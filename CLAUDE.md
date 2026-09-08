@@ -498,6 +498,16 @@ Accepted deferrals, one line each. None of these block the MVP.
   `since`-less requests (the limiter counts auth failures only); the phone bundle carries its
   own copy of xterm (the ~150 KB headless build); `lan_ip()` takes the default-route interface, which on a
   multi-homed PC may not be the phone's link.
+- **Image attach from the phone — backlog (user decision 2026-09-08)**. The phone composer is a
+  plain textarea, so a pasted image goes nowhere, and no channel exists to hand one to the agent in
+  a tab. Both agents take an image *file path* in the prompt (Claude Code's drag-and-drop path
+  handling, Codex's `attach_image path`), so the shape that fits is: an attach button / paste
+  handler on the phone → a new authenticated upload endpoint (image types only, ~10 MiB cap,
+  server-named files) → the app writes into a WSL-visible `~/.winmux/uploads/` → the path is sent
+  as text with the separate CR, exactly like Send. Two decisions ride along: it is a new capability
+  class ("the phone can write files on the PC") and needs an ADR-0016 amendment, and the uploaded
+  files need a lifetime — delete-on-close next to the tab's history files (ADR-0013) is the
+  natural rule. Not started.
 - **Splitter resize is mouse-drag only** — no keyboard equivalent for the drag handle.
 - **1MiB-replay workspace switch is ~236ms with visible flicker** (ADR-0004) — candidates:
   smaller replay cap, progressive replay, hide-until-parsed. Since v0.3.15 the replay
