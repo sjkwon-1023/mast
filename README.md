@@ -27,8 +27,6 @@ single WebView2 over a Rust/ConPTY session core, with a 100MB target, 150MB ceil
 - **Windows + WSL2 on purpose** — no compatibility layer for PowerShell/CMD profiles and no attempt
   to be a general-purpose cross-platform terminal.
 
-The next reliability and product work is tracked in [`ROADMAP.md`](./ROADMAP.md).
-
 ## Requirements
 
 winmux is **WSL2 only**, by design rather than omission. Opening a terminal always means
@@ -193,7 +191,7 @@ autoMemoryReclaim=gradual
 
 Early, one maintainer, but used daily. The current focus is preserving the lightweight session
 architecture while improving terminal reattach fidelity, Windows resource soak coverage, Git
-status/diff inspection, and first-run/public documentation. See [`ROADMAP.md`](./ROADMAP.md).
+status/diff inspection, and first-run/public documentation.
 
 - **Tested on an x64 Windows 11 desktop only.** ARM64 is type-checked and linted on every
   push, but has never run on real hardware — device testing waits on an ARM64 laptop.
