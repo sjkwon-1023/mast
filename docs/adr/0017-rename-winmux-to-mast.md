@@ -67,3 +67,12 @@ entries and will not replace them, while still recording its completion marker. 
 are `mast-x64.exe` / `mast-arm64.exe` from v0.3.21 on; earlier releases keep their old asset
 names, and GitHub's redirect keeps old repository URLs working as long as no new repository
 takes the `winmux` name.
+
+## Amendment (2026-09-11) — the icon
+
+The blue `W` icon was the one visible surface the rename left untouched, so it changes with the
+name: a sail on the same near-black square — a light mast, a blue mainsail, a darker jib — drawn
+by `scripts/icon/make-icon.py`, so the glyph has a source and not only a binary. It ships with
+v0.3.21, the first release under the new name. The §12 checklist does not change: the icon
+rides on the exe, and a stale one at an unchanged path is the Windows icon cache
+(WINDOWS-BUILD §10, v0.3.21).
