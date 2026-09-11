@@ -56,16 +56,31 @@ tauri-winrt-notification = "0.7"
 # 추가로 켜진다).
 windows = { version = "0.61", features = [
     "Win32_Foundation",
+    # INetFwPolicy2·INetFwRule — 방화벽 규칙을 **일반 권한**으로 열거해 판정하는
+    # `firewall` 모듈. netsh/PowerShell 출력 파싱을 쓰지 않는 이유는 느린 것에 더해
+    # 문구가 로캘(한국어)에 따라 바뀌기 때문이다.
+    "Win32_NetworkManagement_WindowsFirewall",
     # PKEY_AppUserModel_ID 는 windows-rs 에서 여기 산다 (Shell 이 아니다).
     "Win32_Storage_EnhancedStorage",
     # IShellLinkW::GetPath 가 받는 WIN32_FIND_DATAW.
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    # IEnumVARIANT(규칙 열거)가 여기 살고, `VARIANT` 타입 **자체**가
+    # `Win32_System_Com` + 이 feature 로 게이트돼 있다 (windows-rs 0.61.3
+    # `Win32/System/Variant/mod.rs:742`) — Variant 만 켜서는 존재하지 않는다.
+    "Win32_System_Ole",
+    # ShellExecuteExW(승격 netsh 실행)가 이 feature 로 게이트돼 있다: SHELLEXECUTEINFOW
+    # 가 HKEY 필드를 들고 있어서다 (같은 크레이트 `Win32/UI/Shell/mod.rs:4360`).
+    # 레지스트리를 직접 쓰지는 않는다.
+    "Win32_System_Registry",
     # GetLocalTime — 토스트 진단 로그(`commands::notify_toast`)의 타임스탬프.
     # 사용자가 "몇 시에 토스트를 못 봤다"와 대조하는 파일이라 epoch 초가 아니라
     # 현지 시각으로 남긴다.
     "Win32_System_SystemInformation",
+    # WaitForSingleObject·GetExitCodeProcess — 승격된 netsh 의 종료를 기다려 exit code
+    # 를 로그에 남긴다 (성공 판정은 재감지가 한다).
+    "Win32_System_Threading",
     "Win32_System_Variant",
     "Win32_UI_Shell",
     "Win32_UI_Shell_PropertiesSystem",
