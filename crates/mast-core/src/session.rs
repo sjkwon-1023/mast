@@ -928,7 +928,7 @@ mod tests {
         );
         let summary = summarize_osc(&OscEvent::Osc777Query {
             kind: "list-tabs".into(),
-            reply_b64: "L3RtcC93aW5tdXgtdGFicy00Mi5qc29u".into(),
+            reply_b64: "L3RtcC9tYXN0LXRhYnMtNDIuanNvbg==".into(),
         });
         assert_eq!(summary, "777-query:list-tabs");
         assert!(!summary.contains("tmp"), "회신 경로가 요약에 실렸다: {summary}");

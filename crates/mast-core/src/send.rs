@@ -349,7 +349,7 @@ mod tests {
     fn reply_path_accepts_tmp_paths() {
         // `printf '%s' '/tmp/mast-tabs-42.json' | base64 -w0` 형태.
         assert_eq!(
-            decode_reply_path("L3RtcC93aW5tdXgtdGFicy00Mi5qc29u"),
+            decode_reply_path("L3RtcC9tYXN0LXRhYnMtNDIuanNvbg=="),
             Ok("/tmp/mast-tabs-42.json".to_owned())
         );
         assert_eq!(
