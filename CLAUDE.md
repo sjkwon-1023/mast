@@ -732,3 +732,9 @@ Windows runners bill at 2x).
   distill the outcome into an ADR and delete the plan file. Current exception:
   `spike-plan.md` stays because its section 4 is the module-contract reference that code
   comments point to; delete it when the MVP refactor replaces those contracts.
+- **Renames are substituted retroactively, except where the old name is the fact being
+  recorded.** A project rename rewrites every ADR, because they describe designs that are
+  still live. Two things keep the former name verbatim: incident forensics — currently
+  `0010-restart-dead-terminal-tabs.md`, whose paths, exit codes and tokens are what was
+  observed — and the rename-migration sections of `docs/WINDOWS-BUILD.md`, which exist to tell
+  a user what to move *from*. The rename itself gets its own ADR (`0017`).

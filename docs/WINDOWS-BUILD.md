@@ -2108,3 +2108,90 @@ Stage 23 (device verification) runs on the ARM64 machine, WSL2 + ARM64 Ubuntu in
    composition from checkpoint 2 — same 100–150MB acceptance band.
 5. Claude Code inside ARM64 WSL (and Codex CLI if its Linux ARM64 binary exists — 계획
    v2 section 13 precheck) with the hook contract wired.
+
+## 12. Rename migration (`winmux` → `mast`)
+
+The project was renamed again in v0.3.21 — `winmux` collided with an active project in the
+same category (`ZimengXiong/winmux`, "WinMux for macOS"), one of 28 same-name repositories.
+Like the `wmux` → `winmux` round before it (§10 item 12, kept verbatim as the record of that
+migration), this is a one-time, single-developer migration handled by hand, not by migration
+code.
+
+**Order matters.** Two of these steps must happen *before* the first launch of the new exe,
+because provisioning treats an unrecognised entry as "the user's own" and leaves it alone —
+while still writing its own completion marker. Do them late and the integration silently never
+wires up.
+
+**Copy, do not move.** Every step below copies and leaves the old state in place. Delete the
+originals only after item 7 passes; until then a failed migration is one `winmux.exe` launch
+away from being undone.
+
+1. **Remote** — GitHub redirects the old repository URL, but update it explicitly, in the
+   bare-worktree container and in the Windows checkout:
+   `git remote set-url origin git@github.com:sjkwon-1023/mast.git`.
+
+2. **Codex — before the first launch.** In `~/.codex/config.toml`, delete the
+   `# winmux: notify on turn completion …` comment and the
+   `notify = ["bash", "-lc", '…winmux-codex-notify.sh…']` line. Provisioning matches its own
+   line by the strings `mast-notify.sh` / `mast-codex-notify.sh`; a `winmux-` line matches
+   neither, so it takes the "notify already set; left untouched" branch, exits 0, and the
+   run still records `.setup-v11`. Delete the line afterwards and nothing rewires it — you
+   would have to `rm ~/.mast/.setup-v11` and relaunch. In `~/.codex/AGENTS.md`, delete the
+   `<!-- >>> winmux integration … >>> -->` … `<!-- <<< winmux integration <<< -->` block; the
+   new block's markers say `mast`, so an old block is not replaced, it is joined.
+
+3. **Claude Code hooks — before the first launch.** In `~/.claude/settings.json`, delete the
+   `UserPromptSubmit` / `Notification` / `Stop` entries that call `winmux-notify.sh`. Keep any
+   hook of your own. Provisioning identifies its entries by `mast-notify.sh`, so an old entry
+   is not recognised and a second set is added next to it — the duplicate-hook symptom from
+   the `wmux` round. Also remove the old skill: `rm -rf ~/.claude/skills/winmux-send`.
+
+4. **App state** — the Tauri identifier moved from `app.winmux.desktop` to `app.mast.desktop`,
+   so the state directory moved with it. Copy
+   `%APPDATA%\app.winmux.desktop` to `%APPDATA%\app.mast.desktop`; the existing workspaces,
+   panes and tabs restore exactly as before. Skip it and the app boots with empty state —
+   nothing is lost, the data just sits in the old folder. `winmux.log`/`winmux.log.1` can be
+   left behind; the new app writes `mast.log`. (The spike's identifier moved
+   `app.winmux.spike` → `app.mast.spike` the same way, but it persists nothing.)
+
+5. **Start menu** — delete the old `winmux.lnk` from
+   `%AppData%\Microsoft\Windows\Start Menu\Programs`. Leaving it is not cosmetic: launching it
+   runs the old exe, which writes the old state and re-adds the old hooks. The first launch of
+   the new exe registers `mast.lnk` itself.
+
+6. **Shell state in WSL**, in each distribution you use — copy the two directories that hold
+   anything you would miss, and let provisioning rebuild the rest:
+
+   ```bash
+   mkdir -p ~/.mast && cp -a ~/.winmux/history ~/.winmux/resume ~/.mast/
+   ```
+
+   Do **not** copy `bin/`, `setup.log` or `.setup-v*`. The helpers are reinstalled under their
+   new names, and an old `~/.winmux/bin/winmux` left on `PATH` emits a `winmux-query` OSC that
+   the new parser drops, so it hangs rather than failing.
+
+7. **Environment variables** — every `WINMUX_*` knob is now `MAST_*`. If you had
+   `WINMUX_DISTRO` set (section 4), `setx MAST_DISTRO "…"` instead; the old name is no longer
+   read and a stale one silently does nothing. Same for any `WINMUX_RESET_*` /
+   `WINMUX_OSC_FLUSH_MS` you set for the section 9 checks. `MAST` and `MAST_TAB` are set by the
+   spawn wrapper — never set those yourself.
+
+8. **Verify, then delete.** Launch `mast`, then check:
+   - `~/.mast/setup.log` ends with `setup v11 complete`, and `~/.mast/bin` holds `mast`,
+     `mast-notify.sh`, `mast-codex-notify.sh`, `mast-send.sh`, `mast-open`.
+   - `~/.claude/settings.json` has exactly **three** `mast-notify.sh` hooks and no
+     `winmux-notify.sh`; `~/.codex/config.toml` has one `mast-codex-notify.sh` notify line;
+     `~/.codex/AGENTS.md` has exactly one managed block.
+   - In a tab: `printenv MAST MAST_TAB`, `command -v mast`, `mast ls`, and `mast send` to
+     another tab with a short and a long line — both must submit, not just pre-fill.
+   - Status and toast: drive `mast:running` → `mast:idle` → `mast:needsInput` (the onset only
+     fires on a transition, so reset to idle first) and confirm the sidebar and a toast from
+     the "mast" sender, with the window unfocused.
+   - Phone: **hard-refresh the phone's browser** before pairing — a cached page sends
+     `X-Winmux-*` headers the new server does not answer, and fails silently. Then pair from a
+     fresh QR (the token key in local storage changed too), and check the tab list, first
+     frame, scrolling and Send.
+   - Restart the app: workspaces, splits, tabs, each shell's directory, history and the resume
+     hint one `Up` away.
+
+   Only after all of that: delete `%APPDATA%\app.winmux.desktop` and `~/.winmux`.
