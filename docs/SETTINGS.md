@@ -96,7 +96,9 @@ Changing this takes a restart, like `log`.
 
 Pair a phone from the sidebar's *Pair phone* QR. The pairing token arrives in the URL fragment
 and is kept in the phone browser's local storage, so a new browser — or a cleared one — needs
-a fresh QR.
+a fresh QR. The same dialog says whether Windows Firewall lets this exe receive on the port —
+the allow rule is bound to the exe's path, so a moved or renamed exe loses it — and offers to
+write the rule behind one UAC prompt; it never opens the port on a public network.
 
 This is **plain HTTP on your own LAN**, off by default, and deliberately not hardened for a
 hostile network. The accepted limits are recorded in

@@ -168,3 +168,59 @@ desktop already receives.
   needs; push in particular cannot work over plain HTTP on a LAN.
 - **Per-IP connection caps, authenticated-client rate limits, token rotation from the UI,
   IPv6, a native app, resizing or workspace control from the phone.** Recorded as follow-ups.
+
+## Amendment (v0.3.23) — the pairing dialog checks, and can write, the firewall rule
+
+The surface above reads screens and writes input; nothing in it touched the PC's own
+security settings. This amendment adds one such capability, deliberately narrow: **on the
+user's click, the app writes one Windows Firewall allow rule for itself.**
+
+The incident behind it: the rename to `mast` changed the exe's file name, and Windows Firewall
+binds an allow rule to the exe **path**. The old rule kept allowing an exe that no longer ran,
+the new exe had no rule, and on a PC whose firewall profiles have `NotifyOnListen` off — this
+one — Windows never asked. The server logged `remote: listening on 0.0.0.0:7331`, the phone
+timed out, and nothing in between said why.
+
+1. **Detection is unprivileged COM, not a shell-out.** `firewall.rs` enumerates
+   `INetFwPolicy2.Rules` in-process and judges whether an enabled inbound Allow rule reaches
+   *this* exe on *this* port for the *current* profile — a rule that names no program counts,
+   and a `Protocol=Any` rule is exempt from the port check because that is exactly the rule
+   Windows's own "allow this app" prompt writes. Reading rules needs no elevation; parsing
+   `netsh` or PowerShell output would be slow and would read a localized (Korean) Windows
+   differently from an English one. The verdict is one of `allowed`, `blocked`, `stalePath`
+   (our own rule points at another copy of the exe), `profileMismatch`, `missing`,
+   `firewallOff`, or `unknown` when COM itself fails — and `unknown` keeps the button, because
+   the judgment failing is not a reason to stop the user fixing the rule.
+2. **Block beats Allow, as it does in Windows**, so a program-bound Block rule for this exe is
+   reported as `blocked` with the rule's name and no button: adding an allow rule would change
+   nothing, and the app does not delete rules it did not write. The match is narrow on purpose —
+   only rules that name this exe and whose remote scope is `*` or includes `LocalSubnet` — so
+   an internet-scoped Block or a policy-wide "block everything" rule does not turn a working PC
+   into a false `blocked`, which, with the button hidden, would be worse than a false
+   `allowed`.
+3. **Writing goes through an elevated, Microsoft-signed `netsh.exe`, once.** The app never
+   elevates itself: an unsigned exe's UAC prompt carries the yellow "unknown publisher" warning
+   and self-elevation would need a command-line mode in `main`. Instead `ShellExecuteExW` with
+   the `runas` verb runs `%SystemRoot%\System32\netsh.exe -f <script>` — the standard UAC
+   prompt, one click — and the script is built from `current_exe()` and the `u16` port and
+   nothing else; a path containing `"` is refused, `cmd.exe` is never involved, and the script
+   file in `%TEMP%` is removed on every exit path. When a rule of our name already exists it is
+   deleted first so the name never doubles.
+4. **Success is judged by re-detection, not by netsh's exit code.** Whether `netsh -f` stops at
+   a failing line and what its exit code reflects is undocumented, so the code is logged
+   (`remote: firewall apply exit=N`) and the dialog is updated from a fresh detection. A
+   declined UAC prompt (`ERROR_CANCELLED`) is reported as declined, not as an error.
+5. **The rule covers `domain,private` only.** No code path produces `profile=public` or `any`;
+   when the current network is Public the dialog says to mark it Private instead of offering
+   the button. Opening a port on a public network is the user's decision, made in Windows.
+6. **One log line at boot** (`remote: firewall <state> for <exe>:<port>`) whenever the server is
+   up, so the next "the phone does not load" report is answered by `mast.log`.
+
+Accepted limits: third-party firewalls (V3, Norton…) are invisible to this API and the dialog
+speaks only for Windows Defender Firewall; the Hyper-V/WSL firewall is out of scope; a
+hand-made rule whose `ApplicationName` uses an environment variable (`%ProgramFiles%\…`)
+reads as `missing`; rule scope (addresses, interfaces, services) is modelled only as far as the
+`blocked` match needs; detection is a snapshot at dialog-open and boot, not a watch; the
+`#[cfg(not(windows))]` stubs are compiled by no gate; and the module's unit tests run only on
+the Windows CI job, since the glue does not build on the Linux dev host. Verification is
+WINDOWS-BUILD §10 v0.3.23, all of it field-only.
