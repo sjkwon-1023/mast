@@ -53,9 +53,11 @@ with Windows 11. mast opens WSL2 shells only — there is no PowerShell or CMD p
 
 ## Installing
 
-Download `mast-x64.exe` or `mast-arm64.exe` from the
-[latest release](https://github.com/sjkwon-1023/mast/releases/latest), matching your CPU, and run it.
-It is unsigned, so SmartScreen warns on first launch: **More info** → **Run anyway**.
+Download the build for your CPU from the
+[latest release](https://github.com/sjkwon-1023/mast/releases/latest) and run it. Releases up to
+and including v0.3.20 predate the rename and are named `winmux-x64.exe` / `winmux-arm64.exe`; from
+the next one on they are `mast-x64.exe` / `mast-arm64.exe`. It is unsigned either way, so
+SmartScreen warns on first launch: **More info** → **Run anyway**.
 
 To build from source, see [`docs/WINDOWS-BUILD.md`](./docs/WINDOWS-BUILD.md).
 
