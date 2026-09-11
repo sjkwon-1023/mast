@@ -2135,16 +2135,17 @@ code.
 
 **Order matters.** Two of these steps must happen *before* the first launch of the new exe,
 because provisioning treats an unrecognised entry as "the user's own" and leaves it alone —
-while still writing its own completion marker. Do them late and the integration silently never
-wires up.
+while still writing its own completion marker. Do them late and the new integration never
+wires up while the old entries keep firing — items 2 and 3 say what that looks like.
 
 **Copy, do not move.** Every step below copies and leaves the old state in place. Delete the
 originals only after item 7 passes; until then a failed migration is one `winmux.exe` launch
 away from being undone.
 
-1. **Remote** — GitHub redirects the old repository URL, but update it explicitly, in the
-   bare-worktree container and in the Windows checkout:
-   `git remote set-url origin git@github.com:sjkwon-1023/mast.git`.
+1. **Remote** — GitHub redirects the old repository URL, but update it explicitly, in every
+   checkout you keep (the WSL clone and the Windows checkout):
+   `git remote set-url origin git@github.com:sjkwon-1023/mast.git`. The local folder name is
+   free (rename it to `mast` or leave it — nothing reads it).
 
 2. **Codex — before the first launch.** In `~/.codex/config.toml`, delete the
    `# winmux: notify on turn completion …` comment and the
@@ -2153,14 +2154,26 @@ away from being undone.
    neither, so it takes the "notify already set; left untouched" branch, exits 0, and the
    run still records `.setup-v11`. Delete the line afterwards and nothing rewires it — you
    would have to `rm ~/.mast/.setup-v11` and relaunch. In `~/.codex/AGENTS.md`, delete the
-   `<!-- >>> winmux integration … >>> -->` … `<!-- <<< winmux integration <<< -->` block; the
-   new block's markers say `mast`, so an old block is not replaced, it is joined.
+   `<!-- >>> winmux integration … >>> -->` … `<!-- <<< winmux integration <<< -->` block by
+   hand. Provisioning only ever rewrites a block whose markers already say `mast`, so an old
+   block is not replaced — the new one is appended after it, and Codex is left with two blocks
+   advertising two CLIs, of which the old one hangs (item 6). Deleting `.setup-v11` and
+   relaunching does not clear it either; only the hand edit does.
 
 3. **Claude Code hooks — before the first launch.** In `~/.claude/settings.json`, delete the
    `UserPromptSubmit` / `Notification` / `Stop` entries that call `winmux-notify.sh`. Keep any
    hook of your own. Provisioning identifies its entries by `mast-notify.sh`, so an old entry
    is not recognised and a second set is added next to it — the duplicate-hook symptom from
-   the `wmux` round. Also remove the old skill: `rm -rf ~/.claude/skills/winmux-send`.
+   the `wmux` round. It is not a quiet duplicate: the old set keeps firing, and a `winmux:*`
+   title no longer parses as a status token, so the core files each one as a status-neutral
+   notification (`notify.rs`) — an unread dot on every prompt and a sidebar preview reading
+   `needs input` or `done` regardless of what the agent is doing. In the same file, rewrite the
+   `permissions.allow` entries `Bash(winmux ls)` / `Bash(winmux id)` / `Bash(winmux send:*)`
+   to their `mast` spellings — provisioning owns only `hooks` and never touches that key, and
+   without it every CLI call from an agent prompts for permission. Also remove the old skill:
+   `rm -rf ~/.claude/skills/winmux-send`. Anything of your own that calls the CLI — a script
+   or skill that runs `winmux send`, reads `$WINMUX` or hard-codes `~/.winmux/bin/winmux` — is
+   yours to rename; nothing here sees it.
 
 4. **App state** — the Tauri identifier moved from `app.winmux.desktop` to `app.mast.desktop`,
    so the state directory moved with it. Copy
@@ -2203,10 +2216,11 @@ away from being undone.
    - Status and toast: drive `mast:running` → `mast:idle` → `mast:needsInput` (the onset only
      fires on a transition, so reset to idle first) and confirm the sidebar and a toast from
      the "mast" sender, with the window unfocused.
-   - Phone: **hard-refresh the phone's browser** before pairing — a cached page sends
-     `X-Winmux-*` headers the new server does not answer, and fails silently. Then pair from a
-     fresh QR (the token key in local storage changed too), and check the tab list, first
-     frame, scrolling and Send.
+   - Phone: **hard-refresh the phone's browser** before pairing — a cached page reads
+     `X-Winmux-*` response headers the new server no longer sends, so every screen poll rejects
+     with `screen reply has malformed headers` while the Bearer token still authenticates: it
+     is not a pairing failure. Then pair from a fresh QR (the token key in local storage
+     changed too), and check the tab list, first frame, scrolling and Send.
    - Restart the app: workspaces, splits, tabs, each shell's directory, history and the resume
      hint one `Up` away.
 
