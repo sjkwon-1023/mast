@@ -1,8 +1,8 @@
 [
   {
     "type": "createWorkspace",
-    "name": "winmux",
-    "rootPath": "/home/dev/code/winmux",
+    "name": "mast",
+    "rootPath": "/home/dev/code/mast",
     "distro": "Ubuntu-24.04",
     "tab": { "type": "terminal", "cwd": null }
   },
@@ -20,7 +20,7 @@
   { "type": "createTab", "pane": 2, "tab": { "type": "terminal", "cwd": null } },
   { "type": "activateTab", "tab": 5 },
   { "type": "closeTab", "tab": 5 },
-  { "type": "navigateFolder", "tab": 7, "path": "/home/dev/code/winmux/src" },
+  { "type": "navigateFolder", "tab": 7, "path": "/home/dev/code/mast/src" },
   { "type": "setViewerScroll", "tab": 8, "scrollTop": 4096.0 },
   {
     "type": "createTab",
@@ -30,12 +30,12 @@
   {
     "type": "createTab",
     "pane": 2,
-    "tab": { "type": "textViewer", "path": "/home/dev/code/winmux/notes.txt" }
+    "tab": { "type": "textViewer", "path": "/home/dev/code/mast/notes.txt" }
   },
   {
     "type": "createTab",
     "pane": 2,
-    "tab": { "type": "markdownViewer", "path": "/home/dev/code/winmux/README.md" }
+    "tab": { "type": "markdownViewer", "path": "/home/dev/code/mast/README.md" }
   },
   {
     "type": "createWorkspace",
@@ -43,7 +43,7 @@
     "rootPath": null,
     "distro": null
   },
-  { "type": "renameWorkspace", "workspace": 1, "name": "winmux (renamed)" },
+  { "type": "renameWorkspace", "workspace": 1, "name": "mast (renamed)" },
   { "type": "moveWorkspace", "workspace": 1, "before": 2 },
   { "type": "moveWorkspace", "workspace": 1, "before": null }
 ]

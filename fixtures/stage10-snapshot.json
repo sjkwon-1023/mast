@@ -4,8 +4,8 @@
     "workspaces": [
       {
         "id": 1,
-        "name": "winmux",
-        "rootPath": "/home/dev/code/winmux",
+        "name": "mast",
+        "rootPath": "/home/dev/code/mast",
         "distro": "Ubuntu-24.04",
         "gitBranch": null,
         "gitDirty": null,
@@ -35,7 +35,7 @@
                   "type": "terminal",
                   "ptySession": 11,
                   "status": { "type": "running" },
-                  "cwd": "/home/dev/code/winmux"
+                  "cwd": "/home/dev/code/mast"
                 },
                 "notification": "none",
                 "lastActivityMs": 1723100000000
@@ -45,7 +45,7 @@
                 "title": "README.md",
                 "kind": {
                   "type": "markdownViewer",
-                  "path": "/home/dev/code/winmux/README.md",
+                  "path": "/home/dev/code/mast/README.md",
                   "scrollTop": 120.5
                 },
                 "notification": "unread",
@@ -74,7 +74,7 @@
                 "title": "src",
                 "kind": {
                   "type": "folderBrowser",
-                  "path": "/home/dev/code/winmux/src"
+                  "path": "/home/dev/code/mast/src"
                 },
                 "notification": "none",
                 "lastActivityMs": null
@@ -84,7 +84,7 @@
                 "title": "notes.txt",
                 "kind": {
                   "type": "textViewer",
-                  "path": "/home/dev/code/winmux/notes.txt",
+                  "path": "/home/dev/code/mast/notes.txt",
                   "scrollTop": 0.0
                 },
                 "notification": "none",

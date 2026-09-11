@@ -57,7 +57,7 @@ Functional results:
 
 ## Follow-ups carried from the spike
 
-- Redesign `winmux-core::SessionManager` to pre-assign session ids (sink factory receives
+- Redesign `mast-core::SessionManager` to pre-assign session ids (sink factory receives
   the id), then delete the duplicate glue-side `Registry` and the dead `PtySession::id`.
 - OSC scanner: CAN/SUB abort is implemented; review remaining C0 handling against real
   terminal behavior.

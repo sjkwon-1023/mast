@@ -4,9 +4,9 @@ Status: accepted (2026-08-22) · Verification: WINDOWS-BUILD §10 v0.3.11 item 2
 
 ## Context
 
-Every winmux terminal tab gets private state inside WSL. The spawn wrapper points `HISTFILE` at
-`~/.winmux/history/tab-<id>` (`host.rs::bash_argv`), and the agent hooks write a resume hint to
-`~/.winmux/resume/tab-<id>` — via `tab-<id>.tmp.<pid>` first, so a hook killed mid-write leaves
+Every mast terminal tab gets private state inside WSL. The spawn wrapper points `HISTFILE` at
+`~/.mast/history/tab-<id>` (`host.rs::bash_argv`), and the agent hooks write a resume hint to
+`~/.mast/resume/tab-<id>` — via `tab-<id>.tmp.<pid>` first, so a hook killed mid-write leaves
 one of those behind too. Both paths are keyed by the tab's stable id, which is what makes them
 work: the id survives restarts, so a revived tab finds its own history and its own `↑`.
 
@@ -15,7 +15,7 @@ closed tab's files can never be reached again by anything — they simply accumu
 files per tab ever opened, for as long as the distro lives.
 
 The bookkeeping is small; the reason to fix it is that the directory is user-visible and its
-contents stop meaning anything. A user reading `~/.winmux/history/` cannot tell which files
+contents stop meaning anything. A user reading `~/.mast/history/` cannot tell which files
 belong to tabs that exist.
 
 ## Decisions
@@ -29,7 +29,7 @@ belong to tabs that exist.
    for. The trigger is `CloseTab` / `ClosePane` / `CloseWorkspace` only.
 
 3. **The core reports, the host deletes.** `SessionHost::release_tabs(&[TabId], Option<&str>)`
-   joins `spawn_shell` and `kill` as the third port. `winmux-core` stays unaware that a tab has
+   joins `spawn_shell` and `kill` as the third port. `mast-core` stays unaware that a tab has
    files at all — it knows only that some tabs are gone for good — and the WSL-shaped half lives
    in the glue, exactly like spawning. The trait method has a default no-op body so hosts without
    per-tab shell state (the test fake, the unix dev path) are unaffected.
@@ -40,7 +40,7 @@ belong to tabs that exist.
    file of every retired tab.
 
 5. **`$HOME` is expanded inside WSL.** The command runs as `wsl.exe [-d <distro>] --exec bash -c
-   'rm -f -- "$HOME/.winmux/…"'` rather than being assembled into a `\\wsl.localhost\…` path on
+   'rm -f -- "$HOME/.mast/…"'` rather than being assembled into a `\\wsl.localhost\…` path on
    the Windows side. The Linux home directory is not ours to guess, and guessing wrong deletes
    nothing while looking like it worked — the same reasoning that puts `mkdir -p` inside the
    spawn wrapper. `--exec` for the same reason `spawn_spec` uses it: no second shell evaluation.

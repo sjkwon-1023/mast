@@ -1,0 +1,1024 @@
+/* mast 최소 다크 테마 — 상태 라인 + 활성 워크스페이스 split tree (11단계)
+   + pane 탭바·배지·placeholder (12단계) + 워크스페이스 사이드바 (13단계). */
+
+:root {
+  color-scheme: dark;
+  --bg: #1e1e1e;
+  --bg-panel: #252526;
+  --fg: #d4d4d4;
+  --fg-muted: #8a8a8a;
+  --border: #3c3c3c;
+  --accent: #007acc;
+  --error: #f48771;
+  --warn: #d7a55b;
+  --send: #c586c0; /* send-mode 대상 하이라이트 (17단계) — accent·error 와 구분 */
+}
+
+/* 뷰어 글꼴 — `--viewer-font-family` / `--viewer-font-size` 는 여기에 **선언하지
+   않는다**. settings.json 에 fontFamily/fontSize 가 있을 때(또는 줌이 걸렸을 때)만
+   viewer-font.ts 가 :root 에 심고, 없으면 아래 var() 의 fallback 이 그대로 쓰인다 —
+   그 fallback 이 화면 기본값의 정본이라 기본값이 두 곳에 갈리지 않는다.
+   `--viewer-font-size` 는 부팅 값이자 **런타임 줌**(Ctrl+= / Ctrl+- / Ctrl+0)의
+   라이브 값이다.
+
+   두 변수의 대상 범위가 다르다.
+   - family: 모노스페이스 **콘텐츠** 표면뿐 — `.text-lines`(텍스트 뷰어 행),
+     `.folder-row`(폴더 목록), `.markdown-body code`(마크다운 code). UI 크롬
+     (사이드바·탭바·상태줄·배너)과 마크다운 **산문**은 사용자가 고른 "코드 글꼴"의
+     대상이 아니다.
+   - size: 위에 더해 마크다운 산문(`.markdown-body`)도 따른다 — 줌이 "보고 있는
+     이 문서를 키우는" 조작이라 산문만 제자리에 남으면 반쪽이기 때문이다. 대신
+     UI 크롬은 여전히 비대상이다 (줌은 콘텐츠 줌이지 UI 스케일이 아니다).
+
+   터미널은 CSS 가 아니라 xterm 옵션으로 같은 설정·같은 줌을 받는다.
+   `--viewer-font-size` 의 fallback 12px 는 viewer-font.ts 의
+   DEFAULT_VIEWER_FONT_SIZE 와 짝이다 (텍스트 뷰어의 행 격자가 이 크기에서
+   행높이를 계산한다 — 갈라지면 행이 잘린다). */
+
+* {
+  box-sizing: border-box;
+}
+
+/* 스크롤바를 직접 그린다. WebView2 는 Windows 의 "스크롤 막대 항상 표시" 설정을
+   따라가는데, 그 설정이 꺼진 기본 상태에서는 스크롤하는 동안만 나타났다 사라지는
+   오버레이 막대가 된다 — 터미널 스크롤백처럼 "지금 어디쯤인지"가 곧 정보인 표면
+   에서는 위치 표시가 아예 없는 것과 같다. `::-webkit-scrollbar` 에 폭을 주면
+   Chromium 이 그 요소를 자리를 차지하는 고전 막대로 되돌리므로 OS 설정과 무관하게
+   항상 보인다.
+
+   터미널에도 그대로 걸린다: xterm 의 `.xterm-viewport` 는 `overflow-y: scroll` 이라
+   막대 자리가 늘 잡혀 있고(스크롤백이 없어도 폭이 일정해 리사이즈로 흔들리지
+   않는다), 트랙을 투명으로 두면 xterm 이 런타임에 뷰포트에 칠하는 테마 배경이
+   그대로 비친다. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-muted);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* 상단 상태 라인 — 일시 표시다: send-mode 프롬프트·one-shot 에러가 있을 때만
+   main.ts 가 펼치고, 없으면 hidden 으로 접혀 본문이 그 자리를 가져간다.
+   display 를 지정하지 않아 hidden 속성만으로 감춰진다 */
+#status-line {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-family: monospace;
+  white-space: pre-wrap;
+}
+
+#status-line.error {
+  color: var(--error);
+}
+
+/* 상태 라인 아래 본문 행 — 좌 사이드바 + 우 뷰 (13단계 D6) */
+#main {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+/* 뷰 영역 — split tree 루트를 담는 flex 컨테이너 (또는 placeholder 텍스트) */
+#view {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  padding: 4px;
+  overflow: hidden;
+  font-size: 13px;
+  font-family: monospace;
+}
+
+/* ── 워크스페이스 사이드바 (13단계) ──────────────────────────────────── */
+
+#sidebar {
+  /* 폭 고정 — 카드 상태 줄의 텍스트 길이가 사이드바 폭을 밀지 못하게 못 박는다.
+     (재검증 발견: needs input 으로 바뀌며 상태 텍스트가 길어지면 사이드바가
+     넓어져 본문 전체가 리플로우돼 화면이 흔들렸다.) 원인은 flex 아이템의 자동
+     최소 크기다 — min-width:auto 가 nowrap 상태 줄의 min-content(=텍스트 전체
+     폭)로 잡혀 flex-basis 를 밀어낸다. min-width:0 으로 그 경로를 끊고 width 로
+     폭을 확정한다. 넘치는 텍스트는 카드 3줄 각각의 ellipsis 가 자르므로 어떤
+     길이에도 폭은 불변이다. */
+  flex: 0 0 220px;
+  width: 220px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.sidebar-cards {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+}
+
+.ws-card {
+  /* 테두리는 항상 1px — 활성 토글이 레이아웃을 흔들지 않게 색만 바꾼다 */
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 8px;
+  background: var(--bg);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ws-card:hover {
+  border-color: var(--fg-muted);
+}
+
+/* 드래그 재배치 (sidebar.ts). 끌고 있는 카드는 흐려지고, 놓을 자리는 카드 **하나**
+   의 위/아래 테두리에 accent 선으로 표시된다 — 카드 사이에 별도 표시 엘리먼트를
+   끼우면 목록의 자식 구조가 렌더마다 달라져 in-place 패치의 전제가 깨진다.
+   inset box-shadow 라 레이아웃을 밀지 않는다 (테두리 두께를 바꾸면 카드가 움직여
+   포인터 아래의 자리가 표시 때문에 바뀐다). */
+.ws-card.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.ws-card.drop-before {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
+.ws-card.drop-after {
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+}
+
+.ws-card.active {
+  border-color: var(--accent);
+}
+
+/* 카드 1줄 — 이름 + 집계 unread dot + 닫기 */
+.ws-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ws-card-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* 이름 인라인 편집 입력 (F2) — 이름 span 과 같은 자리·같은 폭을 차지한다.
+   평시에는 sidebar.ts 가 hidden 으로 접어 둔다 (노드는 항상 존재). */
+.ws-card-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 2px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.ws-card-rename:focus {
+  outline: none;
+}
+
+/* 워크스페이스 집계 unread dot — 안의 어느 탭이든 미확인 알림이 있으면 표시.
+   display 를 지정하지 않아 hidden 속성만으로 감춰진다 (in-place 패치 대상) */
+.ws-card-dot {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 7px;
+}
+
+.ws-card-close {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  border: none;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ws-card-close:hover {
+  color: var(--fg);
+  background: var(--border);
+}
+
+/* 카드 2줄 — 상태 텍스트 + 마지막 에이전트 메시지 첫 줄 (1줄 말줄임) */
+.ws-card-status {
+  margin-top: 2px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 개입을 기다리는 상태만 눈에 띈다 — running·idle 은 muted 그대로 */
+.ws-card-status.needs-input {
+  color: var(--accent);
+}
+
+/* 카드 3줄 — 축약된 rootPath (없으면 sidebar.ts 가 hidden 으로 접는다) */
+.ws-card-path {
+  margin-top: 2px;
+  color: var(--fg-muted);
+  font-family: monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-footer {
+  flex: 0 0 auto;
+  padding: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-new {
+  width: 100%;
+  padding: 4px 6px;
+  background: transparent;
+  color: var(--fg);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sidebar-new:hover {
+  border-color: var(--accent);
+}
+
+/* "Pair phone" — 원격 표면이 떠 있을 때만 사이드바 푸터에 나타난다
+   (main.ts 가 remote_status 로 판정, sidebar.ts setRemoteEnabled). */
+.sidebar-pair {
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px 6px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sidebar-pair:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+/* 페어링 다이얼로그 — 네이티브 <dialog>.showModal() (포커스 트랩·Esc·백드롭은
+   브라우저 몫이다). */
+.pairing-dialog {
+  min-width: 300px;
+  padding: 16px;
+  color: var(--fg);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.pairing-dialog::backdrop {
+  background: rgb(0 0 0 / 50%);
+}
+
+.pairing-dialog h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* QR 은 흰 바탕에 검은 모듈로 그려진다 — 다크 테마 위에서도 대비를 유지해야
+   카메라가 읽는다. */
+.pairing-qr {
+  display: block;
+  margin: 0 auto 12px;
+  background: #fff;
+}
+
+.pairing-url {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--fg-muted);
+  font-family: monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.pairing-close {
+  width: 100%;
+  padding: 4px 6px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pairing-close:hover {
+  border-color: var(--accent);
+}
+
+/* ── split tree (11단계) ─────────────────────────────────────────────
+   direction 은 pane 이 나열되는 축이다 — split-layout.ts 의 방향 규약 참조.
+   자식 flex 값(inline)은 workspace-view 가 소유한다. */
+
+.split {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.split-horizontal {
+  flex-direction: row; /* 좌|우 */
+}
+
+.split-vertical {
+  flex-direction: column; /* 상/하 */
+}
+
+/* splitter 핸들 — 4px, hover/드래그 시 강조 */
+.splitter {
+  flex: 0 0 4px;
+  background: var(--border);
+  touch-action: none; /* 포인터 드래그 중 스크롤 제스처 개입 방지 */
+}
+
+.splitter:hover,
+.splitter:active {
+  background: var(--accent);
+}
+
+.split-horizontal > .splitter {
+  cursor: col-resize;
+}
+
+.split-vertical > .splitter {
+  cursor: row-resize;
+}
+
+/* ── pane ──────────────────────────────────────────────────────────── */
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  /* 테두리는 항상 1px — 활성 토글이 레이아웃을 흔들지 않게 색만 바꾼다 */
+  border: 1px solid var(--border);
+}
+
+.pane.active {
+  border-color: var(--accent);
+}
+
+.pane-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.pane-header button {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  color: var(--fg);
+  border: none;
+  border-radius: 3px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pane-header button:hover {
+  background: var(--border);
+}
+
+/* ── 탭바 (12단계) ─────────────────────────────────────────────────── */
+
+.pane-tabs {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden; /* 넘치는 탭은 잘린다 — 스크롤 UX 는 후속 단계 */
+}
+
+.tab {
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 180px;
+  padding: 1px 2px 1px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tab:hover {
+  background: var(--border);
+}
+
+.tab.active {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab.exited .tab-title {
+  opacity: 0.6;
+}
+
+/* 미확인 알림 dot */
+.tab-dot {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 7px;
+}
+
+/* Exited 배지 — 세션이 끝난 terminal 탭 (replay 만 표시 중) */
+.tab-exited {
+  flex: 0 0 auto;
+  padding: 0 3px;
+  border: 1px solid var(--error);
+  border-radius: 3px;
+  color: var(--error);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+/* "끝났다"(빨강)와 구분되는 경고색 — 시작을 못 한 것은 실패가 아니라 대기 상태이고,
+   늦게 표식이 오면 저절로 걷힌다. */
+.tab-not-started {
+  flex: 0 0 auto;
+  padding: 0 3px;
+  border: 1px solid var(--warn);
+  border-radius: 3px;
+  color: var(--warn);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+/* pane 콘텐츠 위에 겹치는 배너 (notStarted / exited 공용). 터미널 뷰를 밀어내지
+   않으려고 absolute 로 띄운다 — notStarted 는 세션이 살아 있어서 늦게 출력이 시작될 수
+   있고, exited 는 마지막 출력(replay)이 그대로 남아 있어야 한다. */
+.pane-restart {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, 88%);
+  padding: 10px 14px;
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pane-restart[hidden] {
+  display: none;
+}
+
+/* 죽은 탭은 경고(warn)가 아니라 에러 색 — 탭 배지의 exited 와 같은 색을 쓴다. */
+.pane-restart.exited {
+  border-color: var(--error);
+}
+
+.pane-restart-retry {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.pane-restart-retry:disabled {
+  color: var(--fg-muted);
+  cursor: default;
+}
+
+.pane-header .tab-close {
+  width: 16px;
+  height: 16px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.pane-header .tab-close:hover {
+  color: var(--fg);
+  background: var(--bg-panel);
+}
+
+.pane-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  /* .pane-restart 배너의 위치 기준 — 없으면 배너가 뷰포트 중앙으로 달아난다. */
+  position: relative;
+  overflow: hidden;
+  padding: 2px;
+  font-size: 13px;
+  font-family: monospace;
+}
+
+/* 빈 pane / 뷰 없는 탭 안내 — 표시 여부는 pane-view 가 inline display 로 토글 */
+.pane-placeholder {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* xterm 호스트가 pane 콘텐츠를 꽉 채우게 */
+.term-host {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.term-host .xterm {
+  height: 100%;
+}
+
+/* ── 뷰어 탭 — folderBrowser (21단계) ─────────────────────────────────
+   pane 콘텐츠를 꽉 채우는 세로 스택: 상단 배너(로딩·truncated·에러) + 스크롤
+   목록. 행은 <button> 이라 헤더 버튼 규칙(.pane-header button)과 겹치지 않게
+   자체 스타일을 갖는다. 키보드 탐색(체크포인트 2)의 focus 는 목록 컨테이너가
+   갖고, 현재 행은 .folder-row.selected 로 보인다. */
+
+.folder-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.folder-banner {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-banner.error {
+  color: var(--error);
+}
+
+.folder-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* 프로그램적 focus(tabindex -1) 에는 테두리를 그리지 않는다 — 어느 행이
+     현재인지는 .selected 가 보여준다 */
+  outline: none;
+}
+
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 1px 6px;
+  background: transparent;
+  color: var(--fg);
+  border: none;
+  font: inherit;
+  font-family: var(--viewer-font-family, monospace);
+  font-size: var(--viewer-font-size, 12px);
+  text-align: left;
+  cursor: pointer;
+}
+
+.folder-row:hover {
+  background: var(--border);
+}
+
+.folder-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 키보드 선택 행 — hover 와 겹쳐도 구분되게 accent 배경 + 좌측 마커를 쓴다
+   (마커는 padding 안쪽 border 라 행 높이·정렬이 변하지 않는다) */
+.folder-row.selected {
+  background: var(--accent);
+  color: #ffffff;
+  border-left: 2px solid #ffffff;
+  padding-left: 4px;
+}
+
+/* 디렉터리 행 강조 — 이름 뒤 `/` 와 함께 두 겹으로 구분한다 */
+.folder-row.dir .folder-row-name {
+  color: var(--accent);
+}
+
+/* 선택 행 안에서는 디렉터리 강조·크기 색을 배경에 맞춰 되돌린다. 위의 `.dir`
+   규칙과 명시도가 같으므로 **뒤에** 와야 이긴다 (accent 글자 + accent 배경이면
+   선택된 디렉터리 행이 안 보인다) */
+.folder-row.selected .folder-row-name,
+.folder-row.selected .folder-row-size {
+  color: inherit;
+}
+
+.folder-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 크기 열은 이름보다 한 눈금 작다. 뺄셈으로 쓰는 이유는 설정으로 글자를 키웠을
+   때도 그 관계가 유지돼야 하기 때문이다 — 11px 로 못박으면 이름만 커지고 크기
+   열은 그대로 남아 행이 깨져 보인다. 기본값에서는 12-1 = 11px 로 종전과 같다. */
+.folder-row-size {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  font-size: calc(var(--viewer-font-size, 12px) - 1px);
+}
+
+/* ── 뷰어 탭 — textViewer (21단계) ────────────────────────────────────
+   folderBrowser 와 같은 세로 스택(배너 + 본문)에 창 이동 바가 하나 더 붙는다.
+   본문은 **고정 행높이 + no-wrap 실스크롤**이다: 행높이의 정본은 TS 쪽
+   (text-view.ts lineHeightForFontSize — 글자 크기에서 파생)이고 뷰가
+   --text-line-height 로 내려준다 — 여기서 다른 값을 쓰면 spacer 높이·슬라이스
+   위치가 어긋나 행이 밀린다. */
+
+.text-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.text-banner {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.text-banner.error {
+  color: var(--error);
+}
+
+/* 창 이동 바 — 파일이 창(512KiB)보다 클 때만 표시된다 (자동 이어읽기 없음).
+   같은 이동을 Ctrl+PageUp/PageDown·Ctrl+Home/End 로도 하고, 그 표기는 버튼
+   title 에 있다 (text-view.ts) */
+.text-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.text-range {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.text-window-button {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.text-window-button:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--border);
+}
+
+/* 창을 실제로 옮기지 못하는 버튼(첫 창의 first/prev, 마지막 창의 next/last)은
+   잠긴다 — 판정 정본은 text-view.ts 의 windowButtonsDisabled 다 */
+.text-window-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 실스크롤 컨테이너 — 가로(no-wrap)·세로 둘 다 여기서 스크롤된다 */
+.text-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  outline: none; /* 프로그램적 focus(tabindex -1) 표시는 하지 않는다 */
+}
+
+/* 전체 높이 spacer — 실제로 그리는 것은 viewport 근처 행뿐이다 */
+.text-spacer {
+  position: relative;
+}
+
+.text-lines {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* 가장 긴 행만큼 넓어져 가로 스크롤이 성립한다 */
+  width: max-content;
+  min-width: 100%;
+  font-family: var(--viewer-font-family, monospace);
+}
+
+.text-line {
+  height: var(--text-line-height);
+  line-height: var(--text-line-height);
+  font-size: var(--viewer-font-size, 12px);
+  white-space: pre;
+  tab-size: 8;
+}
+
+/* ── 뷰어 탭 — markdownViewer (21단계 청크 D) ─────────────────────────
+   folderBrowser·textViewer 와 같은 세로 스택(배너 + 본문). 본문만 산문이라 읽기
+   폭을 제한하고 줄간격을 조금 넓힌다 — 그 이상의 타이포그래피는 두지 않는다
+   (뷰어이지 문서 뷰 제품이 아니다). 스크롤 컨테이너의 scrollTop(px)이 모델의
+   scrollTop 시맨틱 그대로다. */
+
+.markdown-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.markdown-banner {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-banner.error {
+  color: var(--error);
+}
+
+.markdown-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  outline: none; /* 프로그램적 focus(tabindex -1) 표시는 하지 않는다 */
+}
+
+/* 산문은 **크기만** 설정·줌을 따른다 (글꼴 family 는 비대상 — 아래 code 참조).
+   더하기로 쓰는 이유는 `.folder-row-size` 의 빼기와 같다: 크기를 키우면 그 관계가
+   유지돼야 하고, 13px 로 못박으면 code 만 커지고 산문은 그대로 남아 문서가 깨져
+   보인다. 기본값에서는 12+1 = 13px 로 종전과 같다. 헤딩은 em 이라 따라온다. */
+.markdown-body {
+  max-width: 80ch;
+  padding: 8px 12px;
+  font-size: calc(var(--viewer-font-size, 12px) + 1px);
+  line-height: 1.55;
+  /* 긴 URL·식별자가 가로 스크롤을 만들지 않게 */
+  overflow-wrap: break-word;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 1.2em 0 0.5em;
+  line-height: 1.3;
+}
+
+.markdown-body h1 {
+  font-size: 1.5em;
+}
+
+.markdown-body h2 {
+  font-size: 1.25em;
+}
+
+.markdown-body h3 {
+  font-size: 1.1em;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body pre,
+.markdown-body table {
+  margin: 0.6em 0;
+}
+
+/* code 만 설정 글꼴을 따른다 — 본문 산문(.markdown-body)은 사용자가 고른 "코드
+   글꼴"의 대상이 아니라 종전 그대로다 */
+.markdown-body code {
+  font-family: var(--viewer-font-family, monospace);
+  font-size: var(--viewer-font-size, 12px);
+  background: var(--bg-panel);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+.markdown-body pre {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 6px 8px;
+  overflow-x: auto;
+}
+
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+}
+
+.markdown-body blockquote {
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+  color: var(--fg-muted);
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+.markdown-body table {
+  border-collapse: collapse;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  text-align: left;
+}
+
+/* 링크는 href 가 없다 (markdown-view.ts 계약 1) — 색만 주고 커서는 기본값이다:
+   눌러도 아무 일이 없는 것이 계약이라 클릭 가능한 척하지 않는다 */
+.markdown-body .md-link {
+  color: var(--accent);
+}
+
+/* 이미지 자리 표시 — 원격 로드를 하지 않는다는 사실이 화면에 보이게 */
+.markdown-body .md-image {
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+/* 2MiB 초과 안내 — 렌더를 거부하고 텍스트 뷰어로 여는 길만 준다 */
+.markdown-notice {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.markdown-open-text {
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.markdown-open-text:hover {
+  background: var(--border);
+}
+
+/* ── send-mode 대상 선택 (17단계) ──────────────────────────────────────
+   workspace-view 가 #view 에 .send-mode 를 토글한다. pane 전체가 "클릭 = 대상
+   확정"임을 커서(crosshair)와 hover 테두리로 최소 표시한다. 셀렉터에 #view id
+   가 들어가 xterm.css 의 cursor(text 등)보다 특이도가 높다 — !important 불요.
+   현재는 .send-mode 를 켜는 arm 진입점이 UI 에 없어 이 규칙들이 실제로 매치되지
+   않는다 (휴면 — pane-view.ts 상단 주석). 차기 agent-facing 채널이 재배선한다. */
+
+#view.send-mode .pane,
+#view.send-mode .pane * {
+  cursor: crosshair;
+}
+
+#view.send-mode .pane:hover {
+  border-color: var(--send);
+}
+
+/* pane 집계 unread 배지 (18단계) — 이 pane 의 어느 탭이든 미확인 알림이 있으면
+   헤더 맨 앞(탭바 왼쪽)에 뜬다. 탭바가 넘쳐 잘린 탭의 dot 을 pane 층에서 대신
+   보여주는 자리다. display 를 지정하지 않아 hidden 속성만으로 감춰진다 (패치 대상) */
+.pane-dot {
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 0 2px;
+  color: var(--accent);
+  font-size: 7px;
+}

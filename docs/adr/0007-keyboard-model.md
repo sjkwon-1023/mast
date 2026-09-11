@@ -76,7 +76,7 @@ A terminal cannot distinguish `Enter` from `Shift+Enter` — both are CR — so 
 want "newline without submitting" agree on an out-of-band sequence. Claude Code's is
 `ESC CR`, which its `/terminal-setup` installs into VS Code and iTerm2 keymaps. The
 terminal view now emits `\x1b\r` for the combo itself (preventDefault plus blocking xterm's
-default CR), so the flow works in winmux **without** running `/terminal-setup`. Plain
+default CR), so the flow works in mast **without** running `/terminal-setup`. Plain
 `Enter` is untouched, so shells and `vim` behave exactly as before, and effectively no
 terminal program assigns `Shift+Enter` its own meaning. The interception happens in
 `terminal-view`'s `customKeyEventHandler` (next to copy/paste, which is where xterm-level

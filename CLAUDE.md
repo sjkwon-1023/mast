@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-winmux — a lightweight cmux-style terminal for Windows, centered on WSL2 and coding agents
+mast — a lightweight cmux-style terminal for Windows, centered on WSL2 and coding agents
 (Claude Code / Codex). Decisions: `docs/adr/`.
 
 The product plan `터미널-계획-v2.md` (Korean) is **no longer in the tree** — it was removed
@@ -31,13 +31,13 @@ focused-but-other-workspace case), viewer fonts and viewer zoom, Codex resume hi
 the earlier post-re-verification batch (Shift+Enter as ESC CR, sidebar reflow, workspace
 creation, icons). The WINDOWS-BUILD §10 subsections per release stay as regression
 checklists. One field lesson worth keeping: synthetic needs-input tests must reset state
-first (`winmux:idle` then `winmux:needsInput`) — the onset only fires on a transition, and
+first (`mast:idle` then `mast:needsInput`) — the onset only fires on a transition, and
 two rounds were burned on stale-state and wrong-token test artifacts that looked like app
 defects.
 
 ### Product principles
 
-winmux is a **lightweight multi-agent coding workspace for Windows + WSL2**. The goal is not to
+mast is a **lightweight multi-agent coding workspace for Windows + WSL2**. The goal is not to
 grow into an IDE; it is to make several terminal coding agents easy to run, inspect, switch
 between and control while the cost of the parts you are not looking at stays near zero. The
 constraints that follow from that, and which every entry in the backlog below is weighed against:
@@ -119,15 +119,15 @@ Accepted deferrals, one line each. None of these block the MVP.
   all gone.
 - **Toasts do not appear at all in the field — landed 2026-08-12** (user report 2026-08-12,
   v0.3.5): the card-style Windows notification never showed, focused or not. Root cause
-  **confirmed 2026-08-12**: Windows Settings › Notifications had no winmux entry at all
+  **confirmed 2026-08-12**: Windows Settings › Notifications had no mast entry at all
   (screenshot checked), i.e. the shell had never seen an app identity to attribute toasts to —
   an unpackaged, unsigned exe registers no AppUserModelID / Start-menu shortcut, and WinRT
   drops toasts from unregistered senders silently. Fixed by `src-tauri/src/app_identity.rs`,
   called at the very top of `main()` (before the webview and plugin init): it calls
   `SetCurrentProcessExplicitAppUserModelID` and creates/refreshes
-  `%AppData%\...\Start Menu\Programs\winmux.lnk` with `PKEY_AppUserModel_ID`, idempotently —
+  `%AppData%\...\Start Menu\Programs\mast.lnk` with `PKEY_AppUserModel_ID`, idempotently —
   same target + AUMID means no write, a moved exe rewrites the target (the version-swap case).
-  The AUMID is **`app.winmux.desktop`**, i.e. `tauri.conf.json`'s `identifier`, because that is
+  The AUMID is **`app.mast.desktop`**, i.e. `tauri.conf.json`'s `identifier`, because that is
   what the plugin puts on the toast (`tauri-plugin-notification` 2.3.3 `desktop.rs:27` takes
   `app.config().identifier`, `desktop.rs:195-206` sets it as the app_id unless the exe sits in
   `target\{debug,release}`); a `const` assert against `tauri.conf.json` breaks the build if the
@@ -139,8 +139,8 @@ Accepted deferrals, one line each. None of these block the MVP.
   were rewritten in v0.3.7 (next entry); the registration mechanism itself is unchanged.
 - **Toasts still did not appear once the identity was registered — redesigned 2026-08-13**
   (field diagnosis, v0.3.6). The identity work above was *correct*: `Get-StartApps` lists
-  `winmux app.winmux.desktop`, and a hand-run
-  `CreateToastNotifier("app.winmux.desktop").Show(...)` in PowerShell puts a card on screen, so
+  `mast app.mast.desktop`, and a hand-run
+  `CreateToastNotifier("app.mast.desktop").Show(...)` in PowerShell puts a card on screen, so
   the OS pipeline is proven. Inside the app the onset fired (the chime rang) and no toast
   followed, leaving **two suspects that could not be told apart from inside the app**: (a)
   WebView2's `document.hasFocus()` staying `true` while the window is unfocused, which would
@@ -167,7 +167,7 @@ Accepted deferrals, one line each. None of these block the MVP.
     basis and was deleted — dev builds register the Start-menu shortcut like any other, or their
     toasts would die silently.
   - Diagnosis has a field-visible window: every attempt appends one timestamped `ok`/`err` line
-    to `%AppData%\app.winmux.desktop\toast.log` (best-effort, body not logged, truncated past
+    to `%AppData%\app.mast.desktop\toast.log` (best-effort, body not logged, truncated past
     64 KiB), so the next round can separate "never called" from "sent but not shown" from
     "WinRT refused" without a dev console.
   - The rule also widened, since the old one leaned on the chime: a toast is suppressed **only**
@@ -189,17 +189,17 @@ Accepted deferrals, one line each. None of these block the MVP.
   (review finding 2026-08-11; docs state the honest contract).
 
 - **Agent-facing pane-send channel** — **landed 2026-08-11 as a shell CLI**, not MCP (user
-  decision: MCP is heavy, and it is a v2 browser-surface question instead). `winmux send`
-  addresses a target by stable tab id (`'#181'`) as well as by title, and `winmux ls`
-  enumerates the tabs over a query channel (`OSC 777;winmux-query`, reply written to a
+  decision: MCP is heavy, and it is a v2 browser-surface question instead). `mast send`
+  addresses a target by stable tab id (`'#181'`) as well as by title, and `mast ls`
+  enumerates the tabs over a query channel (`OSC 777;mast-query`, reply written to a
   `/tmp` file the caller names). Contract in `scripts/wsl/claude-hook-example.md`, agent
-  surface in `scripts/wsl/skills/winmux-send/SKILL.md`, verification in WINDOWS-BUILD §10.
+  surface in `scripts/wsl/skills/mast-send/SKILL.md`, verification in WINDOWS-BUILD §10.
   Still open: **reading a pane's scrollback** (enumeration is metadata only — an opt-in
-  design is needed before any output leaves a pane), and `winmux ls`'s **`COMMAND` column
+  design is needed before any output leaves a pane), and `mast ls`'s **`COMMAND` column
   showing `?` for a tab whose shell is in another distro or a Windows shell** (it is read
   from this distro's `/proc`). Keyboard targeting for the old manual send mode stays absorbed
   by the stage-17 retirement — it is not coming back.
-- **`winmux send` submitted to shells but not to TUI agents — fixed 2026-08-22** (found in
+- **`mast send` submitted to shells but not to TUI agents — fixed 2026-08-22** (found in
   the field 2026-08-15, v0.3.11). `cmd_send` appended **LF** (`printf '%s\n' "$text"`, the CLI
   heredoc in `provision.rs`). A shell ran the line because its line discipline takes LF as
   end-of-line, but a raw-mode TUI did not — the terminal sends **CR** for Enter, so Codex and
@@ -226,8 +226,8 @@ Accepted deferrals, one line each. None of these block the MVP.
 - **≤100MB RAM** — ~129MB at checkpoint 2 sits inside the 100–150MB adoption band
   (ADR-0001); getting under 100MB is a v2 optimization.
 - **Per-tab shell history GC — landed 2026-08-22 as delete-on-close** (user decision,
-  v0.3.11). Closing a tab now deletes its `~/.winmux/history/tab-<id>`, its
-  `~/.winmux/resume/tab-<id>` and any `tab-<id>.tmp.<pid>` a killed hook left mid-write. The
+  v0.3.11). Closing a tab now deletes its `~/.mast/history/tab-<id>`, its
+  `~/.mast/resume/tab-<id>` and any `tab-<id>.tmp.<pid>` a killed hook left mid-write. The
   core reports the removal — `SessionHost::release_tabs` is reached from `CloseTab`,
   `ClosePane` and `CloseWorkspace` only, **never from `SessionExited`**, because an exited tab
   is revivable under the same id (ADR-0010) and has to find its own history when it comes back.
@@ -243,15 +243,15 @@ Accepted deferrals, one line each. None of these block the MVP.
   alternatives: [ADR-0013](docs/adr/0013-retiring-a-closed-tab.md). Verification:
   WINDOWS-BUILD §10 v0.3.11 item 2.
 - **The resume hint covers Codex too — landed 2026-08-12** (setup v7). A new
-  `~/.winmux/bin/winmux-codex-notify.sh` reads Codex's notify payload from `$1` (it arrives as
+  `~/.mast/bin/mast-codex-notify.sh` reads Codex's notify payload from `$1` (it arrives as
   the final **argv** element, not on stdin), records `codex resume <thread-id>` in the same
-  per-tab file the Claude hook writes, and delegates the `winmux:idle` emission to
-  `winmux-notify.sh` — whose body is now Codex's last message rather than a fixed string.
+  per-tab file the Claude hook writes, and delegates the `mast:idle` emission to
+  `mast-notify.sh` — whose body is now Codex's last message rather than a fixed string.
   Both agents write one file, so **the last agent to finish a turn in a tab wins**, and the
   spawn wrapper's read guard is a whitelist that now takes `codex resume <token>` as well.
   The exclusion that blocked this was the "never rewrite an existing `notify`" rule; it is
   resolved by a **self-migration** narrow enough to keep the rule: the *only* value ever
-  replaced is one byte-for-byte identical to the line winmux itself wrote (unchanged from
+  replaced is one byte-for-byte identical to the line mast itself wrote (unchanged from
   setup v2 through v6; re-parsed with `tomllib` and value-checked before the write when
   `tomllib` exists — without it the in-place swap proceeds unverified). Every other `notify`, hand-edited variants of
   our own line included, is left untouched with a log line naming the replacement. Payload
@@ -288,27 +288,27 @@ Accepted deferrals, one line each. None of these block the MVP.
   headless escape hatch never fires under WSL). Interop and the default-browser registration were
   healthy the whole time. Landed: web-links addon + an `open_url` command on `ShellExecuteW`
   (http/https only, checked on both sides, suppressed while a TUI holds mouse tracking), and a
-  provisioned `~/.winmux/bin/winmux-open` installed under the name `xdg-open` — not a `$BROWSER`
+  provisioned `~/.mast/bin/mast-open` installed under the name `xdg-open` — not a `$BROWSER`
   export, which would take Codex off the WSL path its own crate already handles. The URL never
   touches a Windows command line on either side. See
   [ADR-0012](docs/adr/0012-opening-links.md). Verification: WINDOWS-BUILD §10 v0.3.10 item 3.
 - **Agent coverage beyond Claude Code and Codex — Antigravity CLI and opencode** (user
-  request 2026-08-15, not started). Both would reuse the `winmux:running` /
-  `winmux:needsInput` / `winmux:idle` tokens and `winmux-notify.sh` **unchanged**: nothing in
-  `winmux-core` (`osc.rs`, `notify.rs`) or the front-end (`chime.ts`, `main.ts`) is
+  request 2026-08-15, not started). Both would reuse the `mast:running` /
+  `mast:needsInput` / `mast:idle` tokens and `mast-notify.sh` **unchanged**: nothing in
+  `mast-core` (`osc.rs`, `notify.rs`) or the front-end (`chime.ts`, `main.ts`) is
   agent-specific. The work is `provision.rs` — the single source of truth for every notify
   script and every auto-wiring block — plus a `SETUP_VERSION` bump, a resume-command entry in
   `host.rs::bash_argv`'s whitelist (today `claude --resume` and `codex resume` only), and a
   matching section in `scripts/wsl/claude-hook-example.md`. What is *not* settled, per agent:
-  - **Antigravity**: only the **CLI** is in scope. The IDE's agents do not run in a winmux
+  - **Antigravity**: only the **CLI** is in scope. The IDE's agents do not run in a mast
     tab, so there is no pts to emit into and no tab to attribute a toast to. The CLI's hooks
     are near-isomorphic to Claude Code's — `hooks.json` under `.agents/` per workspace or
     `~/.gemini/config/` globally, the same `{"matcher": …, "hooks": [{"type": "command",
     "command": …, "timeout": …}]}` shape, payload on stdin — so the Claude half's Python
     merge is the template rather than new machinery. The gap is the **event mapping**: the
     documented events are `PreToolUse` / `PostToolUse` / `PreInvocation` / `PostInvocation` /
-    `Stop`, so `Stop → winmux:idle` is obvious, but there is **no `Notification` equivalent
-    to carry `winmux:needsInput`** — the one state the toast exists for. Until that is
+    `Stop`, so `Stop → mast:idle` is obvious, but there is **no `Notification` equivalent
+    to carry `mast:needsInput`** — the one state the toast exists for. Until that is
     answered the integration is idle-only, which is half the feature. Payload keys are
     camelCase (`conversationId`, `transcriptPath`, `terminationReason`, `fullyIdle`); unlike
     Codex no snake-case fallback is in evidence. Version risk: hook delivery has been in flux
@@ -318,12 +318,12 @@ Accepted deferrals, one line each. None of these block the MVP.
   - **opencode**: it has **no shell-command hook at all** — extension is TypeScript/JS
     plugins under `.opencode/plugins/` (project) or `~/.config/opencode/plugins/` (global), a
     default-exported async function returning an event-hook object. The mapping is the better
-    of the two (`session.idle → winmux:idle`, `permission.asked → winmux:needsInput`,
-    `permission.replied → winmux:running` covers all three states where Antigravity covers
+    of the two (`session.idle → mast:idle`, `permission.asked → mast:needsInput`,
+    `permission.replied → mast:running` covers all three states where Antigravity covers
     one), and the plugin context hands over Bun's `$` shell, so it can call
-    `~/.winmux/bin/winmux-notify.sh` verbatim — no third notify script. The blocker is **tty
+    `~/.mast/bin/mast-notify.sh` verbatim — no third notify script. The blocker is **tty
     attribution**: opencode plugins run in the server process with no controlling terminal,
-    so `winmux_emit` would always fall through to its ancestor-pts walk, and it is unverified
+    so `mast_emit` would always fall through to its ancestor-pts walk, and it is unverified
     whether that server sits in the tab's ancestor chain at all — or whether one server is
     shared across tabs, in which case a needsInput toast lands on the wrong tab or nowhere.
     Answer that before writing any provisioning. Writing a plugin file is also a different
@@ -335,7 +335,7 @@ Accepted deferrals, one line each. None of these block the MVP.
   it; separately, the same memory pressure left already-running agents unresponsive. Full
   analysis and the decisions are in [ADR-0009](docs/adr/0009-startup-marker-and-spawn-deadline.md).
 
-  **Landed**: a startup marker (`OSC 777;winmux-started`) emitted first thing by the wrapper, a
+  **Landed**: a startup marker (`OSC 777;mast-started`) emitted first thing by the wrapper, a
   20s watchdog that marks the tab `NotStarted` **without killing the session** (a late marker
   clears it), a pane banner naming WSL as the likely cause with a Retry that cleans up the
   session the tab still held, and a 5s spawn deadline so one tab cannot hold the dispatcher
@@ -351,7 +351,7 @@ Accepted deferrals, one line each. None of these block the MVP.
   whether killing `wsl.exe` actually reaps the Linux-side relay — the incident's zombies were
   `/init` relays that survived with `PPID=1`, and WINDOWS-BUILD §10 v0.3.9 item 2 measures it.
 - **A tab whose shell died stayed dead forever — fixed 2026-08-20** (user report, v0.3.9).
-  Field diagnosis: the machine slept at 07:28 with winmux running, WSL went down with it, and
+  Field diagnosis: the machine slept at 07:28 with mast running, WSL went down with it, and
   the app recorded all ten `SessionExited` events (`code: 1073807364` = `0x40010004`,
   `DBG_TERMINATE_PROCESS`) into `state.json`. `Exited` was an **absorbing, persisted** state —
   `sanitize` kept the status while clearing `pty_session`, the boot respawn enumerates
@@ -368,14 +368,14 @@ Accepted deferrals, one line each. None of these block the MVP.
   WINDOWS-BUILD §10 v0.3.9 item 4. **Follow-up the same day** (v0.3.10): the first boot that used
   it revived 11 tabs at once and 6 shells never started — 13 `wsl.exe` inside one second lost the
   race with a cold VM (no zombie relays; live `bash -l` matched the 5 `running` tabs exactly). Boot
-  now warms each distro once and paces respawns (`boot.rs`, `WINMUX_RESPAWN_STAGGER_MS`), off the
+  now warms each distro once and paces respawns (`boot.rs`, `MAST_RESPAWN_STAGGER_MS`), off the
   setup thread, and `NotStarted` is normalized on restore too so a restart retries a partly failed
   wave. See the ADR-0010 amendment. **Still open alongside it**: the tab `cwd` gap above means a
   revived tab reopens at the workspace root rather than where the shell had moved to.
 - **Sessions do not survive a severed relay, and that is a deliberate limit** (considered
   2026-08-15, not planned). Putting a detach layer (`dtach`, ~50KB installed and <1MB per
   server) between the terminal and the shell would let a session live through a broken vsock
-  channel, an app restart, even a winmux crash — the agent process keeps running and reattaches
+  channel, an app restart, even a mast crash — the agent process keeps running and reattaches
   where it left off, making the resume-hint feature unnecessary. It would not survive
   `wsl --shutdown` or a reboot, and output produced while detached is lost. Rejected for now on
   complexity, not cost: socket lifetime, attach-vs-new arbitration, resize forwarding and
@@ -386,8 +386,8 @@ Accepted deferrals, one line each. None of these block the MVP.
   `windows_subsystem = "windows"`, so there was no console for it to land in: two field
   incidents were reconstructed from `dmesg` and process trees that happened to still be alive.
   Now `settings.json`'s `"log": true` (default off, read once at boot — enabling it takes a
-  restart) opens `winmux.log` next to `state.json`. Two macros split by purpose: `winlog!` goes
-  to stderr **and** the file and replaced all 66 `eprintln!("[winmux] …")` sites verbatim, so
+  restart) opens `mast.log` next to `state.json`. Two macros split by purpose: `winlog!` goes
+  to stderr **and** the file and replaced all 66 `eprintln!("[mast] …")` sites verbatim, so
   dev behaviour is unchanged and what the app already said now lands somewhere; `wintrace!` is
   file-only and is where the per-event traces removed from the console the same day came back
   (see the entry above — noise in a console is the content of a diagnostic log). **While off
@@ -488,7 +488,7 @@ Accepted deferrals, one line each. None of these block the MVP.
   `/api/state` is the desktop's snapshot JSON, `/api/tabs/{id}/screen` an offset-based, read-only
   delta of the replay (`PtySession::screen_since` — never `reattach()`, which would reset the
   desktop's flow control), `/api/tabs/{id}/input` raw bytes written verbatim. Everything
-  network-facing is the new Tauri-free crate `crates/winmux-remote` — its own `httparse` loop,
+  network-facing is the new Tauri-free crate `crates/mast-remote` — its own `httparse` loop,
   since `tiny_http` has no head cap and drains a rejected body — tested on Linux against a real
   listener; the glue only reads settings, keeps the token file, gates static assets by the
   embedded key set (Tauri's release lookup falls back to `index.html` for unknown paths) and
@@ -530,7 +530,7 @@ Accepted deferrals, one line each. None of these block the MVP.
   a tab. Both agents take an image *file path* in the prompt (Claude Code's drag-and-drop path
   handling, Codex's `attach_image path`), so the shape that fits is: an attach button / paste
   handler on the phone → a new authenticated upload endpoint (image types only, ~10 MiB cap,
-  server-named files) → the app writes into a WSL-visible `~/.winmux/uploads/` → the path is sent
+  server-named files) → the app writes into a WSL-visible `~/.mast/uploads/` → the path is sent
   as text with the separate CR, exactly like Send. Two decisions ride along: it is a new capability
   class ("the phone can write files on the PC") and needs an ADR-0016 amendment, and the uploaded
   files need a lifetime — delete-on-close next to the tab's history files (ADR-0013) is the
@@ -560,7 +560,7 @@ Accepted deferrals, one line each. None of these block the MVP.
   line and went with it. Kept — every `console.debug` that reports a *failure* (toast send,
   stale auto-response, the chime's three), and the boot/reset/spawn lines that report a rare
   significant event. The switch tracer keeps measuring but no longer prints: the report still
-  lands on `window.__winmux.lastSwitch`, so the open ~236ms item keeps its instrument. Note the
+  lands on `window.__mast.lastSwitch`, so the open ~236ms item keeps its instrument. Note the
   backend half was already invisible in release (`windows_subsystem = "windows"` leaves
   `eprintln!` nowhere to land), so this bought code clarity, not runtime quiet — the actual gap
   is the "No runtime log file" entry above.
@@ -585,7 +585,7 @@ Accepted deferrals, one line each. None of these block the MVP.
   forces the IME to commit. What the code cannot settle: whether `compositionend` never arrived
   or arrived without clearing. That is why the opt-in log (above) records the composition events
   and the swallowed shortcuts — the next reproduction answers it. Two candidate responses when it
-  does: narrow the `isComposing` guard to unmodified keys (every winmux shortcut carries Ctrl or
+  does: narrow the `isComposing` guard to unmodified keys (every mast shortcut carries Ctrl or
   Alt and no IME uses those, so this restores an escape hatch without touching the cause), or
   track composition state in the app and force it closed on blur and tab switch (heavier, and
   premature without knowing the trigger).
@@ -648,7 +648,7 @@ Accepted deferrals, one line each. None of these block the MVP.
   diff in the DOM. Unified diff is the default renderer; side-by-side only if it stays cheap on
   large diffs. The later step is handing selected lines or collected review notes to the active
   Claude Code/Codex tab as file/line context over the existing send channel — that reuses
-  `winmux send` and keeps the surface a viewer.
+  `mast send` and keeps the surface a viewer.
 - **The README shows no screenshots and no hero clip** (2026-09-11, not started). The workflow
   it describes — several agents running, the sidebar status changing, opening a file or Markdown
   tab, checking and sending input from a phone — is exactly the part a reader cannot infer from
@@ -666,14 +666,14 @@ Accepted deferrals, one line each. None of these block the MVP.
 
 ## Layout
 
-- `crates/winmux-core` — pure Rust core (PTY session, flow control, OSC scanner, replay
+- `crates/mast-core` — pure Rust core (PTY session, flow control, OSC scanner, replay
   buffer, and the `model`/`command` state + dispatcher). No Tauri dependency; this is
   where unit/integration tests live.
-- `crates/winmux-remote` — the LAN remote surface's HTTP server: head parser on `httparse`,
+- `crates/mast-remote` — the LAN remote surface's HTTP server: head parser on `httparse`,
   route table, pairing token, per-IP limiter, handlers. Pure Rust, no Tauri; its integration
   tests run against a real listener on Linux (`tests/server.rs`, unix-only `tests/server_pty.rs`).
-- `apps/winmux` — the MVP app (계획 v2 section 17, stage 10 onward): Tauri v2 + vanilla TS
-  frontend driving the `winmux-core` `Dispatcher` over a single serializable `Command` bus.
+- `apps/mast` — the MVP app (계획 v2 section 17, stage 10 onward): Tauri v2 + vanilla TS
+  frontend driving the `mast-core` `Dispatcher` over a single serializable `Command` bus.
   Architecture: ADR-0002 (state/bus/attach), ADR-0003 (split/tab UI).
 - `apps/spike` — **frozen as the measurement harness** (ADR-0001 reproduction rig):
   feature work stops here, only compiling is maintained going forward. Its checklist and
@@ -686,13 +686,13 @@ Accepted deferrals, one line each. None of these block the MVP.
 
 ```bash
 export PATH="$HOME/.local/node/bin:$HOME/.cargo/bin:$PATH"
-cargo test -p winmux-core
-cargo test -p winmux-remote
+cargo test -p mast-core
+cargo test -p mast-remote
 cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
 cargo clippy --workspace --all-targets --target aarch64-pc-windows-msvc -- -D warnings
 cargo check --workspace --target x86_64-pc-windows-msvc
 cd apps/spike && npm run build && npx vitest run
-cd apps/winmux && npm run build && npx vitest run
+cd apps/mast && npm run build && npx vitest run
 ```
 
 The ARM64 clippy works on the Linux dev host because check-family commands never link —
@@ -706,7 +706,7 @@ Windows runners bill at 2x).
   sudo-free setup (apt-get download + dpkg -x into `~/.local/llvm`) is in README
   "Development".
 - Windows build/run and the manual verification flow: `docs/WINDOWS-BUILD.md`.
-- The app spawns `wsl.exe [-d $WINMUX_DISTRO] -- bash -l` on Windows, `$SHELL -l` on Unix.
+- The app spawns `wsl.exe [-d $MAST_DISTRO] -- bash -l` on Windows, `$SHELL -l` on Unix.
 
 ## Conventions
 
@@ -717,13 +717,13 @@ Windows runners bill at 2x).
 - The terminal output hot path stays raw binary end to end (`ipc::Channel` +
   `InvokeResponseBody::Raw`; xterm gets `Uint8Array`). No JSON on that path — JSON is
   fine for low-frequency events (`state-changed`, `terminal-exit`, stats). OSC no longer
-  crosses the IPC boundary in `apps/winmux` — it is routed into the model in Rust (stage 18);
+  crosses the IPC boundary in `apps/mast` — it is routed into the model in Rust (stage 18);
   the `osc-event` emit survives only in the frozen `apps/spike`.
 - Lock discipline in the glue: never hold the session-registry mutex across a blocking
   PTY call. Write/resize/spawn go through `spawn_blocking`; `ack_output` stays sync and
   cheap. See the module docs in `apps/spike/src-tauri/src/commands.rs`.
 - Flow control must pause the PTY *read* (backpressure into the OS pipe), never just the
-  delivery. See `winmux-core::session` reader loop.
+  delivery. See `mast-core::session` reader loop.
 
 ## Docs
 

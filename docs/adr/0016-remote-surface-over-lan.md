@@ -4,15 +4,15 @@ Status: accepted (2026-09-05) · Verification: WINDOWS-BUILD §10 v0.3.17
 
 ## Context
 
-The request was to see the workspaces, panes and tabs of a running winmux from a phone on the
+The request was to see the workspaces, panes and tabs of a running mast from a phone on the
 same router, read a terminal tab's current screen, and send text to it — "PC on, lying in bed,
-answer the agent". Three constraints shaped the answer. winmux must stay light, so whatever
+answer the agent". Three constraints shaped the answer. mast must stay light, so whatever
 serves the phone has to cost nothing while it is off. No streaming is needed: a poll every two
-seconds is the whole interaction. And the PTY sessions live inside the winmux process, so any
-remote surface must be a door that winmux itself opens — there is no adapter process that could
+seconds is the whole interaction. And the PTY sessions live inside the mast process, so any
+remote surface must be a door that mast itself opens — there is no adapter process that could
 reach a session from outside.
 
-Two facts about the existing code decided the shape. The Tauri glue (`apps/winmux/src-tauri`)
+Two facts about the existing code decided the shape. The Tauri glue (`apps/mast/src-tauri`)
 cannot compile on the Linux dev host, so code placed there cannot be tested by `cargo test`;
 authentication and request parsing are exactly the code that must be. And ADR-0002 made the
 command bus and the state snapshot serializable, so the phone can be handed the very JSON the
@@ -20,14 +20,14 @@ desktop already receives.
 
 ## Decisions
 
-1. **The HTTP server lives inside the winmux process, on the Windows side, off by default.**
+1. **The HTTP server lives inside the mast process, on the Windows side, off by default.**
    `settings.json` gains `"remote": { "port": <1024-65535> }`; the key's presence turns the
    surface on, `port` is required and range-checked with the same loud failure as `fontSize`,
    and the file is read once at boot (ADR-0014's rule). While off nothing exists — no listener,
    no thread, no token file. Windows-side because a Windows process is reachable at the router
    IP without WSL2's NAT.
 
-2. **A new crate, `crates/winmux-remote`, owns everything network-facing** and knows nothing
+2. **A new crate, `crates/mast-remote`, owns everything network-facing** and knows nothing
    about Tauri. It receives `Arc<Mutex<Dispatcher>>` and `Arc<SessionManager>` from the glue
    plus two closures — one that resolves a static asset key, one that logs a line — and is
    tested on Linux against a real listener on `127.0.0.1:0`. The glue keeps only settings,
@@ -78,7 +78,7 @@ desktop already receives.
    `replayDone` gate cannot be answered into a PTY the desktop already answers for. The phone
    encodes input itself from `term.modes` — bracketed paste when the mode is on — sends actions
    one at a time, and sends Enter as a **separate** request at least 150 ms after a paste, for
-   the reason recorded with the v0.3.16 `winmux send` fix: both agent TUIs treat one burst as a
+   the reason recorded with the v0.3.16 `mast send` fix: both agent TUIs treat one burst as a
    paste and swallow a CR inside it. The page sizes itself to the visual viewport, since phone
    browsers shrink only the visible window when the keyboard opens.
 
@@ -124,7 +124,7 @@ desktop already receives.
   `localStorage` is bound to `http://<ip>:<port>`, so a device that later receives that IP can
   impersonate the origin. TLS was excluded: a self-signed certificate has to be installed on
   the phone, and Tailscale — the upgrade path that adds encryption, device identity and valid
-  HTTPS without touching winmux — costs a separate process. The pairing dialog says so.
+  HTTPS without touching mast — costs a separate process. The pairing dialog says so.
 - **The connection cap does not stop a slowloris.** Thirty-two slots, a ten-second timeout per
   read and a fifteen-second deadline per request bound each connection; a LAN host can still
   cycle through the slots and deny the phone. It cannot reach the desktop.
@@ -142,7 +142,7 @@ desktop already receives.
   reader takes that lock only to commit a chunk, so nothing deadlocks; an authenticated client
   hammering `since`-less requests can make the reader wait, and the limiter counts only
   authentication failures.
-- **Scrollback leaves the app.** `winmux ls` deliberately returns metadata only (ADR-0005
+- **Scrollback leaves the app.** `mast ls` deliberately returns metadata only (ADR-0005
   addendum); this surface returns a tab's replay bytes. The difference is that it is a named
   opt-in for the user's own device, locked by the token — the ADR-0005 rule that another radius
   arrives only as an explicit opt-in is exactly what `"remote"` is.

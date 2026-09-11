@@ -90,14 +90,14 @@ rebuilt, only re-entered.
   prompt from executing itself.
 - Absorbed by the retirement: the "keyboard targeting for send mode" idea (never built)
   dies with the mouse UI.
-- **Landed 2026-08-11 (addendum)**: the channel shipped as `OSC 777;winmux-send` plus a
-  `winmux-query` read half behind the `winmux` CLI — tab-id addressing as planned, but
+- **Landed 2026-08-11 (addendum)**: the channel shipped as `OSC 777;mast-send` plus a
+  `mast-query` read half behind the `mast` CLI — tab-id addressing as planned, but
   written to the target session's stdin in Rust rather than through this ADR's frontend
   paste path, so decision 5's bracketed-paste refusal and acceptance pre-check do not apply
   to it; the machinery kept dormant above is still unused. Contract:
   `scripts/wsl/claude-hook-example.md`.
 - **Confined to the requester's workspace (2026-08-11, user decision)**: both halves of that
-  channel — `winmux send`'s target resolution and `winmux ls`'s enumeration — stop at the
+  channel — `mast send`'s target resolution and `mast ls`'s enumeration — stop at the
   workspace the requester's own tab is in, because a workspace is the project isolation unit
   and a channel crossing it gave a mis-aimed line a blast radius reaching unrelated projects.
   A globally unique `#id` is no exception: uniqueness is a property of the address, not a key

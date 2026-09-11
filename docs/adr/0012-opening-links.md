@@ -4,7 +4,7 @@ Status: accepted (2026-08-20) · Verification: WINDOWS-BUILD §10 v0.3.10 item 3
 
 ## Context
 
-A user reported that clicking a URL in a winmux tab did nothing, and that OAuth logins never
+A user reported that clicking a URL in a mast tab did nothing, and that OAuth logins never
 reached the browser either. They assumed it was a WSL problem. It was not — or rather, it was
 two problems, only one of which is on the WSL side.
 
@@ -55,14 +55,14 @@ half a feature.
    TUI.
 
 4. **The WSL side gets a provisioned opener installed as `xdg-open`, not a `$BROWSER` export.**
-   `~/.winmux/bin` is already first on `PATH` for winmux shells, and `xdg-open` is the name
-   callers already try, so the shim is picked up with no further wiring — and only inside a winmux
+   `~/.mast/bin` is already first on `PATH` for mast shells, and `xdg-open` is the name
+   callers already try, so the shim is picked up with no further wiring — and only inside a mast
    tab. Exporting `BROWSER` was rejected because Codex handles WSL well on its own path and a
    `BROWSER` value would take it off that path.
 
-5. **The URL never travels on a Windows command line there either.** `winmux-open` puts the value
+5. **The URL never travels on a Windows command line there either.** `mast-open` puts the value
    in an environment variable, adds it to `WSLENV`, and PowerShell reads it back as
-   `$env:WINMUX_OPEN_TARGET`. It also refuses anything that is neither an http(s) URL nor an
+   `$env:MAST_OPEN_TARGET`. It also refuses anything that is neither an http(s) URL nor an
    existing path (paths go through `wslpath -w`, since callers use `xdg-open` for files too), and
    it checks that interop is actually enabled before trying — failing loudly, because a silent
    no-op looks exactly like "the browser did not open". Only the **first line** of
@@ -72,8 +72,8 @@ half a feature.
 
 ## Consequences
 
-- Inside a winmux tab, `~/.winmux/bin/xdg-open` shadows a system `xdg-open` the user might install
-  later (wslu, for instance). Outside a winmux tab nothing changes. This is the cost of the name
+- Inside a mast tab, `~/.mast/bin/xdg-open` shadows a system `xdg-open` the user might install
+  later (wslu, for instance). Outside a mast tab nothing changes. This is the cost of the name
   that makes it work without configuration.
 - `SETUP_VERSION` goes to 8, so every existing user re-runs provisioning once. It is idempotent,
   but it does rewrite the notify scripts and re-touch `~/.claude/settings.json`.

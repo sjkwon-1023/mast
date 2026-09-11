@@ -1,6 +1,6 @@
-# winmux
+# mast
 
-[![CI](https://github.com/sjkwon-1023/winmux/actions/workflows/ci.yml/badge.svg)](https://github.com/sjkwon-1023/winmux/actions/workflows/ci.yml)
+[![CI](https://github.com/sjkwon-1023/mast/actions/workflows/ci.yml/badge.svg)](https://github.com/sjkwon-1023/mast/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **A lightweight multi-agent coding workspace for Windows + WSL2.**
@@ -9,12 +9,12 @@ Run Claude Code, Codex, shells, and other terminal agents side by side; see whic
 running, waiting for input, or finished; inspect files and Markdown without opening an IDE; and
 check or control a tab from your phone on the same LAN.
 
-winmux was built after moving from cmux on macOS to Windows. The goal is deliberately narrow:
+mast was built after moving from cmux on macOS to Windows. The goal is deliberately narrow:
 keep the agent workflow useful while keeping inactive UI cheap. The app uses Tauri v2 and a
 single WebView2 over a Rust/ConPTY session core, with a 100MB target, 150MB ceiling, and roughly
 129MB measured app-side in the current release line.
 
-## Why winmux
+## Why mast
 
 - **Manage several coding agents at a glance** — workspace cards show agent state and the last
   message, so a waiting agent does not disappear behind another terminal.
@@ -29,7 +29,7 @@ single WebView2 over a Rust/ConPTY session core, with a 100MB target, 150MB ceil
 
 ## Requirements
 
-winmux is **WSL2 only**, by design rather than omission. Opening a terminal always means
+mast is **WSL2 only**, by design rather than omission. Opening a terminal always means
 ConPTY → `wsl.exe` → a login shell. There is no PowerShell or CMD profile.
 
 - Windows 11 (x64 or ARM64)
@@ -43,7 +43,7 @@ ConPTY → `wsl.exe` → a login shell. There is no PowerShell or CMD profile.
 - **Tabs inside panes** — every pane has its own tab strip; background tabs stay alive.
 - **Workspace sidebar** — one status card per workspace: agent state and its last message.
 - **Agent status and notifications** — Claude Code/Codex helpers emit OSC status into the terminal,
-  so winmux can show running / needs-input / idle state and notify without a separate agent daemon.
+  so mast can show running / needs-input / idle state and notify without a separate agent daemon.
 - **Pane-to-pane text passing** — send text to another pane, where it runs on arrival unless
   you ask to pre-fill the prompt instead.
 - **Viewer tabs** — folder browser, text viewer, and Markdown viewer reading over
@@ -62,9 +62,9 @@ ConPTY → `wsl.exe` → a login shell. There is no PowerShell or CMD profile.
 
 ## Installing
 
-winmux ships as a single portable executable for x64 and ARM64 — no installer, no setup wizard.
-Download `winmux-x64.exe` or `winmux-arm64.exe` from the
-[latest release](https://github.com/sjkwon-1023/winmux/releases/latest), matching your CPU
+mast ships as a single portable executable for x64 and ARM64 — no installer, no setup wizard.
+Download `mast-x64.exe` or `mast-arm64.exe` from the
+[latest release](https://github.com/sjkwon-1023/mast/releases/latest), matching your CPU
 (WSL2 with a distribution installed is still required, see [Requirements](#requirements)).
 It's unsigned, so Windows SmartScreen will warn on first launch — "More info" → "Run
 anyway".
@@ -74,17 +74,17 @@ with the C++ workload, Node.js LTS — is in
 [`docs/WINDOWS-BUILD.md`](./docs/WINDOWS-BUILD.md).
 
 ```powershell
-git clone https://github.com/sjkwon-1023/winmux.git
-cd winmux\apps\winmux
+git clone https://github.com/sjkwon-1023/mast.git
+cd mast\apps\mast
 npm install
 npm run tauri build -- --no-bundle
 ```
 
-That leaves `winmux-app.exe` in the repo's `target\release\`. Use `npm run tauri dev` instead
+That leaves `mast-app.exe` in the repo's `target\release\`. Use `npm run tauri dev` instead
 to run it with hot reload.
 
 Settings are edited by hand — there is no settings screen. Write
-`%AppData%\app.winmux.desktop\settings.json` and restart; any key may be left out, and a broken
+`%AppData%\app.mast.desktop\settings.json` and restart; any key may be left out, and a broken
 file reports itself in the status line instead of being silently ignored.
 
 ```json
@@ -114,33 +114,33 @@ Workspace cards can be dragged to reorder them, and `Ctrl+1`–`Ctrl+9` follow t
 the one you switch to most to the top and it becomes `Ctrl+1`. Dragging never changes which
 workspace is on screen.
 
-`log` writes a diagnostic log to `winmux.log` next to `state.json`, for reporting a bug that is
+`log` writes a diagnostic log to `mast.log` next to `state.json`, for reporting a bug that is
 hard to reproduce. It is **off unless you turn it on**, and turning it on takes a restart. While
 off nothing is opened, written or listened for; while on, the app records what it does — startup,
 shell spawns and how long they took, session exits, failures — plus the browser-level input
 events that are otherwise invisible from outside the window. **Terminal output and the text you
 type are never written**: input events record how many characters were involved, not which ones.
-The file is capped and rolls over into `winmux.log.1`, so leaving it on will not fill a disk.
+The file is capped and rolls over into `mast.log.1`, so leaving it on will not fill a disk.
 
 ## Setup
 
 ### Choosing a distribution
 
-winmux spawns into the WSL default distribution. To point it elsewhere:
+mast spawns into the WSL default distribution. To point it elsewhere:
 
 ```powershell
-$env:WINMUX_DISTRO = "Ubuntu-24.04"      # current shell
-setx WINMUX_DISTRO "Ubuntu-24.04"        # persist for your user account
+$env:MAST_DISTRO = "Ubuntu-24.04"      # current shell
+setx MAST_DISTRO "Ubuntu-24.04"        # persist for your user account
 ```
 
-This matters if you keep a locked-down distribution for agent work. winmux never filters
+This matters if you keep a locked-down distribution for agent work. mast never filters
 commands — it just never hands you a Windows shell, and leaves the real boundary to that
 distribution's own `/etc/wsl.conf`. Viewer tabs keep working there, because they read in the
 other direction, from Windows into WSL.
 
 ### Agent status
 
-On Windows, winmux automatically provisions its Claude Code/Codex notification helpers in each
+On Windows, mast automatically provisions its Claude Code/Codex notification helpers in each
 WSL distribution it uses. Provisioning is idempotent and failure is logged rather than silently
 changing terminal behavior. [`scripts/wsl/claude-hook-example.md`](./scripts/wsl/claude-hook-example.md)
 documents the OSC contract and the manual/fallback setup path.
@@ -166,12 +166,12 @@ Anything not listed goes straight to the PTY.
 | `Ctrl+C` / `Ctrl+Shift+C` | Copy when there is a selection — a bare `Ctrl+C` with no selection still sends SIGINT |
 
 The full list, including viewer-local keys, is in
-[`apps/winmux/src/keys.ts`](./apps/winmux/src/keys.ts).
+[`apps/mast/src/keys.ts`](./apps/mast/src/keys.ts).
 
 ## Troubleshooting
 
 **A tab opens but stays empty, or running sessions stop responding.** This is usually WSL under
-memory pressure rather than winmux. When the VM cannot find contiguous memory it fails to open
+memory pressure rather than mast. When the VM cannot find contiguous memory it fails to open
 the channel a new terminal needs, and processes already running start thrashing. A tab whose
 shell never came up says so and offers Retry; sessions that were already running have to be
 started again.

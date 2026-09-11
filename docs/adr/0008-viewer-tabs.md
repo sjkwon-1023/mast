@@ -19,23 +19,23 @@ so its verification is unusually load-bearing.
 
 ## Decisions
 
-1. **Path validation and UNC mapping live in `winmux-core::wslpath`, not in the glue.** The
-   concrete reason is the shape of the gates: `cargo test -p winmux-core` is the only test
+1. **Path validation and UNC mapping live in `mast-core::wslpath`, not in the glue.** The
+   concrete reason is the shape of the gates: `cargo test -p mast-core` is the only test
    command that runs Rust tests, so logic placed in `src-tauri` is exercised by no gate at
    all. Rejection rules: non-absolute, NUL, backslash (UNC separator smuggling), `.`/`..`
    components, components containing `:` (Windows alternate data streams), and components
    with a trailing dot or space (Win32 truncation aliases). Distro names get the same
    component rules — a later fix, after review found the asymmetry that let
-   `WINMUX_DISTRO=".."` assemble `\\wsl.localhost\..\`. Recorded limits: UNC paths beyond
+   `MAST_DISTRO=".."` assemble `\\wsl.localhost\..\`. Recorded limits: UNC paths beyond
    ~247 characters may fail (verbatim `\\?\UNC` not adopted for the MVP), and symlinks are
    resolved by 9P — read-only access to one's own machine is not a sandbox-escape threat
    model, and the rustdoc says so rather than implying a guarantee.
 2. **Distro resolution tries three sources and only then fails loud**: the argument
-   (workspace distro) → `WINMUX_DISTRO` → a lazy `wsl.exe -l -q` default-distro query
+   (workspace distro) → `MAST_DISTRO` → a lazy `wsl.exe -l -q` default-distro query
    (UTF-16LE decode, success-only process-lifetime cache, `CREATE_NO_WINDOW`). Terminal
    spawn already tolerates an unset distro, so viewers must too: the most common
    configuration — neither set — must not be the one where half the app dies. Total failure
-   names the fix (`workspace distro or WINMUX_DISTRO`) in the message; it is never a
+   names the fix (`workspace distro or MAST_DISTRO`) in the message; it is never a
    silently empty listing.
 3. **Navigation is a dispatcher command; reading file content is not.** `NavigateFolder`
    mutates the model, per 계획 v2 section 4's rule that every operation goes through the

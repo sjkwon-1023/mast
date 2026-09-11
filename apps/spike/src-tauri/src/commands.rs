@@ -1,4 +1,4 @@
-//! Tauri 커맨드 — 프론트엔드 ↔ winmux-core 글루 (spike-plan 4.5).
+//! Tauri 커맨드 — 프론트엔드 ↔ mast-core 글루 (spike-plan 4.5).
 //!
 //! 잠금 규율: 코어 `SessionManager` 의 내부 lock 아래에서는 id 발급과
 //! `Arc<PtySession>` 핸들 복사만 일어난다. 블로킹 가능성이 있는 호출(PTY
@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tauri::ipc::{Channel, InvokeResponseBody, Response};
 use tauri::{AppHandle, State};
-use winmux_core::session::{PtySession, SessionId, SessionOptions, SpawnSpec};
+use mast_core::session::{PtySession, SessionId, SessionOptions, SpawnSpec};
 
 use crate::sink::ChannelSink;
 use crate::state::AppState;
@@ -21,7 +21,7 @@ const REPLAY_CAP: usize = 1024 * 1024;
 const HIGH_WATER: usize = 2 * 1024 * 1024;
 const LOW_WATER: usize = 512 * 1024;
 
-/// `get_stats` 직렬화형. winmux-core 의 `SessionStats` 는 serde 의존이 없으므로
+/// `get_stats` 직렬화형. mast-core 의 `SessionStats` 는 serde 의존이 없으므로
 /// 글루에서 DTO 로 옮겨 내보낸다. `id` 는 `SessionManager::stats` 가 쌍으로
 /// 돌려주는 레지스트리 id — 이벤트·커맨드의 id 와 같은 공간이다.
 #[derive(serde::Serialize)]
@@ -36,14 +36,14 @@ pub struct SessionStatsDto {
 }
 
 /// 플랫폼별 기본 spawn 명령 (spike-plan 4.5).
-/// - Windows: `wsl.exe [-d $WINMUX_DISTRO] -- bash -l` (WINMUX_DISTRO 미설정이면 기본 배포판).
+/// - Windows: `wsl.exe [-d $MAST_DISTRO] -- bash -l` (MAST_DISTRO 미설정이면 기본 배포판).
 /// - Unix(개발 실행): `$SHELL -l`, `$SHELL` 없으면 `bash -l`.
 fn default_spawn_spec(cols: u16, rows: u16) -> SpawnSpec {
     #[cfg(windows)]
     {
         let mut args: Vec<String> = Vec::new();
         // 빈 문자열은 미설정으로 취급한다.
-        if let Ok(distro) = std::env::var("WINMUX_DISTRO") {
+        if let Ok(distro) = std::env::var("MAST_DISTRO") {
             if !distro.is_empty() {
                 args.push("-d".to_string());
                 args.push(distro);

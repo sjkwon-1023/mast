@@ -15,7 +15,7 @@ own); the flush point is the natural hook when they come.
 
 ## Decisions
 
-1. **Coalescing is a per-session merge cell, not a queue.** `winmux-core::notify`'s
+1. **Coalescing is a per-session merge cell, not a queue.** `mast-core::notify`'s
    `OscBatch`/`OscDelta` keep last-wins title/cwd/status, last-non-empty message (500-char
    cap) and sticky unread per session, so memory is bounded by the *session count*
    regardless of OSC volume — a flood cannot grow the batch. Within a window, cross-session
@@ -23,15 +23,15 @@ own); the flush point is the natural hook when they come.
    priority rule (decision 4) makes the load-bearing case order-independent.
 2. **The hot path never takes the dispatcher lock.** `OscRouter::push` (glue) does
    merge + notify under the pending lock only. Its worker runs a predicate condvar loop,
-   waits out a **100ms trailing window** (`WINMUX_OSC_FLUSH_MS`, following the
-   `WINMUX_RESET_*` knob convention) so a burst coalesces, takes the batch *after*
+   waits out a **100ms trailing window** (`MAST_OSC_FLUSH_MS`, following the
+   `MAST_RESET_*` knob convention) so a burst coalesces, takes the batch *after*
    releasing the pending lock, then takes the dispatcher lock and applies. The two locks
    are never held together, which makes deadlock impossible by construction rather than by
    review. `Drop` mirrors the Saver's close-notify-join discipline, and `flush_now()` runs
    on `RunEvent::Exit` **before** the Saver flush so the last cwd/status is persisted.
-3. **`winmux:<status>` is the token contract; everything else is status-neutral.** OSC 777
-   `notify;title;body` whose title is `winmux:running` | `winmux:needsInput` |
-   `winmux:idle` sets `Workspace.agent_status`; a token mismatch or an OSC 9 sets **unread
+3. **`mast:<status>` is the token contract; everything else is status-neutral.** OSC 777
+   `notify;title;body` whose title is `mast:running` | `mast:needsInput` |
+   `mast:idle` sets `Workspace.agent_status`; a token mismatch or an OSC 9 sets **unread
    and message only** and never asserts a status — OSC 9 is ConEmu progress reporting in
    other tools, and a foreign tool must not be able to claim an agent state. `running`
    raises no unread (it is progress, not a call for attention). OSC 0 — with `"2"` accepted

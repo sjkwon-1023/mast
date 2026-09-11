@@ -4,7 +4,7 @@ Status: accepted (2026-08-22) · Verification: WINDOWS-BUILD §10 v0.3.12
 
 ## Context
 
-Everything winmux says at runtime went to `eprintln!`, and the release build is
+Everything mast says at runtime went to `eprintln!`, and the release build is
 `windows_subsystem = "windows"` — there is no console for it to land in. Two field incidents
 were reconstructed from evidence outside the app: `dmesg`, a process tree that happened to still
 be alive, `state.json` after the fact. Both took hours, and in one of them two hypotheses were
@@ -34,7 +34,7 @@ when a rare bug is worth catching rather than something that runs for everyone a
    when off is a predictable branch on paths that already spawn processes or cross IPC.
 
 3. **Two macros, split by what the line is for.** `winlog!` writes to stderr *and* the file — it
-   replaces the existing `eprintln!("[winmux] …")` sites verbatim, so dev behaviour is unchanged
+   replaces the existing `eprintln!("[mast] …")` sites verbatim, so dev behaviour is unchanged
    and everything the app already says now has somewhere to land. `wintrace!` writes to the file
    only, and is where the per-event traces removed from the console earlier the same day came
    back. What was noise in a console is exactly the content of a diagnostic log.

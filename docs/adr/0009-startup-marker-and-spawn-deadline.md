@@ -11,7 +11,7 @@ the physically contiguous memory a Hyper-V vsock ring buffer needs (`dmesg`: ele
 healthy WSL terminal is `SessionLeader → Relay(<bash pid>) → bash`, but two `/init` relays sat
 with **no children at all**, still retrying `UtilAcceptVsock` hours later.
 
-winmux noticed none of it. The spawn returned `Ok`, no error surfaced, and a session that
+mast noticed none of it. The spawn returned `Ok`, no error surfaced, and a session that
 spawns cleanly and then stays silent forever is indistinguishable from an idle one here — the
 child has not exited so the waiter thread never wakes, and the reader gets no EOF and no
 `EIO`. The user was left staring at a blank pane with no way to tell an app bug from a WSL
@@ -22,7 +22,7 @@ milliseconds".
 ## Decisions
 
 1. **Detection keys on an explicit startup marker, never on output volume.** The WSL wrapper
-   emits `OSC 777;winmux-started` as its very first act, and that arrival is the signal.
+   emits `OSC 777;mast-started` as its very first act, and that arrival is the signal.
 
    "Any output means the shell is alive" was proposed and **rejected on evidence already in
    this repo**: ConPTY injects cursor probes (`ESC[6n`) into the output stream (ADR-0004), and
@@ -75,7 +75,7 @@ milliseconds".
 
 8. **Enabled only where a wrapper can emit the marker.** The unix development path launches
    `$SHELL -l` directly, so it has no marker contract and defaults to off; a slow rc would
-   otherwise be a false positive. `WINMUX_STARTUP_DEADLINE_MS` and `WINMUX_SPAWN_DEADLINE_MS`
+   otherwise be a false positive. `MAST_STARTUP_DEADLINE_MS` and `MAST_SPAWN_DEADLINE_MS`
    override both values (`0` disables), which is also how the field checklist reproduces the
    detection path.
 

@@ -1,4 +1,4 @@
-//! winmux spike — Tauri v2 부팅부. 로직은 commands/sink/state 모듈에 있고
+//! mast spike — Tauri v2 부팅부. 로직은 commands/sink/state 모듈에 있고
 //! 여기서는 상태 등록과 커맨드 핸들러 배선만 한다 (spike-plan 4.5).
 
 // Windows 릴리스 빌드에서 콘솔 창을 띄우지 않는다 (디버그 빌드는 콘솔 유지).
@@ -22,5 +22,5 @@ fn main() {
             commands::get_stats,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running winmux-spike");
+        .expect("error while running mast-spike");
 }

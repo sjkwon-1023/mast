@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mast</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <!-- 상태 라인은 일시 표시다 — 지속 프롬프트·에러가 있을 때만 main.ts 가
+         펼친다 (평시에는 접혀 터미널 영역을 넓게 쓴다). -->
+    <div id="status-line" hidden></div>
+    <div id="main">
+      <aside id="sidebar"></aside>
+      <div id="view"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
