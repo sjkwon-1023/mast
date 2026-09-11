@@ -32,10 +32,12 @@ import {
   clampFontPx,
   DEFAULT_FONT_PX,
   FONT_STEP_PX,
+  joinWrappedRows,
   MAX_SCREEN_LINES,
   tailRange,
   trimTrailingBlank,
 } from "./screen-text";
+import type { ScreenRow } from "./screen-text";
 import type { TabId } from "../types";
 
 const POLL_INTERVAL_MS = 2000;
@@ -305,10 +307,13 @@ export class TabView {
   private render(term: Terminal): void {
     const buffer = term.buffer.active;
     const [start, end] = tailRange(buffer.length, MAX_SCREEN_LINES);
-    const lines: string[] = [];
+    const rows: ScreenRow[] = [];
     for (let y = start; y < end; y += 1) {
-      lines.push(buffer.getLine(y)?.translateToString(true) ?? "");
+      const line = buffer.getLine(y);
+      // trimRight 없이 — 이어 붙일 행의 끝 공백을 살린다. 잘라 내는 것은 joinWrappedRows.
+      rows.push({ text: line?.translateToString(false) ?? "", wrapped: line?.isWrapped ?? false });
     }
+    const lines = joinWrappedRows(rows);
     const out = this.outputEl;
     const atBottom =
       out.scrollHeight - out.scrollTop - out.clientHeight <= STICK_TO_BOTTOM_PX;

@@ -96,6 +96,19 @@ desktop already receives.
    rule. Every input burst also triggers an immediate poll when the queue drains, since a
    2 s wait after a scroll tap reads as a dead button.
 
+   *Amendment (v0.3.22).* "Rendered as wrapped text" was breaking every long line twice: the
+   headless terminal has the PTY's width, so it soft-wraps a long line into several buffer
+   rows, and the CSS then wrapped each row again at the phone's width. The rows a terminal
+   wrapped are marked (`isWrapped`), so the phone now joins them back into one logical line
+   before the CSS sees it, trimming the right only where the logical line ends. Rows a TUI drew
+   with cursor moves are never marked and pass through unchanged, which is also the limit: a
+   full-width TUI layout still fragments at the phone's width, and re-interpreting the byte
+   stream at the phone's width cannot fix that because the stream carries absolute cursor
+   positions for the desktop's width. The only correct narrow layout comes from the TUI itself,
+   i.e. a PTY that follows the most recently active viewer (tmux's `window-size latest`) —
+   that reverses decision 5's "the phone never resizes" and is recorded as a backlog item
+   rather than decided here.
+
 8. **Static assets are gated by the embedded key set.** Tauri's release asset lookup falls back
    to `index.html` for any unknown path (`manager/mod.rs:406-428` in 2.11.5), so without a gate
    `/remote/typo` would serve the desktop page to an unauthenticated client. The glue collects

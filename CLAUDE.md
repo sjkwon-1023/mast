@@ -525,6 +525,24 @@ Accepted deferrals, one line each. None of these block the MVP.
   `since`-less requests (the limiter counts auth failures only); the phone bundle carries its
   own copy of xterm (the ~150 KB headless build); `lan_ip()` takes the default-route interface, which on a
   multi-homed PC may not be the phone's link.
+- **The phone broke every long line twice — fixed 2026-09-12** (user report, v0.3.22). The
+  headless terminal has the PTY's width, so a long line arrives as several soft-wrapped buffer
+  rows, and the phone's CSS wrapped each row again at its own width — the breaks "followed the
+  computer". `joinWrappedRows` (`screen-text.ts`) stitches the rows xterm marked `isWrapped`
+  back into one logical line, trimming the right only at the logical end, so the CSS wraps once.
+  TUI rows are drawn with cursor moves and are never marked, so Claude Code/Codex screens are
+  unchanged — including the part that still looks wrong: a full-width TUI layout fragments at
+  the phone's width. ADR-0016 decision 7 amendment records why re-interpreting the stream at
+  the phone's width cannot fix that. Verification: WINDOWS-BUILD §10 v0.3.22.
+- **PTY follows the latest viewer — backlog (2026-09-12, not started)**. The only way a TUI
+  lays itself out for the phone is to be told the phone's size: when a phone opens a tab, resize
+  the PTY to the phone's columns/rows (the TUI redraws on SIGWINCH), and restore the desktop's
+  size when the phone's polling lease lapses or the desktop is used again — tmux's
+  `window-size latest`. Costs: the desktop pane shows the narrow layout while the phone looks,
+  a lease with a timeout has to exist, and ADR-0016 decision 5 ("the phone never resizes")
+  needs an amendment. Sequenced behind real phone use of Claude Code tabs; a faithful
+  fixed-grid mode with horizontal scroll/pinch zoom is the cheaper alternative if reading is
+  not the main use.
 - **Image attach from the phone — backlog (user decision 2026-09-08)**. The phone composer is a
   plain textarea, so a pasted image goes nowhere, and no channel exists to hand one to the agent in
   a tab. Both agents take an image *file path* in the prompt (Claude Code's drag-and-drop path

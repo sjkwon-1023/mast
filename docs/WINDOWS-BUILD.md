@@ -2076,6 +2076,19 @@ the build.
    `scripts/icon/make-icon.py`; regenerate rather than edit the `.ico` by hand.
 2. **§12 item 8** in full — the migration checklist is the rest of this release's verification.
 
+### v0.3.22 — verification
+
+Phone-page only; the server is unchanged.
+
+1. **Long lines wrap once.** In a plain shell tab on the phone, print a line longer than the
+   desktop's width — `echo $PATH`, or `printf '%0.s-' $(seq 1 300); echo` — and read it on the
+   phone: one paragraph, wrapped at the phone's width, with no break at the desktop's column
+   count. Resize the desktop window so the same line re-wraps there; the phone still shows one
+   paragraph.
+2. **TUIs are untouched.** A Claude Code or Codex tab renders exactly as in v0.3.21 — the boxes
+   still fragment at the phone's width (that is the open "PTY follows the latest viewer" item,
+   not this fix), and ▲/▼ scrolling and the first frame (v0.3.19 item 1, v0.3.20 item 1) hold.
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy
