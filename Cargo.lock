@@ -1729,6 +1729,8 @@ name = "mast-app"
 version = "0.3.21"
 dependencies = [
  "anyhow",
+ "mast-core",
+ "mast-remote",
  "rfd",
  "serde",
  "serde_json",
@@ -1737,8 +1739,6 @@ dependencies = [
  "tauri-winrt-notification",
  "windows",
  "windows-sys 0.61.2",
- "mast-core",
- "mast-remote",
 ]
 
 [[package]]
@@ -1760,9 +1760,9 @@ dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
  "httparse",
+ "mast-core",
  "serde_json",
  "tempfile",
- "mast-core",
 ]
 
 [[package]]
@@ -1770,11 +1770,11 @@ name = "mast-spike"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "mast-core",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
- "mast-core",
 ]
 
 [[package]]
