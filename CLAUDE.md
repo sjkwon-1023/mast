@@ -35,6 +35,33 @@ first (`winmux:idle` then `winmux:needsInput`) — the onset only fires on a tra
 two rounds were burned on stale-state and wrong-token test artifacts that looked like app
 defects.
 
+### Product principles
+
+winmux is a **lightweight multi-agent coding workspace for Windows + WSL2**. The goal is not to
+grow into an IDE; it is to make several terminal coding agents easy to run, inspect, switch
+between and control while the cost of the parts you are not looking at stays near zero. The
+constraints that follow from that, and which every entry in the backlog below is weighed against:
+
+- Keep the Rust/session side durable and the WebView side disposable.
+- Do not keep inactive workspace renderers alive just to preserve UI state.
+- Bound queues, replay buffers, caches, and every other long-lived structure.
+- Prefer lazy, read-only viewer surfaces over embedding an editor or IDE runtime.
+- Preserve agent sessions across UI resets; a backend restart is never a routine
+  memory-recovery mechanism.
+- Add a feature only when its idle cost stays small for a user with many workspaces and agents.
+
+### Non-goals
+
+Not "not yet" — these are the shapes the product declines, so a proposal that needs one of them
+needs to argue against this list first.
+
+- Keeping every workspace's xterm/renderer alive just to preserve visual state.
+- Becoming a full code editor or IDE.
+- Supporting PowerShell/CMD profiles; WSL2 remains the terminal execution model.
+- Restarting the Rust backend as a memory watchdog action.
+- Adding always-on services whose idle cost scales with the number of workspaces, unless the
+  feature clearly requires it.
+
 ### Backlog
 
 Accepted deferrals, one line each. None of these block the MVP.
@@ -508,16 +535,20 @@ Accepted deferrals, one line each. None of these block the MVP.
   class ("the phone can write files on the PC") and needs an ADR-0016 amendment, and the uploaded
   files need a lifetime — delete-on-close next to the tab's history files (ADR-0013) is the
   natural rule. Not started.
-- **Splitter resize is mouse-drag only** — no keyboard equivalent for the drag handle.
+- **Splitter resize is mouse-drag only** — no keyboard equivalent for the drag handle. The
+  smallest of the accessibility gaps rather than the only one.
 - **1MiB-replay workspace switch is ~236ms with visible flicker** (ADR-0004) — candidates:
   smaller replay cap, progressive replay, hide-until-parsed. Since v0.3.15 the replay
   window is no longer the only carrier of terminal modes (ADR-0015 re-asserts them from
   the session instead), so shrinking the cap no longer trades bracketed paste, the alt
-  screen or mouse tracking away — only redraw fidelity.
+  screen or mouse tracking away — only redraw fidelity. Sequenced
+  behind the Codex transcript/scroll item below: if a reattach still feels slow once that
+  lands, shrinking the cap or replaying progressively is the next lever.
 - **Per-pane split-button affordance** (ADR-0004) — a first-time user read the header
   buttons as "split the *selected* pane".
 - **The `◎` browser tab button** was removed from the pane header (permanently disabled,
-  taking up space); it returns in v2 with the feature behind it.
+  taking up space); it returns in v2 with the feature behind it, and only if an unused
+  browser tab can be isolated well enough to cost nothing at idle.
 - **Diagnostic stderr/console logging — cleaned up 2026-08-22** (ADR-0004 deferred it until
   "before any public release"; v0.3.11). The rule applied: **per-event tracing of normal
   operation whose question has been answered goes; failure reports and once-per-boot facts
@@ -568,6 +599,70 @@ Accepted deferrals, one line each. None of these block the MVP.
   cycle — accepted narrow window.
 - **OSC scanner C0 handling** — CAN/SUB abort is implemented; the remaining C0 cases were
   never reviewed against real terminal behavior (carried from ADR-0001).
+
+- **Codex transcript and scroll position do not survive a workspace round-trip** (2026-09-11,
+  not started). Switching away and back rebuilds the pane's xterm from the replay, so a Codex
+  TUI returns pinned to the bottom. Investigate the reattach path first — the replay followed by
+  the forced `SIGWINCH` resize nudge — rather than reaching for a workspace-wide keep-alive:
+  disposing an inactive workspace's xterm instances is the memory model (ADR-0004), not an
+  oversight, and the principles above rule out keeping renderers alive for visual state.
+- **Attach-time redraw fires even for a session already attached in this WebView lifetime**
+  (2026-09-11, not started). The redraw/resize side effects exist for the recovery path after a
+  real WebView reset; a session re-shown inside the same lifetime does not need them. Narrow the
+  policy without losing the reset recovery.
+- **An exited tab keeps a live tab's replay budget** (2026-09-11, not started). A finished tab
+  still holds up to 1 MiB of replay although nothing will attach to it again except to read the
+  final screen. Measure whether 128–256 KiB still preserves a useful last screen and transcript
+  before changing the per-session behaviour. Same cap as the ~236ms switch entry above, wanted
+  smaller for a different reason.
+- **No Windows PTY resource soak test** (2026-09-11, not started). Nothing exercises
+  create/close/respawn at volume on the platform where the handles actually live. The shape:
+  500–1,000 cycles recording process private bytes, handle count, thread count,
+  `conhost`/`OpenConsole` and `wsl.exe` process counts, plus system paged/nonpaged pool where
+  practical. The assertion that matters is that the counts come back near baseline, not that
+  they stay flat within a cycle.
+- **The `portable-pty`/ConPTY shutdown path has never been audited on a supported Windows 11
+  build** (2026-09-11, not started). Verify that pseudoconsole, pipe, process and thread handles
+  are released on normal exit, explicit kill, failed spawn and rapid respawn. Verification work
+  unless the soak test above turns up a leak.
+- **Nothing cross-checks the model's session ids against `SessionManager` and `SinkRegistry`**
+  (2026-09-11, not started). Drift between the three is invisible today. Log a mismatch loudly,
+  and auto-clean a session only when it is provably orphaned — ADR-0010 makes an exited tab
+  revivable under the same id, so a missing sink is not by itself proof.
+- **No backend resource diagnostics for a long-running session** (2026-09-11, not started).
+  When a warning fires there is nothing to capture: backend RSS/private bytes, live and exited
+  session counts, replay bytes, handle and thread counts where available, orphan counts. It
+  must not be paired with an automatic backend restart — that destroys live PTYs and the agents
+  inside them, which the non-goals above rule out.
+- **The persistence handoff channel is unbounded** (2026-09-11, not started). A producer burst
+  can queue an arbitrary number of cloned `AppState` snapshots at the saver. Replace or wrap it
+  with a latest-state slot or a bounded channel; the opt-in log's bounded, drop-rather-than-block
+  queue (ADR-0014) is the precedent.
+- **`git_branch`/`git_dirty` are reserved on the model and never populated** (2026-09-11, not
+  started). Stage 19 deferred the display and the sidebar hides both fields while they are
+  empty. Wiring them to the workspace root is the small half; bounding the refresh cost for a
+  user with many workspaces is the half that decides the design.
+- **No Changes view beside the file viewer** (2026-09-11, not started). The wanted shape is a
+  viewer-class surface, not an editor: changed files with `M/A/D/?`, a Working / Staged / All
+  filter, and the selected file's diff fetched lazily instead of materializing a repository-wide
+  diff in the DOM. Unified diff is the default renderer; side-by-side only if it stays cheap on
+  large diffs. The later step is handing selected lines or collected review notes to the active
+  Claude Code/Codex tab as file/line context over the existing send channel — that reuses
+  `winmux send` and keeps the surface a viewer.
+- **The README shows no screenshots and no hero clip** (2026-09-11, not started). The workflow
+  it describes — several agents running, the sidebar status changing, opening a file or Markdown
+  tab, checking and sending input from a phone — is exactly the part a reader cannot infer from
+  prose.
+- **First-run setup is file-based and its failures are quiet** (2026-09-11, not started).
+  Automatic agent-hook provisioning needs to be obvious in the docs and its failures visible at
+  the surface. A settings UI or setup assistant earns its cost only once a real user is blocked
+  by `settings.json`.
+- **Unsigned releases meet SmartScreen** (2026-09-11, not started). Windows code signing is the
+  fix and it carries a running cost; revisit when external usage justifies it rather than ahead
+  of it.
+- **No external users yet** (2026-09-11, open). Adoption is one maintainer using it daily, so
+  every priority above is self-reported. Repeated-use feedback from a small set of real users is
+  what should decide the next scope expansion — ahead of any generic terminal or IDE feature.
 
 ## Layout
 
