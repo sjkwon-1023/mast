@@ -29,8 +29,8 @@ README's "Shells respawn in the directory they were last in" was therefore false
 
 1. **The emitter is injected by the spawn wrapper, not installed into the user's rc file.**
    `bash_argv` adds `PROMPT_COMMAND` to the environment assignment list it already builds for
-   `PATH`/`HISTFILE`/`WINMUX_TAB`, so every winmux shell reports its directory and no shell
-   outside winmux is affected.
+   `PATH`/`HISTFILE`/`MAST_TAB`, so every mast shell reports its directory and no shell
+   outside mast is affected.
 
    The backlog had predicted "a provisioning line and a `SETUP_VERSION` bump, not a code
    change". Measurement reversed that: writing into `~/.bashrc` needs a re-provisioning round
@@ -82,6 +82,6 @@ README's "Shells respawn in the directory they were last in" was therefore false
   the notice makes it visible and the alternative (decision 4's evidence) is a tab that cannot
   start at all.
 - The wrapper script grows one clause and one assignment. It is already the single place that
-  defines what a winmux shell is, and it is covered by the argv contract tests — which now
+  defines what a mast shell is, and it is covered by the argv contract tests — which now
   actually run, on the Windows CI leg (they had rotted unnoticed because the Linux gate never
   compiled them).

@@ -51,14 +51,14 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: |
-            apps/winmux/package-lock.json
+            apps/mast/package-lock.json
             apps/spike/package-lock.json
 
       - name: Core tests
-        run: cargo test -p winmux-core
+        run: cargo test -p mast-core
 
       - name: Remote crate tests
-        run: cargo test -p winmux-remote
+        run: cargo test -p mast-remote
 
       - name: Clippy (x64 Windows target)
         run: cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
@@ -66,8 +66,16 @@ jobs:
       - name: Clippy (ARM64 Windows target)
         run: cargo clippy --workspace --all-targets --target aarch64-pc-windows-msvc -- -D warnings
 
-      - name: winmux frontend (build + vitest)
-        working-directory: apps/winmux
+      - name: Workspace check (x64 Windows target)
+        run: cargo check --workspace --target x86_64-pc-windows-msvc
+
+      # 락을 손으로 고친 뒤 조용히 어긋나는 걸 막는다 — 위 cargo 단계가 Cargo.lock 을
+      # 갱신했다면 여기서 red 가 된다.
+      - name: Cargo.lock is up to date
+        run: git diff --exit-code -- Cargo.lock
+
+      - name: mast frontend (build + vitest)
+        working-directory: apps/mast
         run: |
           npm ci
           npm run build
@@ -94,9 +102,9 @@ jobs:
         target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
         include:
           - target: x86_64-pc-windows-msvc
-            asset_name: winmux-x64.exe
+            asset_name: mast-x64.exe
           - target: aarch64-pc-windows-msvc
-            asset_name: winmux-arm64.exe
+            asset_name: mast-arm64.exe
     steps:
       - uses: actions/checkout@v5
 
@@ -112,16 +120,16 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: apps/winmux/package-lock.json
+          cache-dependency-path: apps/mast/package-lock.json
 
-      - name: Build winmux (release, no bundle)
-        working-directory: apps/winmux
+      - name: Build mast (release, no bundle)
+        working-directory: apps/mast
         run: |
           npm ci
           npm run tauri build -- --target ${{ matrix.target }} --no-bundle
 
-      # 이 레포의 Rust 테스트 중 `winmux-app`(글루)의 것은 Windows 타깃에서만 컴파일된다
-      # — ubuntu 의 gates job 은 `winmux-core` 만 돌린다. 그래서 래퍼 argv 계약 테스트가
+      # 이 레포의 Rust 테스트 중 `mast-app`(글루)의 것은 Windows 타깃에서만 컴파일된다
+      # — ubuntu 의 gates job 은 `mast-core`/`mast-remote` 만 돌린다. 그래서 래퍼 argv 계약 테스트가
       # 시작 표식 도입(d21d9a8) 이후 조용히 낡아 있었다. x64 레그에서만 실행한다
       # (ARM64 는 크로스 빌드라 이 러너에서 실행 자체가 불가능하다).
       - name: Glue tests (x64 only — ARM64 binaries cannot run here)
@@ -130,16 +138,16 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: winmux-${{ matrix.target }}
+          name: mast-${{ matrix.target }}
           # 워크스페이스 루트 target 디렉터리 (레포 루트가 cargo 워크스페이스다).
-          path: target/${{ matrix.target }}/release/winmux-app.exe
+          path: target/${{ matrix.target }}/release/mast-app.exe
           if-no-files-found: error
 
       # 태그 트리거 전용: Release 에 올릴 타깃별 명확한 이름의 복사본.
       # workflow_dispatch 실행은 위 artifact 업로드(원본 파일명)만 하고 여기서 끝난다.
       - name: Copy release asset
         if: startsWith(github.ref, 'refs/tags/v')
-        run: cp target/${{ matrix.target }}/release/winmux-app.exe target/${{ matrix.target }}/release/${{ matrix.asset_name }}
+        run: cp target/${{ matrix.target }}/release/mast-app.exe target/${{ matrix.target }}/release/${{ matrix.asset_name }}
 
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')

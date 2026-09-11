@@ -144,7 +144,7 @@ it got reported first.
    consistent at chunk granularity: a re-attach can never see a preamble that describes a chunk
    the snapshot does not contain, or vice versa. The matches that are exhaustive today — `OscBatch::merge` and the
    spike's sink — got an explicit ignore arm rather than a wildcard, so a future event type
-   cannot slip silently into a path that does not expect it; the winmux sink's existing wildcard
+   cannot slip silently into a path that does not expect it; the mast sink's existing wildcard
    would forward them to the router, which is one more reason the session consumes them first.
 
 ## Consequences
@@ -152,7 +152,7 @@ it got reported first.
 - **The `reattach()` offset contract is worded differently.** The returned bytes are no longer
   "the stream interval `[end_offset - len, end_offset)`" — the preamble sits in front of them
   and belongs to no offset at all. The dedup rule callers actually run, `offset < end_offset`,
-  is unaffected. A grep over `apps/winmux/src` confirmed that rule is the *only* offset
+  is unaffected. A grep over `apps/mast/src` confirmed that rule is the *only* offset
   arithmetic on the front end (`attach-gate.ts`); nothing derives a start offset from the
   snapshot length. The comments that stated the old interval were corrected where they appear.
 - **Other TUIs recover most of a round-trip.** A `vim` or `htop` pane comes back with mouse

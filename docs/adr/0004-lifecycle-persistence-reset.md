@@ -21,8 +21,8 @@ knowledge.
    class); ~236ms with a 1MiB replay buffer (known perf item, visible flicker).
 2. **Replay snapshots trim to a line boundary after eviction (14)** (4KB scan cap; TUI
    frames without newlines stay untrimmed and rely on the SIGWINCH nudge). A pure
-   `SwitchTracer` reports switch timing to `window.__winmux.lastSwitch`.
-3. **Persistence (15).** `state.json` (`%APPDATA%/app.winmux.desktop/`) holds a
+   `SwitchTracer` reports switch timing to `window.__mast.lastSwitch`.
+3. **Persistence (15).** `state.json` (`%APPDATA%/app.mast.desktop/`) holds a
    versioned camelCase envelope of `AppState`. Load validates structure (including
    global stable-id uniqueness and split-ratio ranges — disk is a trust boundary),
    sanitizes (`pty_session` always cleared; `next_id` repaired incl. split ids), backs
@@ -33,7 +33,7 @@ knowledge.
    shell's exit event can be lost. Scroll positions and live shell cwd are deliberately
    not restored (viewers don't exist yet; OSC 7 tracking is stage 18).
 4. **Automatic reset (16).** Pure `ResetPolicy` (u64 ticks) + glue supervisor with
-   `WINMUX_RESET_*` env knobs. Reset is a **glue command** (`reset_ui`, dev-hook/MCP
+   `MAST_RESET_*` env knobs. Reset is a **glue command** (`reset_ui`, dev-hook/MCP
    only) — a deliberate deviation from 계획 v2 section 12's "command dispatcher 내부
    커맨드" wording: the core bus is structural mutations only (ADR-0002) and reset
    mutates nothing, while the reload itself needs Tauri. The idle trigger fires once

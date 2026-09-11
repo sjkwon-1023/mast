@@ -13,8 +13,8 @@ the decisions that outlive the plan file.
 
 ## Decisions
 
-1. **All persistent state lives in Rust.** `winmux-core::model::AppState` (workspaces,
-   split trees, panes, tabs) is owned by `winmux-core::command::Dispatcher`; the WebView
+1. **All persistent state lives in Rust.** `mast-core::model::AppState` (workspaces,
+   split trees, panes, tabs) is owned by `mast-core::command::Dispatcher`; the WebView
    is a disposable view (the premise of 계획 v2 section 12's WebView reset safety net).
    Frontend sync is deliberately simple: every successful mutation emits a
    `state-changed` event carrying the **full snapshot** with a monotonically increasing
@@ -55,12 +55,12 @@ the decisions that outlive the plan file.
      TUI-faithful redraw is the stage-14 bar (replay escape-cut fix carried from
      ADR-0001 is due there).
 
-5. **`apps/winmux` is a new app; `apps/spike` is frozen** as the ADR-0001 measurement
+5. **`apps/mast` is a new app; `apps/spike` is frozen** as the ADR-0001 measurement
    harness (feature-frozen, kept compiling). Reused from spike: the glue discipline
    (spawn_blocking, lock scoping), the ack batcher, and the Windows-verified copy/paste
    key handling.
 
-6. Smaller contract decisions: serde joined `winmux-core` (pinned ≥ 1.0.186);
+6. Smaller contract decisions: serde joined `mast-core` (pinned ≥ 1.0.186);
    `git_branch`/`git_dirty` fields are pre-declared on `Workspace` (filled at stage 19)
    for type-space stability; empty panes are allowed until stage 12 introduces collapse
    rules; `SplitPane`/`ClosePane`/`CloseWorkspace` are implemented at the model level so
@@ -72,7 +72,7 @@ the decisions that outlive the plan file.
 - Automated gates (all green in-session): core tests (84 incl. unix PTY integration and
   golden-fixture round-trips), workspace clippy/check for `x86_64-pc-windows-msvc`
   (glue compile gate via userspace `llvm-rc`), both frontends' `tsc`+`vite`+`vitest`
-  (43 winmux + 24 spike). Shared golden fixtures under `fixtures/` lock the JSON contract
+  (43 mast + 24 spike). Shared golden fixtures under `fixtures/` lock the JSON contract
   on both the Rust and TS sides.
 - **Windows manual checklist pending**: `docs/WINDOWS-BUILD.md` section 6 (6 items:
   boot dogfood, reload survival, dev-hook commands, id stability, background-tab

@@ -55,7 +55,7 @@ deliberate under-forecast: the stage needed real core-contract growth (recorded 
    keyboard input never drops to the body. Tab-strip DOM rebuilds are skipped when the
    tab model is unchanged — a mid-click rebuild used to swallow the click on an inactive
    pane's tab.
-8. **WebView reload is Ctrl+Shift+R** (+ `window.__winmux.reload()`), never F5 — with the
+8. **WebView reload is Ctrl+Shift+R** (+ `window.__mast.reload()`), never F5 — with the
    terminal focused, xterm correctly delivers F5 to the shell as `ESC[15~` (TUI apps
    use it). This is also the manual verification path for the reset safety net until the
    automatic triggers land (계획 v2 section 12, stage 16).
@@ -63,7 +63,7 @@ deliberate under-forecast: the stage needed real core-contract growth (recorded 
 ## Verification
 
 - Automated gates green throughout: core 94 tests (incl. new resize/atomic-split/
-  collapse/reset_flow coverage), winmux frontend 73 vitest tests, spike 24 (regression),
+  collapse/reset_flow coverage), mast frontend 73 vitest tests, spike 24 (regression),
   workspace clippy/check for the Windows target.
 - **Windows manual checklists passed 2026-08-09** (WINDOWS-BUILD.md sections 6 and 7):
   splits/nesting, ratio reload survival, keep-alive tab switching without replay flash,

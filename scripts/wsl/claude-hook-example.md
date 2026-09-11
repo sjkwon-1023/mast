@@ -1,13 +1,13 @@
-# winmux OSC contract — Claude Code hook / shell prompt
+# mast OSC contract — Claude Code hook / shell prompt
 
 This is the **contract document** that implements the path described in 계획 v2 section 9
-("에이전트 상태 및 알림"). It defines the meaning of the OSC sequences winmux interprets
+("에이전트 상태 및 알림"). It defines the meaning of the OSC sequences mast interprets
 (fixed in stage 18) and shows, as examples, the Claude Code hook and shell prompt halves.
 
 ```
 Claude Code hook (UserPromptSubmit / Notification / Stop)
   → writes OSC 777 to the resolved TTY (/dev/tty, or an ancestor process's pts)
-  → the Rust PTY reader (winmux-core::osc::OscScanner) detects it
+  → the Rust PTY reader (mast-core::osc::OscScanner) detects it
   → batched over a 100ms flush window (glue OscRouter)
   → updates the tab unread dot / pane badge / workspace sidebar status
 ```
@@ -17,7 +17,7 @@ named pipe, or Windows helper CLI.
 
 ## Automatic provisioning
 
-**winmux auto-provisions this on first run per distro (`~/.winmux/.setup-v7`); this
+**mast auto-provisions this on first run per distro (`~/.mast/.setup-v7`); this
 document remains the contract and the manual path.**
 
 On launch the app streams a setup script into `wsl.exe [-d <distro>] -- bash -s` for every
@@ -25,57 +25,57 @@ distro it knows about (each workspace's, plus the WSL default) — stdin, so no 
 guess at the WSL home path and no dependency on a distro's `interop`/`automount` settings.
 Once per distro it:
 
-- installs the script below at `~/.winmux/bin/winmux-notify.sh` (executable),
-- installs `~/.winmux/bin/winmux-codex-notify.sh` (executable) — the Codex half, described
-  under [Resume hint](#resume-hint--winmuxresumetab-id) below. It exists separately because
+- installs the script below at `~/.mast/bin/mast-notify.sh` (executable),
+- installs `~/.mast/bin/mast-codex-notify.sh` (executable) — the Codex half, described
+  under [Resume hint](#resume-hint--mastresumetab-id) below. It exists separately because
   Codex hands its payload over as a final **argv** argument rather than on stdin, and it
-  delegates the OSC write back to `winmux-notify.sh` rather than repeating it,
-- installs the **`winmux` CLI** at `~/.winmux/bin/winmux` (executable) — the command-line
-  half of the send and query channels below (`winmux ls` / `winmux send` / `winmux id`), so
+  delegates the OSC write back to `mast-notify.sh` rather than repeating it,
+- installs the **`mast` CLI** at `~/.mast/bin/mast` (executable) — the command-line
+  half of the send and query channels below (`mast ls` / `mast send` / `mast id`), so
   nothing has to assemble an escape sequence or repeat the tty resolution by hand. Every
-  winmux terminal has `~/.winmux/bin` prepended to `PATH`
-  (`apps/winmux/src-tauri/src/host.rs::bash_argv`), so inside a tab it is just `winmux`,
-- replaces the old `~/.winmux/bin/winmux-send.sh` (setup v3) with a two-line wrapper that
-  execs `winmux send "$@"`, so anything still pointing at that path keeps working,
-- installs the `winmux-send` skill at `~/.claude/skills/winmux-send/SKILL.md` (the agent
-  send and query channels below; source: `scripts/wsl/skills/winmux-send/SKILL.md`),
+  mast terminal has `~/.mast/bin` prepended to `PATH`
+  (`apps/mast/src-tauri/src/host.rs::bash_argv`), so inside a tab it is just `mast`,
+- replaces the old `~/.mast/bin/mast-send.sh` (setup v3) with a two-line wrapper that
+  execs `mast send "$@"`, so anything still pointing at that path keeps working,
+- installs the `mast-send` skill at `~/.claude/skills/mast-send/SKILL.md` (the agent
+  send and query channels below; source: `scripts/wsl/skills/mast-send/SKILL.md`),
 - merges the three hooks into `~/.claude/settings.json`, keeping every existing value (see
   the migration rules below),
 - adds a `notify` key to `~/.codex/config.toml` if that file exists and has no `notify` of
-  its own (Codex runs it once per completed turn, which maps to `winmux:idle`); a missing
+  its own (Codex runs it once per completed turn, which maps to `mast:idle`); a missing
   file means Codex is not installed there and nothing is created, and when `~/.codex/`
-  exists, a managed `winmux integration` block in `~/.codex/AGENTS.md` teaches Codex the CLI
+  exists, a managed `mast integration` block in `~/.codex/AGENTS.md` teaches Codex the CLI
   and to run it outside the sandbox (delete the block to opt out). An **existing** `notify`
   is the user's own integration and stays — with the one exception in the table below,
-- records what it did in `~/.winmux/setup.log`, then writes the marker.
+- records what it did in `~/.mast/setup.log`, then writes the marker.
 
 The hook merge treats each of the three events on its own, and never touches a hook that is
 not one of ours:
 
 | Existing hook for the event | Result | Logged as |
 |---|---|---|
-| Runs `~/.winmux/bin/winmux-notify.sh` (however it is spelled — `$HOME`, `~`, absolute) | Left exactly as it is, custom arguments included | `already wired` |
-| Runs a `winmux-notify.sh` from **another** path (a hand-wired `~/.claude/hooks/…`, an older install) | The **path** is rewritten to `"$HOME/.winmux/bin/winmux-notify.sh"`; the arguments after it stay byte-for-byte | `migrated` |
-| Mentions `winmux-notify.sh` somewhere other than the leading word (`bash ~/…/winmux-notify.sh …`) | Left alone — rewriting that shape would be guesswork, and it already covers the event | `left untouched` |
+| Runs `~/.mast/bin/mast-notify.sh` (however it is spelled — `$HOME`, `~`, absolute) | Left exactly as it is, custom arguments included | `already wired` |
+| Runs a `mast-notify.sh` from **another** path (a hand-wired `~/.claude/hooks/…`, an older install) | The **path** is rewritten to `"$HOME/.mast/bin/mast-notify.sh"`; the arguments after it stay byte-for-byte | `migrated` |
+| Mentions `mast-notify.sh` somewhere other than the leading word (`bash ~/…/mast-notify.sh …`) | Left alone — rewriting that shape would be guesswork, and it already covers the event | `left untouched` |
 | None | A new entry is appended | `added` |
 
 Migration exists because a hand-wired hook points at an older copy of *this* contract, which
 goes stale as the script below changes (the tty fallback, the stdin JSON body). Nothing is
-ever duplicated: an event that has any `winmux-notify.sh` hook never gets a second one.
+ever duplicated: an event that has any `mast-notify.sh` hook never gets a second one.
 
-Codex's single `notify` key is read the same way — the only line winmux will ever replace is
-the one winmux itself wrote:
+Codex's single `notify` key is read the same way — the only line mast will ever replace is
+the one mast itself wrote:
 
 | Existing `notify` in `~/.codex/config.toml` | Result | Logged as |
 |---|---|---|
 | None | The line below is inserted into the **root table** (before the first `[table]` header), preceded by the opt-out comment | `notify added` |
-| Byte-for-byte the line setup **v6** wrote (`… winmux-notify.sh winmux:idle "codex turn complete" < /dev/null`) | Replaced in place with the line below, indentation kept, nothing else in the file moved | `notify upgraded to winmux-codex-notify.sh` |
-| Already the line below | Left exactly as it is | `already runs winmux-codex-notify.sh` |
+| Byte-for-byte the line setup **v6** wrote (`… mast-notify.sh mast:idle "codex turn complete" < /dev/null`) | Replaced in place with the line below, indentation kept, nothing else in the file moved | `notify upgraded to mast-codex-notify.sh` |
+| Already the line below | Left exactly as it is | `already runs mast-codex-notify.sh` |
 | Anything else, **including** a hand-edited line that runs one of our scripts with different wording | Left exactly as it is; the log names the line to paste if you want the Codex resume hint | `left untouched` |
 | More than one `notify =` line, or a file that does not parse as TOML | Left exactly as it is — which key is the root-table one cannot be told apart by a line scan | `left untouched` |
 
 ```toml
-notify = ["bash", "-lc", 'exec "$HOME/.winmux/bin/winmux-codex-notify.sh" "$0"']
+notify = ["bash", "-lc", 'exec "$HOME/.mast/bin/mast-codex-notify.sh" "$0"']
 ```
 
 Codex appends the payload JSON as the **final argv element**, so `bash -lc <script> <json>`
@@ -92,29 +92,29 @@ Any failure leaves the marker unwritten, so the next launch retries. A distro wi
 `python3` gets the notify script but no hook merge (the merge has to preserve an existing
 `settings.json`, which rules out text munging) — install `python3` or wire it by hand.
 
-The installer lives in `apps/winmux/src-tauri/src/provision.rs`, and the copies it embeds
+The installer lives in `apps/mast/src-tauri/src/provision.rs`, and the copies it embeds
 are **byte-identical** to their sources — the "Example hook script" below and
-`scripts/wsl/skills/winmux-send/SKILL.md`: change both halves together.
+`scripts/wsl/skills/mast-send/SKILL.md`: change both halves together.
 
 ## OSC meaning contract
 
-winmux interprets four kinds of sequences.
+mast interprets four kinds of sequences.
 
 | Sequence | Meaning | Status (`agentStatus`) | Unread dot |
 |---|---|---|---|
-| `OSC 777;notify;winmux:running;<body>` | Agent work started | `running` | no |
-| `OSC 777;notify;winmux:needsInput;<body>` | Waiting for user input | `needsInput` | yes |
-| `OSC 777;notify;winmux:idle;<body>` | Work finished | `idle` | yes |
-| `OSC 777;winmux-send;<target>;<base64>` | Text delivered to another pane's stdin (next section) | unchanged | no |
-| `OSC 777;winmux-query;<kind>;<base64>` | Metadata answered into a file the sender names (section after that) | unchanged | no |
+| `OSC 777;notify;mast:running;<body>` | Agent work started | `running` | no |
+| `OSC 777;notify;mast:needsInput;<body>` | Waiting for user input | `needsInput` | yes |
+| `OSC 777;notify;mast:idle;<body>` | Work finished | `idle` | yes |
+| `OSC 777;mast-send;<target>;<base64>` | Text delivered to another pane's stdin (next section) | unchanged | no |
+| `OSC 777;mast-query;<kind>;<base64>` | Metadata answered into a file the sender names (section after that) | unchanged | no |
 | Any other `OSC 777` / every `OSC 9` | Status-neutral notification | **unchanged** | yes |
 | `OSC 0` (and the alias `OSC 2`) | Tab title | unchanged | no |
 | `OSC 7` `file://host/path` | Tab cwd (respawn location on restart) | unchanged | no |
 
 Detailed rules:
 
-- **A status token must match the entire title field exactly** (`winmux:running` /
-  `winmux:needsInput` / `winmux:idle`). Any deviation falls through to a status-neutral
+- **A status token must match the entire title field exactly** (`mast:running` /
+  `mast:needsInput` / `mast:idle`). Any deviation falls through to a status-neutral
   notification — this is the boundary that keeps 777s emitted by other tools, or an
   OSC 9 such as ConEmu's progress report, from claiming agent status.
 - If `body` is non-empty it is kept as the sidebar preview (`lastAgentMessage`). **An empty
@@ -132,11 +132,11 @@ Detailed rules:
   mis-splits the fields, so the emitting side substitutes it.
 - A restart resets all notifications and statuses (a dead session's needsInput does not
   survive a restart — 계획 v2 section 11).
-- `winmux-send` and `winmux-query` are the two `OSC 777`s that are **not** notifications:
+- `mast-send` and `mast-query` are the two `OSC 777`s that are **not** notifications:
   they change no state at all, raise no dot, and are not coalesced into the 100ms flush
   window. They are actions, and each has its own section below.
 
-## Agent send channel — `OSC 777;winmux-send`
+## Agent send channel — `OSC 777;mast-send`
 
 The agent-facing way to put text into **another pane's terminal**. This is the designed
 successor to the retired manual send mode ([ADR-0005](../../docs/adr/0005-inter-pane-text-passing.md)):
@@ -149,34 +149,34 @@ unit, so a channel that crossed it would give a mis-aimed line a blast radius re
 that have nothing to do with the work in hand (user decision 2026-08-11). The confinement
 applies to **both** addressing modes and to the query channel below: a tab in another
 workspace matches neither its title nor its globally unique `#id`, and does not appear in
-`winmux ls`. Ids stay globally unique — uniqueness is a property of the address, not a key
+`mast ls`. Ids stay globally unique — uniqueness is a property of the address, not a key
 past the boundary. If the sender's session cannot be mapped back to a tab at all (it always
 can — it is a live session that just emitted the OSC), there is no boundary to draw and
 nothing is sent.
 
-The skill that teaches an agent to use it is `scripts/wsl/skills/winmux-send/SKILL.md`
-(auto-provisioned to `~/.claude/skills/winmux-send/SKILL.md`), and the command it tells the
-agent to call is `winmux send`:
+The skill that teaches an agent to use it is `scripts/wsl/skills/mast-send/SKILL.md`
+(auto-provisioned to `~/.claude/skills/mast-send/SKILL.md`), and the command it tells the
+agent to call is `mast send`:
 
 ```bash
-winmux send '#181' 'cargo test'     # runs the line in tab 181
-winmux send -l '#181' 'cargo test'  # literal: only pre-fills the prompt, submits nothing
-winmux send build 'cargo test'      # by title substring instead of id
+mast send '#181' 'cargo test'     # runs the line in tab 181
+mast send -l '#181' 'cargo test'  # literal: only pre-fills the prompt, submits nothing
+mast send build 'cargo test'      # by title substring instead of id
 ```
 
 The CLI encodes the text, then (unless `-l`) sends a **CR** as a second OSC 200 ms later,
-and resolves the terminal device with the same two-step discipline as `winmux-notify.sh` — so it
+and resolves the terminal device with the same two-step discipline as `mast-notify.sh` — so it
 works from a hook too. Delivery stays silent (exit 0 either way); only a usage error is reported.
 
 The sequence it emits:
 
 ```
-ESC ] 777 ; winmux-send ; <target> ; <base64> BEL
+ESC ] 777 ; mast-send ; <target> ; <base64> BEL
 ```
 
 | Field | Contract |
 |---|---|
-| `winmux-send` | Literal kind marker. Everything else after `777;` keeps its old meaning. |
+| `mast-send` | Literal kind marker. Everything else after `777;` keeps its old meaning. |
 | `<target>` | `#<decimal>` addresses a **tab id** exactly. Anything else is matched **case-insensitively as a substring** of a tab's title (the title the target set with `OSC 0`). Either way the candidates are the running terminal tabs of the **sender's own workspace**. |
 | `<base64>` | Standard base64 (`A-Za-z0-9+/`, optional `=` padding) of the raw bytes. No URL-safe alphabet, no embedded whitespace or newline. |
 
@@ -195,7 +195,7 @@ parse as a `u64`; `#build`, `#`, `#1.2` and an out-of-range number all fall back
 matching, so a tab whose title starts with `#` stays reachable by title. An id resolves to
 one tab or to none — `Ambiguous` cannot happen, because ids are unique across the app; an id
 belonging to another workspace resolves to none, exactly like an id that does not exist. The
-tab's own id is in its `WINMUX_TAB` (below), and `winmux ls` lists the rest of its workspace;
+tab's own id is in its `MAST_TAB` (below), and `mast ls` lists the rest of its workspace;
 a title is the weaker address because a prompt hook may rewrite it on every prompt.
 
 - **Nothing is written back to the sender**, on success or failure — a diagnostic in someone
@@ -206,7 +206,7 @@ a title is the weaker address because a prompt hook may rewrite it on every prom
   real terminal sends for Enter, so it submits in a raw-mode TUI (Codex, Claude Code) as well
   as in a shell, whose `ICRNL` turns it back into a newline. A bare LF only submits in a
   shell; a TUI takes it into its prompt and sits there. Send the CR as its **own**
-  `winmux-send` a beat (≥150 ms) after the text, never appended to it: both TUIs treat bytes
+  `mast-send` a beat (≥150 ms) after the text, never appended to it: both TUIs treat bytes
   that land in one read as a paste, and a CR inside a paste is a newline. The app writes each
   send to the PTY as it arrives, so two sends spaced apart are two writes.
 - The effective size limit is far below 32 KiB: the OSC scanner discards any payload over
@@ -215,22 +215,22 @@ a title is the weaker address because a prompt hook may rewrite it on every prom
   a file.
 - No state changes, so no snapshot is published and nothing is persisted.
 
-**Environment.** Every winmux terminal exports `WINMUX=1` and prepends `~/.winmux/bin` to
-`PATH`; a tab with per-tab history also exports `WINMUX_TAB=<tab id>` (its own stable tab id).
-That is how an agent knows it is inside winmux at all — the skill's description keys off
-`WINMUX` — and the id is the tab's self-reference for a reply address. The wrapper that sets
-them is `apps/winmux/src-tauri/src/host.rs::bash_argv`, so they reach the login shell and
+**Environment.** Every mast terminal exports `MAST=1` and prepends `~/.mast/bin` to
+`PATH`; a tab with per-tab history also exports `MAST_TAB=<tab id>` (its own stable tab id).
+That is how an agent knows it is inside mast at all — the skill's description keys off
+`MAST` — and the id is the tab's self-reference for a reply address. The wrapper that sets
+them is `apps/mast/src-tauri/src/host.rs::bash_argv`, so they reach the login shell and
 every child of it. The `PATH` entry survives the login shell because the Debian/Ubuntu rc
 convention *prepends* to `PATH` (`PATH="$HOME/bin:$PATH"`) rather than reassigning it.
 
 **Security.** Any terminal program on the machine that can write to a pane's PTY can inject
-input into another pane this way. That is intended — winmux assumes your own machine and
+input into another pane this way. That is intended — mast assumes your own machine and
 cooperating agents — and this channel is a convenience, **not** a privilege boundary. The
 size cap, the unique-match requirement, the self-exclusion and the workspace confinement are
 misfire guards, not security controls: they bound the blast radius of a *mistake*, and none
 of them stops a program that is already free to write to the target's PTY itself.
 
-## Agent query channel — `OSC 777;winmux-query`
+## Agent query channel — `OSC 777;mast-query`
 
 The read half of the agent channel: it answers "what tabs are open?" so an agent can pick a
 target id instead of guessing at a title. It shares the send channel's **workspace
@@ -240,17 +240,17 @@ channels this one has a **reply**, and because the OSC stream is one-way (into t
 reply is a **file the sender names in the request**.
 
 ```
-ESC ] 777 ; winmux-query ; <kind> ; <base64 reply path> BEL
+ESC ] 777 ; mast-query ; <kind> ; <base64 reply path> BEL
 ```
 
 | Field | Contract |
 |---|---|
-| `winmux-query` | Literal kind marker. |
+| `mast-query` | Literal kind marker. |
 | `<kind>` | The question. `list-tabs` is the only one the app answers; any other value is ignored (so a newer CLI against an older app simply gets no reply, and vice versa). |
-| `<base64 reply path>` | Standard base64 of an absolute Linux path that **must start with `/tmp/`**. Both fields are required — `777;winmux-query;list-tabs` with no path is not a query at all, since there is nowhere to answer. |
+| `<base64 reply path>` | Standard base64 of an absolute Linux path that **must start with `/tmp/`**. Both fields are required — `777;mast-query;list-tabs` with no path is not a query at all, since there is nowhere to answer. |
 
 **`/tmp/` is enforced at the string level — a misfire guard, not a privilege boundary.** The
-reply is a file *write performed by the winmux app*. The content is only metadata the app
+reply is a file *write performed by the mast app*. The content is only metadata the app
 already owns, but leaving the path free would make this channel a way for anything that can
 write to a PTY to overwrite `~/.bashrc` or `~/.claude/settings.json`. Path validation
 (`crate::send::decode_reply_path`) rejects `..`, backslashes and NUL *before* the prefix
@@ -262,7 +262,7 @@ canonicalize-at-write recheck is a recorded backlog item pending real-hardware 9
 The reply for `list-tabs`:
 
 ```json
-{"tabs": [{"tab": 181, "title": "build", "workspaceId": 1, "workspaceName": "winmux",
+{"tabs": [{"tab": 181, "title": "build", "workspaceId": 1, "workspaceName": "mast",
            "pane": 3, "active": true, "kind": "terminal", "status": "running"}],
  "self_tab": 176}
 ```
@@ -283,18 +283,18 @@ The reply for `list-tabs`:
 - **Failure is silent, exactly like send.** A bad path, an unknown kind, a serialization or
   write failure — all of it goes to the app's stderr and **nothing** is written back to the
   requester's terminal. The reply file never appearing is the only signal the requester gets,
-  which is why `winmux ls` times out (2s) rather than waiting forever.
+  which is why `mast ls` times out (2s) rather than waiting forever.
 - No state changes: no snapshot is published, nothing is persisted, and the query is not
   coalesced into the 100ms notification flush window (two queries in one window must both be
   answered).
 - Queries share one in-flight cap with sends (8 concurrent) — they contend for the same
   blocking thread pool, so one counter guards both.
 
-`winmux ls` is the CLI half. It `mktemp`s a name under `/tmp`, removes the placeholder, emits
+`mast ls` is the CLI half. It `mktemp`s a name under `/tmp`, removes the placeholder, emits
 the query, polls for the path to appear (0.05s, giving up at 2s), renders the JSON as a table,
 and deletes the file. **The `COMMAND` column is not part of the reply** — the app has no idea
 what runs inside a tab. The CLI fills it from `/proc` on its own side by finding the process
-whose environment has `WINMUX_TAB=<id>` and reading its terminal's foreground process group,
+whose environment has `MAST_TAB=<id>` and reading its terminal's foreground process group,
 which is why a tab whose shell lives in another WSL distro or in a Windows shell shows `?`.
 
 ## tty resolution discipline — direct `/dev/tty` → ancestor pts fallback
@@ -310,8 +310,8 @@ enough.
 
 **Measured (Claude Code 2.1.226, checkpoint 2):** the hook process **has no controlling
 TTY**, so `> /dev/tty` fails with `No such device or address` (ENXIO). Meanwhile **the main
-Claude Code process is still attached to the `/dev/pts/N` that winmux opened** — the device
-is alive, only the hook side lacks a handle to it. That is why `winmux_emit` in the example
+Claude Code process is still attached to the `/dev/pts/N` that mast opened** — the device
+is alive, only the hook side lacks a handle to it. That is why `mast_emit` in the example
 below resolves the tty in two steps.
 
 1. **Direct `/dev/tty`** — if a controlling TTY exists (running it by hand, launching the
@@ -333,21 +333,21 @@ its stdout *is* the PTY, so neither a redirect nor a fallback is needed.)
 
 ## Example hook script
 
-`~/.claude/hooks/winmux-notify.sh` (must be made executable: `chmod +x`) — auto-provisioning
-installs this same text at `~/.winmux/bin/winmux-notify.sh` instead, and migrates a hook
+`~/.claude/hooks/mast-notify.sh` (must be made executable: `chmod +x`) — auto-provisioning
+installs this same text at `~/.mast/bin/mast-notify.sh` instead, and migrates a hook
 still pointing at the manual path onto that copy (see the table above), so the block below is
-the canonical source for the copy embedded in `apps/winmux/src-tauri/src/provision.rs`
+the canonical source for the copy embedded in `apps/mast/src-tauri/src/provision.rs`
 (**keep the two byte-identical**):
 
 ```bash
 #!/usr/bin/env bash
-# Called from a Claude Code hook to emit a winmux status token as OSC 777 to the real
+# Called from a Claude Code hook to emit a mast status token as OSC 777 to the real
 # terminal device.
-# Arguments: $1 = status token (winmux:running | winmux:needsInput | winmux:idle)
+# Arguments: $1 = status token (mast:running | mast:needsInput | mast:idle)
 #            $2 = body (optional). The Notification event prefers .message from the stdin JSON.
 set -euo pipefail
 
-STATUS="${1:?usage: winmux-notify.sh <winmux:running|winmux:needsInput|winmux:idle> [body]}"
+STATUS="${1:?usage: mast-notify.sh <mast:running|mast:needsInput|mast:idle> [body]}"
 BODY="${2:-}"
 
 # Write the OSC bytes to the real terminal device. This implements the two steps of the
@@ -356,10 +356,10 @@ BODY="${2:-}"
 #   2) /proc ancestor chain — the hook process of Claude Code 2.1.226 has no controlling
 #      TTY, so 1) fails with ENXIO ("No such device or address"). In that case, walk up
 #      from itself through its parents and write to the /dev/pts/* that fd 0/1/2 of each
-#      process points at. The main Claude Code process is attached to winmux's pts, so it
+#      process points at. The main Claude Code process is attached to mast's pts, so it
 #      is found a few hops up.
 # If neither works, give up silently — a failed notification must not break the Claude session.
-winmux_emit() {
+mast_emit() {
   local payload="$1"
 
   if { printf '%s' "$payload" > /dev/tty; } 2>/dev/null; then
@@ -408,18 +408,18 @@ if [[ ! -t 0 ]]; then
   fi
 fi
 
-# Resume hint. winmux respawns a tab's shell on restart, so the agent session that ran in it
+# Resume hint. mast respawns a tab's shell on restart, so the agent session that ran in it
 # is gone from the screen; recording how to re-enter it lets the fresh shell offer the command
-# (apps/winmux/src-tauri/src/host.rs::bash_argv reads this file and never runs it). Rewritten
+# (apps/mast/src-tauri/src/host.rs::bash_argv reads this file and never runs it). Rewritten
 # on every hook call, so the tab's most recent session wins. Line 1 is the command, line 2 the
 # epoch seconds it was recorded at. tmp+mv makes the replacement atomic for a concurrent
 # reader, and every failure here is swallowed: a notification must not break on it.
 # The id is required to be a plain token: the spawn wrapper echoes line 1 into the terminal
 # and into shell history and checks nothing itself, so this is where that is guarded. A
 # session id is a uuid, so the check rejects nothing real.
-if [[ -n "${WINMUX_TAB:-}" && "$SESSION_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
-  RESUME_FILE="$HOME/.winmux/resume/tab-$WINMUX_TAB"
-  if mkdir -p "$HOME/.winmux/resume" 2>/dev/null; then
+if [[ -n "${MAST_TAB:-}" && "$SESSION_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  RESUME_FILE="$HOME/.mast/resume/tab-$MAST_TAB"
+  if mkdir -p "$HOME/.mast/resume" 2>/dev/null; then
     if printf 'claude --resume %s\n%s\n' "$SESSION_ID" "$(date +%s 2>/dev/null || echo 0)" \
          > "$RESUME_FILE.tmp.$$" 2>/dev/null; then
       mv -f "$RESUME_FILE.tmp.$$" "$RESUME_FILE" 2>/dev/null || true
@@ -432,7 +432,7 @@ fi
 BODY="${BODY//;/,}"
 
 # OSC 777 format: ESC ] 777 ; notify ; title ; body BEL
-winmux_emit "$(printf '\033]777;notify;%s;%s\007' "$STATUS" "$BODY")" || true
+mast_emit "$(printf '\033]777;notify;%s;%s\007' "$STATUS" "$BODY")" || true
 
 # Even if the emission fails, the hook exits successfully (miss a notification rather than
 # break the session).
@@ -452,7 +452,7 @@ Maps the three events to the three status tokens:
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/winmux-notify.sh winmux:running"
+            "command": "~/.claude/hooks/mast-notify.sh mast:running"
           }
         ]
       }
@@ -463,7 +463,7 @@ Maps the three events to the three status tokens:
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/winmux-notify.sh winmux:needsInput 'needs input'"
+            "command": "~/.claude/hooks/mast-notify.sh mast:needsInput 'needs input'"
           }
         ]
       }
@@ -474,7 +474,7 @@ Maps the three events to the three status tokens:
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/winmux-notify.sh winmux:idle done"
+            "command": "~/.claude/hooks/mast-notify.sh mast:idle done"
           }
         ]
       }
@@ -508,11 +508,11 @@ if [[ -n "$TRANSCRIPT" && -r "$TRANSCRIPT" ]]; then
 fi
 ```
 
-## Resume hint — `~/.winmux/resume/tab-<id>`
+## Resume hint — `~/.mast/resume/tab-<id>`
 
 A restart respawns every terminal tab as a **fresh login shell**: the layout comes back, but
 the agent session that was running in the tab does not, and its id is nowhere on screen. Both
-agents hand winmux an id when they report a turn — Claude Code's hook stdin JSON carries
+agents hand mast an id when they report a turn — Claude Code's hook stdin JSON carries
 `.session_id`, Codex's notify payload carries `thread-id` — so each records it per tab and the
 next shell in that tab offers it back.
 
@@ -521,11 +521,11 @@ places and run by neither of them.
 
 | Field | Contract |
 |---|---|
-| Path | `~/.winmux/resume/tab-<id>`, where `<id>` is the writer's `WINMUX_TAB` — the tab's stable id, which survives a restart, so the file and the tab that gets the hint are the same tab. |
+| Path | `~/.mast/resume/tab-<id>`, where `<id>` is the writer's `MAST_TAB` — the tab's stable id, which survives a restart, so the file and the tab that gets the hint are the same tab. |
 | Line 1 | The resume command: `claude --resume 11111111-2222-3333-4444-555555555555` or `codex resume 019ff5e6-d08e-7013-9cec-105030994d8d`. The reader takes **only this line**. |
 | Line 2 | Epoch seconds at the time of writing. Recorded for diagnosis; **nothing reads it** — see freshness below. |
-| Written when | Every invocation that has both a non-empty `WINMUX_TAB` and an id matching `^[A-Za-z0-9_-]+$` — Claude Code's `.session_id`, Codex's `thread-id` (`thread_id` is accepted too; the payload has been serialized both ways). The tab's most recent session therefore wins. |
-| Not written when | The tab has no `WINMUX_TAB` (a tab without per-tab history), `jq` is missing, the payload does not parse or carries no id, or the id is not a plain token. For Claude Code, also when stdin is a TTY (the script run by hand, so no JSON is read at all). |
+| Written when | Every invocation that has both a non-empty `MAST_TAB` and an id matching `^[A-Za-z0-9_-]+$` — Claude Code's `.session_id`, Codex's `thread-id` (`thread_id` is accepted too; the payload has been serialized both ways). The tab's most recent session therefore wins. |
+| Not written when | The tab has no `MAST_TAB` (a tab without per-tab history), `jq` is missing, the payload does not parse or carries no id, or the id is not a plain token. For Claude Code, also when stdin is a TTY (the script run by hand, so no JSON is read at all). |
 | Atomicity | Written to `<path>.tmp.<pid>` and `mv`d into place, so a concurrent reader sees either the old file or the new one, never a half-written line. The pid suffix keeps two writers firing at once in the same tab from sharing a temp name. |
 | Failure | Swallowed. Every step is guarded and the writer still exits 0 — a resume hint must never cost a notification, let alone the session. |
 
@@ -534,13 +534,13 @@ is the intended behavior, not a collision to be designed away: a tab where you s
 Claude Code to Codex should offer the Codex thread back, and the same in reverse. There is one
 hint per tab, and it names whichever agent spoke last.
 
-The reader is `apps/winmux/src-tauri/src/host.rs::bash_argv`, the same wrapper that sets
-`WINMUX_TAB` and `HISTFILE`. Before it execs the login shell it reads line 1 and, if it is
+The reader is `apps/mast/src-tauri/src/host.rs::bash_argv`, the same wrapper that sets
+`MAST_TAB` and `HISTFILE`. Before it execs the login shell it reads line 1 and, if it is
 non-empty:
 
 1. **appends it to the tab's `HISTFILE`**, so a single press of ↑ at the fresh prompt puts the
    command on the command line, and
-2. prints one dimmed line, `[winmux] resume previous agent: <cmd>`.
+2. prints one dimmed line, `[mast] resume previous agent: <cmd>`.
 
 If the file does not exist the wrapper prints nothing at all — a tab that never ran an agent
 looks exactly as it did before. The block is written so that it does not fail the `&&` chain
@@ -565,22 +565,22 @@ once; the file simply grows.
 **Freshness is the user's call.** The hint is shown whenever the file exists, however old it
 is. An age cutoff would have to guess at a threshold, and being wrong in the strict direction
 hides the one thing the user was looking for; the timestamp is on line 2 for anyone who wants
-to check by hand. Nothing prunes these files, exactly as nothing prunes `~/.winmux/history`.
+to check by hand. Nothing prunes these files, exactly as nothing prunes `~/.mast/history`.
 
-### The Codex half — `winmux-codex-notify.sh`
+### The Codex half — `mast-codex-notify.sh`
 
 Codex's `notify` program is run once per completed turn (`agent-turn-complete`, the only
 event there is) and receives the payload as a single JSON object appended as the **final argv
-element** — not on stdin. `~/.winmux/bin/winmux-codex-notify.sh` is that program; its source
+element** — not on stdin. `~/.mast/bin/mast-codex-notify.sh` is that program; its source
 is the `provision.rs` heredoc, and this section is its contract. Given `$1`:
 
 1. **Reads two fields, defensively.** `thread-id` and `last-assistant-message`, falling back
    to `thread_id` / `last_assistant_message` (the payload has been serialized both kebab- and
    snake-cased across releases; `codex-cli 0.147` is kebab). Neither is required.
 2. **Records the resume hint** — `codex resume <thread-id>` in the file described above, when
-   `WINMUX_TAB` is set and the id is a plain token. `codex resume <id>` is the same form Codex
+   `MAST_TAB` is set and the id is a plain token. `codex resume <id>` is the same form Codex
    prints as its own post-exit hint.
-3. **Emits `winmux:idle`** by running `winmux-notify.sh` as a child with stdin closed, so the
+3. **Emits `mast:idle`** by running `mast-notify.sh` as a child with stdin closed, so the
    tty resolution and the `;` substitution have exactly one implementation. The body is the
    **first line** of the agent's closing message, control characters replaced with spaces and
    capped at 500 characters; with no message it reads `codex turn complete`.
@@ -602,34 +602,34 @@ side's `~/.bashrc`:
 ```bash
 # On every prompt, emit the current directory (OSC 7) and the tab title (OSC 0).
 # The shell's stdout is the PTY itself, so no /dev/tty redirect is needed.
-__winmux_osc() {
-  # OSC 7: file://<host>/<path> — winmux ignores host and uses only the path (ST terminator).
+__mast_osc() {
+  # OSC 7: file://<host>/<path> — mast ignores host and uses only the path (ST terminator).
   printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-wsl}" "$PWD"
   # OSC 0: tab title — here, the directory name (BEL terminator).
   printf '\033]0;%s\007' "${PWD##*/}"
 }
-PROMPT_COMMAND="__winmux_osc${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+PROMPT_COMMAND="__mast_osc${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
 ```
 
-- winmux percent-decodes the OSC 7 path. If the path contains `%`, it must be encoded as
+- mast percent-decodes the OSC 7 path. If the path contains `%`, it must be encoded as
   `%25` per the convention to be accurate (if what follows `%` is not two hex digits, it is
   left as a literal).
 - This cwd is used as the **respawn location after a restart** — the shell reopens in the
   directory it was last in.
 - To change the title to something else, such as an agent name, just swap the OSC 0 string.
-  Even if ConPTY re-encodes OSC 0 as OSC 2 in transit, winmux receives it with the same
+  Even if ConPTY re-encodes OSC 0 as OSC 2 in transit, mast receives it with the same
   meaning.
 
 ## Verification
 
 1. Use `scripts/wsl/osc-test.sh` first to confirm "does an OSC written to /dev/tty reach the
-   winmux app" (OSC 777 is cases 7, 8, and 9). This script runs directly from the shell and
+   mast app" (OSC 777 is cases 7, 8, and 9). This script runs directly from the shell and
    therefore has a tty, so it only takes step 1 — its purpose is to see whether the delivery
    path itself is alive.
-2. Then run Claude Code inside a winmux terminal and confirm that the three hooks actually
+2. Then run Claude Code inside a mast terminal and confirm that the three hooks actually
    update the tab dot, pane badge, and sidebar status/preview
    (`docs/WINDOWS-BUILD.md` section 10, checkpoint 2).
-3. If the hook is silent, start by looking at where the fallback broke. Inside a winmux
+3. If the hook is silent, start by looking at where the fallback broke. Inside a mast
    terminal, reproduce a tty-less context with
    `setsid -w bash -c 'printf "" > /dev/tty' ; echo $?`, and check whether the main Claude
    process is attached to `/dev/pts/*` with
@@ -638,7 +638,7 @@ PROMPT_COMMAND="__winmux_osc${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
 
 ## Notes
 
-- BEL (`\007`) is not relied on as the only completion signal (계획 v2 section 9) — winmux's
+- BEL (`\007`) is not relied on as the only completion signal (계획 v2 section 9) — mast's
   `OscScanner` recognizes both BEL and ST (`ESC \`) as terminators.
 - "The hook has no controlling TTY" is a **fact measured on Claude Code 2.1.226**, not a
   guaranteed contract. That is exactly why the example script keeps step 1 — if a later

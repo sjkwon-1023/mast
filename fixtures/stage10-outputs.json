@@ -14,7 +14,7 @@
     { "type": "spawnFailed", "message": "wsl.exe: program not found" },
     { "type": "invalidRatio", "ratio": 1.5 },
     { "type": "kindMismatch", "tab": 7 },
-    { "type": "invalidPath", "message": "path must be absolute: \"code/winmux\"" },
+    { "type": "invalidPath", "message": "path must be absolute: \"code/mast\"" },
     { "type": "invalidScroll", "value": -1.0 },
     {
       "type": "invalidName",

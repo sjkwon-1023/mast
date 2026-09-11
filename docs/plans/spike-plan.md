@@ -1,11 +1,11 @@
-# winmux Spike 실행 계획
+# mast Spike 실행 계획
 
 > **집행 완료 (2026-08-08).** Windows 검증까지 끝났고 판정은 **후보 A 채택** — 결과·수치·후속
 > 항목은 [`docs/adr/0001-adopt-tauri-webview2-xterm-stack.md`](../adr/0001-adopt-tauri-webview2-xterm-stack.md)
 > 참조. 이 문서의 4장(모듈 계약)은 코드 주석들이 참조하는 계약 문서로 유지되며, MVP 리팩터링이
 > 계약을 대체하는 시점에 문서 전체를 삭제한다.
 > **4.3(flow)·4.4(session)은 10단계 청크 A에서 대체됨** — 현행 계약은 해당 모듈의 rustdoc
-> (`crates/winmux-core/src/{flow,session}.rs`)이 정본이다 (offset/Delivery sink·reattach·id 선발급).
+> (`crates/mast-core/src/{flow,session}.rs`)이 정본이다 (offset/Delivery sink·reattach·id 선발급).
 
 `터미널-계획-v2.md`(이하 "계획 v2") 17장 개발 순서의 **1~9단계(기술 검증 Spike)** 를 코드로 만드는
 세션 실행 계획이다. 계획 v2가 제품 계획이고, 이 문서는 그중 Spike 단계를 "무엇을 어떤 계약으로
@@ -26,7 +26,7 @@
 
 | 산출물 | 검증 방식 |
 |---|---|
-| `crates/winmux-core` — OSC 스캐너·replay buffer·flow control·PTY 세션 (순수 Rust, tauri 무관) | WSL에서 `cargo test`(unix PTY 통합 테스트 포함)·`clippy`·windows target `cargo check` |
+| `crates/mast-core` — OSC 스캐너·replay buffer·flow control·PTY 세션 (순수 Rust, tauri 무관) | WSL에서 `cargo test`(unix PTY 통합 테스트 포함)·`clippy`·windows target `cargo check` |
 | `apps/spike` — Tauri v2 + xterm.js Spike 앱 (창 1개, 터미널 N개 그리드, 상태 표시) | 프론트엔드는 `tsc`+`vite build`+`vitest`, src-tauri는 windows target `cargo check`(best-effort) |
 | `scripts/wsl/*` — OSC 방출·flood·scrollback 테스트, Claude Code hook 예시 | shellcheck 수준 검토 (실행은 Spike 검증 시) |
 | `scripts/win/measure.ps1` — private working set(WebView2 트리 포함) 측정 | Windows에서 사용자 실행 |
@@ -39,13 +39,13 @@
 ## 3. 저장소 구조
 
 ```
-winmux/
+mast/
   터미널-계획-v2.md          제품 계획 (원본 유지)
   README.md                  영어 tracked reference
   docs/
     plans/spike-plan.md      이 문서
     WINDOWS-BUILD.md         Windows 빌드·검증 절차 (영어)
-  crates/winmux-core/          순수 Rust 코어 (tauri 의존 없음)
+  crates/mast-core/          순수 Rust 코어 (tauri 의존 없음)
     src/{lib.rs, osc.rs, replay.rs, flow.rs, session.rs}
   apps/spike/
     package.json, vite.config.ts, tsconfig.json, index.html
@@ -56,13 +56,13 @@ winmux/
     win/measure.ps1
 ```
 
-Cargo workspace: 루트 `Cargo.toml`, members = `crates/winmux-core`, `apps/spike/src-tauri`.
+Cargo workspace: 루트 `Cargo.toml`, members = `crates/mast-core`, `apps/spike/src-tauri`.
 
 ## 4. 모듈 계약 (구현 에이전트 브리프)
 
 계획 v2의 원칙을 코드 경계로 옮긴 것. 식별자·시그니처는 영어, 주석은 한국어.
 
-### 4.1 `winmux-core::osc` — OSC 감지 (계획 v2 2·9장)
+### 4.1 `mast-core::osc` — OSC 감지 (계획 v2 2·9장)
 
 ```rust
 pub enum OscEvent {
@@ -85,7 +85,7 @@ impl OscScanner {
 - OSC 777은 `notify;title;body` 형식(urxvt 계열) 파싱.
 - Rust PTY 리더 단에서 실행된다(계획 v2: xterm.js가 아니라 Rust에서 감지).
 
-### 4.2 `winmux-core::replay` — replay buffer (계획 v2 12장)
+### 4.2 `mast-core::replay` — replay buffer (계획 v2 12장)
 
 ```rust
 pub struct ReplayBuffer { /* chunk VecDeque + 총량 계정 */ }
@@ -100,7 +100,7 @@ impl ReplayBuffer {
 - cap 초과 시 오래된 chunk부터 통째로 evict. escape 시퀀스 중간 절단 가능성은 Spike에서는
   허용하고 한계로 문서화한다(MVP에서 개선 검토).
 
-### 4.3 `winmux-core::flow` — backpressure 상태 머신 (계획 v2 2·12장)
+### 4.3 `mast-core::flow` — backpressure 상태 머신 (계획 v2 2·12장)
 
 ```rust
 pub enum FlowAction { None, Pause, Resume }
@@ -116,7 +116,7 @@ impl FlowControl {
 
 - pending ≥ high → `Pause`, paused 상태에서 pending ≤ low → `Resume`. 나머지 `None`.
 
-### 4.4 `winmux-core::session` — PTY 세션 (계획 v2 2·5장)
+### 4.4 `mast-core::session` — PTY 세션 (계획 v2 2·5장)
 
 `portable-pty` 크레이트 사용(Windows에서 ConPTY, Unix에서 표준 PTY — 개발 머신 WSL에서
 실제 셸을 띄우는 통합 테스트가 가능해진다).
@@ -166,7 +166,7 @@ pub struct SessionStats {
   `write_stdin(id, data: String)` / `send_raw(id, bytes: Vec<u8>)` /
   `resize(id, cols, rows)` / `ack_output(id, n)` / `replay(id) -> Vec<u8>` /
   `close_terminal(id)` / `get_stats() -> Vec<SessionStats>`
-- spawn 명령: Windows에서 `wsl.exe [-d $WINMUX_DISTRO] -- bash -l` (env `WINMUX_DISTRO` 없으면 기본
+- spawn 명령: Windows에서 `wsl.exe [-d $MAST_DISTRO] -- bash -l` (env `MAST_DISTRO` 없으면 기본
   배포판), Unix 개발 실행에서는 `$SHELL` 또는 `bash -l`.
 
 ### 4.6 `apps/spike/src` — 프론트엔드 (xterm.js)
@@ -183,9 +183,9 @@ pub struct SessionStats {
 
 WSL 자동 게이트 (red면 커밋 없음):
 
-1. `cargo test -p winmux-core` — 단위 + unix PTY 통합
-2. `cargo clippy -p winmux-core --all-targets -- -D warnings`
-3. `cargo check -p winmux-core --target x86_64-pc-windows-msvc` — 코어의 Windows 호환
+1. `cargo test -p mast-core` — 단위 + unix PTY 통합
+2. `cargo clippy -p mast-core --all-targets -- -D warnings`
+3. `cargo check -p mast-core --target x86_64-pc-windows-msvc` — 코어의 Windows 호환
 4. `npm run build` (tsc + vite) + `npx vitest run` — 프론트엔드
 5. `cargo check --workspace --target x86_64-pc-windows-msvc` (src-tauri 포함 전체) —
    tauri-build의 Windows 리소스 임베딩이 `llvm-rc`를 요구한다. sudo 없이 해결:
@@ -210,7 +210,7 @@ WSL 자동 게이트 (red면 커밋 없음):
 6. RAM 측정 — `scripts/win/measure.ps1`로 ①앱만 ②터미널 1개 ③4개 ④8개 ⑤4개+Claude Code 2개
    시나리오별 private working set 기록. 판정: 4패널 ≤100MB 매우 좋음 / 100~150MB 채택 /
    >150MB 최적화 / 최적화 후에도 >150MB → 후보 B 진입.
-7. 정리 검증 — 터미널을 모두 닫은 뒤 작업 관리자/Process Explorer에서 winmux-spike
+7. 정리 검증 — 터미널을 모두 닫은 뒤 작업 관리자/Process Explorer에서 mast-spike
    프로세스 트리에 잔존 자식 프로세스·스레드가 없는지 확인 (ConPTY는 kill 후 read가
    안 풀리는 이력이 있는 영역 — Windows에서만 확인 가능).
 

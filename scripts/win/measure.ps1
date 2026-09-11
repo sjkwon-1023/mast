@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Periodically measures the private working set of the winmux spike app,
+    Periodically measures the private working set of the mast spike app,
     including the WebView2 process tree.
 
 .DESCRIPTION
@@ -12,7 +12,7 @@
     per sample.
 
 .PARAMETER ProcessName
-    Target process name (without extension). Default: winmux-spike
+    Target process name (without extension). Default: mast-spike
     (matches productName in apps/spike/src-tauri/tauri.conf.json).
 
 .PARAMETER IntervalSec
@@ -27,10 +27,10 @@
 
 .EXAMPLE
     .\measure.ps1
-    Console-only output with the defaults (winmux-spike, 5s interval, 12 samples).
+    Console-only output with the defaults (mast-spike, 5s interval, 12 samples).
 
 .EXAMPLE
-    .\measure.ps1 -ProcessName winmux-spike -IntervalSec 5 -Samples 12 -OutCsv .\ram-4pane.csv
+    .\measure.ps1 -ProcessName mast-spike -IntervalSec 5 -Samples 12 -OutCsv .\ram-4pane.csv
     Records the spike-plan.md section 6 scenario (4 terminals etc.) to CSV.
 
 .NOTES
@@ -42,7 +42,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$ProcessName = "winmux-spike",
+    [string]$ProcessName = "mast-spike",
     [int]$IntervalSec = 5,
     [int]$Samples = 12,
     [string]$OutCsv

@@ -1,4 +1,4 @@
-//! `SessionSink` 구현 — winmux-core 세션의 출력·이벤트를 프론트엔드로 나른다.
+//! `SessionSink` 구현 — mast-core 세션의 출력·이벤트를 프론트엔드로 나른다.
 //!
 //! - 터미널 출력: `tauri::ipc::Channel`에 `InvokeResponseBody::Raw`로 바이너리 그대로
 //!   전송한다. JSON 직렬화 금지(계획 v2 2·12장) — 프론트엔드는 ArrayBuffer로 받는다.
@@ -6,8 +6,8 @@
 
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
-use winmux_core::osc::OscEvent;
-use winmux_core::session::{Delivery, SessionId, SessionSink};
+use mast_core::osc::OscEvent;
+use mast_core::session::{Delivery, SessionId, SessionSink};
 
 /// `osc-event` 이벤트 payload — 프론트엔드 계약과 일치:
 /// `{ id, kind: "777"|"9"|"7"|"0", title, body }`.
@@ -20,7 +20,7 @@ pub struct OscEventPayload {
 }
 
 impl OscEventPayload {
-    /// winmux-core `OscEvent` → 프론트엔드 계약 형태로 변환.
+    /// mast-core `OscEvent` → 프론트엔드 계약 형태로 변환.
     /// kind별 배치: 777은 title/body 그대로, 9는 알림 메시지를 body에,
     /// 7은 cwd URI를 body에, 0은 창 제목을 title에 둔다 (비는 칸은 빈 문자열).
     pub fn from_event(id: u32, event: &OscEvent) -> Self {
@@ -49,7 +49,7 @@ impl OscEventPayload {
                 title: title.clone(),
                 body: body.clone(),
             },
-            // pane 간 전송(winmux-send)은 MVP 앱의 기능이고 이 계측 하네스는
+            // pane 간 전송(mast-send)은 MVP 앱의 기능이고 이 계측 하네스는
             // 전달을 구현하지 않는다 (frozen — ADR-0001 재현 rig). 관측만 되게
             // 대상만 실어 보낸다: base64 payload 는 프론트 표시에 쓸모가 없다.
             OscEvent::Osc777Send { target, .. } => Self {
@@ -58,7 +58,7 @@ impl OscEventPayload {
                 title: target.clone(),
                 body: String::new(),
             },
-            // 질의(winmux-query)도 전송과 같이 MVP 앱의 기능이다 — 관측만 되게
+            // 질의(mast-query)도 전송과 같이 MVP 앱의 기능이다 — 관측만 되게
             // 종류만 싣는다 (회신 경로는 프론트 표시에 쓸모가 없다).
             OscEvent::Osc777Query { kind, .. } => Self {
                 id,
@@ -82,7 +82,7 @@ impl OscEventPayload {
                 body: String::new(),
             },
             // DEC private mode·리셋은 OSC 가 아니라 코어 세션이 소비한다
-            // (재-attach preamble — winmux-core session.rs). sink 까지 오지 않으므로
+            // (재-attach preamble — mast-core session.rs). sink 까지 오지 않으므로
             // 여기 팔은 exhaustive 검사를 만족시키는 것이 전부다.
             OscEvent::DecPrivateMode { .. } | OscEvent::TerminalReset { .. } => Self {
                 id,
@@ -129,7 +129,7 @@ impl SessionSink for ChannelSink {
                 // 거동이 달라지므로 spike-plan §6 측정 재현 시 이 차이를 감안할 것
                 // (ADR-0002 시기의 변경). 실패 자체는 삼키지 않고 stderr 에 남긴다.
                 eprintln!(
-                    "[winmux-spike] raw output channel send failed (id={}): {err}",
+                    "[mast-spike] raw output channel send failed (id={}): {err}",
                     self.id
                 );
                 Delivery::Dropped
@@ -140,7 +140,7 @@ impl SessionSink for ChannelSink {
     fn on_osc(&self, event: &OscEvent) {
         let payload = OscEventPayload::from_event(self.id, event);
         if let Err(err) = self.app.emit("osc-event", payload) {
-            eprintln!("[winmux-spike] osc-event emit failed (id={}): {err}", self.id);
+            eprintln!("[mast-spike] osc-event emit failed (id={}): {err}", self.id);
         }
     }
 
@@ -148,7 +148,7 @@ impl SessionSink for ChannelSink {
         let payload = TerminalExitPayload { id: self.id, code };
         if let Err(err) = self.app.emit("terminal-exit", payload) {
             eprintln!(
-                "[winmux-spike] terminal-exit emit failed (id={}): {err}",
+                "[mast-spike] terminal-exit emit failed (id={}): {err}",
                 self.id
             );
         }
