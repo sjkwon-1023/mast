@@ -133,13 +133,37 @@ pub fn init(
         },
     );
     match started {
-        Ok(server) => RemoteState::On {
-            port,
-            token,
-            server,
-        },
+        Ok(server) => {
+            log_firewall_state(port);
+            RemoteState::On {
+                port,
+                token,
+                server,
+            }
+        }
         Err(err) => failed(format!("cannot listen on 0.0.0.0:{port}: {err}")),
     }
+}
+
+/// 원격이 실제로 열린 부팅에서 방화벽 판정을 한 줄 남긴다.
+///
+/// 별도 스레드인 이유는 COM 열거가 수백 개의 규칙을 도는 동안 부팅을 잡지 않기
+/// 위해서다. `allowed` 도 남긴다 — 현장 진단에서 "확인했더니 허용" 과 "아예 확인하지
+/// 않았다" 는 다른 정보이고, 폰이 안 붙는다는 신고의 첫 질문이 바로 이것이다.
+fn log_firewall_state(port: u16) {
+    std::thread::spawn(move || {
+        let status = crate::firewall::status(port);
+        let detail = status
+            .detail
+            .as_deref()
+            .map(|detail| format!(" — {detail}"))
+            .unwrap_or_default();
+        winlog!(
+            "remote: firewall {} for {}:{port}{detail}",
+            status.state,
+            status.exe
+        );
+    });
 }
 
 /// [`remote_status`] 의 응답. 프론트 미러는 `backend.ts` 의 같은 이름 타입이다.
@@ -199,6 +223,45 @@ pub fn remote_pairing(state: State<'_, RemoteState>) -> Result<Option<Pairing>, 
             url: pairing_url(lan_ip()?, *port, token),
         })),
     }
+}
+
+/// 방화벽 커맨드 둘이 공유하는 전제 — 꺼져 있거나 부팅에 실패한 원격에는 물어볼
+/// 포트가 없다. 그 두 경우만 `Err` 이고, 방화벽 쪽 실패는 전부 `Ok` 안의 상태로
+/// 나간다 (대화상자가 "확인하지 못했다" 를 보여 줄 수 있어야 한다).
+fn active_port(state: &RemoteState) -> Result<u16, String> {
+    match state {
+        RemoteState::Off => Err("remote surface is off".to_owned()),
+        RemoteState::Failed { reason } => Err(reason.clone()),
+        RemoteState::On { port, .. } => Ok(*port),
+    }
+}
+
+/// 지금 이 exe·이 포트가 Windows 방화벽에 허용돼 있는가 — 페어링 대화상자를 **열 때**
+/// 부른다.
+///
+/// COM 열거는 수백 개의 규칙을 도므로 `spawn_blocking` 에서 돌린다 (`open_url` 과 같은
+/// 이유). 포트만 복사해 넘기고 managed state 는 await 너머로 들고 가지 않는다.
+#[tauri::command]
+pub async fn remote_firewall_status(
+    state: State<'_, RemoteState>,
+) -> Result<crate::firewall::FirewallStatus, String> {
+    let port = active_port(&state)?;
+    tauri::async_runtime::spawn_blocking(move || crate::firewall::status(port))
+        .await
+        .map_err(|err| format!("remote_firewall_status task join failed: {err}"))
+}
+
+/// 허용 규칙을 만든다 — **사용자가 버튼을 눌렀을 때만** 부른다. UAC 창이 한 번 뜨고,
+/// 응답은 사용자가 그 창에 답할 때까지 돌아오지 않는다(상한 없음 — `ShellExecuteExW`
+/// 가 그 안에서 기다린다; 120 s 는 그 뒤 netsh 실행의 상한이다).
+#[tauri::command]
+pub async fn remote_firewall_allow(
+    state: State<'_, RemoteState>,
+) -> Result<crate::firewall::AllowOutcome, String> {
+    let port = active_port(&state)?;
+    tauri::async_runtime::spawn_blocking(move || crate::firewall::allow(port))
+        .await
+        .map_err(|err| format!("remote_firewall_allow task join failed: {err}"))
 }
 
 /// 토큰을 fragment 에 싣는다 — fragment 는 요청에 실리지 않으므로 폰의 첫 GET 이

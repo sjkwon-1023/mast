@@ -376,6 +376,29 @@ body {
   border-color: var(--accent);
 }
 
+.pairing-firewall {
+  display: block;
+  margin: 0 0 12px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.pairing-allow {
+  width: 100%;
+  padding: 4px 6px;
+  margin-bottom: 12px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pairing-allow:hover {
+  border-color: var(--accent);
+}
+
 /* ── split tree (11단계) ─────────────────────────────────────────────
    direction 은 pane 이 나열되는 축이다 — split-layout.ts 의 방향 규약 참조.
    자식 flex 값(inline)은 workspace-view 가 소유한다. */

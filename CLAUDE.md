@@ -543,6 +543,21 @@ Accepted deferrals, one line each. None of these block the MVP.
   needs an amendment. Sequenced behind real phone use of Claude Code tabs; a faithful
   fixed-grid mode with horizontal scroll/pinch zoom is the cheaper alternative if reading is
   not the main use.
+- **The firewall rule is bound to the exe path, and nothing said so — landed 2026-09-12**
+  (v0.3.23). The rename changed the exe's file name, the `winmux-x64.exe` allow rule silently
+  stopped applying, and this PC's profiles have `NotifyOnListen` off, so Windows never asked;
+  the only symptom was a phone page that never loaded while `mast.log` showed
+  `remote: listening …`. The *Pair phone* dialog now judges, over unprivileged COM
+  (`firewall.rs`), whether an enabled inbound Allow reaches this exe on this port for the
+  current profile — `Protocol=Any` rules are exempt from the port check because that is what
+  Windows's own prompt writes — and offers *Allow in Windows Firewall*, which runs a
+  Microsoft-signed `netsh -f <script>` elevated once; the script is built from `current_exe()`
+  and the port only, the rule covers `domain,private` only, and success is judged by
+  re-detection rather than netsh's undocumented exit code. A program-bound Block rule for this
+  exe wins over Allow, as in Windows, and hides the button since another allow rule would
+  change nothing. Boot logs one `remote: firewall <state>` line. Decisions and limits (third-party
+  firewalls invisible, rule scope only partly modelled, tests run only on the Windows CI job):
+  ADR-0016 amendment (v0.3.23). Verification: WINDOWS-BUILD §10 v0.3.23, field-only.
 - **Image attach from the phone — backlog (user decision 2026-09-08)**. The phone composer is a
   plain textarea, so a pasted image goes nowhere, and no channel exists to hand one to the agent in
   a tab. Both agents take an image *file path* in the prompt (Claude Code's drag-and-drop path

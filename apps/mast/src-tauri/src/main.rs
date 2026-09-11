@@ -20,6 +20,8 @@
 mod app_identity;
 mod boot;
 mod commands;
+// Windows 방화벽 규칙 감지(COM)·적용(승격 netsh) — 원격 표면의 페어링 대화상자용.
+mod firewall;
 mod host;
 mod logfile;
 mod provision;
@@ -300,6 +302,10 @@ fn main() {
             // 페어링은 다이얼로그를 열 때만.
             remote::remote_status,
             remote::remote_pairing,
+            // 페어링 대화상자의 방화벽 줄과 그 버튼 (ADR-0016 amendment). 감지는
+            // 대화상자를 열 때, 적용은 사용자가 누를 때만 — 둘 다 자동으로 돌지 않는다.
+            remote::remote_firewall_status,
+            remote::remote_firewall_allow,
         ])
         .build(tauri::generate_context!())
         .expect("error while building mast")

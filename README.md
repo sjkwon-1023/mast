@@ -47,7 +47,9 @@ with Windows 11. mast opens WSL2 shells only — there is no PowerShell or CMD p
   to pre-fill the prompt instead.
 - **Viewer tabs** — folder browser, text viewer and Markdown viewer for files inside WSL.
 - **Phone remote (opt-in)** — pair by QR, then read a tab, scroll a full-screen TUI, or send input.
-  Off by default; plain HTTP on your own LAN — see [`docs/SETTINGS.md`](./docs/SETTINGS.md).
+  Off by default; plain HTTP on your own LAN — see [`docs/SETTINGS.md`](./docs/SETTINGS.md). If
+  the phone cannot connect, the pairing dialog says whether Windows Firewall allows the app and
+  writes the rule for you behind one UAC prompt.
 - **Layout persistence** — workspaces, splits and tabs come back, each shell respawned where it was,
   and a tab that was running an agent returns with its resume command one `Up` away.
 

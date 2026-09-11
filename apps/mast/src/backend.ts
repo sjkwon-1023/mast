@@ -185,6 +185,48 @@ export function remotePairing(): Promise<Pairing | null> {
   return invoke<Pairing | null>("remote_pairing");
 }
 
+/** Windows 방화벽에서 이 앱의 상태 (ADR-0016 amendment — 페어링 다이얼로그가
+ *  감지해 보여 준다). COM 조회는 비관리자 권한으로 끝나므로 UAC 없이 즉시 온다. */
+export interface FirewallStatus {
+  state:
+    | "allowed"
+    | "blocked"
+    | "stalePath"
+    | "profileMismatch"
+    | "missing"
+    | "firewallOff"
+    | "unknown";
+  /** state 별 부가 정보 — stalePath: 옛 exe 경로, blocked: 차단 규칙 이름,
+   *  profileMismatch: 현재 활성 프로필 이름들, unknown: 오류 문장. 그 외 null. */
+  detail: string | null;
+  exe: string;
+  port: number;
+  /** 현재 활성 프로필 — "Domain" | "Private" | "Public" 의 부분집합. */
+  currentProfiles: string[];
+}
+
+/** remote_firewall_allow 시도 결과. */
+export interface AllowOutcome {
+  outcome: "applied" | "declined" | "failed";
+  /** failed 일 때의 사유. 그 외 null. */
+  detail: string | null;
+  /** 시도 뒤 재감지한 상태 — outcome 과 무관하게 항상 온다. */
+  status: FirewallStatus;
+}
+
+/** Windows 방화벽 상태 조회 (비관리자, COM `INetFwPolicy2`). 원격 표면이
+ *  off/failed 면 사유 문자열로 reject 된다. */
+export function remoteFirewallStatus(): Promise<FirewallStatus> {
+  return invoke<FirewallStatus>("remote_firewall_status");
+}
+
+/** Windows 방화벽에 allow 규칙을 적용 시도한다 — UAC 프롬프트가 뜨고, 사용자가
+ *  답할 때까지 resolve 되지 않는다(상한 없음). 원격 표면이 off/failed 면 사유
+ *  문자열로 reject 된다. */
+export function remoteFirewallAllow(): Promise<AllowOutcome> {
+  return invoke<AllowOutcome>("remote_firewall_allow");
+}
+
 // --- 뷰어 파일 접근 (21단계) --------------------------------------------------
 // folderBrowser·textViewer 가 쓰는 읽기 전용 커맨드 3종. 백엔드가 Windows 에서
 // \\wsl.localhost UNC 로 접근하므로 프론트는 항상 **리눅스 경로**를 넘긴다.
