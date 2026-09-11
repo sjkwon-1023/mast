@@ -3,15 +3,31 @@
 [![CI](https://github.com/sjkwon-1023/winmux/actions/workflows/ci.yml/badge.svg)](https://github.com/sjkwon-1023/winmux/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A lightweight terminal for Windows, built around WSL2 and coding agents.
+**A lightweight multi-agent coding workspace for Windows + WSL2.**
 
-Split panes, tabs inside each pane, and a workspace sidebar that shows which agent is running,
-which one is waiting for your input, and which one just finished — without switching to it.
+Run Claude Code, Codex, shells, and other terminal agents side by side; see which workspace is
+running, waiting for input, or finished; inspect files and Markdown without opening an IDE; and
+check or control a tab from your phone on the same LAN.
 
-I built it after moving from cmux on macOS to Windows: only the features I actually use, kept
-as small as I could (100MB target, 150MB ceiling, ~129MB measured), plus a folder browser and
-text and markdown viewers for reading while an agent works. It is Tauri v2 and xterm.js over a
-pure Rust core — the terminal logic has no UI framework dependency and is tested on Linux.
+winmux was built after moving from cmux on macOS to Windows. The goal is deliberately narrow:
+keep the agent workflow useful while keeping inactive UI cheap. The app uses Tauri v2 and a
+single WebView2 over a Rust/ConPTY session core, with a 100MB target, 150MB ceiling, and roughly
+129MB measured app-side in the current release line.
+
+## Why winmux
+
+- **Manage several coding agents at a glance** — workspace cards show agent state and the last
+  message, so a waiting agent does not disappear behind another terminal.
+- **Stay in one lightweight tool** — split panes and tabs plus folder, text, and Markdown viewers
+  cover the common read/inspect loop without embedding a full editor runtime.
+- **Keep working away from the desk** — pair a phone on the same Wi-Fi to read a terminal, scroll
+  Claude Code/Codex TUIs, and send input.
+- **Designed for long-running agent sessions** — PTYs and durable state live behind a disposable
+  WebView, so the UI can reload to reclaim memory without killing the shell or agent.
+- **Windows + WSL2 on purpose** — no compatibility layer for PowerShell/CMD profiles and no attempt
+  to be a general-purpose cross-platform terminal.
+
+The next reliability and product work is tracked in [`ROADMAP.md`](./ROADMAP.md).
 
 ## Requirements
 
@@ -28,23 +44,27 @@ ConPTY → `wsl.exe` → a login shell. There is no PowerShell or CMD profile.
   new pane or tab opens in the directory the pane's shell is in.
 - **Tabs inside panes** — every pane has its own tab strip; background tabs stay alive.
 - **Workspace sidebar** — one status card per workspace: agent state and its last message.
-- **Agent status** — driven by OSC 777/9 from a Claude Code hook or your shell prompt. No
-  daemon, no IPC server, no named pipe.
+- **Agent status and notifications** — Claude Code/Codex helpers emit OSC status into the terminal,
+  so winmux can show running / needs-input / idle state and notify without a separate agent daemon.
 - **Pane-to-pane text passing** — send text to another pane, where it runs on arrival unless
   you ask to pre-fill the prompt instead.
-- **Viewer tabs** — folder browser, text viewer, and markdown viewer reading over
+- **Viewer tabs** — folder browser, text viewer, and Markdown viewer reading over
   `\\wsl.localhost`. Large files page in 512KiB windows.
-- **Remote surface (opt-in)** — set `"remote": { "port": 7331 }` in `settings.json`, pair a phone on the same Wi-Fi from the sidebar's *Pair phone* QR, and read a tab or send it text from the phone's browser. Off by default; plain HTTP on your LAN — the limits are in ADR-0016.
+- **Remote surface (opt-in)** — set `"remote": { "port": 7331 }` in `settings.json`, pair a phone
+  on the same Wi-Fi from the sidebar's *Pair phone* QR, then read a tab, scroll an alternate-screen
+  TUI, or send input from the phone's browser. Off by default; plain HTTP on your LAN — the limits
+  are in ADR-0016.
 - **Layout persistence** — workspaces, splits, and tabs come back, each shell respawned in the
   directory it was last in, and a tab that was running an agent comes back with its resume
-  command one `Up` away. The agent process is gone; the conversation is not.
+  command one `Up` away. The agent process is gone after a full app restart; the conversation
+  can still be resumed.
 - **Automatic UI reset** — durable state lives in Rust, so the WebView can reload to reclaim
-  memory without losing a session.
+  renderer/JS memory without losing a live PTY session.
 - **x64 and ARM64** — both gated in CI.
 
 ## Installing
 
-winmux ships as a single portable executable for x64 and ARM64 — no installer, no setup.
+winmux ships as a single portable executable for x64 and ARM64 — no installer, no setup wizard.
 Download `winmux-x64.exe` or `winmux-arm64.exe` from the
 [latest release](https://github.com/sjkwon-1023/winmux/releases/latest), matching your CPU
 (WSL2 with a distribution installed is still required, see [Requirements](#requirements)).
@@ -79,7 +99,7 @@ file reports itself in the status line instead of being silently ignored.
 ```
 
 `fontFamily`/`fontSize` set the font for the terminal **and** for the viewers' monospace
-content — the text viewer's lines, the folder listing, and markdown code spans and blocks.
+content — the text viewer's lines, the folder listing, and Markdown code spans and blocks.
 Markdown prose keeps its own face but follows the *size*, so a larger `fontSize` scales the
 whole document. The rest of the UI (sidebar, tab bars, status line) is never affected.
 `Ctrl+=`/`Ctrl+-`/`Ctrl+0` zoom moves the terminal and all three viewer surfaces together. Zoom
@@ -122,9 +142,10 @@ other direction, from Windows into WSL.
 
 ### Agent status
 
-Copy the hook script and the `settings.json` snippet from
-[`scripts/wsl/claude-hook-example.md`](./scripts/wsl/claude-hook-example.md). It also covers
-emitting the tab title and cwd from your `~/.bashrc`.
+On Windows, winmux automatically provisions its Claude Code/Codex notification helpers in each
+WSL distribution it uses. Provisioning is idempotent and failure is logged rather than silently
+changing terminal behavior. [`scripts/wsl/claude-hook-example.md`](./scripts/wsl/claude-hook-example.md)
+documents the OSC contract and the manual/fallback setup path.
 
 ## Keyboard shortcuts
 
@@ -170,12 +191,12 @@ autoMemoryReclaim=gradual
 
 ## Status
 
-Early, one maintainer, but I use it daily.
+Early, one maintainer, but used daily. The current focus is preserving the lightweight session
+architecture while improving terminal reattach fidelity, Windows resource soak coverage, Git
+status/diff inspection, and first-run/public documentation. See [`ROADMAP.md`](./ROADMAP.md).
 
 - **Tested on an x64 Windows 11 desktop only.** ARM64 is type-checked and linted on every
   push, but has never run on real hardware — device testing waits on an ARM64 laptop.
-- **Git branch display** and a **built-in browser tab** are both planned, not built. The data
-  model already reserves the git fields, and the sidebar hides them while they are empty.
 
 ## License
 
