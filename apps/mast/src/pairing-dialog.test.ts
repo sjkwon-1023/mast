@@ -58,10 +58,12 @@ describe("firewallMessage", () => {
     );
   });
 
-  it("profileMismatch — names the rule's profiles", () => {
-    expect(firewallMessage(status({ state: "profileMismatch", detail: "Domain, Public" }))).toBe(
-      "An allow rule exists, but not for the current network profile (Domain, Public).",
-    );
+  it("profileMismatch — names the current profiles", () => {
+    expect(
+      firewallMessage(
+        status({ state: "profileMismatch", detail: "Private", currentProfiles: ["Private"] }),
+      ),
+    ).toBe("An allow rule exists, but not for the current network profile (Private).");
   });
 
   it("missing — names the port", () => {
@@ -92,6 +94,12 @@ describe("firewallMessage", () => {
     expect(firewallMessage(status({ state: "stalePath", currentProfiles: ["Public"] }))).toBe(
       "This network is set to Public. Mark it Private in Windows settings; mast never opens a port on public networks.",
     );
+  });
+
+  it("keeps the blocking rule's name even on a public-only network", () => {
+    expect(
+      firewallMessage(status({ state: "blocked", detail: "vendor block", currentProfiles: ["Public"] })),
+    ).toContain('"vendor block"');
   });
 
   it("never overrides allowed or firewallOff, even with no active profile", () => {

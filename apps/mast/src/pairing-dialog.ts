@@ -48,12 +48,19 @@ export async function resolvePairing(): Promise<PairingResult> {
   }
 }
 
-/** 방화벽 상태 → 상태줄 한 줄. currentProfiles 덮어쓰기는 allowed/firewallOff
- *  에는 적용하지 않는다 — 그 둘은 프로필과 무관하게 그대로 보여준다. */
+/** 방화벽 상태 → 상태줄 한 줄. currentProfiles 덮어쓰기는 allowed/firewallOff/blocked
+ *  에는 적용하지 않는다 — 앞의 둘은 프로필과 무관하고, blocked 는 차단 규칙 이름이
+ *  이 상태가 존재하는 이유라 Public 안내에 묻히면 안 된다. */
 export function firewallMessage(status: FirewallStatus): string {
-  const { state, detail, port, currentProfiles } = status;
+  const { state, port, currentProfiles } = status;
+  const detail = status.detail ?? "?";
 
-  if (state !== "unknown" && state !== "allowed" && state !== "firewallOff") {
+  if (
+    state !== "unknown" &&
+    state !== "allowed" &&
+    state !== "firewallOff" &&
+    state !== "blocked"
+  ) {
     if (currentProfiles.length === 0) {
       return "No active network profile — connect to a network first.";
     }
@@ -191,7 +198,7 @@ function installFirewallSection(dialog: HTMLDialogElement, close: HTMLButtonElem
     void (async () => {
       try {
         const outcome = await remoteFirewallAllow();
-        // UAC 프롬프트는 최대 120s 를 끌 수 있다 — 그동안 사용자가 다이얼로그를
+        // UAC 프롬프트는 사용자가 답할 때까지 열려 있다 — 그동안 다이얼로그를
         // 닫았으면(Close/Esc/백드롭) 이미 없는 엘리먼트에 쓰지 않는다.
         if (!dialog.isConnected) return;
         line.textContent = allowOutcomeMessage(outcome);

@@ -220,8 +220,9 @@ export function remoteFirewallStatus(): Promise<FirewallStatus> {
   return invoke<FirewallStatus>("remote_firewall_status");
 }
 
-/** Windows 방화벽에 allow 규칙을 적용 시도한다 — UAC 프롬프트가 뜬다(최대
- *  120s 대기). 원격 표면이 off/failed 면 사유 문자열로 reject 된다. */
+/** Windows 방화벽에 allow 규칙을 적용 시도한다 — UAC 프롬프트가 뜨고, 사용자가
+ *  답할 때까지 resolve 되지 않는다(상한 없음). 원격 표면이 off/failed 면 사유
+ *  문자열로 reject 된다. */
 export function remoteFirewallAllow(): Promise<AllowOutcome> {
   return invoke<AllowOutcome>("remote_firewall_allow");
 }

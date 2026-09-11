@@ -252,7 +252,8 @@ pub async fn remote_firewall_status(
 }
 
 /// 허용 규칙을 만든다 — **사용자가 버튼을 눌렀을 때만** 부른다. UAC 창이 한 번 뜨고,
-/// 응답은 사용자가 그 창에 답할 때까지(최대 120 s) 돌아오지 않는다.
+/// 응답은 사용자가 그 창에 답할 때까지 돌아오지 않는다(상한 없음 — `ShellExecuteExW`
+/// 가 그 안에서 기다린다; 120 s 는 그 뒤 netsh 실행의 상한이다).
 #[tauri::command]
 pub async fn remote_firewall_allow(
     state: State<'_, RemoteState>,

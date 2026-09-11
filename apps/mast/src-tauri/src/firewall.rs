@@ -41,8 +41,10 @@ const PROFILE_DOMAIN: i32 = 1;
 const PROFILE_PRIVATE: i32 = 2;
 const PROFILE_PUBLIC: i32 = 4;
 
-/// 승격된 netsh 를 기다리는 상한. 사용자가 UAC 앞에서 자리를 비울 수 있어 넉넉히
-/// 잡되, 무한정 blocking 풀의 스레드를 붙잡지는 않는다.
+/// netsh **실행**의 상한. UAC 창 자체는 여기 들어가지 않는다 — `ShellExecuteExW` 의
+/// `runas` 는 사용자가 그 창에 답할 때까지 반환하지 않으므로(그래서 거절이
+/// `ERROR_CANCELLED` 로 구분된다) 그 대기에는 상한이 없고, 그동안 blocking 풀의
+/// 스레드 하나가 잡혀 있다. 이 값은 그 뒤 몇 ms 짜리 netsh 가 걸렸을 때의 안전장치다.
 #[cfg(windows)]
 const NETSH_TIMEOUT_MS: u32 = 120_000;
 
@@ -100,8 +102,9 @@ struct RuleRecord {
     local_ports: String,
     application_name: String,
     profiles: i32,
-    /// Block 후보에서만 채운다 — Allow 판정은 보지 않는데 규칙마다 BSTR 을 하나 더
-    /// 읽는 비용이라(보통 수백 개다) 필요한 자리에서만 읽는다.
+    /// Allow·Block 양쪽이 본다. 원격 주소가 좁게 스코프된 Allow(예: 특정 IP 하나)는
+    /// 폰을 들이지 못하는데, 그것을 `allowed` 로 읽으면 대화상자가 버튼까지 감추고
+    /// "허용됨"이라 안심시키는 최악의 오판이 된다.
     remote_addresses: String,
 }
 
@@ -200,19 +203,20 @@ fn firewall_off(enabled_per_active_profile: &[bool]) -> bool {
     !enabled_per_active_profile.is_empty() && enabled_per_active_profile.iter().all(|on| !on)
 }
 
-/// Block 규칙이 폰이 오는 방향(같은 LAN)을 실제로 덮는가.
+/// 규칙의 `RemoteAddresses` 가 폰이 오는 방향(같은 LAN)을 실제로 덮는가.
 ///
-/// `RemoteAddresses` 가 인터넷 대역으로 스코프된 Block 규칙은 흔하고, 그것까지
-/// `blocked` 로 세면 정상적으로 허용된 PC 가 막혔다고 보고된다.
+/// 인터넷 대역으로 스코프된 Block 은 흔하고 그것까지 `blocked` 로 세면 정상 PC 가
+/// 막혔다고 보고되며, 반대로 특정 IP 로 스코프된 Allow 를 `allowed` 로 세면 폰이
+/// 못 붙는데 버튼이 사라진다. 빈 값과 `*` 는 "모든 주소"다 (포트와 같은 규약).
 fn remote_covers_lan(remote_addresses: &str) -> bool {
     let value = remote_addresses.trim();
-    value == "*" || value.to_ascii_lowercase().contains("localsubnet")
+    value.is_empty() || value == "*" || value.to_ascii_lowercase().contains("localsubnet")
 }
 
 /// 규칙 목록에서 상태 하나를 고른다. COM 을 타지 않으므로 이 함수가 단위 테스트의
 /// 본체다.
-fn judge(target: &Target, rules: &[RuleRecord], firewall_off: bool) -> Verdict {
-    if firewall_off {
+fn judge(target: &Target, rules: &[RuleRecord], all_profiles_off: bool) -> Verdict {
+    if all_profiles_off {
         return Verdict::FirewallOff;
     }
 
@@ -243,12 +247,14 @@ fn judge(target: &Target, rules: &[RuleRecord], firewall_off: bool) -> Verdict {
         };
     }
 
-    if rules.iter().any(|rule| {
+    let allows_us = |rule: &RuleRecord| {
         reaches_us(rule)
-            && in_profile(rule)
             && rule.action_allow
             && (any_program(rule) || our_program(rule))
-    }) {
+            && remote_covers_lan(&rule.remote_addresses)
+    };
+
+    if rules.iter().any(|rule| allows_us(rule) && in_profile(rule)) {
         return Verdict::Allowed;
     }
 
@@ -264,10 +270,7 @@ fn judge(target: &Target, rules: &[RuleRecord], firewall_off: bool) -> Verdict {
 
     // 프로필 조건만 빼고 허용 후보를 만족한다 = 규칙은 있는데 지금 네트워크가 그
     // 프로필이 아니다 (규칙은 Private, 지금은 Public 따위).
-    if rules
-        .iter()
-        .any(|rule| reaches_us(rule) && rule.action_allow && (any_program(rule) || our_program(rule)))
-    {
+    if rules.iter().any(allows_us) {
         return Verdict::ProfileMismatch;
     }
 
@@ -283,18 +286,25 @@ fn judge(target: &Target, rules: &[RuleRecord], firewall_off: bool) -> Verdict {
 /// delete 줄은 같은 이름의 규칙이 이미 있을 때만 넣는다 — 없는 규칙의 delete 는
 /// netsh 가 오류로 끝낸다. 반대로 있을 때 지우지 않으면 포트를 바꾼 사용자가 같은
 /// 이름의 규칙을 둘 갖게 된다.
+///
+/// 모양은 `netsh advfirewall firewall dump` 가 내놓는 스크립트와 같다 — `pushd` 로
+/// 컨텍스트에 들어가 짧은 명령을 쓰고 `popd` 로 나온다. `-f` 가 소비하도록 만들어진
+/// 형식이 그것이라, 완전 수식 명령이 컨텍스트를 바꾸는지 같은 문서에 없는 질문을
+/// 피한다.
 fn script_text(exe: &str, port: u16, delete_first: bool) -> Result<String, String> {
     if exe.contains('"') {
         return Err("the executable path contains a quote character".to_owned());
     }
     let delete = if delete_first {
-        format!("advfirewall firewall delete rule name=\"{RULE_NAME}\"\r\n")
+        format!("delete rule name=\"{RULE_NAME}\"\r\n")
     } else {
         String::new()
     };
     Ok(format!(
-        "{delete}advfirewall firewall add rule name=\"{RULE_NAME}\" dir=in action=allow \
-         protocol=TCP localport={port} program=\"{exe}\" profile=domain,private enable=yes\r\n"
+        "pushd advfirewall firewall\r\n\
+         {delete}add rule name=\"{RULE_NAME}\" dir=in action=allow protocol=TCP \
+         localport={port} program=\"{exe}\" profile=domain,private enable=yes\r\n\
+         popd\r\n"
     ))
 }
 
@@ -309,13 +319,18 @@ fn current_exe_text() -> Result<String, String> {
 
 /// 규칙에 박히는 경로. 표시용과 달리 손실 변환을 허용하지 않는다 — 잘못 변환된
 /// 경로로 만든 규칙은 아무것도 허용하지 않으면서 허용된 것처럼 보인다.
+///
+/// `\\?\` 접두사는 뗀다 — 규칙에 그대로 박히면 Windows 가 실행 중인 exe 와 맞추지
+/// 못하는데, 재감지는 [`normalize_exe`] 가 접두사를 떼고 비교하므로 `allowed` 로
+/// 읽어 버튼까지 감춘다. 대소문자는 그대로 둔다(표시용이기도 하다).
 #[cfg(windows)]
 fn current_exe_exact() -> Result<String, String> {
     let path =
         std::env::current_exe().map_err(|err| format!("cannot read this executable's path: {err}"))?;
-    path.to_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "this executable's path is not valid Unicode".to_owned())
+    let text = path
+        .to_str()
+        .ok_or_else(|| "this executable's path is not valid Unicode".to_owned())?;
+    Ok(text.strip_prefix(r"\\?\").unwrap_or(text).to_owned())
 }
 
 /// COM 으로 한 번에 읽어 온 것들. 규칙·활성 프로필·방화벽 on/off 가 같은 스냅샷에서
@@ -429,11 +444,7 @@ fn read_rule(rule: &INetFwRule) -> Option<RuleRecord> {
     let protocol = unsafe { rule.Protocol() }.ok()?;
     let local_ports = unsafe { rule.LocalPorts() }.ok()?.to_string();
     let profiles = unsafe { rule.Profiles() }.ok()?;
-    let remote_addresses = if action_allow {
-        String::new()
-    } else {
-        unsafe { rule.RemoteAddresses() }.ok()?.to_string()
-    };
+    let remote_addresses = unsafe { rule.RemoteAddresses() }.ok()?.to_string();
 
     Some(RuleRecord {
         name,
@@ -451,7 +462,7 @@ fn read_rule(rule: &INetFwRule) -> Option<RuleRecord> {
 /// 방화벽 정책 전체를 한 번 읽는다. COM 스코프는 이 함수 안에서 열고 닫는다 —
 /// 승격 실행([`run_elevated_netsh`])은 스코프 밖에서 돈다.
 #[cfg(windows)]
-fn collect() -> Result<Collected, String> {
+fn read_policy() -> Result<Collected, String> {
     use windows::core::Interface;
     use windows::Win32::Foundation::VARIANT_FALSE;
     use windows::Win32::NetworkManagement::WindowsFirewall::{
@@ -573,10 +584,28 @@ enum Applied {
     Declined,
 }
 
+/// `C:\Windows\System32` 에 해당하는 경로를 커널에 묻는다. 버퍼가 모자라면(반환값이
+/// 버퍼 길이 이상) 경로를 신뢰하지 않는다.
+#[cfg(windows)]
+fn system_directory() -> Result<std::path::PathBuf, String> {
+    use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
+
+    let mut buffer = [0u16; 260];
+    let len = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
+    if len == 0 || len >= buffer.len() {
+        return Err("cannot resolve the Windows system directory".to_owned());
+    }
+    String::from_utf16(&buffer[..len])
+        .map(std::path::PathBuf::from)
+        .map_err(|_| "the Windows system directory path is not valid Unicode".to_owned())
+}
+
 /// 승격된 netsh 를 띄우고 끝날 때까지 기다린다.
 ///
-/// `cmd.exe` 를 거치지 않고, netsh 는 `%SystemRoot%\System32` 절대 경로로 부른다
-/// (PATH 탐색 금지 — ADR-0012 와 같은 규율).
+/// `cmd.exe` 를 거치지 않고, netsh 는 시스템 디렉터리의 절대 경로로 부른다 (PATH
+/// 탐색 금지 — ADR-0012 와 같은 규율). 그 디렉터리는 `%SystemRoot%` 환경변수가
+/// 아니라 `GetSystemDirectoryW` 에서 얻는다: 환경변수는 같은 사용자 권한의 어떤
+/// 프로세스든 고칠 수 있는데, 이 값이 **무엇을 승격시킬지**를 정한다.
 #[cfg(windows)]
 fn run_elevated_netsh(script: &std::path::Path) -> Result<Applied, String> {
     use windows::core::{HRESULT, HSTRING, PCWSTR};
@@ -588,11 +617,7 @@ fn run_elevated_netsh(script: &std::path::Path) -> Result<Applied, String> {
     };
     use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
-    let system_root = std::env::var("SystemRoot")
-        .map_err(|_| "the SystemRoot environment variable is not set".to_owned())?;
-    let netsh = std::path::Path::new(&system_root)
-        .join("System32")
-        .join("netsh.exe");
+    let netsh = system_directory()?.join("netsh.exe");
     let script = script
         .to_str()
         .ok_or_else(|| "the temporary script path is not valid Unicode".to_owned())?;
@@ -644,8 +669,10 @@ fn run_elevated_netsh(script: &std::path::Path) -> Result<Applied, String> {
         }
         Ok(Applied::Ran)
     } else if wait == WAIT_TIMEOUT {
-        // 죽이지 않는다 — UAC 를 띄워 둔 채 사용자가 자리를 비운 것일 수 있고, 그
-        // netsh 가 나중에 규칙을 만들어도 손해가 아니다.
+        // 여기 오면 UAC 는 이미 지났고(그 대기는 ShellExecuteExW 안이다) 몇 ms 짜리
+        // netsh 가 걸린 것이다. 죽이지 않는다 — 비승격 프로세스는 승격된 것을 죽일
+        // 수 없다. 반환하면서 스크립트 파일이 지워지므로 뒤늦게 읽으려 해도 실패하고,
+        // 규칙이 생겼는지는 어차피 재감지가 답한다.
         Err(format!(
             "netsh did not finish within {} s",
             NETSH_TIMEOUT_MS / 1000
@@ -665,7 +692,7 @@ fn apply(port: u16) -> Result<Applied, String> {
     // 수집 실패를 감내한다: COM 이 답하지 않아도 버튼은 동작해야 한다. 규칙 자체가
     // `profile=domain,private` 고정이라 가드 없이도 Public 에 포트를 열지 않는다 —
     // 보안 불변식은 가드가 아니라 규칙의 구성이 지킨다.
-    let collected = collect().ok();
+    let collected = read_policy().ok();
     if let Some(collected) = &collected {
         if collected.current_profiles == 0 {
             return Err("no active network profile".to_owned());
@@ -696,7 +723,7 @@ pub fn status(port: u16) -> FirewallStatus {
         Ok(exe) => exe,
         Err(err) => return FirewallStatus::unknown(String::new(), port, err),
     };
-    let collected = match collect() {
+    let collected = match read_policy() {
         Ok(collected) => collected,
         Err(err) => return FirewallStatus::unknown(exe, port, err),
     };
@@ -777,7 +804,7 @@ mod tests {
             local_ports: PORT.to_string(),
             application_name: EXE.to_owned(),
             profiles: PROFILE_PRIVATE,
-            remote_addresses: String::new(),
+            remote_addresses: "*".to_owned(),
         }
     }
 
@@ -785,7 +812,6 @@ mod tests {
         RuleRecord {
             name: "vendor block".to_owned(),
             action_allow: false,
-            remote_addresses: "*".to_owned(),
             ..allowing_rule()
         }
     }
@@ -900,6 +926,22 @@ mod tests {
             ..allowing_rule()
         };
         assert_eq!(judge(&target(), &[rule], false), Verdict::Allowed);
+    }
+
+    #[test]
+    fn judge_ignores_an_allow_scoped_away_from_the_lan() {
+        // 특정 IP 하나에만 열린 Allow 는 폰을 들이지 못한다 — allowed 로 읽으면 버튼이
+        // 사라진 채 "허용됨"이 뜬다.
+        let narrow = RuleRecord {
+            remote_addresses: "10.0.0.5".to_owned(),
+            ..allowing_rule()
+        };
+        assert_eq!(judge(&target(), &[narrow], false), Verdict::Missing);
+        let empty_scope = RuleRecord {
+            remote_addresses: String::new(),
+            ..allowing_rule()
+        };
+        assert_eq!(judge(&target(), &[empty_scope], false), Verdict::Allowed);
     }
 
     #[test]
@@ -1042,9 +1084,11 @@ mod tests {
     fn script_text_writes_only_the_add_line_by_default() {
         assert_eq!(
             script_text(EXE, PORT, false).unwrap(),
-            "advfirewall firewall add rule name=\"mast remote (LAN)\" dir=in action=allow \
-             protocol=TCP localport=7331 program=\"C:\\Users\\me\\Downloads\\mast-x64.exe\" \
-             profile=domain,private enable=yes\r\n"
+            "pushd advfirewall firewall\r\n\
+             add rule name=\"mast remote (LAN)\" dir=in action=allow protocol=TCP \
+             localport=7331 program=\"C:\\Users\\me\\Downloads\\mast-x64.exe\" \
+             profile=domain,private enable=yes\r\n\
+             popd\r\n"
         );
     }
 
@@ -1052,10 +1096,12 @@ mod tests {
     fn script_text_deletes_the_old_rule_first_when_asked() {
         assert_eq!(
             script_text(EXE, PORT, true).unwrap(),
-            "advfirewall firewall delete rule name=\"mast remote (LAN)\"\r\n\
-             advfirewall firewall add rule name=\"mast remote (LAN)\" dir=in action=allow \
-             protocol=TCP localport=7331 program=\"C:\\Users\\me\\Downloads\\mast-x64.exe\" \
-             profile=domain,private enable=yes\r\n"
+            "pushd advfirewall firewall\r\n\
+             delete rule name=\"mast remote (LAN)\"\r\n\
+             add rule name=\"mast remote (LAN)\" dir=in action=allow protocol=TCP \
+             localport=7331 program=\"C:\\Users\\me\\Downloads\\mast-x64.exe\" \
+             profile=domain,private enable=yes\r\n\
+             popd\r\n"
         );
     }
 

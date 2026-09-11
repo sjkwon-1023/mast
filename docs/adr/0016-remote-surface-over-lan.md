@@ -183,9 +183,11 @@ timed out, and nothing in between said why.
 
 1. **Detection is unprivileged COM, not a shell-out.** `firewall.rs` enumerates
    `INetFwPolicy2.Rules` in-process and judges whether an enabled inbound Allow rule reaches
-   *this* exe on *this* port for the *current* profile — a rule that names no program counts,
-   and a `Protocol=Any` rule is exempt from the port check because that is exactly the rule
-   Windows's own "allow this app" prompt writes. Reading rules needs no elevation; parsing
+   *this* exe on *this* port for the *current* profile from *this* LAN — a rule that names no
+   program counts, a `Protocol=Any` rule is exempt from the port check because that is exactly
+   the rule Windows's own "allow this app" prompt writes, and a rule whose remote scope
+   excludes the local subnet does not count, since reading it as `allowed` would hide the
+   button while the phone still cannot connect. Reading rules needs no elevation; parsing
    `netsh` or PowerShell output would be slow and would read a localized (Korean) Windows
    differently from an English one. The verdict is one of `allowed`, `blocked`, `stalePath`
    (our own rule points at another copy of the exe), `profileMismatch`, `missing`,
@@ -201,11 +203,13 @@ timed out, and nothing in between said why.
 3. **Writing goes through an elevated, Microsoft-signed `netsh.exe`, once.** The app never
    elevates itself: an unsigned exe's UAC prompt carries the yellow "unknown publisher" warning
    and self-elevation would need a command-line mode in `main`. Instead `ShellExecuteExW` with
-   the `runas` verb runs `%SystemRoot%\System32\netsh.exe -f <script>` — the standard UAC
+   the `runas` verb runs `netsh.exe -f <script>` from the system directory reported by
+   `GetSystemDirectoryW` (not `%SystemRoot%`, which any same-user process can change) — the standard UAC
    prompt, one click — and the script is built from `current_exe()` and the `u16` port and
    nothing else; a path containing `"` is refused, `cmd.exe` is never involved, and the script
    file in `%TEMP%` is removed on every exit path. When a rule of our name already exists it is
-   deleted first so the name never doubles.
+   deleted first so the name does not double — except when detection itself failed, where the
+   script is a bare add and a duplicate is the accepted price of the button still working.
 4. **Success is judged by re-detection, not by netsh's exit code.** Whether `netsh -f` stops at
    a failing line and what its exit code reflects is undocumented, so the code is logged
    (`remote: firewall apply exit=N`) and the dialog is updated from a fresh detection. A
@@ -219,8 +223,12 @@ timed out, and nothing in between said why.
 Accepted limits: third-party firewalls (V3, Norton…) are invisible to this API and the dialog
 speaks only for Windows Defender Firewall; the Hyper-V/WSL firewall is out of scope; a
 hand-made rule whose `ApplicationName` uses an environment variable (`%ProgramFiles%\…`)
-reads as `missing`; rule scope (addresses, interfaces, services) is modelled only as far as the
-`blocked` match needs; detection is a snapshot at dialog-open and boot, not a watch; the
+reads as `missing`; rule scope is modelled as one check — the remote addresses are `*`, empty
+or include `LocalSubnet` — on both Allow and Block, so interfaces, services and per-interface
+profiles are not seen and a rule bound to another active profile's interface can still count;
+the script file in `%TEMP%` is the one input the elevated `netsh` reads and a same-user process
+could in principle replace it between write and read, accepted because UAC is not a security
+boundary and the window is milliseconds; detection is a snapshot at dialog-open and boot, not a watch; the
 `#[cfg(not(windows))]` stubs are compiled by no gate; and the module's unit tests run only on
 the Windows CI job, since the glue does not build on the Linux dev host. Verification is
 WINDOWS-BUILD §10 v0.3.23, all of it field-only.
