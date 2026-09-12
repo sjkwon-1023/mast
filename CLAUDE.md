@@ -722,17 +722,22 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   before changing the per-session behaviour. Same cap as the *1MiB-replay workspace switch*
   entry, wanted smaller for a different reason.
 
-- **No Windows PTY resource soak test** (2026-09-11, not started). Nothing exercises
-  create/close/respawn at volume on the platform where the handles actually live. The shape:
-  500–1,000 cycles recording process private bytes, handle count, thread count,
-  `conhost`/`OpenConsole` and `wsl.exe` process counts, plus system paged/nonpaged pool where
-  practical. The assertion that matters is that the counts come back near baseline, not that
-  they stay flat within a cycle.
+- **Windows PTY resource soak — landed 2026-09-12 (compile-gated only; first Windows run
+  pending)**. `crates/mast-core/tests/soak_windows.rs` (`#[ignore]`, Windows-only) rotates 500–
+  1,000 create / kill / rapid-respawn cycles through `PtySession` and judges that handles,
+  threads, private bytes and the `conhost`/`OpenConsole`/`wsl`/`wslhost`/`wslrelay` counts come
+  back to a settled post-warm-up baseline — process counts with no slack, since a leftover relay
+  is the defect itself. `scripts/win/soak-pty.ps1` runs it and keeps the log and CSV; the rule,
+  the columns and the env knobs are in `docs/WINDOWS-BUILD.md` §13. It was written on the Linux
+  box, so only the Windows-target clippy has seen it — nothing is verified until someone runs it.
 
 - **The `portable-pty`/ConPTY shutdown path has never been audited on a supported Windows 11
   build** (2026-09-11, not started). Verify that pseudoconsole, pipe, process and thread handles
   are released on normal exit, explicit kill, failed spawn and rapid respawn. Verification work
-  unless the soak test above turns up a leak.
+  unless the soak test above turns up a leak. The soak test is the instrument for it — its three
+  cycle patterns are exactly normal exit, explicit kill and rapid respawn, so the audit is
+  reading its handle and process columns rather than building a second harness (failed spawn
+  stays uncovered).
 
 - **≤100MB RAM** — ~129MB at checkpoint 2 sits inside the 100–150MB adoption band
   (ADR-0001); getting under 100MB is a v2 optimization.
