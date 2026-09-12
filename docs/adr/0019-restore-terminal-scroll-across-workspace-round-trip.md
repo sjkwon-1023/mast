@@ -266,7 +266,9 @@ jumps; that is why the defect only ever shows on a pane the user had scrolled up
    The alternate buffer and an offset of 0 are excluded for the reasons decision 7 gives.
 
 4. **`ESC[3J` is assumed to reach xterm on Windows; the log line is what proves it.** conhost
-   passes ED 3 through to the attached terminal in ConPTY mode (microsoft/terminal#2715), and the
+   forwards a client's ED 3 to the attached terminal in ConPTY mode — older builds special-cased
+   a scrollback erase in `AdaptDispatch::EraseInDisplay` so the state machine would pass it on,
+   and the current console forwards client VT output as written (`WriteCharsVT`) — and the
    Linux-pty capture behind this ADR's fact 3 shows Codex sending it, but this repo has not
    observed the sequence on the Windows path. So the hook logs one opt-in line per detection
    (`scroll: scrollback wiped N line(s) above the bottom — restoring`) and one at the end of each

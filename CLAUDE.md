@@ -136,19 +136,28 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   round-trip spends on that reprint; the cheaper lever is one resize instead of the current
   two-step nudge, not skipping it.
 
-- **Korean IME composition can get stuck, and every shortcut dies with it** (user report
-  2026-08-22, not fixed). Typing Korean produced a previously typed syllable repeating, no
-  shortcut worked, and clicking another pane and coming back cleared it. What the code settles:
-  `keys.ts:212` drops **every** shortcut while `ev.isComposing` is true, so a dead Alt+Arrow is
-  direct evidence that the browser still believed a composition was open; the repeated syllable
-  is xterm's hidden textarea re-sending stale composition text; the click fixed it because blur
-  forces the IME to commit. What the code cannot settle: whether `compositionend` never arrived
-  or arrived without clearing. That is why the opt-in log (above) records the composition events
-  and the swallowed shortcuts — the next reproduction answers it. Two candidate responses when it
-  does: narrow the `isComposing` guard to unmodified keys (every mast shortcut carries Ctrl or
-  Alt and no IME uses those, so this restores an escape hatch without touching the cause), or
-  track composition state in the app and force it closed on blur and tab switch (heavier, and
-  premature without knowing the trigger).
+- **Korean typed into a busy pane lost syllables and spaces — fixed 2026-09-12** (user
+  reports 2026-08-22 and 2026-09-12, v0.3.26). `테스트 문장` came out as `테 테  테 `; rare,
+  Korean only, and clicking another pane cleared it. Not Claude Code — it only ever receives
+  committed UTF-8 — and not the same-millisecond `compositionend`/`compositionstart` pairs the
+  opt-in log showed, which are simply 두벌식 moving a trailing consonant to the next syllable.
+  The fault is `@xterm/xterm` 5.5.0's `CompositionHelper`: it defers each send with
+  `setTimeout(0)`, coalesces queued sends through one boolean, and reads a stale one-character
+  `[start, end)` window whenever two or more keys are processed before that timer runs — a busy
+  main thread (a pane pouring output next door; the diagnostic log's own IPC per composition
+  event makes it *more* likely, not less). Reproduced on the real bundle: flushing the timer
+  every three keys turns the sentence into `테트문장`. Upstream fixed the expression three days
+  after 5.5.0 shipped (`52e8a75e9f`, xterm.js #5023) but only 6.0.0 carries it, and 6.0 rewrote
+  the viewport that ADR-0019's latch analysis depends on. Fixed by patching that one expression in
+  the shipped bundle at build time (`src/xterm-composition-patch.ts`, on both the Rollup and the
+  esbuild pre-bundle path), throwing unless it occurs exactly once, with `ime-composition.test.ts`
+  driving the stock and the patched bundle through the event sequence. **Still open**: whether
+  the 2026-08-22 "stuck composition, every shortcut dead" report was this fault plus a blur (a
+  syllable repeating verbatim needs `start` to stop advancing) — the `keys.ts:212` `isComposing`
+  guard and the composition log lines stay until a reproduction says. The eventual answer is the
+  xterm 6 upgrade as its own change.
+  [ADR-0020](docs/adr/0020-patch-xterm-composition-at-build-time.md). Verification:
+  WINDOWS-BUILD §10 v0.3.26 items 7–8.
 
 - **Splitter resize is mouse-drag only** — no keyboard equivalent for the drag handle. The
   smallest of the accessibility gaps rather than the only one.

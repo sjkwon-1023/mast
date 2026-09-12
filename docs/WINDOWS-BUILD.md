@@ -2244,9 +2244,11 @@ the diagnostics only exist there. Boot with `"log": true` throughout — `mast.l
 
 ### v0.3.26 — verification
 
-Front-end only (ADR-0019 amendment). Field-only: the defect is a reprint that this dev box has
-never produced, and the whole judgment lives in a browser xterm. Boot with `"log": true` and keep
-`mast.log` open — item 5 is what tells a failed restore apart from bytes that never arrived.
+Front-end only: the scrollback-wipe restore (ADR-0019 amendment, items 1–6) and the xterm
+composition patch (ADR-0020, items 7–8). Field-only: the defects are a reprint this dev box has
+never produced and an IME this dev box does not have, and the whole judgment lives in a browser
+xterm. Boot with `"log": true` and keep `mast.log` open — item 5 is what tells a failed restore
+apart from bytes that never arrived. Item 8 turns the log **off** again on purpose.
 
 1. **A resize no longer throws a scrolled-up tab to the top.** In a Codex tab, scroll up so
    identifiable lines sit well above the bottom, then resize the mast window a little. The same
@@ -2273,6 +2275,24 @@ never produced, and the whole judgment lives in a browser xterm. Boot with `"log
    bottom on a cleared screen within about a second. It may take that second to get there — the
    restore starts, finds nothing to restore to and refuses — but it must not sit at the top and
    it must follow output afterwards.
+7. **Korean arrives byte-for-byte, idle and busy.** The judge is what the PTY received, not what
+   a TUI drew, so capture it with `cat`:
+
+   ```bash
+   cat > /tmp/ime.txt      # in a mast tab; type 테스트 문장, then Ctrl+D
+   xxd /tmp/ime.txt        # expected: ed 85 8c ec 8a a4 ed 8a b8 20 eb ac b8 ec 9e a5
+   ```
+
+   First in an idle tab. Then with the main thread busy — a split next to it running
+   `yes | head -c 50000000`, or a Claude Code tab mid-answer — type the sentence again into the
+   `cat`. Before this release the busy run lost syllables or the space (`테트문장` is the
+   measured shape); now both runs must match the expected bytes. A Claude Code tab is *not* the
+   judge here, but as a final check type the same sentence into one during the busy run and read
+   what it shows.
+8. **The log's own cost.** Repeat item 7's busy run with `"log": false`. The bytes must still be
+   right (they must be right either way); the point is to notice whether the composition log
+   lines made the fault easier to hit before the fix, which decides how much to trust that log
+   as a reproduction tool in future IME reports. Note the answer in the report.
 
 ## 11. ARM64 cross-build notes
 
