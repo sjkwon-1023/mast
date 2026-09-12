@@ -69,8 +69,12 @@
 - **D3 기록은 재시작을 넘어 남는다**: `sanitize` 는 `Exited` 유지, `NotStarted → Running` 만. 부팅 재스폰은
   Running 만(코드 불변, rustdoc 정정).
 - **D4 파일명은 탭 id 유도**(`records/tab-<id>.bin`), 모델에 경로 없음.
-- **D5 orphan = 레지스트리에 있고 어떤 탭도 참조하지 않음**, 잠금 순서 레지스트리 → Dispatcher. 반대 방향은 탭을
-  Exited 로 수리만. 주기 타이머 없음.
+- **D5 orphan = 레지스트리에 있고 어떤 탭도 참조하지 않음**, 반대 방향(탭이 참조하는데 레지스트리에 없음)은 탭을
+  Exited 로 수리만. 주기 타이머 없음. **잠금 순서는 Dispatcher lock 을 잡은 채 레지스트리 id 를 뜬다**(1b 반증에서
+  정정 — 아래 청크 4). 세션 생성(레지스트리 insert)과 모델 기록은 같은 dispatch 임계구역 안에서 끝나므로 lock
+  아래 스냅샷에서의 부재는 진짜 부재이고, 반대로 lock 보다 먼저 뜬 레지스트리 스냅샷은 갓 만든 멀쩡한 탭을
+  dangling 으로 오판해 살아 있는 셸을 Exited 로 끊는다(파괴적). 잠금 방향은 dispatch 와 같아(Dispatcher →
+  레지스트리) 순환이 없다.
 - **D6 원격 불변**(exited 탭 409). **D7 Saver 슬롯**(대기 clone ≤ 1, flush 순서 보장 유지).
 
 ## 2. 청크
@@ -111,13 +115,15 @@
 
 - `replay.rs`: `pub fn clear(&mut self)` — chunks·total 만 비운다, `evicted` 불변.
 - `session.rs`: `pub fn take_record(&self) -> Option<Vec<u8>>` — 한 lock 안에서 `if inner.alive { return None }`,
-  preamble + snapshot, `replay.clear()`. 술어는 **`alive`** (`killed` 는 kill() 이 자식 생존 중에도 올린다). flow
+  snapshot 을 뜨고 `replay.clear()`; **snapshot 이 비어 있으면 `Some(Vec::new())`**(preamble 만 남는 기록은 빈 화면
+  파일이라 만들지 않는다 — 글루의 "비어 있으면 기록 삭제" 판정이 여기에 건다), 아니면 preamble + snapshot. 술어는 **`alive`** (`killed` 는 kill() 이 자식 생존 중에도 올린다). flow
   리셋·notify 없음. rustdoc 에 리더 tail 경합 한 문장. `SessionStats.replay_bytes: usize`(= `replay.len()`).
   `SessionManager::ids() -> Vec<SessionId>`(오름차순, 레지스트리 lock 만).
 - `record.rs`(신규) + `lib.rs`: `RecordStore { dir }` — `new`, `path(tab)`, `write(tab, &[u8])`(create_dir_all →
   `tab-<id>.bin.tmp` → rename), `read(tab) -> io::Result<Option<Vec<u8>>>`(NotFound → None, > 4 MiB → Err),
-  `remove(tab)`(없으면 Ok), `sweep(keep: &HashSet<TabId>) -> io::Result<usize>`(`tab-<u64>.bin` 으로 파싱되는 것만
-  판정, 잔여 `*.tmp` 는 이름 무관 삭제, 파싱 안 되는 `.bin` 은 무시). `tempfile` 로 write/read/remove/sweep/미존재/
+  `remove(tab)`(없으면 Ok), `sweep(keep: &HashSet<TabId>) -> io::Result<SweepReport { removed, failed }>`(`tab-<u64>.bin`
+  으로 파싱되는 것만 판정, 잔여 `*.tmp` 는 이름 무관 삭제, 파싱 안 되는 `.bin` 은 무시; 항목 하나의 삭제 실패로
+  멈추지 않고 세어서 돌려준다 — Windows sharing violation 대비; 디렉터리 부재는 빈 보고). `tempfile` 로 write/read/remove/sweep/미존재/
   초과 크기 테스트.
 - `command.rs` 하단: `RegistryAudit { orphan_sessions, orphan_sinks, dangling_tabs: Vec<(TabId, SessionId)> }`
   (`Debug, Clone, Default, PartialEq, Eq, Serialize`, camelCase) + `audit_registries(model, session_ids, sink_ids)`.
@@ -129,7 +135,7 @@
 
 - `state.rs`: `AppState.records: Arc<RecordStore>`, `AppState.last_audit: Mutex<RegistryAudit>`, `SinkRegistry::ids()`.
 - `sink.rs`: `TerminalSink { tab: Option<TabId>, .. }`, `new(session, tab, app, router)`; `on_exit` 를 D2 순서로 재작성
-  (①②③ 명시적 `drop(dispatcher)` ④). `tab` 이 None 인 exit 은 `winlog!`. 함수 주석의 "리더 스레드" 오기를 "waiter
+  (①②③ 명시적 `drop(dispatcher)` ④). `tab` 이 None 인 exit 은 `winlog!`. ② 의 "빈 바이트" 는 `take_record` 가 `Some(빈 Vec)` 을 돌려준 경우다(1b 계약). 함수 주석의 "리더 스레드" 오기를 "waiter
   스레드"로.
 - `host.rs`: `create_session(.., tab: Option<TabId>)`, `spawn_shell_inner` 가 `req.history_tab.map(TabId)` 전달(롤백·
   늦은 스폰 경로 불변); `TauriHost.records`; `release_tabs` 가 detached 스레드에서 각 탭 `records.remove` 후
@@ -139,7 +145,7 @@
   `commands.rs::respawn_tab` 과 `boot.rs` 웨이브 양쪽이 쓴다.
 - `main.rs`: `app_data_dir()` 를 변수로 뽑아 `state.json` 과 `records/` 유도; `RecordStore` 를 `manage` 에 포함;
   **load/adopt 직후, dogfood dispatch 와 부팅 웨이브보다 앞에서** `records.sweep(keep = 전 터미널 탭 id)` 동기 실행,
-  삭제 수 > 0 이면 `winlog!`; `generate_handler!` 에 `read_tab_record`.
+  `SweepReport` 의 removed·failed 중 하나라도 0 이 아니면 `winlog!`; `generate_handler!` 에 `read_tab_record`.
 - 리뷰 체크리스트(커밋 메시지에 남긴다): (1) `records.write` 가 `dispatcher.lock()` 문장보다 위, (2) `drop(dispatcher)`
   뒤에 `sinks.remove`/`sessions.remove`, (3) `on_exit` 에 `take_record` 외 세션 메서드·join 없음, (4) Drop→`kill()` 은
   `killed == true` 로 즉시 반환, (5) `TerminalSink::new` 호출 지점은 `create_session` 하나, (6) 롤백·늦은 스폰 정리
@@ -171,10 +177,11 @@
 
 ### 4 — audit 배선·진단 [med · 잠금 순서]
 
-- `audit.rs`(신규): `run_audit(state) -> RegistryAudit` — 레지스트리 id 복사(각자 짧은 lock) **먼저**, Dispatcher lock
-  **나중**(`audit_registries`; `dangling_tabs` 는 lock 안에서 `SessionExited { code: None, ended_at_ms: now }` 로 수리,
-  수리가 있으면 publish), unlock 뒤 orphan 은 `sinks.remove`·`sessions.remove`. 결과를 `last_audit` 에. 발견 시
-  `winlog!`, 아니면 `wintrace!`. rustdoc 에 순서 근거(반대 순서는 갓 만든 세션을 죽인다).
+- `audit.rs`(신규): `run_audit(state) -> RegistryAudit` — **Dispatcher lock 을 먼저** 잡고, 그 아래에서 `sessions.ids()`·
+  `sinks.ids()`(각자 짧은 내부 lock, 복사만) 를 뜬 뒤 `audit_registries`; `dangling_tabs` 는 같은 lock 안에서
+  `SessionExited { code: None, ended_at_ms: now }` 로 수리, 수리가 있으면 publish; unlock 뒤 orphan 은 `sinks.remove`·
+  `sessions.remove`(kill 은 멱등 — `on_exit` ④ 나 late-spawn 정리와 겹쳐도 무해). 결과를 `last_audit` 에. 발견 시
+  `winlog!`(`RegistryAudit::is_empty()` 로 판정), 아니면 `wintrace!`. 근거는 `audit_registries` rustdoc(D5).
 - 실행 지점: `on_exit` 끝, `commands.rs::dispatch` 의 Close* 성공 후(lock 해제 뒤), 부팅 웨이브 끝(`boot.rs`),
   `get_diagnostics`. 주기 타이머 없음.
 - `diagnostics.rs`(신규): `Diagnostics { process { private_bytes, working_set_bytes, handle_count, thread_count }
