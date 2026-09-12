@@ -261,16 +261,24 @@ jumps; that is why the defect only ever shows on a pane the user had scrolled up
    `pending` answers null, because the value already in flight is where the *user* was, while
    what is on screen mid-restore is an intermediate state the machinery has not corrected yet.
    That covers both the round-trip nudge's reprint and the second `ESC[3J` inside one reprint
-   (Codex sends `ESC[2J` + `ESC[3J`). A wipe arriving before the replay has finished parsing is
-   ignored too — it is a past reprint preserved in the replay window, not something the user saw.
-   The alternate buffer and an offset of 0 are excluded for the reasons decision 7 gives.
+   (Codex sends `ESC[2J` + `ESC[3J`). A wipe while a deferred latch release is pending is
+   ignored as well: the view is then frozen at line 0 by a refused restore, not parked there by
+   the user, and because the release runs in the write callback while the hook runs during
+   parsing, the hook would otherwise read that artefact as "the whole transcript above the
+   bottom" and pin the pane at the top — the very symptom. A wipe arriving before a re-attach's
+   replay has finished parsing is ignored too — it is a past reprint preserved in the replay
+   window, not something the user saw (the first attach sets `replayDone` before its replay
+   because its queries are live, ADR-0009; a fresh terminal has offset 0, so the same wipes
+   fall out on that rule). The alternate buffer and an offset of 0 are excluded for the reasons
+   decision 7 gives.
 
 4. **`ESC[3J` is assumed to reach xterm on Windows; the log line is what proves it.** conhost
-   forwards a client's ED 3 to the attached terminal in ConPTY mode — older builds special-cased
-   a scrollback erase in `AdaptDispatch::EraseInDisplay` so the state machine would pass it on,
-   and the current console forwards client VT output as written (`WriteCharsVT`) — and the
-   Linux-pty capture behind this ADR's fact 3 shows Codex sending it, but this repo has not
-   observed the sequence on the Windows path. So the hook logs one opt-in line per detection
+   is understood to forward a client's ED 3 to the attached terminal in ConPTY mode — older
+   builds special-cased a scrollback erase in `AdaptDispatch::EraseInDisplay` so the state
+   machine would pass it on, and the current console emits `ESC[3J` on its own VT output path for
+   API-level clears (`WriteClearScreen`) — and the Linux-pty capture behind this ADR's fact 3
+   shows Codex sending it, but this repo has not observed a client's own `ESC[3J` arriving on
+   the Windows path. So the hook logs one opt-in line per detection
    (`scroll: scrollback wiped N line(s) above the bottom — restoring`) and one at the end of each
    restore. A field report of a jump **without** that line says the bytes never arrive and the
    fix is in the wrong layer; a jump *with* it says the restore ran and lost. No screen content
@@ -283,4 +291,8 @@ when a reprint that nobody asked for is over. A `clear` typed into a pane the us
 up is an `ESC[3J` as well: the restore starts, the (now empty) scrollback refuses the position
 and the pane ends at the bottom after the settle window — correct, but it spends a second getting
 there. And the intermediate states of a reprint are visible as before: the pane tracks the
-rebuild from the bottom up rather than sitting still.
+rebuild from the bottom up rather than sitting still. One window widened rather than opened:
+decision 3 of this ADR prefers a pending offset over the buffer when a tab is disposed mid-restore,
+and a restore is now pending for up to two seconds after *every* reprint, so leaving a workspace
+in that window remembers the pre-wipe offset even if the restore had been refused and the pane
+was in fact at the bottom — the same priority as before, reached more often.

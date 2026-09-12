@@ -344,17 +344,27 @@ export function restoreTargetLine(baseY: number, offset: number): number | null 
  *  지금 보이는 화면은 그 복원이 아직 되돌리지 못한 중간 상태다 (왕복 복원의
  *  nudge 가 부르는 재인쇄, 그리고 한 재인쇄 안의 두 번째 ED 3 이 이 경로로 온다).
  *
- *  **replay 재생 중의 ED 3 도 무시한다**: replay 창에 보존된 과거의 재인쇄라
- *  지금 사용자가 보던 자리와 무관하다. 대체 버퍼와 맨 아래(offset 0)를 빼는
- *  이유는 scrollOffsetToRemember 와 같다. */
+ *  **미뤄 둔 래치 해제가 남아 있어도 무시한다**: 직전 복원이 거절돼 baseY 0 에서
+ *  끝난 뒤의 뷰는 line 0 에 얼어붙은 인공물이지 사용자가 고른 자리가 아니다. 해제는
+ *  write 완료 콜백에서 하고 이 훅은 파싱 중에 돌아 훅이 먼저 이기므로, 여기서
+ *  거르지 않으면 그 인공물(전사 전체)을 자리로 잡아 이 기계가 고치려는 증상을
+ *  그대로 재현한다 (change-critic 2026-09-12).
+ *
+ *  **replay 재생 중의 ED 3 도 무시한다**: 재-attach 의 replay 는 창에 보존된
+ *  과거의 재인쇄라 지금 사용자가 보던 자리와 무관하다 (최초 attach 는 라이브
+ *  질의 때문에 replayDone 을 먼저 세우지만, 새 터미널은 offset 0 이라 어차피
+ *  걸린다). 대체 버퍼와 맨 아래(offset 0)를 빼는 이유는 scrollOffsetToRemember 와
+ *  같다. */
 export function scrollbackWipeRestoreOffset(
   pending: number | null,
+  latchReleasePending: boolean,
   replayDone: boolean,
   bufferType: "normal" | "alternate",
   baseY: number,
   viewportY: number,
 ): number | null {
   if (pending !== null) return null;
+  if (latchReleasePending) return null;
   if (!replayDone) return null;
   if (bufferType !== "normal") return null;
   const offset = baseY - viewportY;
@@ -901,6 +911,7 @@ export class TerminalView {
     const buffer = this.term.buffer.active;
     const offset = scrollbackWipeRestoreOffset(
       this.restoreOffset,
+      this.releaseLatchOnNextChunk,
       this.replayDone,
       buffer.type,
       buffer.baseY,
@@ -917,6 +928,13 @@ export class TerminalView {
    *  — 평시 attach 에는 타이머도 리스너도 생기지 않는다. */
   private armScrollRestore(): void {
     if (this.restoreOffset === null || this.disposed) return;
+    // 이미 무장돼 있으면 그 타이머를 걷고 다시 잡는다 — attach 가 끝나기 전에 wipe
+    // 경로가 먼저 무장한 경우다. 고아 타이머가 먼저 발화해 settleTimer 를 null 로
+    // 만들면 rescheduleSettle 이 대기 아님으로 보고 quiet 규칙이 그 복원 내내 죽는다.
+    if (this.settleTimer !== null) {
+      clearTimeout(this.settleTimer);
+      this.settleTimer = null;
+    }
     const now = performance.now();
     this.settle.start(now);
     this.scheduleSettleCheck(this.settle.poll(now));

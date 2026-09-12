@@ -12,6 +12,10 @@
 // 표현식은 **정확히 한 번** 있어야 하고 아니면 빌드를 세운다. 번들이 바뀌었는데 조용히
 // 넘어가면 이 결함이 소리 없이 돌아온다 — 번들 bump 뒤 이 에러가 나면 업스트림
 // `CompositionHelper.ts` 를 다시 읽고 패치를 지우거나 새 표현식에 맞춘다.
+//
+// dev 사전번들 캐시(`node_modules/.vite/deps`)의 무효화 키에는 플러그인 **이름**만
+// 들어가고 아래 문자열은 안 들어간다 — 문자열을 바꾸면 그 디렉터리를 지워야 dev 가
+// 새 패치를 쓴다. 릴리스 빌드는 캐시가 없어 해당 없다.
 
 import { readFile } from "node:fs/promises";
 import type { Plugin } from "vite";

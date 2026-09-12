@@ -11,7 +11,7 @@
 // 브라우저가 처리하는 키 수: 1 이면 한가한 메인 스레드, 그 이상은 출력이 쏟아지는
 // pane 옆에서 치는 상황의 모델이다.
 
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,7 +25,9 @@ type TerminalCtor = new (options: { cols: number; rows: number }) => XtermTermin
 
 const require = createRequire(import.meta.url);
 const BUNDLE_PATH = require.resolve("@xterm/xterm");
-const PATCHED_PATH = join(tmpdir(), `mast-xterm-patched-${process.pid}.cjs`);
+// 워커 스레드는 pid 를 공유하므로 이름은 mkdtemp 가 정한다.
+const PATCHED_DIR = mkdtempSync(join(tmpdir(), "mast-xterm-patched-"));
+const PATCHED_PATH = join(PATCHED_DIR, "xterm.cjs");
 
 // UMD 번들이라 `module.exports` 로 나온다 — 패치본은 임시 파일에 써서 같은 방식으로
 // 읽는다. 원본의 sourcemap 주석은 파일 옆에 map 이 없어 무시된다.
@@ -34,7 +36,7 @@ const Stock = (require(BUNDLE_PATH) as { Terminal: TerminalCtor }).Terminal;
 const Patched = (require(PATCHED_PATH) as { Terminal: TerminalCtor }).Terminal;
 
 afterAll(() => {
-  unlinkSync(PATCHED_PATH);
+  rmSync(PATCHED_DIR, { recursive: true, force: true });
 });
 
 type Op =

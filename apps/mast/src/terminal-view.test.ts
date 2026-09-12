@@ -243,28 +243,32 @@ describe("OutputSettle", () => {
 // 스크롤백이 지워질 때만 자리를 붙잡는다.
 describe("scrollbackWipeRestoreOffset", () => {
   it("위로 올려 둔 일반 버퍼면 하단 기준 오프셋을 돌려준다", () => {
-    expect(scrollbackWipeRestoreOffset(null, true, "normal", 1008, 993)).toBe(15);
-    expect(scrollbackWipeRestoreOffset(null, true, "normal", 96, 0)).toBe(96);
+    expect(scrollbackWipeRestoreOffset(null, false, true, "normal", 1008, 993)).toBe(15);
+    expect(scrollbackWipeRestoreOffset(null, false, true, "normal", 96, 0)).toBe(96);
   });
 
   it("복원이 이미 진행 중이면 무시한다 — 진행 중인 값이 사용자의 원래 자리다", () => {
     // 왕복 복원의 nudge 가 부르는 재인쇄, 그리고 한 재인쇄 안의 두 번째 ED 3.
     // 여기서 지금 화면을 새로 잡으면 복원 중간 상태(맨 아래)를 목표로 삼는다.
-    expect(scrollbackWipeRestoreOffset(15, true, "normal", 1008, 900)).toBeNull();
-    expect(scrollbackWipeRestoreOffset(15, true, "normal", 0, 0)).toBeNull();
+    expect(scrollbackWipeRestoreOffset(15, false, true, "normal", 1008, 900)).toBeNull();
+    expect(scrollbackWipeRestoreOffset(15, false, true, "normal", 0, 0)).toBeNull();
+  });
+
+  it("미뤄 둔 래치 해제가 남아 있으면 무시한다 — line 0 의 뷰는 사용자 자리가 아니다", () => {
+    expect(scrollbackWipeRestoreOffset(null, true, true, "normal", 1008, 0)).toBeNull();
   });
 
   it("replay 재생 중의 ED 3 은 무시한다 — 창에 보존된 과거의 재인쇄다", () => {
-    expect(scrollbackWipeRestoreOffset(null, false, "normal", 1008, 993)).toBeNull();
+    expect(scrollbackWipeRestoreOffset(null, false, false, "normal", 1008, 993)).toBeNull();
   });
 
   it("대체 버퍼는 무시한다 — 그 스크롤은 앱 상태다", () => {
-    expect(scrollbackWipeRestoreOffset(null, true, "alternate", 1008, 993)).toBeNull();
+    expect(scrollbackWipeRestoreOffset(null, false, true, "alternate", 1008, 993)).toBeNull();
   });
 
   it("맨 아래를 보고 있었으면 아무 것도 하지 않는다 — 이미 출력을 따라간다", () => {
-    expect(scrollbackWipeRestoreOffset(null, true, "normal", 1008, 1008)).toBeNull();
-    expect(scrollbackWipeRestoreOffset(null, true, "normal", 0, 0)).toBeNull();
+    expect(scrollbackWipeRestoreOffset(null, false, true, "normal", 1008, 1008)).toBeNull();
+    expect(scrollbackWipeRestoreOffset(null, false, true, "normal", 0, 0)).toBeNull();
   });
 });
 

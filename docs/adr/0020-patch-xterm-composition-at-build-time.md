@@ -33,7 +33,7 @@ is busy enough that **two or more keys are processed before that zero-delay time
 
 Reproduced on the real 5.5.0 browser bundle under happy-dom (`ime-composition.test.ts`): with
 the timer flushed after every key the output is correct; after every two keys the space is lost;
-after every three `스` is lost; after every four `테`, `트` and the space are lost. The DOM
+after every three `스` and the space are lost (`테트문장`, the shape the test locks); after every four `테`, `트` and the space are lost. The DOM
 update order made no difference — the only variable is when the timer runs. That is why the
 field sees it "sometimes": an idle pane flushes between keys, a pane next to one that is pouring
 output does not. Claude Code is not involved at all — it receives committed UTF-8 bytes, so the
@@ -51,10 +51,11 @@ major upgrade is not a one-line change.
 
 1. **Patch the shipped bundle at build time.** `src/xterm-composition-patch.ts` exports a Vite
    plugin that replaces the one expression in `node_modules/@xterm/xterm/lib/xterm.js` with the
-   upstream form, on both paths the app is built through: Rollup's `transform` for `vite build`
-   (which does run over `node_modules`) and an esbuild `onLoad` for the dev server's dependency
-   pre-bundle, which bypasses plugin transforms. Covering only one would give dev and release
-   builds different Korean input.
+   upstream form, on both paths the desktop bundle is built through (`vite.config.ts`): Rollup's
+   `transform` for `vite build` (which does run over `node_modules`) and an esbuild `onLoad` for
+   the dev server's dependency pre-bundle, which bypasses plugin transforms. Covering only one
+   would give dev and release builds different Korean input. The phone bundle
+   (`vite.remote.config.ts`) is untouched — `@xterm/headless` has no composition helper.
 2. **The patch fails loudly.** The expression must occur exactly once; anything else throws and
    stops the build. A dependency bump that changes the bundle therefore forces a decision — drop
    the patch (6.x has the fix) or re-target it — rather than silently bringing the fault back.

@@ -153,7 +153,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   esbuild pre-bundle path), throwing unless it occurs exactly once, with `ime-composition.test.ts`
   driving the stock and the patched bundle through the event sequence. **Still open**: whether
   the 2026-08-22 "stuck composition, every shortcut dead" report was this fault plus a blur (a
-  syllable repeating verbatim needs `start` to stop advancing) — the `keys.ts:212` `isComposing`
+  syllable repeating verbatim needs `start` to stop advancing) — the `keys.ts:216` `isComposing`
   guard and the composition log lines stay until a reproduction says. The eventual answer is the
   xterm 6 upgrade as its own change.
   [ADR-0020](docs/adr/0020-patch-xterm-composition-at-build-time.md). Verification:
