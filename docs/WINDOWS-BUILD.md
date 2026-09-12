@@ -2242,6 +2242,38 @@ the diagnostics only exist there. Boot with `"log": true` throughout — `mast.l
    desktop's record view is not disturbed by the request. A live tab in the same workspace keeps
    polling normally.
 
+### v0.3.26 — verification
+
+Front-end only (ADR-0019 amendment). Field-only: the defect is a reprint that this dev box has
+never produced, and the whole judgment lives in a browser xterm. Boot with `"log": true` and keep
+`mast.log` open — item 5 is what tells a failed restore apart from bytes that never arrived.
+
+1. **A resize no longer throws a scrolled-up tab to the top.** In a Codex tab, scroll up so
+   identifiable lines sit well above the bottom, then resize the mast window a little. The same
+   lines must still be on screen, give or take a few (the transcript is rebuilt, so the position
+   is restored to within a line or two). Before this release the pane jumped to the very top of
+   the transcript and stayed there.
+2. **The end of an answer does not throw it either.** Ask Codex something long enough to read
+   while it prints, scroll up into the transcript while it is still working, and let the answer
+   finish: the pane must stay where you were. This is the trigger the user reported and whose
+   cause is unmeasured — if it still jumps, item 5's log lines decide where to look next.
+3. **Typing goes to the bottom, and that is xterm, not us.** After either of the above, type a
+   character: the pane jumps to the bottom. Expected, unchanged, and not a defect.
+4. **A tab at the bottom keeps following output.** With a Codex tab left at the bottom, resize
+   the window and let an answer finish: the pane must keep tracking new output with no pause and
+   no jump. Same for a plain bash tab and for an alternate-screen tab (Claude Code, `vim`,
+   `htop`) — nothing about those changes.
+5. **Every reprint leaves one log line.** For each of items 1 and 2, `mast.log` gets a
+   `scroll: scrollback wiped N line(s) above the bottom — restoring` line, followed by one
+   `scroll: restore ended …` line. **A jump with no `scroll: scrollback wiped` line is the
+   important report**: it means `ESC[3J` never reached xterm (the ConPTY pass-through this change
+   assumes), and the fix would belong in another layer entirely. Quote the lines either way.
+6. **`clear` in a scrolled-up pane ends at the bottom.** In a bash tab with a long scrollback,
+   scroll up, then send `clear` to it from another pane (`mast send`). The pane ends at the
+   bottom on a cleared screen within about a second. It may take that second to get there — the
+   restore starts, finds nothing to restore to and refuses — but it must not sit at the top and
+   it must follow output afterwards.
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy

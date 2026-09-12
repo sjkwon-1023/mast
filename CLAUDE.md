@@ -110,7 +110,16 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   browser build did not. Decisions
   and the accepted limits (WebView-lifetime memory, heuristic settle window, ~192 KB of replay
   per round-trip still unaddressed): [ADR-0019](docs/adr/0019-restore-terminal-scroll-across-workspace-round-trip.md).
-  Verification: WINDOWS-BUILD §10 v0.3.24.
+  Verification: WINDOWS-BUILD §10 v0.3.24. **Follow-up 2026-09-12** (v0.3.26): the same jump
+  happens with no round-trip at all — a scrolled-up Codex tab goes to the top of its transcript
+  on a window resize, and on Windows also when an answer ends (that trigger is unmeasured).
+  Cause: xterm's ED 3 (`ESC[3J`) empties the scrollback without clearing `isUserScrolling`, so a
+  pane the user scrolled up stays pinned at line 0 while the reprinted history stacks below it.
+  The front end now hooks ED 3 in the parser — a custom CSI handler runs before xterm's, so it
+  still sees the pre-wipe offset — and hands that offset to the v0.3.24 restore machinery
+  unchanged; a pane at the bottom is left alone, and a position the reprint no longer has is
+  refused to the bottom as before. ADR-0019 amendment (v0.3.26); verification: WINDOWS-BUILD §10
+  v0.3.26.
 
 - **1MiB-replay workspace switch is ~236ms with visible flicker** (ADR-0004) — candidates:
   smaller replay cap, progressive replay, hide-until-parsed. Since v0.3.15 the replay
