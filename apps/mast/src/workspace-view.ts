@@ -14,6 +14,11 @@
 // dispose(탭 사라짐·워크스페이스 밖) / detachSessions(attach 안 하는 세션 전부 —
 // fire-and-forget 스윕, 부트 첫 스냅샷 포함) / visible(pane 별 표시 탭)을 집행한다.
 //
+// 터미널 스크롤 기억 (ADR-0019): 워크스페이스를 떠나 dispose 되는 터미널 뷰의
+// 스크롤 위치(하단 기준 줄 수)를 탭별로 들고 있다가, 돌아와 뷰를 새로 만들 때
+// 1회성으로 넘긴다. WebView 수명 한정이다 — F5·자동 리로드 뒤에는 기억이 없고,
+// 그것이 "같은 WebView 수명"의 자연스러운 경계다.
+//
 // 뷰어 뷰 수명 (21단계): 시맨틱이 반대라(활성 탭만 마운트 — viewer-view.ts)
 // 병렬 레지스트리 viewerViews 를 두고 planViewerSync 로 집행한다. 두 레지스트리의
 // 키는 겹치지 않는다 (탭은 terminal 이거나 뷰어 하나다). dispose 시 탭이 아직
@@ -43,6 +48,7 @@ import type { PaneRect } from "./keys";
 import { MarkdownView } from "./markdown-view";
 import { PaneView } from "./pane-view";
 import type { SendController, ViewRegistry, ViewerRegistry } from "./pane-view";
+import { ScrollMemory } from "./scroll-memory";
 import { SendMode, sendModePrompt } from "./send-mode";
 import { Splitter } from "./splitter";
 import type { DragGuard } from "./splitter";
@@ -51,7 +57,7 @@ import type { SwitchTracer } from "./switch-trace";
 import { TerminalView } from "./terminal-view";
 import { TextView } from "./text-view";
 import type { ViewerView } from "./viewer-view";
-import { planViewSync, planViewerSync } from "./view-reconcile";
+import { existingTabIds, planViewSync, planViewerSync } from "./view-reconcile";
 import type { VisibleView, VisibleViewer } from "./view-reconcile";
 import type {
   Command,
@@ -110,6 +116,9 @@ export class WorkspaceView {
   private readonly views = new Map<TabId, TerminalView>();
   /** 탭별 뷰어 뷰 — 활성 탭만 들어 있는 병렬 레지스트리 (21단계, 파일 상단). */
   private readonly viewerViews = new Map<TabId, ViewerView>();
+  /** 워크스페이스를 떠난 터미널 탭의 스크롤 위치 (ADR-0019 — 파일 상단).
+   *  수명 규칙(1회성 인출·프룬)은 순수 클래스가 들고 테스트가 잠근다. */
+  private readonly scrollMemory = new ScrollMemory();
   /** 보상 focus 보류 1칸. rendersLeft: 미해소 렌더가 이만큼 지나면 stale 로
    *  폐기한다 — invoke 응답이 앞선 무관 이벤트 렌더보다 먼저 처리되는 race 에서
    *  구 revision 렌더가 보상을 조기 폐기하지 않게 하면서(리뷰 finding), 닫힌 탭
@@ -292,15 +301,33 @@ export class WorkspaceView {
     // keep-alive 리컨실 — 구조 렌더보다 먼저: dispose 로 뷰가 정리된 뒤에
     // updatePanes 가 가시성·lazy attach 를 만진다 (계획 D3·D4-b).
     const plan = planViewSync(this.views.keys(), snapshot);
+    const existing = existingTabIds(snapshot);
     for (const tab of plan.dispose) {
+      const view = this.views.get(tab);
+      this.views.delete(tab);
+      if (view === undefined) continue;
+      // 기억 실패가 dispose 를 건너뛰게 두지 않는다 — 해제되지 않은 뷰는 채널을
+      // 물고 남아 세션이 paused 에 고착된다 (TerminalView.dispose 주석).
+      try {
+        // 탭이 스냅샷에 아직 있으면 워크스페이스 이탈이라 돌아올 자리가 있다 —
+        // 스크롤 위치를 기억한다 (ADR-0019). 사라진 탭(닫힘)은 기억하지 않는다.
+        if (existing.has(tab)) {
+          const offset = view.rememberedScrollOffset();
+          if (offset !== null) this.scrollMemory.remember(tab, offset);
+        }
+      } catch (err) {
+        console.error("scroll offset capture failed", tab, err);
+      }
       // 한 뷰의 dispose 이상이 나머지 정리·렌더 전체를 중단시키지 않게 격리.
       try {
-        this.views.get(tab)?.dispose();
+        view.dispose();
       } catch (err) {
         console.error("view dispose failed", tab, err);
       }
-      this.views.delete(tab);
     }
+    // 사라진 탭의 기억은 매 렌더 걷는다 — 비활성 워크스페이스에서 닫힌 탭은
+    // dispose 루프를 타지 않아 여기서만 정리된다.
+    this.scrollMemory.prune(existing);
     const unattached = new Set(plan.detachSessions);
     for (const session of plan.detachSessions) {
       // fire-and-forget 스윕 (멱등) — 부트 첫 스냅샷 포함. F5 후 미방문 탭
@@ -465,7 +492,13 @@ export class WorkspaceView {
     if (this.tracer.markAttachStart(tab, performance.now())) {
       onTraceReplayDone = (bytes) => this.tracer.markReplayDone(tab, bytes, performance.now());
     }
-    const created = new TerminalView(parent, session, onTraceReplayDone);
+    // 스크롤 기억은 1회성이다 (ADR-0019 — take 가 꺼내면서 지운다).
+    const created = new TerminalView(
+      parent,
+      session,
+      onTraceReplayDone,
+      this.scrollMemory.take(tab),
+    );
     this.views.set(tab, created);
     created.attach().catch((err) => {
       console.error("attach_terminal failed", err);

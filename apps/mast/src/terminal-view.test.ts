@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 //
 // 터미널 줌의 순수 판정 검증 — 글꼴 크기 클램프(백엔드 FONT_SIZE_RANGE 6..=72 와
-// 같은 범위)만 대상이다. xterm 인스턴스 적용·refit·레지스트리 수명은 DOM/IPC 경로라
-// 여기서 다루지 않는다 (Windows 수동 검증 WINDOWS-BUILD §10 v0.3.4).
+// 같은 범위)와 스크롤 위치 복원의 판정(ADR-0019)만 대상이다. xterm 인스턴스 적용·
+// refit·레지스트리 수명은 DOM/IPC 경로라 여기서 다루지 않는다 (Windows 수동 검증
+// WINDOWS-BUILD §10 v0.3.4·v0.3.24).
 //
 // 판정 자체는 DOM 무의존인데도 happy-dom 환경인 이유: 이 모듈을 import 하면
 // @xterm/addon-fit 의 UMD 래퍼가 로드 시점에 `self` 를 읽어 node 환경에서는
@@ -10,7 +11,15 @@
 
 import { describe, expect, it } from "vitest";
 
-import { clampFontSize, shouldOpenLink } from "./terminal-view";
+import {
+  OutputSettle,
+  SETTLE_CAP_MS,
+  SETTLE_QUIET_MS,
+  clampFontSize,
+  restoreTargetLine,
+  scrollOffsetToRemember,
+  shouldOpenLink,
+} from "./terminal-view";
 
 describe("clampFontSize", () => {
   it("범위 안의 값은 그대로 통과한다", () => {
@@ -64,5 +73,135 @@ describe("shouldOpenLink", () => {
     expect(shouldOpenLink("javascript:alert(1)", "none")).toBe(false);
     expect(shouldOpenLink("not a url", "none")).toBe(false);
     expect(shouldOpenLink("", "none")).toBe(false);
+  });
+});
+
+// 스크롤 위치 복원 (ADR-0019) — 좌표 판정과 settle 상태기계. 실제 xterm 적용·타이머
+// 배선은 DOM 경로라 여기서 다루지 않는다 (WINDOWS-BUILD §10 v0.3.24).
+describe("scrollOffsetToRemember", () => {
+  it("일반 버퍼에서는 하단으로부터의 줄 수를 돌려준다", () => {
+    expect(scrollOffsetToRemember(null, "normal", 1008, 993)).toBe(15);
+    expect(scrollOffsetToRemember(null, "normal", 1008, 0)).toBe(1008);
+  });
+
+  it("맨 아래면 기억하지 않는다 — 복원할 것이 없다", () => {
+    expect(scrollOffsetToRemember(null, "normal", 1008, 1008)).toBeNull();
+    expect(scrollOffsetToRemember(null, "normal", 0, 0)).toBeNull();
+  });
+
+  it("대체 버퍼는 기억하지 않는다 — 그 스크롤은 앱 상태다", () => {
+    expect(scrollOffsetToRemember(null, "alternate", 1008, 993)).toBeNull();
+    expect(scrollOffsetToRemember(null, "alternate", 40, 0)).toBeNull();
+  });
+
+  it("복원이 진행 중이면 버퍼가 아니라 그 pending 값이 답이다", () => {
+    // 돌아오자마자 다시 떠나는 경로: replay·재인쇄 전의 버퍼는 아직 사용자가
+    // 보던 자리가 아니라, 그대로 읽으면 기억이 증발한다.
+    expect(scrollOffsetToRemember(15, "normal", 0, 0)).toBe(15);
+    expect(scrollOffsetToRemember(15, "normal", 1008, 1008)).toBe(15);
+    expect(scrollOffsetToRemember(15, "alternate", 40, 40)).toBe(15);
+  });
+});
+
+describe("restoreTargetLine", () => {
+  it("하단 기준 오프셋을 지금 버퍼의 줄 번호로 되돌린다", () => {
+    expect(restoreTargetLine(1008, 15)).toBe(993);
+    expect(restoreTargetLine(972, 15)).toBe(957);
+  });
+
+  it("baseY 와 같은 오프셋은 유효한 0 이다 — 진짜 맨 위", () => {
+    expect(restoreTargetLine(211, 211)).toBe(0);
+    expect(restoreTargetLine(0, 0)).toBe(0);
+  });
+
+  it("스크롤백이 그때보다 짧으면 0 으로 접지 않고 거절한다", () => {
+    // 0 으로 접으면 xterm 의 isUserScrolling 이 전사 맨 위에서 걸려 pane 이
+    // 이후 출력을 영영 따라가지 않는다 (실측) — 호출자는 null 을 받으면
+    // scrollToBottom 으로 래치를 푼다.
+    expect(restoreTargetLine(10, 15)).toBeNull();
+    expect(restoreTargetLine(0, 1)).toBeNull();
+  });
+});
+
+describe("OutputSettle", () => {
+  it("start 전에는 어떤 poll 도 복원하지 않는다", () => {
+    const settle = new OutputSettle();
+    expect(settle.poll(0)).toEqual({ kind: "abandon" });
+  });
+
+  it("nudge 뒤 chunk 가 하나도 없으면 상한에서 복원 없이 끝난다", () => {
+    // 재인쇄가 없었다는 뜻이라 1차 복원의 결과가 그대로 남아 있다.
+    const settle = new OutputSettle();
+    settle.start(1000);
+    expect(settle.poll(1000)).toEqual({ kind: "wait", nextCheckAt: 1000 + SETTLE_CAP_MS });
+    expect(settle.poll(1000 + SETTLE_CAP_MS)).toEqual({ kind: "abandon" });
+  });
+
+  it("마지막 chunk 후 quiet 창이 지나면 복원한다", () => {
+    const settle = new OutputSettle();
+    settle.start(1000);
+    settle.noteChunk(1100);
+    expect(settle.poll(1100)).toEqual({ kind: "wait", nextCheckAt: 1100 + SETTLE_QUIET_MS });
+    expect(settle.poll(1100 + SETTLE_QUIET_MS - 1)).toEqual({
+      kind: "wait",
+      nextCheckAt: 1100 + SETTLE_QUIET_MS,
+    });
+    expect(settle.poll(1100 + SETTLE_QUIET_MS)).toEqual({ kind: "restore" });
+  });
+
+  it("chunk 가 계속 오면 quiet 창이 그만큼 밀린다", () => {
+    const settle = new OutputSettle();
+    settle.start(0);
+    settle.noteChunk(100);
+    settle.noteChunk(300);
+    expect(settle.poll(350)).toEqual({ kind: "wait", nextCheckAt: 300 + SETTLE_QUIET_MS });
+    expect(settle.poll(300 + SETTLE_QUIET_MS)).toEqual({ kind: "restore" });
+  });
+
+  it("출력이 끊이지 않아도 상한에서 복원한다", () => {
+    const settle = new OutputSettle();
+    settle.start(0);
+    settle.noteChunk(SETTLE_CAP_MS - 10);
+    // quiet 창(=1990+250)이 아니라 상한이 이긴다.
+    expect(settle.poll(SETTLE_CAP_MS - 10)).toEqual({ kind: "wait", nextCheckAt: SETTLE_CAP_MS });
+    expect(settle.poll(SETTLE_CAP_MS)).toEqual({ kind: "restore" });
+  });
+
+  it("chunk 은 다음 확인 시각을 앞당긴다 — 드라이버가 타이머를 다시 잡아야 하는 이유", () => {
+    // 처음 예약된 상한 시각만 기다리면 quiet 규칙이 영영 발화하지 않는다
+    // (실제로 그랬다 — peer review 2026-09-12). 그래서 write 완료 콜백이
+    // noteChunk 뒤에 타이머를 걷고 이 poll 의 답으로 다시 예약한다.
+    const settle = new OutputSettle();
+    settle.start(1000);
+    const first = settle.poll(1000);
+    expect(first).toEqual({ kind: "wait", nextCheckAt: 1000 + SETTLE_CAP_MS });
+    settle.noteChunk(1100);
+    const second = settle.poll(1100);
+    expect(second).toEqual({ kind: "wait", nextCheckAt: 1100 + SETTLE_QUIET_MS });
+    expect(second).not.toEqual(first);
+  });
+
+  it("취소 뒤에는 chunk 가 더 와도 복원하지 않는다", () => {
+    const settle = new OutputSettle();
+    settle.start(0);
+    settle.noteChunk(100);
+    settle.cancel();
+    settle.noteChunk(200);
+    expect(settle.poll(10_000)).toEqual({ kind: "abandon" });
+  });
+
+  it("판정이 끝나면 다시 복원하지 않는다 — 늦게 도는 타이머 1회성", () => {
+    const settle = new OutputSettle();
+    settle.start(0);
+    settle.noteChunk(100);
+    expect(settle.poll(400)).toEqual({ kind: "restore" });
+    expect(settle.poll(500)).toEqual({ kind: "abandon" });
+  });
+
+  it("start 전 chunk 는 세지 않는다 — replay·dedup 구간은 재인쇄가 아니다", () => {
+    const settle = new OutputSettle();
+    settle.noteChunk(10);
+    settle.start(1000);
+    expect(settle.poll(1000 + SETTLE_CAP_MS)).toEqual({ kind: "abandon" });
   });
 });

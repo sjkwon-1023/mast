@@ -88,12 +88,29 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   `second` (right/bottom), so a root wrap either takes the insertion side as a parameter or
   is right/bottom-only.
 
-- **Codex transcript and scroll position do not survive a workspace round-trip** (2026-09-11,
-  not started). Switching away and back rebuilds the pane's xterm from the replay, so a Codex
-  TUI returns pinned to the bottom. Investigate the reattach path first — the replay followed by
-  the forced `SIGWINCH` resize nudge — rather than reaching for a workspace-wide keep-alive:
-  disposing an inactive workspace's xterm instances is the memory model (ADR-0004), not an
-  oversight, and the principles above rule out keeping renderers alive for visual state.
+- **Codex transcript and scroll position did not survive a workspace round-trip — landed
+  2026-09-12** (v0.3.24). The suspected culprit was innocent: measurement on the user's own
+  `codex-cli 0.153.4` showed its default UI never touches the alternate screen and never enables
+  mouse tracking, so the transcript is plain normal-buffer scrollback and the scroll position is
+  xterm-side state (`viewportY` vs `baseY`) that the replay cannot carry — the nudge is
+  irrelevant to it, and in fact *rebuilds* a Codex tab's scrollback (a resize makes Codex reprint
+  its whole history, ~96 KB / 1,038 lines, which reconstructs 972 lines even from an 8 KiB
+  replay). Fixed front-end only: `WorkspaceView` remembers the bottom-relative offset of a tab it
+  disposes on workspace leave and `TerminalView` re-applies it after the replay, on every parsed
+  chunk while the reprint runs, and once when that output goes quiet — cancelled by a key while
+  that pane has focus, a wheel notch, or a scrollbar drag (a click to focus the pane does not).
+  A position the rebuilt scrollback no longer has is **refused**, not clamped to line 0:
+  `scrollToLine` latches xterm's `isUserScrolling`, so a clamped restore froze the pane at the
+  top of the transcript for good. Releasing that latch is the subtle half — in the *browser*
+  build `scrollToBottom()` goes through `Viewport.scrollLines`, which returns at a zero delta and
+  never reaches the buffer service that clears the flag, so a release asked for at the reprint's
+  `ESC[3J` (`ybase = ydisp = 0`) is a no-op and is deferred to the next chunk; a key cancel
+  releases too, a wheel or scrollbar cancel does not (that scroll is the user's). `@xterm/headless`
+  clears it there, which is why a headless probe passed and a peer review against the real
+  browser build did not. Decisions
+  and the accepted limits (WebView-lifetime memory, heuristic settle window, ~192 KB of replay
+  per round-trip still unaddressed): [ADR-0019](docs/adr/0019-restore-terminal-scroll-across-workspace-round-trip.md).
+  Verification: WINDOWS-BUILD §10 v0.3.24.
 
 - **1MiB-replay workspace switch is ~236ms with visible flicker** (ADR-0004) — candidates:
   smaller replay cap, progressive replay, hide-until-parsed. Since v0.3.15 the replay
@@ -103,10 +120,12 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   and scroll position* item: if a reattach still feels slow once that lands, shrinking the cap
   or replaying progressively is the next lever.
 
-- **Attach-time redraw fires even for a session already attached in this WebView lifetime**
-  (2026-09-11, not started). The redraw/resize side effects exist for the recovery path after a
-  real WebView reset; a session re-shown inside the same lifetime does not need them. Narrow the
-  policy without losing the reset recovery.
+- **Attach-time redraw fires even for a session already attached in this WebView lifetime —
+  closed 2026-09-12** (ADR-0019 decision 6). Narrowing it would drop the resize reprint that
+  rebuilds a Codex tab's scrollback from whatever the replay window happens to hold, which is
+  worth more than the redraw it saves. The remaining open cost is the ~192 KB of replay each
+  round-trip spends on that reprint; the cheaper lever is one resize instead of the current
+  two-step nudge, not skipping it.
 
 - **Korean IME composition can get stuck, and every shortcut dies with it** (user report
   2026-08-22, not fixed). Typing Korean produced a previously typed syllable repeating, no
