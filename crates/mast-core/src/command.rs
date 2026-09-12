@@ -1532,6 +1532,15 @@ impl Dispatcher {
         None
     }
 
+    /// `session` 을 실은 탭의 id — 글루의 exit 경로가 "이 세션을 이 탭이 채택했는가"
+    /// 를 묻는 자리다 (ADR-0018 D2). 스폰이 실패하거나 늦어 모델이 다른 세션을 채택한
+    /// 뒤라면 다른 탭 id 이거나 None 이고, 그 세션의 exit 은 남의 탭 기록을 건드리면
+    /// 안 된다.
+    pub fn tab_of_session(&self, session: SessionId) -> Option<TabId> {
+        self.locate_session(session)
+            .map(|(wi, pane, ti)| self.state.workspaces[wi].panes[&pane].tabs[ti].id)
+    }
+
     /// `session` 이 실린 탭이 속한 **워크스페이스 인덱스** — 에이전트 채널
     /// ([`Self::resolve_send_target`]·[`Self::list_tabs`])의 격리 경계 기준점이다.
     /// 역매핑은 [`Self::locate_session`] 을 그대로 재사용하고 pane·tab 위치만
@@ -1717,7 +1726,9 @@ pub struct RegistryAudit {
     pub orphan_sinks: Vec<SessionId>,
     /// 탭이 `pty_session: Some(s)` 인데 `s` 가 두 레지스트리 중 **한쪽에라도**
     /// 없다 — attach 는 세션·sink 가 둘 다 있어야 사니 한쪽만 비어도 그 탭은 이미
-    /// 못 쓴다. 죽일 대상이 없으므로 탭을 Exited 로 수리할 뿐이다 (ADR-0018 D5).
+    /// 못 쓴다. 이 버킷이 지시하는 수리는 탭을 Exited 로 되돌리는 것뿐이고, 한쪽에
+    /// 살아남은 짝은 더 이상 어떤 탭도 참조하지 않으므로 **같은 라운드의 고아 버킷에
+    /// 실려 해제(kill)된다** (ADR-0018 D5).
     pub dangling_tabs: Vec<(TabId, SessionId)>,
 }
 
@@ -4075,6 +4086,23 @@ mod tests {
         // 재스폰돼 세션이 채워진 탭은 열거에서 빠진다.
         d.respawn_tab(TabId(5)).unwrap();
         assert_eq!(d.running_terminal_tabs(), vec![TabId(6)]);
+    }
+
+    #[test]
+    fn tab_of_session_names_the_adopting_tab_only() {
+        let (mut d, _host) = adopted_dispatcher();
+        let s5 = d.respawn_tab(TabId(5)).unwrap();
+        assert_eq!(d.tab_of_session(s5), Some(TabId(5)));
+        // 모델이 실은 적 없는 세션 id — 글루의 exit 경로는 이 답으로 "채택되지 않은
+        // 스폰" 을 가려낸다.
+        assert_eq!(d.tab_of_session(s5 + 1), None);
+        // 탭이 세션을 놓으면(exit) 그 id 는 더 이상 어느 탭의 것도 아니다.
+        d.apply_event(SessionEvent::SessionExited {
+            session: s5,
+            code: Some(0),
+            ended_at_ms: 1,
+        });
+        assert_eq!(d.tab_of_session(s5), None);
     }
 
     #[test]

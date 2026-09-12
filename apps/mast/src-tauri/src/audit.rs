@@ -88,9 +88,11 @@ pub fn audit_once(app: &AppHandle, state: &AppState, context: &str) -> RegistryA
                 );
             }
         }
-        // 탭이 참조하는 세션이 레지스트리에 없다 — 죽일 대상이 없으므로 탭만 Exited 로
-        // 되돌린다. 그러면 `pty_session` 이 비어 배너의 Restart 로 되살릴 수 있다.
-        // code 는 모른다(우리가 관측한 exit 이 아니다) — 그래서 None 이다.
+        // 탭이 참조하는 세션이 레지스트리에 없다 — 이 루프가 하는 일은 탭을 Exited 로
+        // 되돌리는 것뿐이다. 그러면 `pty_session` 이 비어 배너의 Restart 로 되살릴 수
+        // 있다. code 는 모른다(우리가 관측한 exit 이 아니다) — 그래서 None 이다.
+        // 한쪽 레지스트리에만 남아 있던 짝은 아무도 참조하지 않아 고아로 분류되므로,
+        // 아래 해제 루프가 같은 라운드에서 죽인다.
         for (tab, session) in &audit.dangling_tabs {
             winlog!(
                 "audit ({context}): tab {} references session {session} which no longer exists; marking it exited",

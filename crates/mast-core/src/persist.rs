@@ -344,13 +344,23 @@ struct SaverSlot {
     /// 유실 창이 `debounce` 로 유계이게 하는 trailing debounce 의 핵심.
     /// `pending` 이 `None` 이면 의미 없다.
     deadline: Instant,
-    /// 발급된 flush 티켓 수. `flush` 는 자기 티켓이 `flush_done` 에 닿을 때까지 기다린다.
-    flush_req: u64,
-    /// worker 가 완료를 인정한 마지막 티켓. worker 는 lock 안에서 `pending` 이
-    /// `None` 일 때만 올린다 — 그래야 "flush 반환 시점에 그 이전 schedule 이 전부
-    /// 디스크에 있다"가 성립한다 (`main.rs` 의 `router.flush_now()` → `saver.flush()`
-    /// 종료 계약이 여기에 걸려 있다).
-    flush_done: u64,
+    /// 지금까지 발급된 예약 세대 — `schedule` 마다 1 오른다. 슬롯은 큐가 아니라
+    /// 교체라 `pending` 에 든 상태의 세대가 곧 이 값이다.
+    scheduled: u64,
+    /// worker 가 **디스크에 쓴** 마지막 상태의 세대. worker 는 `pending` 을 집어갈 때
+    /// 본 `scheduled` 를 기억했다가 write 를 마친 뒤 그 값을 여기에 적는다 — 쓰고 난
+    /// 뒤의 `scheduled` 를 적으면 쓰는 동안 들어온 예약까지 쓴 것으로 ack 하게 된다.
+    ///
+    /// 완료 판정이 세대인 이유: "`pending` 이 빌 때까지" 로 판정하면 저장이 상태
+    /// 갱신보다 느린 환경에서 슬롯이 영영 비지 않아 종료 경로(`main.rs` 의
+    /// `router.flush_now()` → `saver.flush()`)가 끝나지 않는다 — OSC 프로듀서는
+    /// `flush_now()` 로 멈추지 않는다 (2026-09-12 리뷰).
+    written: u64,
+    /// flush 를 기다리는 호출자가 지목한 세대 — `written` 이 여기 닿을 때까지 worker 는
+    /// deadline 을 무시하고 즉시 쓴다. 불리언 플래그가 아닌 이유: 플래그는 "슬롯이 비는
+    /// 순간" 말고는 내릴 자리가 없어, 프로듀서가 write 마다 슬롯을 다시 채우는 동안
+    /// 한 번의 flush 가 trailing debounce 를 영구히 꺼 버린다 (2026-09-12 리뷰).
+    flush_target: u64,
     /// Saver 가 Drop 중 — worker 는 대기분을 쓰고 종료한다.
     closed: bool,
     /// worker 가 사라졌다 (패닉·정상 종료). 이후의 `schedule`·`flush` 는 무한
@@ -392,8 +402,9 @@ impl Drop for WorkerDeadGuard<'_> {
 /// - **메모리**: 대기분은 항상 1개 — `schedule` 은 큐에 넣지 않고 슬롯을 교체한다.
 /// - **저장 실패**: loud stderr 만 남기고 패닉하지 않는다. 별도 재시도 루프 없이
 ///   다음 schedule 이 자연 재시도가 된다.
-/// - **종료**: [`Saver::flush`] 는 대기분을 동기적으로 기록하고, Drop 도 대기분을
-///   flush 한 뒤 worker 를 join 한다.
+/// - **종료**: [`Saver::flush`] 는 호출 시점까지의 예약분을 동기적으로 기록하고
+///   (그 뒤에 들어오는 예약은 기다리지 않는다 — 그쪽을 기다리면 반환이 프로듀서에
+///   묶인다), Drop 도 대기분을 flush 한 뒤 worker 를 join 한다.
 pub struct Saver {
     shared: Arc<SaverShared>,
     debounce: Duration,
@@ -407,8 +418,9 @@ impl Saver {
             slot: Mutex::new(SaverSlot {
                 pending: None,
                 deadline: Instant::now(),
-                flush_req: 0,
-                flush_done: 0,
+                scheduled: 0,
+                written: 0,
+                flush_target: 0,
                 closed: false,
                 worker_dead: false,
             }),
@@ -440,6 +452,7 @@ impl Saver {
         if slot.pending.is_none() {
             slot.deadline = Instant::now() + self.debounce;
         }
+        slot.scheduled += 1;
         slot.pending = Some(Box::new(state));
         drop(slot);
         self.shared.cond.notify_all();
@@ -447,18 +460,24 @@ impl Saver {
 
     /// 대기분을 지금 기록하고 완료까지 동기 대기한다. 대기분이 없으면 no-op ack.
     ///
-    /// 반환 시점에는 **이 호출 이전의 모든 `schedule` 이 디스크에 있다** — worker 가
-    /// 쓰는 도중 들어온 교체분까지 포함해 `pending` 이 빌 때까지 ack 하지 않는다.
+    /// 반환 시점에는 **이 호출 이전의 모든 `schedule` 이 디스크에 있다.** 근거는
+    /// 슬롯이 큐가 아니라는 것이다: 호출 시점의 세대(`scheduled`)가 디스크에 닿으면
+    /// 그 세대의 상태가 이전 예약을 전부 흡수한 최신본이므로 더 기다릴 것이 없다.
+    /// **호출 뒤에 들어온 예약은 기다리지 않는다** — 슬롯이 빌 때까지 기다리면 예약이
+    /// 저장보다 빠른 환경에서 영영 반환하지 못한다.
     pub fn flush(&self) {
         let mut slot = lock_slot(&self.shared);
         if slot.worker_dead {
             eprintln!("[mast] persist: saver worker is gone; flush dropped");
             return;
         }
-        slot.flush_req += 1;
-        let ticket = slot.flush_req;
+        let target = slot.scheduled;
+        if slot.written >= target {
+            return;
+        }
+        slot.flush_target = slot.flush_target.max(target);
         self.shared.cond.notify_all();
-        while slot.flush_done < ticket {
+        while slot.written < target {
             if slot.worker_dead {
                 eprintln!("[mast] persist: saver worker died before flush ack");
                 return;
@@ -488,20 +507,23 @@ fn worker_loop(path: &Path, shared: &SaverShared) {
     let _dead = WorkerDeadGuard { shared };
     let mut slot = lock_slot(shared);
     loop {
-        if slot.pending.is_none() && slot.flush_done < slot.flush_req {
-            slot.flush_done = slot.flush_req;
-            shared.cond.notify_all();
-        }
-        let flush_wanted = slot.flush_done < slot.flush_req;
+        // flush 요구는 그것이 지목한 세대가 디스크에 닿는 순간 스스로 꺼진다 — 슬롯이
+        // 비기를 기다려 내리지 않는다.
+        let flush_wanted = slot.written < slot.flush_target;
         let due = slot.pending.is_some()
             && (flush_wanted || slot.closed || Instant::now() >= slot.deadline);
         if due {
+            // 집어가는 상태의 세대를 **여기서** 붙든다 — write 중에 들어온 예약이
+            // `scheduled` 를 올리므로, 쓴 뒤에 읽으면 쓰지 않은 상태를 ack 하게 된다.
+            let generation = slot.scheduled;
             let state = slot.pending.take().expect("due 는 pending 이 Some 일 때만 참");
             // 디스크 IO 는 반드시 lock 밖에서 — schedule 은 Dispatcher lock 을 쥔
             // 프로듀서가 부른다.
             drop(slot);
             write_state(path, &state);
             slot = lock_slot(shared);
+            slot.written = generation;
+            shared.cond.notify_all();
             continue;
         }
         if slot.closed {
@@ -535,6 +557,9 @@ fn write_state(path: &Path, state: &AppState) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::mpsc;
+
     use super::*;
     use crate::model::{
         AgentStatus, NotificationState, Pane, PaneId, SplitDirection, SplitId, SplitTree, Tab,
@@ -1051,7 +1076,7 @@ mod tests {
             state
         };
         // debounce 0 — worker 가 예약분을 즉시 집어 간다.
-        let saver = Saver::spawn(path.clone(), Duration::ZERO);
+        let saver = Arc::new(Saver::spawn(path.clone(), Duration::ZERO));
         saver.schedule(bulky(1));
         // 슬롯이 비는 순간이 곧 "worker 가 lock 밖에서 1 을 쓰는 중" 이다. 교체는
         // 반드시 그 안에서, 그리고 flush 호출보다 먼저 들어가야 한다 — 이 순서라야
@@ -1063,14 +1088,76 @@ mod tests {
             thread::yield_now();
         }
         saver.schedule(bulky(2));
-        saver.flush();
+        assert!(
+            flush_within(&saver, Duration::from_secs(10)),
+            "flush 가 반환하지 않았다"
+        );
         assert_eq!(
             read_revision(&path),
             2,
             "worker 가 쓰는 동안 들어온 교체분까지 flush 가 덮어야 함"
         );
         let slot = lock_slot(&saver.shared);
-        assert!(slot.pending.is_none(), "ack 시점에 대기분이 남아 있으면 안 됨");
-        assert_eq!(slot.flush_done, slot.flush_req);
+        assert_eq!(
+            slot.written, slot.scheduled,
+            "ack 시점의 written 은 마지막 예약 세대여야 함"
+        );
+    }
+
+    /// `flush()` 를 떼어 낸 스레드에서 돌리고 `limit` 안에 반환했는지만 돌려준다.
+    /// 직접 부르면 "ack 을 영영 올리지 않는" 부류의 회귀가 테스트 실패가 아니라 멈춘
+    /// CI 잡으로 나타난다 — `cargo test` 에는 테스트별 타임아웃이 없다.
+    fn flush_within(saver: &Arc<Saver>, limit: Duration) -> bool {
+        let flushing = Arc::clone(saver);
+        let (tx, rx) = mpsc::channel();
+        let flusher = thread::spawn(move || {
+            flushing.flush();
+            let _ = tx.send(());
+        });
+        let returned = rx.recv_timeout(limit).is_ok();
+        if returned {
+            flusher.join().unwrap();
+        }
+        returned
+    }
+
+    #[test]
+    fn saver_flush_returns_while_another_thread_keeps_scheduling() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        // 예약이 저장을 앞지르는 상황을 재현한다: 256 KiB 짜리 상태라 write 한 번이
+        // 수십 ms 걸리고, 프로듀서는 그 사이마다 슬롯을 다시 채운다. 프로듀서를 멈추는
+        // 것은 벽시계가 아니라 **이 스레드**다 — 느린 러너에서 프로듀서가 먼저 끝나
+        // 판정이 흐려지는 일이 없고, 슬롯이 비기를 기다리는 구현에서는 flush 가
+        // 반환하지 못해 프로듀서도 영영 멈추지 않는다.
+        let mut bulky = sample_state(None, 7);
+        bulky.workspaces[0].name = "x".repeat(256 * 1024);
+        let saver = Arc::new(Saver::spawn(path.clone(), Duration::ZERO));
+        let stop = Arc::new(AtomicBool::new(false));
+        let scheduled = Arc::new(AtomicU64::new(0));
+        let producer = {
+            let saver = Arc::clone(&saver);
+            let stop = Arc::clone(&stop);
+            let scheduled = Arc::clone(&scheduled);
+            thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    let mut state = bulky.clone();
+                    state.revision = scheduled.fetch_add(1, Ordering::SeqCst) + 1;
+                    saver.schedule(state);
+                }
+            })
+        };
+        // 슬롯이 실제로 다시 차기 시작한 뒤에 flush 한다.
+        while scheduled.load(Ordering::SeqCst) < 3 {
+            thread::yield_now();
+        }
+        let returned = flush_within(&saver, Duration::from_secs(10));
+        stop.store(true, Ordering::SeqCst);
+        producer.join().unwrap();
+        assert!(
+            returned,
+            "flush 가 프로듀서가 멈출 때까지 묶였다 — 세대가 아니라 슬롯이 비는 것으로 \
+             완료를 판정하고 있다"
+        );
     }
 }

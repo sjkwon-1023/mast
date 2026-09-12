@@ -270,20 +270,35 @@ fn describe_trigger(trigger: ResetTrigger, g: &Guarded, cfg: &ResetConfig, now: 
 /// 않고 loud — 다음 트리거·수동 리로드(Ctrl+Shift+R)가 재시도 경로다.
 fn perform_reset(app: &AppHandle, reason: &str, trigger: Option<ResetTrigger>) {
     winlog!("reset: reloading webview ({reason})");
-    // 메모리 임계 발화는 "무언가가 자원을 붙잡고 있다"는 유일한 자동 신호다 — 리로드가
-    // 프론트 쪽 사용량을 지우기 **전**의 백엔드 그림을 한 줄 남긴다 (ADR-0018 진단).
-    // 다른 트리거(idle·hidden·수동)는 자원과 무관하므로 찍지 않는다.
+    // 메모리 임계 발화는 "무언가가 자원을 붙잡고 있다"는 유일한 자동 신호다 — 그때의
+    // 백엔드 그림을 한 줄 남긴다 (ADR-0018 진단). 다른 트리거(idle·hidden·수동)는
+    // 자원과 무관하므로 찍지 않는다.
     if matches!(trigger, Some(ResetTrigger::MemWatchdog)) {
-        match app.try_state::<AppState>() {
-            Some(state) => {
-                // 여기서 검사를 새로 돌리지 않는다 (주기 검사 없음이 D5 다) — 그래서
-                // 줄의 `audit ...` 필드만 다른 시점의 값이다. 몇 시간 전 결과일 수 있는
-                // 것을 갓 잰 수치와 한 줄에 두므로 context 가 그 사실을 말한다.
-                let audit = state.last_audit.lock().unwrap().clone();
-                let context = "reset memWatchdog (audit: last seen)";
-                crate::diagnostics::log_summary(&state, &audit, context);
-            }
-            None => winlog!("reset: managed state unavailable; diagnostics skipped"),
+        // 수집은 **떼어 낸 스레드**에서 돈다. `diagnostics::collect` 가 탭을 세는 동안
+        // Dispatcher lock 을 기다리는데, 이 함수는 워크스페이스 전환 신호를 통해
+        // async `dispatch` 커맨드에서도 불린다 — 거기서 기다리면 다른 스폰이 쥔 lock
+        // 동안 Tokio worker 를 점유하고 리로드까지 늦춘다. 리로드는 백엔드 그림을
+        // 기다릴 이유가 없으므로 결과를 회수하지 않는다 (fire-and-forget).
+        //
+        // 대가는 이 줄이 **리로드 이전의 그림이 아니라는 것**이다: lock 대기가 길면
+        // 탭·세션·프로세스 수치가 리로드가 시작된 뒤의 값일 수 있고, 로그만 보고는
+        // 어느 쪽인지 가릴 수 없다. 그래서 context 가 그 사실까지 말한다.
+        let diag_app = app.clone();
+        let spawned = std::thread::Builder::new()
+            .name("mast-diag".into())
+            .spawn(move || match diag_app.try_state::<AppState>() {
+                Some(state) => {
+                    // 여기서 검사를 새로 돌리지 않는다 (주기 검사 없음이 D5 다) — 그래서
+                    // 줄의 `audit ...` 필드만 다른 시점의 값이다. 몇 시간 전 결과일 수 있는
+                    // 것을 갓 잰 수치와 한 줄에 두므로 context 가 그 사실을 말한다.
+                    let audit = state.last_audit.lock().unwrap().clone();
+                    let context = "reset memWatchdog (sampled around the reload; audit: last seen)";
+                    crate::diagnostics::log_summary(&state, &audit, context);
+                }
+                None => winlog!("reset: managed state unavailable; diagnostics skipped"),
+            });
+        if let Err(err) = spawned {
+            winlog!("reset: cannot spawn the diagnostics thread: {err}");
         }
     }
     match app.get_webview_window("main") {

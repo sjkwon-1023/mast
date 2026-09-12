@@ -153,12 +153,13 @@ impl SessionSink for SinkHandle {
     /// 끝난 셸을 **세션에서 기록으로** 바꾸는 자리 (ADR-0018 D2). 호출자는 세션당
     /// 정확히 한 번 도는 **waiter 스레드**다.
     ///
-    /// 순서가 계약이다 — ① 기록 재료를 떠내고(`take_record`) ② 파일로 쓴 뒤
-    /// ③ Dispatcher lock 아래에서 모델을 갱신·publish 하고, lock 을 놓은 다음에야
-    /// ④ 세션·sink 를 레지스트리에서 놓고 ⑤ 정합성 검사를 돌린다. ②가 ③보다 뒤면 프론트가
-    /// `state-changed` 를 보고 아직 없는 기록을 읽는 창이 생기고, ④가 ③보다 앞이면
-    /// 프론트가 "Running + 세션 있음" 스냅샷으로 attach 해 미지 세션 에러를 본다.
-    /// 파일 I/O 가 lock 밖인 것은 `state.rs` 잠금 규율 그대로다.
+    /// 순서가 계약이다 — ① 기록 재료를 떠내고(`take_record`) **①.5 이 스폰을 모델이
+    /// 채택했는지 확인한 뒤** ② 파일로 쓰고 ③ Dispatcher lock 아래에서 모델을
+    /// 갱신·publish 하고, lock 을 놓은 다음에야 ④ 세션·sink 를 레지스트리에서 놓고
+    /// ⑤ 정합성 검사를 돌린다. ②가 ③보다 뒤면 프론트가 `state-changed` 를 보고 아직
+    /// 없는 기록을 읽는 창이 생기고, ④가 ③보다 앞이면 프론트가 "Running + 세션 있음"
+    /// 스냅샷으로 attach 해 미지 세션 에러를 본다. 파일 I/O 가 lock 밖인 것은
+    /// `state.rs` 잠금 규율 그대로다.
     ///
     /// Dispatcher lock 을 여기서 잡아도 교착이 없는 근거는 종전과 같다: dispatch 가
     /// lock 아래에서 부르는 kill 은 join 없는 신호라(코어 rustdoc) 이 스레드의 종료를
@@ -176,37 +177,75 @@ impl SessionSink for SinkHandle {
         wintrace!("session {} exited (code={code:?})", self.0.session);
 
         // ① 세션 핸들에 거는 유일한 호출이다 (join 도, 두 번째 메서드도 없다 —
-        // 여기서 세션을 기다리면 waiter 스레드가 자기 자신을 기다린다).
-        let record = state
+        // 여기서 세션을 기다리면 waiter 스레드가 자기 자신을 기다린다). `None` 일 수
+        // 있다: `SessionManager::create` 는 `PtySession::spawn` 이 **반환한 뒤**
+        // 레지스트리에 넣는데(session.rs) waiter 는 그 spawn 안에서 이미 돌기 시작하므로,
+        // 즉사한 셸의 exit 이 등록을 앞지른다.
+        let mut record = state
             .sessions
             .get(self.0.session)
             .and_then(|session| session.take_record());
+
+        // ①.5 등록 장벽 겸 채택 확인. 스폰하는 dispatch 는 **하나의 Dispatcher lock
+        // 임계구역 안에서** 레지스트리 삽입과 `pty_session` 기록을 끝내므로, 여기서
+        // lock 을 한 번 잡았다 놓는 것만으로 둘 다 끝난 뒤임이 보장된다 — 그래서 ① 이
+        // 빈손이었더라도 여기서 다시 떠내면 등록을 앞지른 exit 의 화면을 잃지 않는다.
+        // 재조회가 lock 안인 것은 `take_record` 가 세션 자기 mutex 만 건드리기
+        // 때문이다(Dispatcher → 세션, dispatch 와 같은 방향). **파일 쓰기는 여전히
+        // lock 밖**이다 (`state.rs` 잠금 규율).
+        let adopted = {
+            let dispatcher = state.dispatcher.lock().unwrap();
+            let adopted = dispatcher.tab_of_session(self.0.session) == self.0.tab;
+            if adopted && record.is_none() {
+                record = state
+                    .sessions
+                    .get(self.0.session)
+                    .and_then(|session| session.take_record());
+            }
+            adopted
+        };
+
         // ② 기록은 모델 갱신보다 먼저 디스크에 있어야 한다(위 순서 계약). 실패는
         // 한 줄로 드러내되 나머지 단계를 끊지 않는다 — 기록을 못 남기는 것과 탭이
         // 영영 Running 으로 남는 것은 무게가 다르다.
-        match (self.0.tab, record) {
-            (Some(tab), Some(bytes)) if !bytes.is_empty() => {
-                if let Err(err) = state.records.write(tab, &bytes) {
-                    winlog!("on_exit: cannot write the record of tab {}: {err}", tab.0);
+        //
+        // **채택된 세션만 기록을 건드린다.** 모델이 이 탭에 싣지 않은 스폰(데드라인을
+        // 넘겨 실패한 Restart 의 늦은 세션, 또는 이미 닫힌·정리된 탭)의 exit 이 파일을
+        // 쓰거나 지우면 남의 화면을 덮는다 — 실패한 Restart 는 이전 기록을 보존한다는
+        // 계약(ADR-0018 D4)이 거기서 깨진다. 늦은 세션의 레지스트리 자리는 스폰 쪽의
+        // late cleanup 이 치운다.
+        if adopted {
+            match (self.0.tab, record) {
+                (Some(tab), Some(bytes)) if !bytes.is_empty() => {
+                    if let Err(err) = state.records.write(tab, &bytes) {
+                        winlog!("on_exit: cannot write the record of tab {}: {err}", tab.0);
+                    }
                 }
-            }
-            // 남길 화면이 없다(`take_record` 의 빈 바이트 계약) — 낡은 기록이 방금
-            // 끝난 셸의 화면 행세를 하지 않게 지운다.
-            (Some(tab), Some(_)) => {
-                if let Err(err) = state.records.remove(tab) {
-                    winlog!("on_exit: cannot remove the record of tab {}: {err}", tab.0);
+                // 남길 화면이 없다(`take_record` 의 빈 바이트 계약) — 낡은 기록이 방금
+                // 끝난 셸의 화면 행세를 하지 않게 지운다.
+                (Some(tab), Some(_)) => {
+                    if let Err(err) = state.records.remove(tab) {
+                        winlog!("on_exit: cannot remove the record of tab {}: {err}", tab.0);
+                    }
                 }
+                // ① 도 ①.5 의 재조회도 빈손 — 탭은 여전히 이 세션을 가리키는데
+                // 레지스트리에는 없다, 즉 정합성 검사의 고아 해제 같은 다른 경로가
+                // 핸들을 먼저 놓았다. 남길 화면이 애초에 없으므로 기존 기록은 둔다.
+                (Some(_), None) => wintrace!(
+                    "on_exit: session {} is already released; no record taken",
+                    self.0.session
+                ),
+                (None, _) => winlog!(
+                    "on_exit: session {} has no tab; no record written",
+                    self.0.session
+                ),
             }
-            // 세션이 이미 레지스트리에 없다 — 탭을 닫는 경로가 앞질렀고, 그 경로가
-            // 기록까지 지운다.
-            (Some(_), None) => wintrace!(
-                "on_exit: session {} is already released; no record taken",
-                self.0.session
-            ),
-            (None, _) => winlog!(
-                "on_exit: session {} has no tab; no record written",
-                self.0.session
-            ),
+        } else {
+            wintrace!(
+                "on_exit: session {} is not the session of tab {:?}; record untouched",
+                self.0.session,
+                self.0.tab.map(|tab| tab.0)
+            );
         }
 
         // ③④ 는 밖에서 보면 하나여야 한다: 그 사이의 세션은 탭이 놓았는데 레지스트리에는

@@ -17,6 +17,10 @@
 //!   Dispatcher lock 밖에서만 한다. exit 경로가 기록을 **모델 갱신보다 먼저**
 //!   쓰는 것도 여기서 나온다 ([`crate::sink`] 의 `on_exit`) — 프론트가
 //!   `state-changed` 를 보고 기록을 읽으므로 파일이 그때 이미 있어야 한다.
+//!   같은 경로가 쓰기 **전에** Dispatcher lock 을 한 번 잡았다 놓는 것은 스폰의
+//!   등록 장벽 겸 채택 확인이다: 그 lock 아래에서 `take_record`(세션 자기 mutex)까지는
+//!   불러도 되지만 — Dispatcher → 세션은 dispatch 와 같은 방향이다 — 파일 쓰기는
+//!   그 밖으로 나간다.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};

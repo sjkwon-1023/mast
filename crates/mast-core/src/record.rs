@@ -15,7 +15,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use crate::model::TabId;
@@ -69,24 +69,30 @@ impl RecordStore {
 
     /// 기록 바이트. 파일이 없으면 `Ok(None)` — 기록 없는 탭은 정상이다(뷰가 안내
     /// 한 줄을 그린다). [`MAX_RECORD_BYTES`] 초과는 Err.
+    ///
+    /// 상한은 **읽고 있는 그 핸들**에 건다 (`take(cap + 1)`): 크기를 `metadata` 로
+    /// 재고 경로를 다시 여는 구조면 그 사이에 파일이 커지거나 다른 파일로 바뀌어도
+    /// 상한 없이 통째로 메모리에 올라간다 (2026-09-12 리뷰). 한 바이트를 더 읽는 것이
+    /// 초과 판정이다 — 상한만큼 읽어서는 "딱 상한" 과 "넘김" 을 가를 수 없다.
     pub fn read(&self, tab: TabId) -> io::Result<Option<Vec<u8>>> {
         let path = self.path(tab);
-        let meta = match fs::metadata(&path) {
-            Ok(meta) => meta,
+        let file = match fs::File::open(&path) {
+            Ok(file) => file,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err),
         };
-        if meta.len() > MAX_RECORD_BYTES {
+        let mut bytes = Vec::new();
+        file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_RECORD_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "record {} is {} bytes, over the {MAX_RECORD_BYTES} cap",
-                    path.display(),
-                    meta.len()
+                    "record {} is over the {MAX_RECORD_BYTES} byte cap",
+                    path.display()
                 ),
             ));
         }
-        fs::read(&path).map(Some)
+        Ok(Some(bytes))
     }
 
     /// 기록을 지운다. 없으면 `Ok(())` — 호출자 셋(respawn 성공·탭 닫기·빈 기록)
@@ -230,6 +236,19 @@ mod tests {
     fn read_of_a_missing_record_is_none() {
         let (_dir, store) = store();
         assert!(store.read(TabId(9)).unwrap().is_none());
+    }
+
+    /// 상한 **그 자체**는 통과다. 경계의 포함 쪽을 고정해 두지 않으면 판정을 `>=` 로
+    /// 바꾸는 회귀가 초과 테스트를 통과한 채 정상 크기의 기록을 거부한다 — 실기에서도
+    /// 정상 기록은 1 MiB 근처라 이 경계를 밟지 않으므로 드러나지 않는다.
+    #[test]
+    fn read_accepts_a_file_exactly_at_the_cap() {
+        let (_dir, store) = store();
+        store
+            .write(TabId(8), &vec![b'x'; MAX_RECORD_BYTES as usize])
+            .unwrap();
+        let bytes = store.read(TabId(8)).unwrap().expect("상한 크기 기록은 읽힌다");
+        assert_eq!(bytes.len() as u64, MAX_RECORD_BYTES);
     }
 
     #[test]

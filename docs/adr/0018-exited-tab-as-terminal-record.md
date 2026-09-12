@@ -64,14 +64,30 @@ and the diagnostics would otherwise report a number nothing bounds.
 
    ① `take_record()` on the session handle — the only call this function makes on the session,
    and it never joins anything. The waiter thread is the one calling `on_exit`, so any wait on
-   the session here is a wait on itself.
+   the session here is a wait on itself. It can come back empty-handed: `SessionManager::create`
+   inserts into the registry only after `PtySession::spawn` **returns**, while the waiter thread
+   is already running inside that spawn, so a shell that dies instantly reaches `on_exit` before
+   its own registration.
 
-   ② write `records/tab-<id>.bin` (or delete the file when the record is empty), **outside the
-   Dispatcher lock**. Before the model update, because the front end reacts to the state change
-   by reading the file: publish first and the record view can mount against a file that is not
-   there yet. Outside the lock, because this is disk I/O and the Dispatcher lock is the app's
-   structural mutex. A failed write logs one line and does **not** abort the sequence — losing a
-   screen and leaving a tab `Running` forever are not the same weight of failure.
+   ①.5 take the Dispatcher lock, ask `tab_of_session(id) == self.tab`, and release it. Two things
+   ride on that one lock/unlock. It is a **registration barrier**: the spawning dispatch inserts
+   into the registry and writes `pty_session` inside one critical section, so after this the race
+   above is over and a `None` from ① is retried here — `take_record` touches only the session's
+   own mutex, and Dispatcher → session is dispatch's own direction. And it is the **adoption
+   check** that gates ②: without it, a session the model never took can write over a tab's record.
+   Two cases produce one — the late session of a Restart that failed its spawn deadline (its
+   registry entry is removed by the spawn path's own late cleanup, which the exit can outrun), and
+   a tab that was closed or retired before its shell finished dying. In both, the file belongs to
+   a different shell's screen.
+
+   ② write `records/tab-<id>.bin` (or delete the file when the record is empty) **for an adopted
+   session only**, and **outside the Dispatcher lock**. A session that failed ①.5 skips both the
+   write and the delete and logs one trace line. Before the model update, because the front end
+   reacts to the state change by reading the file: publish first and the record view can mount
+   against a file that is not there yet. Outside the lock, because this is disk I/O and the
+   Dispatcher lock is the app's structural mutex. A failed write logs one line and does **not**
+   abort the sequence — losing a screen and leaving a tab `Running` forever are not the same
+   weight of failure.
 
    ③ take the Dispatcher lock, `apply_event(SessionExited { code, ended_at_ms })`,
    `publish_state`, then **explicitly** drop the guard.
@@ -141,10 +157,14 @@ and the diagnostics would otherwise report a number nothing bounds.
 
    - **orphans** — a session (or sink) id the registry holds that no tab's `pty_session`
      references. These are released from both registries.
-   - **dangling tabs** — a tab whose `pty_session` names a session neither registry has. There
-     is nothing to kill, so the tab is only *repaired*: `SessionExited` with `code: None` (we did
-     not observe this exit, and "unknown" is the honest answer) and the audit's own wall clock as
-     `ended_at_ms`. The tab drops its session id and gets the Restart banner.
+   - **dangling tabs** — a tab whose `pty_session` names a session that is missing from
+     **either** registry. Both halves are needed for the tab to work (attach mounts a channel on
+     the sink and reads the session's replay), so a tab holding only one of them is as broken as a
+     tab holding neither. The tab is *repaired*: `SessionExited` with `code: None` (we did not
+     observe this exit, and "unknown" is the honest answer) and the audit's own wall clock as
+     `ended_at_ms`, after which it drops its session id and gets the Restart banner. The half that
+     did survive is no longer referenced by any tab, so the same pass reports it as an orphan and
+     releases it — the repair and the release are one round, not two.
 
    The glue takes the **Dispatcher lock first** and snapshots `sessions.ids()` and `sinks.ids()`
    underneath it. The reverse order is destructive, which is why it is written down rather than
@@ -202,11 +222,16 @@ and the diagnostics would otherwise report a number nothing bounds.
    replaces one pending `Box<AppState>` under a short slot lock instead of sending a clone down
    an unbounded `mpsc`, so a publish burst can never queue more than one snapshot. The two
    contracts that were on the channel are kept explicitly: the debounce deadline is fixed at the
-   `None → Some` transition (a stream of changes is still written within one debounce window
-   rather than being pushed ahead of itself), and the worker raises `flush_done` **only while
-   `pending` is empty**, so `flush()` returning means every `schedule` made before it is on disk
-   — which is what `main.rs`'s shutdown path (`router.flush_now()` then `saver.flush()`) relies
-   on. A worker that dies is reported and no longer waited for.
+   `None → Some` transition (a stream of changes is still written within one debounce window rather
+   than being pushed ahead of itself), and completion is judged by **generation**, not by an empty
+   slot — each `schedule` bumps `scheduled`, the worker records the generation it took and writes it
+   into `written` once that state is on disk, and `flush()` waits only for `written` to reach the
+   `scheduled` it read on entry. `flush()` returning therefore still means every `schedule` made
+   before it is on disk (the slot always holds the latest state, so that generation subsumes the
+   earlier ones) — which is what `main.rs`'s shutdown path (`router.flush_now()` then
+   `saver.flush()`) relies on — while a producer that keeps scheduling can no longer hold the
+   shutdown open, as `flush_now()` does not stop the OSC producers. A worker that dies is reported
+   and no longer waited for.
 
 9. **On the front end an exited tab leaves the terminal lifecycle for the viewer lifecycle.**
    `planViewSync` now disposes the `TerminalView` of **any** session-less terminal tab, including
@@ -272,10 +297,19 @@ and the diagnostics would otherwise report a number nothing bounds.
 - **An attach in flight when the exit lands shows one error frame.** `attach_terminal` can be on
   its way to a session that ④ has just released; the front end reports an unknown-session error
   for that frame and the next render draws the record.
-- **Close and exit can interleave and re-create a deleted record.** If a tab is closed while its
-  shell is dying, the release thread can delete the file between ① and ②, and the waiter then
-  writes it again. The tab is gone from the model, so the next boot's sweep collects the file;
-  until then it is an orphan on disk.
+- **A delete that lands between the adoption check and the write is undone.** The check of ①.5
+  and the write are separate critical sections — the file write stays outside the Dispatcher
+  lock — so a record deleted in that window is written again by the waiter. Both deleting callers
+  can hit it. A **close** (`release_tabs`) leaves the file for a tab that is gone from the model,
+  which the next boot's sweep collects; until then it is an orphan on disk. A **successful
+  respawn** (`forget_record_after_respawn`, which also runs after its Dispatcher guard is
+  dropped) leaves the previous shell's screen attached to a tab that is `Running` again under a
+  new session — the sweep *keeps* that file because the tab is still in `state.json`. Nothing
+  reads it in the meantime (the front end reads a record only for an exited tab) and the tab's
+  next exit overwrites it, so the cost is disk residue, not a wrong screen.
+- **An exit that beats its own registration no longer loses the screen.** `take_record` is
+  retried after the ①.5 barrier, so the instant-death case that used to write nothing now writes
+  the full record it had already collected.
 - **A shell that dies instantly after Restart can lose its own record.** The post-respawn delete
   runs after the spawn, so a new shell that exits before it — spawn, exit and record write all
   inside that window — leaves the tab exited with an empty record view. Deleting *before* the

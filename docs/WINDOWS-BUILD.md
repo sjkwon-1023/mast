@@ -353,8 +353,9 @@ button, 계획 v2 section 12).
 
 1. **Persistence round-trip** — build 2 workspaces with splits, tabs, and an adjusted
    splitter ratio → quit and restart the app → the full structure (workspaces, panes,
-   tabs, ratios, active selections, ids) is restored, and every terminal tab runs a
-   **fresh shell** (session content is not persisted — only structure).
+   tabs, ratios, active selections, ids) is restored, and every **`Running` or `NotStarted`**
+   terminal tab runs a **fresh shell** (a live session's content is not persisted — only
+   structure). An exited tab is the exception and comes back as its record, per item 2.
 2. **An exited tab stays exited across a restart, and Restart brings it back**
    ([ADR-0018](adr/0018-exited-tab-as-terminal-record.md), which reverses the restore half of
    [ADR-0010](adr/0010-restart-dead-terminal-tabs.md); this item read "a restart revives an
