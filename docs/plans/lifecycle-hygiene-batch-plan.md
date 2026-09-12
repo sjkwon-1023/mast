@@ -24,8 +24,8 @@
 
 ## 2. PR 3 — exited tab = terminal record + backend hygiene
 
-계약 브리프는 세션 스크래치패드 `exited-tab-record.brief.md` 에 있고, `/review-plan` 결과가 확정본이다.
-핵심 결정(초안이 바꾸지 않는 것):
+확정 실행계획은 [`exited-tab-record-plan.md`](exited-tab-record-plan.md) 이다(`/review-plan` 의 반증 판정
+**revise** 를 취합한 결과 — 채택·기각 목록은 그 문서 0절). 핵심 결정:
 
 - **D1 기록 = raw 바이트.** exit 시 `reattach()` 와 같은 재료(DEC 모드 preamble + replay 스냅샷)를
   `<app_data_dir>/records/tab-<id>.bin` 에 원자적으로 쓴다. Rust 쪽 그리드 렌더러는 만들지 않는다.
@@ -48,8 +48,8 @@
 기록 파일 수명: exit 시 덮어쓰기 → `respawn_tab` 성공 직후 삭제 → Close* 경로에서 삭제(ADR-0013
 확장) → 부팅 시 `Exited` 탭 id 집합 밖의 파일 sweep.
 
-버전 0.3.24. 문서: ADR-0018, ADR-0010·0013 개정 한 줄, `CLAUDE.md` 백로그 4항목 최소 갱신,
-`docs/WINDOWS-BUILD.md` §10 v0.3.24.
+버전 **0.3.25**(PR 2 가 0.3.24). 문서: ADR-0018, ADR-0010·0013 개정 한 줄, `CLAUDE.md` 백로그 4항목 최소 갱신,
+`docs/WINDOWS-BUILD.md` §10 v0.3.25.
 
 ## 3. PR 2 — reattach 경로와 Codex scroll
 
@@ -58,9 +58,11 @@
 틀린다). 이 박스의 `codex` 0.153.4 를 pty 에서 `resume` 으로 띄워 휠업 → SIGWINCH → 캡처를 headless
 xterm 으로 렌더해 비교한다(모델에 메시지는 보내지 않는다).
 
-수정 방향은 결과에 따르되 울타리는 고정: inactive 워크스페이스의 renderer keep-alive 금지, F5/자동
-리로드 뒤의 재그리기(nudge 의 존재 이유)는 잃지 않는다. 유력 후보는 "replay 가 무손실(evict 없음)이면
-nudge 생략" — 백엔드가 아는 사실을 attach 응답 헤더에 실어 프론트가 판정한다.
+실측 결과(2026-09-12): codex 0.153.4 기본 UI 는 대체 화면을 쓰지 않고 transcript 를 일반 버퍼 스크롤백에
+인쇄하므로 스크롤 위치는 xterm 쪽 상태(`viewportY`)이고 바이트열에 없다 — nudge 는 원인이 아니며(대체 화면
+오버레이에서는 SIGWINCH 뒤에도 위치 유지), 오히려 Codex 의 전체 히스토리 재인쇄(왕복당 약 192 KB)로
+스크롤백을 복구해 준다. 그래서 nudge 는 유지하고, 프론트가 dispose 직전 "하단 기준 줄 수"를 탭별로
+기억해 replay 직후와 재인쇄가 잠잠해진 뒤 두 번 되돌린다(WebView 수명 한정). ADR-0019, 버전 0.3.24.
 
 ## 4. PR 1 — soak 테스트
 
@@ -88,7 +90,9 @@ history 로 읽으라고 명시하므로 그대로 둔다. `eslint-disable`·`al
 ## 7. 진행 상태
 
 - [x] PR #21 머지, main 갱신, 워크트리 4개 생성
-- [ ] PR 3 `/review-plan` 확정 → 구현 → 게이트 → change-critic → codex 리뷰 → PR
+- [x] PR 1 → #23 (soak 테스트)
+- [x] PR 3 `/review-plan` 확정 (`exited-tab-record-plan.md`)
+- [ ] PR 3 구현 → 게이트 → change-critic → codex 리뷰 → PR
 - [ ] PR 2 조사 → 설계 → 구현 → 게이트 → codex 리뷰 → PR
 - [ ] PR 1 구현 → 2렌즈 리뷰 → 게이트 → PR
 - [ ] PR 4 정리 → 반증 검증 → 게이트 → PR
