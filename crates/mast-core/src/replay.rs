@@ -124,6 +124,18 @@ impl ReplayBuffer {
         out
     }
 
+    /// 보관 중인 chunk 를 전부 버리고 메모리를 반납한다 — 종료된 세션의 기록을
+    /// 떠낸 뒤([`PtySession::take_record`](crate::session::PtySession::take_record))
+    /// 같은 바이트를 메모리에도 들고 있지 않기 위한 경로다.
+    ///
+    /// `evicted` 는 내리지 않는다. 비운 버퍼가 곧 "스트림 처음"인 것은 아니다 —
+    /// 이 호출 뒤에도 리더가 tail chunk 를 push 할 수 있고, 그 선두는 여전히
+    /// chunk 경계 절단이라 head 트림의 조건이 그대로 성립한다.
+    pub fn clear(&mut self) {
+        self.chunks.clear();
+        self.total = 0;
+    }
+
     /// 보관 중인 총 바이트 수. evicted head 트림과 무관한 **보관량**이다 —
     /// `snapshot().len()` 과 다를 수 있다 (트림은 snapshot 반환값에만 적용).
     pub fn len(&self) -> usize {
@@ -270,6 +282,21 @@ mod tests {
         buf.push(b"d\n"); // 5 → "abc" evict → 2
                           // 유일한 `\n` 이 마지막 바이트 — 트림하면 빈 스냅샷이 되므로 무트림.
         assert_eq!(buf.snapshot(), b"d\n");
+    }
+
+    #[test]
+    fn clear_empties_the_buffer_but_keeps_the_evicted_flag() {
+        let mut buf = ReplayBuffer::new(8);
+        buf.push(b"aaaa");
+        buf.push(b"bb\ncc"); // 9 > cap → "aaaa" evict
+        buf.clear();
+        assert!(buf.is_empty());
+        assert_eq!(buf.len(), 0);
+        assert_eq!(buf.snapshot(), b"");
+        // clear 뒤 push 된 chunk 의 선두도 절단일 수 있다 — 트림 조건이 유지돼야
+        // 한다 (evicted 를 내렸다면 아래 스냅샷은 "xx\n" 을 달고 나온다).
+        buf.push(b"xx\nyy");
+        assert_eq!(buf.snapshot(), b"yy");
     }
 
     // --- bytes_from (원격 델타) ---

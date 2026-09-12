@@ -1694,6 +1694,97 @@ fn parse_tab_id_target(target: &str) -> Option<TabId> {
     digits.parse::<u64>().ok().map(TabId)
 }
 
+/// 모델 ↔ 레지스트리 정합성 검사의 결과 ([`audit_registries`]). 진단 표면으로
+/// 그대로 나간다(`get_diagnostics`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryAudit {
+    /// 레지스트리에 있는데 어떤 탭도 참조하지 않는 세션 — 해제 대상.
+    pub orphan_sessions: Vec<SessionId>,
+    /// 같은 판정의 sink 쪽.
+    pub orphan_sinks: Vec<SessionId>,
+    /// 탭이 `pty_session: Some(s)` 인데 `s` 가 두 레지스트리 중 **한쪽에라도**
+    /// 없다 — attach 는 세션·sink 가 둘 다 있어야 사니 한쪽만 비어도 그 탭은 이미
+    /// 못 쓴다. 죽일 대상이 없으므로 탭을 Exited 로 수리할 뿐이다 (ADR-0018 D5).
+    pub dangling_tabs: Vec<(TabId, SessionId)>,
+}
+
+impl RegistryAudit {
+    /// 하나라도 찾았는가 — 호출자가 loud 로그와 조용한 trace 를 가르는 데 쓴다.
+    pub fn is_empty(&self) -> bool {
+        self.orphan_sessions.is_empty()
+            && self.orphan_sinks.is_empty()
+            && self.dangling_tabs.is_empty()
+    }
+}
+
+/// 모델의 `pty_session` 참조와 두 레지스트리(세션·sink)의 id 목록을 대조한다.
+/// 순수 함수다 — **lock 순서는 호출자 몫**이다.
+///
+/// # 스냅샷은 Dispatcher lock 을 잡은 뒤에 뜬다
+///
+/// 두 판정 모두 "모델과 레지스트리를 같은 순간에 본다"를 요구하는데, 그 순간을
+/// 만드는 것은 Dispatcher lock 이다. 탭을 위한 세션은 그 탭을 쓰는 dispatch **안**
+/// 에서 만들어져 같은 lock 아래에서 모델에 실리므로(`state.rs` 모듈 doc: 셸 스폰까지
+/// lock 아래), lock 을 잡은 시점에 모델이 참조하는 세션은 이미 등록이 끝나 있다 —
+/// 그래서 lock 아래 스냅샷에서의 부재는 진짜 부재다. 반대로 lock 보다 **먼저** 뜬
+/// 스냅샷은 그 dispatch 앞에 찍혔을 수 있어, 갓 만들어진 멀쩡한 탭을 dangling 으로
+/// 오판하고 (ADR-0018 D5 의 수리가 파괴적이라) 살아 있는 셸을 Exited 로 끊는다.
+///
+/// 고아 방향도 같은 순서로 안전하다. lock 을 들고 있는 동안에는 "만들었지만 아직
+/// 모델에 싣지 않은" 중간 상태가 있을 수 없고, 유일한 예외인 마감 초과 뒤 늦게
+/// 끝난 스폰(`host.rs` 의 late 정리 콜백)은 어차피 어떤 탭도 물지 않는 고아다.
+///
+/// 잠금 방향은 dispatch 와 같다(Dispatcher → 레지스트리). 역방향으로 기다리는
+/// 경로가 없으므로 순환이 생기지 않는다.
+///
+/// 결과 순서는 입력 순서 그대로다 — 호출자가 오름차순 id 를 주면 결과도 그렇다.
+pub fn audit_registries(
+    model: &AppState,
+    session_ids: &[SessionId],
+    sink_ids: &[SessionId],
+) -> RegistryAudit {
+    let mut referenced: HashSet<SessionId> = HashSet::new();
+    let mut dangling_tabs = Vec::new();
+    let sessions: HashSet<SessionId> = session_ids.iter().copied().collect();
+    let sinks: HashSet<SessionId> = sink_ids.iter().copied().collect();
+    for ws in &model.workspaces {
+        for pane in ws.panes.values() {
+            for tab in &pane.tabs {
+                let TabKind::Terminal {
+                    pty_session: Some(session),
+                    ..
+                } = tab.kind
+                else {
+                    continue;
+                };
+                if !sessions.contains(&session) || !sinks.contains(&session) {
+                    // 참조자로 세지 않는다 — 이 탭은 Exited 로 수리되어 세션을
+                    // 놓을 것이므로, 반대쪽 레지스트리에 남은 짝은 아무도 닿지
+                    // 못하는 고아다. 세었다면 한 번의 audit 이 수렴하지 못하고
+                    // 그 짝 뒤의 셸이 살아남는다.
+                    dangling_tabs.push((tab.id, session));
+                    continue;
+                }
+                referenced.insert(session);
+            }
+        }
+    }
+    RegistryAudit {
+        orphan_sessions: session_ids
+            .iter()
+            .copied()
+            .filter(|id| !referenced.contains(id))
+            .collect(),
+        orphan_sinks: sink_ids
+            .iter()
+            .copied()
+            .filter(|id| !referenced.contains(id))
+            .collect(),
+        dangling_tabs,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -4763,5 +4854,69 @@ mod tests {
             )
         );
         assert_eq!(host.kills(), vec![session]);
+    }
+
+    // --- 레지스트리 정합성 검사 (ADR-0018 D5) ---
+
+    #[test]
+    fn a_clean_model_and_registry_pair_audits_empty() {
+        let (mut d, _host) = dispatcher();
+        let (_ws, pane) = create_ws(&mut d, "ws");
+        let (_t1, s1) = create_terminal_tab(&mut d, pane);
+        let (_t2, s2) = create_terminal_tab(&mut d, pane);
+
+        let audit = audit_registries(d.state(), &[s1, s2], &[s1, s2]);
+        assert_eq!(audit, RegistryAudit::default());
+        assert!(audit.is_empty());
+    }
+
+    #[test]
+    fn a_session_no_tab_references_is_an_orphan_in_both_registries() {
+        let (mut d, _host) = dispatcher();
+        let (_ws, pane) = create_ws(&mut d, "ws");
+        let (_tab, session) = create_terminal_tab(&mut d, pane);
+
+        let audit = audit_registries(d.state(), &[session, 99], &[session, 99]);
+        assert_eq!(audit.orphan_sessions, vec![99]);
+        assert_eq!(audit.orphan_sinks, vec![99]);
+        assert!(audit.dangling_tabs.is_empty());
+    }
+
+    #[test]
+    fn an_exited_tabs_former_session_becomes_an_orphan() {
+        // 정확히 이 청소가 1a 의 계약 반전으로 가능해졌다 — exited 탭이 세션을
+        // 놓으므로 남아 있는 레지스트리 항목은 참조자가 없다.
+        let (mut d, _host) = dispatcher();
+        let (_ws, pane) = create_ws(&mut d, "ws");
+        let (_tab, session) = create_terminal_tab(&mut d, pane);
+        d.apply_event(SessionEvent::SessionExited {
+            session,
+            code: Some(0),
+            ended_at_ms: 1_700_000_000_000,
+        });
+
+        let audit = audit_registries(d.state(), &[session], &[session]);
+        assert_eq!(audit.orphan_sessions, vec![session]);
+        assert_eq!(audit.orphan_sinks, vec![session]);
+        assert!(audit.dangling_tabs.is_empty());
+    }
+
+    #[test]
+    fn a_tab_whose_session_is_missing_from_either_registry_is_dangling() {
+        let (mut d, _host) = dispatcher();
+        let (_ws, pane) = create_ws(&mut d, "ws");
+        let (t1, s1) = create_terminal_tab(&mut d, pane);
+        let (t2, s2) = create_terminal_tab(&mut d, pane);
+
+        // 한쪽만 비어도 dangling 이다 — attach 는 sink·세션 둘 다 있어야 산다.
+        let audit = audit_registries(d.state(), &[s1, s2], &[s2]);
+        assert_eq!(audit.dangling_tabs, vec![(t1, s1)]);
+        // 그리고 반대쪽에 남은 짝은 같은 pass 에서 고아로 나온다 — 탭이 곧 세션을
+        // 놓으므로 s1 을 참조자로 세면 살아 있는 셸이 영원히 안 잡힌다.
+        assert_eq!(audit.orphan_sessions, vec![s1]);
+        assert!(audit.orphan_sinks.is_empty());
+
+        let audit = audit_registries(d.state(), &[], &[]);
+        assert_eq!(audit.dangling_tabs, vec![(t1, s1), (t2, s2)]);
     }
 }
