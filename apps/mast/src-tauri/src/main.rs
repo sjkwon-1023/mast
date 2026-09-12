@@ -19,8 +19,10 @@
 // Windows 셸 앱 신원(AUMID) 등록 — 토스트 발신자 등록용이라 Windows 전용이다.
 #[cfg(windows)]
 mod app_identity;
+mod audit;
 mod boot;
 mod commands;
+mod diagnostics;
 // Windows 방화벽 규칙 감지(COM)·적용(승격 netsh) — 원격 표면의 페어링 대화상자용.
 mod firewall;
 mod host;
@@ -34,7 +36,7 @@ mod state;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -197,6 +199,7 @@ fn main() {
                 router,
                 records: Arc::clone(&records),
                 last_audit: Mutex::new(RegistryAudit::default()),
+                exits_in_flight: AtomicUsize::new(0),
             });
 
             // Fresh 부팅 dogfood — 직접 상태 조작 없이 커맨드 bus 경유로 초기
@@ -323,6 +326,8 @@ fn main() {
             commands::resize,
             commands::ack_output,
             commands::get_stats,
+            // 백엔드 자원 그림 + 방금 돈 정합성 검사 (ADR-0018) — 사람이 부를 때만 돈다.
+            diagnostics::get_diagnostics,
             commands::user_activity,
             commands::reset_ui,
             // settings.json 의 UI 설정 (터미널 폰트) — 부팅당 1회, 설정 UI 는 없다.

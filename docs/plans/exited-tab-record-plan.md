@@ -182,6 +182,10 @@
   `SessionExited { code: None, ended_at_ms: now }` 로 수리, 수리가 있으면 publish; unlock 뒤 orphan 은 `sinks.remove`·
   `sessions.remove`(kill 은 멱등 — `on_exit` ④ 나 late-spawn 정리와 겹쳐도 무해). 결과를 `last_audit` 에. 발견 시
   `winlog!`(`RegistryAudit::is_empty()` 로 판정), 아니면 `wintrace!`. 근거는 `audit_registries` rustdoc(D5).
+  **4 반증에서 추가**: `on_exit` 의 ③(모델 갱신)과 ④(레지스트리 해제) 사이 창의 세션은 고아의 정의 그대로라 정상
+  종료마다 오판된다 — `AppState.exits_in_flight: AtomicUsize` 를 ③ 직전에 올리고 ④ 뒤에 내리며, 검사는 Dispatcher
+  lock 아래에서 **스냅샷보다 먼저** 그 값을 읽어 0 이 아니면 그 회차의 고아 판정을 버린다(dangling 판정은 불변).
+  Close* 뒤의 검사는 `spawn_blocking` 안에서 돈다(lock 대기·kill 이 async 워커를 붙잡지 않게).
 - 실행 지점: `on_exit` 끝, `commands.rs::dispatch` 의 Close* 성공 후(lock 해제 뒤), 부팅 웨이브 끝(`boot.rs`),
   `get_diagnostics`. 주기 타이머 없음.
 - `diagnostics.rs`(신규): `Diagnostics { process { private_bytes, working_set_bytes, handle_count, thread_count }

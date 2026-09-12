@@ -19,6 +19,7 @@
 //!   `state-changed` 를 보고 기록을 읽으므로 파일이 그때 이미 있어야 한다.
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -57,9 +58,6 @@ impl SinkRegistry {
     /// [`SessionManager::ids`] 와 짝이며, 정합성 검사
     /// ([`mast_core::command::audit_registries`])가 **Dispatcher lock 아래에서**
     /// 두 레지스트리 스냅샷을 같이 뜨는 데 쓴다 — 그 순서의 근거는 그쪽 rustdoc.
-    // 검사를 도는 `audit` 모듈이 이 PR 의 다음 청크에 들어온다 — 그때까지 호출자가
-    // 없다 (계약은 같은 청크 쌍인 `SessionManager::ids` 와 함께 이미 잠겨 있다).
-    #[allow(dead_code)]
     pub fn ids(&self) -> Vec<SessionId> {
         let mut ids: Vec<SessionId> = self.sinks.lock().unwrap().keys().copied().collect();
         ids.sort_unstable();
@@ -88,10 +86,15 @@ pub struct AppState {
     /// 끝난 탭의 마지막 화면 기록 (ADR-0018) — 디렉터리 경로만 드는 값이라 자체
     /// lock 이 없다. `TauriHost` 도 같은 `Arc` 를 들어 탭 닫기 경로에서 지운다.
     pub records: Arc<RecordStore>,
-    /// 마지막 정합성 검사 결과 — 진단 커맨드가 읽는 자리다. 쓰는 쪽(`audit` 모듈)과
-    /// 읽는 쪽(`get_diagnostics`)이 이 PR 의 다음 청크에 들어온다.
-    #[allow(dead_code)]
+    /// 마지막 정합성 검사 결과 — [`crate::audit::run_audit`] 이 쓰고 진단 커맨드가
+    /// 읽는다. 검사 자체가 짧아 결과를 들고 있는 것은 표면을 위한 것이지 캐시가 아니다.
     pub last_audit: Mutex<RegistryAudit>,
+    /// ③(모델 갱신)과 ④(레지스트리 해제) 사이에 있는 exit 의 수 ([`crate::sink`]).
+    /// 그 창 안의 세션은 어떤 탭도 참조하지 않으면서 두 레지스트리에 아직 살아 있어
+    /// 정합성 검사의 고아 정의에 그대로 걸린다 — 셸 열 개가 한꺼번에 죽는
+    /// `wsl --shutdown` 이면 매번 걸린다. 검사는 Dispatcher lock 아래에서 이 값을
+    /// 먼저 읽고, 0 이 아니면 그 회차의 고아 판정을 버린다 ([`crate::audit`]).
+    pub exits_in_flight: AtomicUsize,
 }
 
 /// 현재 스냅샷을 `state-changed` 이벤트로 emit 하고 저장을 예약한다 (emit +

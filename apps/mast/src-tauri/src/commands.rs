@@ -71,7 +71,14 @@ pub async fn dispatch(
         Command::CreateWorkspace { distro, .. } => Some(distro.clone()),
         _ => None,
     };
+    // 탭이 사라지는 세 경로 — 성공하면 그 탭이 물고 있던 세션·sink 가 모델에서 끊기므로,
+    // 레지스트리에 남은 것이 없는지 dispatch 뒤에 확인한다 (ADR-0018 D5의 실행 지점).
+    let closes_tabs = matches!(
+        cmd,
+        Command::CloseTab { .. } | Command::ClosePane { .. } | Command::CloseWorkspace { .. }
+    );
     let provision_app = app.clone();
+    let audit_app = app.clone();
     // 전체를 spawn_blocking 에서: CreateTab 의 셸 스폰(프로세스 생성 — 수십 ms
     // 블로킹)이 Dispatcher lock 아래에서 일어난다 (계획 0-3 — 핫패스와 무간섭
     // 이라 수용). 메인(이벤트 루프) 스레드는 잡지 않는다.
@@ -99,6 +106,27 @@ pub async fn dispatch(
         // 건 것 포함)는 `ensure_provisioned` 의 프로세스 수명 캐시가 걸러 낸다.
         if let Some(distro) = created_distro {
             crate::provision::ensure_provisioned(&provision_app, distro.as_deref());
+        }
+        // Dispatcher lock 은 위 `spawn_blocking` 클로저가 끝나며 이미 풀렸다 — 검사는
+        // 그 lock 을 다시 잡으므로 여기서(await 뒤)가 가장 이른 안전한 지점이다.
+        // 다시 `spawn_blocking` 인 이유는 이 함수 머리의 규율 그대로다: 검사는 그
+        // lock 을 기다리고 고아를 찾으면 `kill` 까지 부르므로(그 tail 은 writer
+        // mutex 를 기다린다) async 워커를 붙잡으면 무관한 커맨드의 재개가 밀린다.
+        if closes_tabs {
+            let joined = tauri::async_runtime::spawn_blocking(move || {
+                match audit_app.try_state::<AppState>() {
+                    Some(state) => {
+                        crate::audit::run_audit(&audit_app, &state, "close");
+                    }
+                    None => winlog!("dispatch: managed state unavailable; audit skipped"),
+                }
+            })
+            .await;
+            // 검사가 터져도 닫기 자체는 성공이다 — 결과를 뒤집지 않되 조용히 넘기지도
+            // 않는다.
+            if let Err(err) = joined {
+                winlog!("dispatch: audit task failed: {err}");
+            }
         }
     }
     result

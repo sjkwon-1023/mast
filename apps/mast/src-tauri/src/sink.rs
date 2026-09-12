@@ -155,7 +155,7 @@ impl SessionSink for SinkHandle {
     ///
     /// 순서가 계약이다 — ① 기록 재료를 떠내고(`take_record`) ② 파일로 쓴 뒤
     /// ③ Dispatcher lock 아래에서 모델을 갱신·publish 하고, lock 을 놓은 다음에야
-    /// ④ 세션·sink 를 레지스트리에서 놓는다. ②가 ③보다 뒤면 프론트가
+    /// ④ 세션·sink 를 레지스트리에서 놓고 ⑤ 정합성 검사를 돌린다. ②가 ③보다 뒤면 프론트가
     /// `state-changed` 를 보고 아직 없는 기록을 읽는 창이 생기고, ④가 ③보다 앞이면
     /// 프론트가 "Running + 세션 있음" 스냅샷으로 attach 해 미지 세션 에러를 본다.
     /// 파일 I/O 가 lock 밖인 것은 `state.rs` 잠금 규율 그대로다.
@@ -209,6 +209,12 @@ impl SessionSink for SinkHandle {
             ),
         }
 
+        // ③④ 는 밖에서 보면 하나여야 한다: 그 사이의 세션은 탭이 놓았는데 레지스트리에는
+        // 남아 있어 동시에 도는 정합성 검사가 고아로 읽는다. 표식은 ③ 의 lock 을 잡기
+        // **전**에 세운다 — 검사는 lock 아래에서 이 값을 먼저 읽으므로(`audit`), 그래야
+        // 검사가 0 을 본 회차에는 ③ 이 아직 일어나지 않았음이 보장된다.
+        state.exits_in_flight.fetch_add(1, Ordering::SeqCst);
+
         let mut dispatcher = state.dispatcher.lock().unwrap();
         dispatcher.apply_event(SessionEvent::SessionExited {
             session: self.0.session,
@@ -225,6 +231,12 @@ impl SessionSink for SinkHandle {
         // 이미 죽은 자식에 무해하다.
         state.sinks.remove(self.0.session);
         state.sessions.remove(self.0.session);
+        state.exits_in_flight.fetch_sub(1, Ordering::SeqCst);
+
+        // ⑤ 이 exit 이 어긋남을 남기지 않았는지 본다 — 검사도 Dispatcher lock 을 잡으므로
+        // ④ 뒤, 즉 이 함수가 레지스트리를 다 정리한 뒤여야 방금 놓은 세션이 고아로
+        // 잡히지 않는다 (ADR-0018 D5).
+        crate::audit::run_audit(&self.0.app, &state, "exit");
     }
 
     fn on_startup_timeout(&self) {

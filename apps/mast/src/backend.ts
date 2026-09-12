@@ -94,6 +94,35 @@ export function getStats(): Promise<SessionStats[]> {
   return invoke<SessionStats[]>("get_stats");
 }
 
+/** src-tauri `Diagnostics` DTO (ADR-0018) — 필드명은 camelCase (serde rename_all).
+ *  `process` 는 Windows 가 아니면 null 이고, Windows 에서도 개별 조회가 거부되면 그
+ *  필드만 null 이다 — 못 잰 값을 0 으로 채우지 않는 백엔드 계약의 미러다. */
+export interface Diagnostics {
+  process: {
+    privateBytes: number | null;
+    workingSetBytes: number | null;
+    handleCount: number | null;
+    threadCount: number | null;
+  } | null;
+  sessions: { registered: number; alive: number; sinks: number; replayBytes: number };
+  tabs: { running: number; exited: number; notStarted: number };
+  audit: {
+    orphanSessions: number[];
+    orphanSinks: number[];
+    /** `[탭 id, 세션 id]` — 탭이 참조하는 세션이 레지스트리에 없었다는 뜻이고,
+     *  백엔드가 그 탭을 이미 exited 로 수리한 뒤의 보고다. */
+    danglingTabs: [number, number][];
+  };
+}
+
+/** 백엔드 자원 진단 (dev 훅 window.__mast.diagnostics 전용 — UI 표면 없음).
+ *  호출 때마다 모델 ↔ 레지스트리 정합성 검사가 한 번 돌고, 그 결과 반영 뒤의
+ *  수치가 온다. 주기 폴링으로 쓰지 않는다 — Toolhelp 스레드 스냅샷은 전 시스템
+ *  분량이라 싸지 않다. */
+export function getDiagnostics(): Promise<Diagnostics> {
+  return invoke<Diagnostics>("get_diagnostics");
+}
+
 /** 활동 핑 (16단계 C-3) — throttled 사용자 입력 신호. `visible` 은
  *  visibilitychange 보조 신호(즉시), 순수 활동 핑은 null. 백엔드 자동 리셋
  *  정책의 idle·hidden 타이머를 재무장한다. */
