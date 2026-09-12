@@ -84,6 +84,21 @@ from a different build; field confirmation is requested as part of the verificat
    shell tab) and `ensureView`'s respawn branch, which can hand a fresh shell an offset
    remembered from the session it replaced.
 
+   **Releasing the latch is harder than setting it, and the browser build differs from the
+   headless one.** `Terminal.scrollToBottom()` is `scrollLines(ybase - ydisp)` at source USER,
+   and in the browser build that call is routed to `Viewport.scrollLines(e)`, which returns
+   immediately when `e === 0` — so it never reaches `BufferService.scrollLines`, the only place
+   that clears `isUserScrolling` (on `e + ydisp >= ybase`). At the `ESC[3J` moment of a reprint
+   `ybase === ydisp === 0`, so the release we ask for there is a no-op and a latch set a moment
+   earlier survives it; a cancel landing in that window left the pane frozen at the top through
+   2,000 further lines. The headless build has no viewport, takes the buffer-service path, and
+   clears the latch — which is why the first round's probes did not see this and a peer review
+   against the real browser build did. The view therefore tracks whether it may have latched
+   (`scrollToLine` to a target below `baseY`) and, when a release is asked for while `baseY` is
+   0, **defers it to the next parsed chunk** — the moment `ybase` leaves 0 is the first moment a
+   release actually works. That deferred release runs independently of whether a restore is
+   still pending, because the latch is ours to undo whether or not we still want the position.
+
 3. **The memory lives in `WorkspaceView` for the lifetime of the WebView, keyed by tab.** It is
    written in the `render()` dispose loop and only when the tab is still present in the snapshot
    — a tab that vanished (`CloseTab`, `ClosePane`, `CloseWorkspace`) has nowhere to come back
@@ -91,6 +106,13 @@ from a different build; field confirmation is requested as part of the verificat
    while its workspace was inactive and whose view was therefore disposed long before. Reading
    it is one-shot: `ensureView` takes the value and deletes it when it constructs a
    `TerminalView`.
+
+   A view asked for its offset **while a restore is still pending answers with the pending
+   value, not with its buffer**: before the replay and the reprint have landed, the buffer does
+   not yet hold the place the user was at, so reading it would round-trip a tab that was left
+   again within the first second straight to the bottom and lose the memory for good (the
+   one-shot `take` has already cleared it). The judgment is in the same pure function, as a
+   leading `pending` argument.
 
    The WebView lifetime is the deliberate boundary. F5 and the idle webview reload (ADR-0004
    decision 4) come back with no memory and therefore at the bottom, exactly as before this
@@ -114,7 +136,12 @@ from a different build; field confirmation is requested as part of the verificat
    The settle decides only when to **stop** correcting: 250 ms of silence after the last parsed
    chunk, capped at 2,000 ms after the nudge is armed. If no chunk arrives at all once it is
    armed there was no reprint, so the applications that already happened stand and the settle
-   does nothing more. Those two numbers are a heuristic and the weakest part of this change; they
+   does nothing more. The quiet half of that rule only works if the **driver re-polls**: a chunk
+   moves the machine's next check earlier, so the pending timer has to be cleared and re-armed
+   from the new answer. The first draft armed one timer at the cap and never re-polled, so every
+   restore waited the full 2,000 ms and kept correcting into output the user was already reading
+   (peer review 2026-09-12). The re-arm is guarded on a timer actually being pending — polling a
+   settle that is not yet armed answers `abandon` and would kill the restore before the nudge. Those two numbers are a heuristic and the weakest part of this change; they
    are isolated in a pure state machine (`OutputSettle`) that takes its time as an argument, so
    the rule is testable without a clock and adjustable without touching the view.
 
@@ -132,6 +159,14 @@ from a different build; field confirmation is requested as part of the verificat
    key press cancels only while that pane has focus, so a returning user typing into a different
    pane does not disturb this one — and equally, the keyboard is not a global escape hatch. The
    wheel and the scrollbar drag reach the pane under the pointer whether or not it has focus.
+
+   The three signals differ in one more way: **a key cancel also releases the latch, the other
+   two do not.** Someone who starts typing is not saying "keep me here", and leaving our latch
+   behind would stop the pane following the reprint that is still on its way — the frozen-pane
+   failure of decision 2, reached through the cancel path instead. Someone who turned the wheel
+   or dragged the scrollbar owns that scroll position themselves, and releasing it would undo
+   the gesture that cancelled us. If the key cancel lands at `baseY === 0` the release is
+   deferred like any other.
 
 6. **The nudge stays exactly as it is.** It is not the cause, and removing or narrowing it —
    the "attach-time redraw fires even for a session already attached in this WebView lifetime"
@@ -154,6 +189,15 @@ from a different build; field confirmation is requested as part of the verificat
   ends with the last correction applied — on a real line the pane stays there (xterm reads it as
   a user scroll, which is the point) and on a refused one it sits at the bottom and follows
   output. Neither outcome is a pane frozen at the top, which is what the first draft produced.
+- **The app now owns a piece of xterm state it did not before.** `isUserScrolling` used to be
+  set only by the user and cleared only by the user reaching the bottom; the restore sets it and
+  is responsible for undoing it on every exit path — refusal, cancel by key, and the deferred
+  case at `baseY === 0`. The flags that track that (`latchedByRestore`,
+  `releaseLatchOnNextChunk`) are the cost of the feature, and they are cleared on dispose with
+  everything else. The transferable lesson is narrower and worth more: **`@xterm/headless` is
+  not a stand-in for the browser build when the behaviour under test involves the viewport.**
+  Three of this change's defects were invisible to a headless probe and visible to one against
+  `@xterm/xterm`.
 - **After F5 or the idle webview reload the position is gone** (decision 3). The user-visible
   rule is "a workspace round-trip keeps your place; a reload does not".
 - **~192 KB of replay per round-trip remains unaddressed.** Decision 6 keeps the two-step nudge,

@@ -2146,7 +2146,17 @@ two workspaces throughout and switch with `Ctrl+1`/`Ctrl+2`.
    put it and does not jump back up a moment later. The key only counts while **that** pane has
    focus (ADR-0019 decision 5), so in a split, typing into the other pane must not disturb this
    one.
-5. **A scrollbar drag cancels it too.** Same setup, but on return grab the pane's scrollbar and
+5. **A cancelled restore still follows new output.** This is the defect class that cost two
+   review rounds, so run it twice. Scroll a Codex tab up, switch away, switch back and press
+   **Ctrl alone** (a modifier, so nothing is typed) the instant it returns; then wait for the
+   reprint to finish and let the agent print something new — the pane must scroll with it. A
+   pane that sits still while output arrives below is the frozen state (ADR-0019 decision 2);
+   report the timing of your key press if you see it.
+6. **Leaving again mid-restore keeps the place.** Scroll a Codex tab up, switch away, switch
+   back and — without waiting for the redraw to settle — switch away again immediately, then
+   back a third time: the place is still restored. Losing it on the third visit is the
+   carry-over defect (ADR-0019 decision 3).
+7. **A scrollbar drag cancels it too.** Same setup, but on return grab the pane's scrollbar and
    drag it instead of using the wheel: the restore is abandoned and the pane stays where you
    dragged it. This is the one cancel signal whose DOM target is **unverified on WebView2** — the
    handler only counts a mouse-down inside `.xterm-viewport`, and whether Chromium's overlay-off
@@ -2154,11 +2164,11 @@ two workspaces throughout and switch with `Ctrl+1`/`Ctrl+2`.
    anywhere but by reading the code. If the drag does *not* cancel, say so: the fix is to widen
    the target test, not to abandon the narrowing (a plain click to focus a pane must keep not
    cancelling).
-6. **A reload does not keep the place.** Scroll up, press F5: the tab comes back at the bottom.
+8. **A reload does not keep the place.** Scroll up, press F5: the tab comes back at the bottom.
    That is the documented boundary (ADR-0019 decision 3), not a defect.
-7. **A closed tab leaves nothing behind.** Scroll a tab up, close it, open a new terminal tab in
+9. **A closed tab leaves nothing behind.** Scroll a tab up, close it, open a new terminal tab in
    the same pane: the new tab starts at the bottom.
-8. **Which screen does Codex actually use here?** (Answers the conflict in ADR-0019's Context.)
+10. **Which screen does Codex actually use here?** (Answers the conflict in ADR-0019's Context.)
    In a live Codex tab, scroll the wheel: if the *terminal's* scrollback moves, Codex is drawing
    inline on the normal buffer, as it did on the Linux dev box. If the app scrolls its own
    transcript and the terminal scrollback does not move, Codex is on the alternate screen here

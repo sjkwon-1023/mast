@@ -101,7 +101,13 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   that pane has focus, a wheel notch, or a scrollbar drag (a click to focus the pane does not).
   A position the rebuilt scrollback no longer has is **refused**, not clamped to line 0:
   `scrollToLine` latches xterm's `isUserScrolling`, so a clamped restore froze the pane at the
-  top of the transcript for good (measured), and `scrollToBottom` is what releases it. Decisions
+  top of the transcript for good. Releasing that latch is the subtle half — in the *browser*
+  build `scrollToBottom()` goes through `Viewport.scrollLines`, which returns at a zero delta and
+  never reaches the buffer service that clears the flag, so a release asked for at the reprint's
+  `ESC[3J` (`ybase = ydisp = 0`) is a no-op and is deferred to the next chunk; a key cancel
+  releases too, a wheel or scrollbar cancel does not (that scroll is the user's). `@xterm/headless`
+  clears it there, which is why a headless probe passed and a peer review against the real
+  browser build did not. Decisions
   and the accepted limits (WebView-lifetime memory, heuristic settle window, ~192 KB of replay
   per round-trip still unaddressed): [ADR-0019](docs/adr/0019-restore-terminal-scroll-across-workspace-round-trip.md).
   Verification: WINDOWS-BUILD §10 v0.3.24.

@@ -80,18 +80,26 @@ describe("shouldOpenLink", () => {
 // 배선은 DOM 경로라 여기서 다루지 않는다 (WINDOWS-BUILD §10 v0.3.24).
 describe("scrollOffsetToRemember", () => {
   it("일반 버퍼에서는 하단으로부터의 줄 수를 돌려준다", () => {
-    expect(scrollOffsetToRemember("normal", 1008, 993)).toBe(15);
-    expect(scrollOffsetToRemember("normal", 1008, 0)).toBe(1008);
+    expect(scrollOffsetToRemember(null, "normal", 1008, 993)).toBe(15);
+    expect(scrollOffsetToRemember(null, "normal", 1008, 0)).toBe(1008);
   });
 
   it("맨 아래면 기억하지 않는다 — 복원할 것이 없다", () => {
-    expect(scrollOffsetToRemember("normal", 1008, 1008)).toBeNull();
-    expect(scrollOffsetToRemember("normal", 0, 0)).toBeNull();
+    expect(scrollOffsetToRemember(null, "normal", 1008, 1008)).toBeNull();
+    expect(scrollOffsetToRemember(null, "normal", 0, 0)).toBeNull();
   });
 
   it("대체 버퍼는 기억하지 않는다 — 그 스크롤은 앱 상태다", () => {
-    expect(scrollOffsetToRemember("alternate", 1008, 993)).toBeNull();
-    expect(scrollOffsetToRemember("alternate", 40, 0)).toBeNull();
+    expect(scrollOffsetToRemember(null, "alternate", 1008, 993)).toBeNull();
+    expect(scrollOffsetToRemember(null, "alternate", 40, 0)).toBeNull();
+  });
+
+  it("복원이 진행 중이면 버퍼가 아니라 그 pending 값이 답이다", () => {
+    // 돌아오자마자 다시 떠나는 경로: replay·재인쇄 전의 버퍼는 아직 사용자가
+    // 보던 자리가 아니라, 그대로 읽으면 기억이 증발한다.
+    expect(scrollOffsetToRemember(15, "normal", 0, 0)).toBe(15);
+    expect(scrollOffsetToRemember(15, "normal", 1008, 1008)).toBe(15);
+    expect(scrollOffsetToRemember(15, "alternate", 40, 40)).toBe(15);
   });
 });
 
@@ -157,6 +165,20 @@ describe("OutputSettle", () => {
     // quiet 창(=1990+250)이 아니라 상한이 이긴다.
     expect(settle.poll(SETTLE_CAP_MS - 10)).toEqual({ kind: "wait", nextCheckAt: SETTLE_CAP_MS });
     expect(settle.poll(SETTLE_CAP_MS)).toEqual({ kind: "restore" });
+  });
+
+  it("chunk 은 다음 확인 시각을 앞당긴다 — 드라이버가 타이머를 다시 잡아야 하는 이유", () => {
+    // 처음 예약된 상한 시각만 기다리면 quiet 규칙이 영영 발화하지 않는다
+    // (실제로 그랬다 — peer review 2026-09-12). 그래서 write 완료 콜백이
+    // noteChunk 뒤에 타이머를 걷고 이 poll 의 답으로 다시 예약한다.
+    const settle = new OutputSettle();
+    settle.start(1000);
+    const first = settle.poll(1000);
+    expect(first).toEqual({ kind: "wait", nextCheckAt: 1000 + SETTLE_CAP_MS });
+    settle.noteChunk(1100);
+    const second = settle.poll(1100);
+    expect(second).toEqual({ kind: "wait", nextCheckAt: 1100 + SETTLE_QUIET_MS });
+    expect(second).not.toEqual(first);
   });
 
   it("취소 뒤에는 chunk 가 더 와도 복원하지 않는다", () => {
