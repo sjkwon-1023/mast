@@ -11,6 +11,7 @@ use tauri::AppHandle;
 use mast_core::command::{SessionHost, ShellSpawnReq};
 use mast_core::deadline::call_with_deadline;
 use mast_core::model::TabId;
+use mast_core::record::RecordStore;
 use mast_core::session::{SessionId, SessionManager, SessionOptions, SpawnSpec};
 
 use crate::router::OscRouter;
@@ -26,6 +27,9 @@ pub struct TauriHost {
     sinks: Arc<SinkRegistry>,
     /// 새로 만드는 sink 에 물려 줄 OSC 라우터 핸들 (18단계 glue 계약).
     router: Arc<OscRouter>,
+    /// 닫힌 탭의 기록 파일을 지우는 데 쓰는 저장소 핸들 — 관리 상태와 같은 `Arc` 다
+    /// ([`SessionHost::release_tabs`], ADR-0018 수명 규칙).
+    records: Arc<RecordStore>,
 }
 
 impl TauriHost {
@@ -34,12 +38,14 @@ impl TauriHost {
         sessions: Arc<SessionManager>,
         sinks: Arc<SinkRegistry>,
         router: Arc<OscRouter>,
+        records: Arc<RecordStore>,
     ) -> Self {
         Self {
             app,
             sessions,
             sinks,
             router,
+            records,
         }
     }
 }
@@ -315,6 +321,7 @@ fn create_session(
     sinks: &SinkRegistry,
     app: &AppHandle,
     router: &Arc<OscRouter>,
+    tab: Option<TabId>,
     spec: SpawnSpec,
     opts: SessionOptions,
 ) -> anyhow::Result<SessionId> {
@@ -323,7 +330,7 @@ fn create_session(
     // factory 밖으로 id 를 꺼내는 Cell.
     let registered: Cell<Option<SessionId>> = Cell::new(None);
     let result = sessions.create(spec, opts, |id| {
-        let sink = Arc::new(TerminalSink::new(id, app.clone(), Arc::clone(router)));
+        let sink = Arc::new(TerminalSink::new(id, tab, app.clone(), Arc::clone(router)));
         sinks.insert(id, Arc::clone(&sink));
         registered.set(Some(id));
         Box::new(SinkHandle(sink))
@@ -366,19 +373,31 @@ impl SessionHost for TauriHost {
 
     fn release_tabs(&self, tabs: &[TabId], distro: Option<&str>) {
         wintrace!("release: {} closed tab(s)", tabs.len());
+        release_records(Arc::clone(&self.records), tabs);
         release_tab_files(tabs, distro);
     }
 }
 
 impl TauriHost {
     fn spawn_shell_inner(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId> {
+        // sink 가 들고 갈 탭 id — exit 이 기록 파일 이름을 여기서만 얻는다
+        // (`history_tab` 은 이 세션이 실릴 탭의 안정 ID 다, 코어 rustdoc).
+        let tab = req.history_tab.map(TabId);
         let spec = spawn_spec(&req);
         let opts = SessionOptions {
             startup_deadline: startup_deadline(),
             ..SessionOptions::default()
         };
         let Some(deadline) = spawn_deadline() else {
-            return create_session(&self.sessions, &self.sinks, &self.app, &self.router, spec, opts);
+            return create_session(
+                &self.sessions,
+                &self.sinks,
+                &self.app,
+                &self.router,
+                tab,
+                spec,
+                opts,
+            );
         };
 
         let sessions = Arc::clone(&self.sessions);
@@ -390,10 +409,13 @@ impl TauriHost {
         call_with_deadline(
             "mast-pty-spawn",
             deadline,
-            move || create_session(&sessions, &sinks, &app, &router, spec, opts),
+            move || create_session(&sessions, &sinks, &app, &router, tab, spec, opts),
             move |late| {
-                // 마감 뒤에 끝난 스폰은 어떤 탭도 물고 있지 않다 — 그대로 두면 실기
-                // 사고에서 몇 시간을 살아남은 그 좀비가 된다.
+                // 마감 뒤에 끝난 스폰은 모델 어디에도 실리지 않는다 — 스폰은 이미
+                // Err 로 돌아갔다 — 그대로 두면 실기 사고에서 몇 시간을 살아남은 그
+                // 좀비가 된다. sink 는 이 경로에서도 탭 id 를 들고 있으므로, 기록을
+                // 남기지 않는 근거는 **여기서 먼저 레지스트리를 비운다**는 순서다:
+                // 뒤늦게 도는 `on_exit` 은 세션을 못 찾아 아무것도 쓰지 않는다.
                 if let Ok(id) = late {
                     late_sinks.remove(id);
                     late_sessions.remove(id);
@@ -406,6 +428,32 @@ impl TauriHost {
                  ever completes"
             ))
         })
+    }
+}
+
+/// 닫힌 탭들의 **기록 파일** 삭제 (ADR-0018 수명 규칙) — 셸측 자원
+/// ([`release_tab_files`])과 달리 로컬 디스크라 `wsl.exe` 왕복과 무관하지만, 호출이
+/// Dispatcher lock 아래라(이 파일 모듈 doc) 여기서 동기로 지우지 않고 스레드로 넘긴다.
+/// unix 개발 실행에도 기록은 쌓이므로 cfg 로 가르지 않는다.
+///
+/// 실패는 로그로만 쓴다 — 남은 파일은 다음 부팅의 sweep([`mast_core::record::RecordStore::sweep`])
+/// 이 keep 집합 밖으로 보고 걷어 간다. **같은 sweep 이 덮는 창이 하나 더 있다**: 탭을
+/// 닫는 순간 그 탭의 세션이 막 끝나 있으면, waiter 스레드가 `take_record` 와 파일 쓰기
+/// 사이에 있을 수 있어 여기서 지운 파일이 그 뒤에 다시 쓰인다. 닫힌 탭은 keep 집합에
+/// 없으므로 다음 부팅의 sweep 이 걷어 간다 (ADR-0018 accepted limits).
+fn release_records(records: Arc<RecordStore>, tabs: &[TabId]) {
+    let tabs: Vec<TabId> = tabs.to_vec();
+    let spawned = std::thread::Builder::new()
+        .name("mast-release-records".to_string())
+        .spawn(move || {
+            for tab in tabs {
+                if let Err(err) = records.remove(tab) {
+                    winlog!("could not remove the record of closed tab {}: {err}", tab.0);
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        winlog!("could not start the record release thread: {err}");
     }
 }
 

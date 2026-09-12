@@ -194,6 +194,9 @@ pub struct SessionStats {
     pub osc_count: u64,
     pub last_osc: Option<String>,
     pub alive: bool,
+    /// replay buffer 가 지금 들고 있는 바이트 수 — 세션 하나가 붙잡은 메모리의
+    /// 대부분이라 진단의 관심사다. [`PtySession::take_record`] 뒤에는 0 이다.
+    pub replay_bytes: usize,
 }
 
 /// [`PtySession::screen_since`] 의 반환 — 폴링 소비자가 화면을 세우는 데 필요한
@@ -473,6 +476,49 @@ impl PtySession {
         (end_offset, bytes)
     }
 
+    /// 종료된 세션의 **마지막 화면 재료를 떠내고 replay 를 비운다** — 끝난 탭을
+    /// 세션이 아니라 디스크 기록으로 남기는 경로다 (ADR-0018 D1). 내용은
+    /// [`reattach`](Self::reattach) 와 같은 재료(모드 preamble + replay 스냅샷)이고,
+    /// 호출자는 이 바이트를 파일에 쓴 뒤 세션을 레지스트리에서 놓는다.
+    ///
+    /// 살아 있는 세션에는 **None** 이다 — replay 를 비우면 그 세션에 재접속하는
+    /// 프론트가 화면을 잃는다. 판정은 `killed` 가 아니라 `alive` 로 한다:
+    /// [`kill`](Self::kill) 은 자식이 아직 살아 있는 동안에도 `killed` 를 올리지만
+    /// `alive` 는 waiter 가 `child.wait()` 반환을 관측해야 내려간다.
+    ///
+    /// **화면이 없으면 빈 바이트**다. 모드 맵은 `clear` 대상이 아니라 두 번째
+    /// 호출이나 이미 빈 replay 위에서도 preamble 은 만들어지지만, 그것만 담은
+    /// 기록은 아무것도 그리지 않는 터미널 설정일 뿐이다 — 호출자는 빈 바이트를
+    /// "남길 화면이 없다"로 읽고 기록 파일을 지운다(ADR-0018 수명 규칙). 그래서
+    /// 스냅샷이 비면 preamble 도 버린다.
+    ///
+    /// # 리더 tail 경합
+    ///
+    /// waiter 가 `alive` 를 내린 뒤 `on_exit` 를 부르는 동안 리더 스레드는 아직
+    /// 마지막 chunk 를 `replay.push` 하는 중일 수 있다. 그 chunk 는 기록에 담기지
+    /// 않아 기록이 attach 화면보다 tail 하나만큼 짧을 수 있다 —
+    /// [`waiter_loop`] 가 이미 받아들인 tail 유실(killed 지시와 잔여 read 사이의
+    /// 경합)과는 별개의 창이다.
+    ///
+    /// flow 를 리셋하지도, 리더를 깨우지도 않는다 — 죽은 세션에는 깨울 리더도
+    /// 되돌릴 backpressure 도 없다.
+    pub fn take_record(&self) -> Option<Vec<u8>> {
+        let mut inner = self.shared.inner.lock().unwrap();
+        if inner.alive {
+            return None;
+        }
+        let mut snapshot = inner.replay.snapshot();
+        // clear 는 판정보다 먼저다 — evict 된 선두를 트림한 스냅샷이 비어도 버퍼에는
+        // chunk 가 남아 있을 수 있고, 그 메모리는 어느 갈래로 나가든 반납 대상이다.
+        inner.replay.clear();
+        if snapshot.is_empty() {
+            return Some(Vec::new());
+        }
+        let mut bytes = dec_mode_preamble(&inner.dec_modes);
+        bytes.append(&mut snapshot);
+        Some(bytes)
+    }
+
     /// replay buffer 에 보관 중인 최근 출력 스냅샷 — **버퍼 원본 그대로**다.
     /// 모드 preamble 이 붙지 않으므로 새 터미널을 여기서 되살리면 안 된다
     /// (그 경로는 [`reattach`](Self::reattach)). 진단용 관측 창이다.
@@ -536,6 +582,7 @@ impl PtySession {
             osc_count: inner.osc_count,
             last_osc: inner.last_osc.clone(),
             alive: inner.alive,
+            replay_bytes: inner.replay.len(),
         }
     }
 
@@ -883,6 +930,17 @@ impl SessionManager {
             }
             None => false,
         }
+    }
+
+    /// 등록된 세션 id 목록 — 오름차순. 레지스트리 lock 하나만 잡고 곧바로 놓는다
+    /// (세션 핸들을 만지지 않으므로 [`stats`](Self::stats) 와 달리 세션별 lock 이
+    /// 끼지 않는다). 정합성 검사([`audit_registries`](crate::command::audit_registries))
+    /// 가 **Dispatcher lock 아래에서** 레지스트리 스냅샷을 뜨는 데 쓴다 — 그 순서의
+    /// 근거는 그쪽 rustdoc 에 있다.
+    pub fn ids(&self) -> Vec<SessionId> {
+        let mut ids: Vec<SessionId> = self.sessions.lock().unwrap().keys().copied().collect();
+        ids.sort_unstable();
+        ids
     }
 
     /// 전체 세션의 (id, stats) 목록 — id 오름차순.

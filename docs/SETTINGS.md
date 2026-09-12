@@ -103,3 +103,25 @@ write the rule behind one UAC prompt; it never opens the port on a public networ
 This is **plain HTTP on your own LAN**, off by default, and deliberately not hardened for a
 hostile network. The accepted limits are recorded in
 [ADR-0016](./adr/0016-remote-surface-over-lan.md).
+
+## What else lives in `%AppData%\app.mast.desktop\`
+
+`settings.json` shares its folder with the files mast writes for itself: `state.json` (the
+workspace layout), `mast.log` and `toast.log`, the remote pairing token — and `records\`.
+
+`records\tab-<id>.bin` is **the last screen of a terminal tab whose shell has exited**, held so
+the tab can still be read after a restart instead of coming back empty
+([ADR-0018](./adr/0018-exited-tab-as-terminal-record.md)). It is the terminal's own bytes in
+plain text — whatever was on screen when the shell died, including command output and an agent's
+last messages — capped by the 1 MiB replay window. Treat it like any other document on your disk:
+nothing encrypts it, and copying the folder copies those screens.
+
+A record is deleted when the tab's **Restart** succeeds (the pane now shows a new shell), when
+the tab, its pane or its workspace is **closed**, and at **boot**, when mast removes every record
+whose tab is no longer in `state.json` — which on a boot that starts fresh, because `state.json`
+was missing or was set aside as `state.json.corrupt-<epoch>`, is every record there is. A shell that exited without printing anything leaves no
+file at all. Deleting the folder by hand is safe: the affected tabs come back with an empty
+record view and their Restart button.
+
+**`mast.log` still never contains terminal output** — that separation is unchanged, and the two
+files are written for different reasons.

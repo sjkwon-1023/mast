@@ -14,6 +14,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ActivityPing } from "./activity-ping";
 import {
   dispatch,
+  getDiagnostics,
   getState,
   getUiSettings,
   notifyToast,
@@ -62,6 +63,9 @@ declare global {
       /** 수동 WebView 리셋 (16단계) — 백엔드 perform_reset 경유라 자동 리셋과
        *  같은 경로를 검증한다. dev 훅 전용 — UI 버튼 금지 (계획 v2 12장). */
       resetUi: typeof resetUi;
+      /** 백엔드 자원 진단 (ADR-0018) — 부를 때마다 정합성 검사가 한 번 돈다.
+       *  UI 표면은 없다: 장시간 켜 둔 세션의 수치를 콘솔에서 확인하는 용도다. */
+      diagnostics: typeof getDiagnostics;
       /** 마지막 워크스페이스 전환 계측 report (14단계) — 정착 전에는 null. */
       lastSwitch: SwitchReport | null;
     };
@@ -193,6 +197,7 @@ class App {
       getState,
       reload: () => location.reload(),
       resetUi,
+      diagnostics: getDiagnostics,
       lastSwitch: null,
     };
     installReloadKey();

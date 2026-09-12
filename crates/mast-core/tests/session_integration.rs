@@ -884,3 +884,109 @@ fn screen_since_leaves_flow_and_reattach_untouched() {
     );
     session.kill();
 }
+
+// --- take_record (끝난 탭의 기록) ---
+//
+// 끝난 탭은 세션이 아니라 디스크 기록으로 남는다 — 그 재료를 떠내고 replay 메모리를
+// 곧바로 반납하는 경로다. 계약은 `PtySession::take_record` rustdoc (ADR-0018 D1).
+
+/// exit 이벤트가 올 때까지 sink 이벤트를 소비하고 exit code 를 돌려준다.
+fn wait_for_exit(rx: &Receiver<Event>) -> Option<u32> {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        match rx.recv_timeout(remaining(deadline, "exit event")) {
+            Ok(Event::Exit(code)) => return code,
+            Ok(_) => {}
+            Err(err) => panic!("no exit event received ({err})"),
+        }
+    }
+}
+
+/// MARK1 을 찍고 한 줄 입력을 기다리다 3 으로 끝나는 스크립트. `read` 핸드셰이크가
+/// "출력이 replay 에 들어간 시점"과 "종료 시점"을 갈라 준다 — sleep 으로 맞추면
+/// 부하 걸린 러너에서 둘이 뒤섞인다.
+fn spawn_marked_then_exit() -> (PtySession, Receiver<Event>) {
+    spawn_script(
+        r"printf 'MARK1\n'; read -r _; exit 3",
+        SessionOptions::default(),
+    )
+}
+
+/// 같은 핸드셰이크에 DEC 모드 두 개를 얹는다 — 모드 맵이 비지 않은 세션이라야
+/// "화면이 없으면 preamble 도 내주지 않는다"가 자명하지 않은 주장이 된다.
+fn spawn_marked_with_modes_then_exit() -> (PtySession, Receiver<Event>) {
+    spawn_script(
+        r"printf '\033[?25l\033[?2004hMARK1\n'; read -r _; exit 3",
+        SessionOptions::default(),
+    )
+}
+
+/// exit 이벤트 뒤 sink 채널이 조용해질 때까지 비운다. 리더는 waiter 와 다른
+/// 스레드라 `alive` 가 내려간 뒤에도 마지막 chunk 를 `replay.push` 하는 중일 수
+/// 있고(`take_record` rustdoc 의 tail 경합), 리더는 **push 를 마친 뒤** `on_output`
+/// 을 부르므로 채널의 정적이 곧 "그 push 는 이미 끝났다"다. 계약이 보장하지 않는
+/// 순간을 가정하는 대신 관측으로 확정하는 자리다.
+fn drain_until_quiet(rx: &Receiver<Event>) {
+    while rx.recv_timeout(Duration::from_millis(200)).is_ok() {}
+}
+
+#[test]
+fn take_record_is_none_while_the_session_is_alive() {
+    let (session, rx) = spawn_marked_then_exit();
+    wait_for_marker(&rx, "MARK1");
+
+    assert!(
+        session.take_record().is_none(),
+        "살아 있는 세션의 replay 를 떠내면 재접속한 프론트가 화면을 잃는다"
+    );
+    // 거절이 replay 를 건드리지 않았는지까지 본다.
+    assert!(
+        session.stats().replay_bytes > 0,
+        "출력이 replay 에 쌓이면 replay_bytes 가 따라 오른다"
+    );
+    session.kill();
+}
+
+#[test]
+fn take_record_after_exit_returns_the_last_screen_and_empties_the_replay() {
+    let (session, rx) = spawn_marked_then_exit();
+    wait_for_marker(&rx, "MARK1");
+    let held = session.stats().replay_bytes;
+    assert!(held > 0);
+
+    session.write(b"\n").expect("release the script's read");
+    assert_eq!(wait_for_exit(&rx), Some(3));
+    drain_until_quiet(&rx);
+
+    let record = session.take_record().expect("끝난 세션은 기록을 내준다");
+    assert!(
+        contains(&record, b"MARK1"),
+        "record must carry the replay snapshot: {:?}",
+        String::from_utf8_lossy(&record)
+    );
+    assert_eq!(
+        session.stats().replay_bytes,
+        0,
+        "기록을 떠냈으면 같은 바이트를 메모리에도 들고 있지 않는다"
+    );
+}
+
+#[test]
+fn a_second_take_record_finds_nothing_left_to_record() {
+    let (session, rx) = spawn_marked_with_modes_then_exit();
+    wait_for_marker(&rx, "MARK1");
+    session.write(b"\n").expect("release the script's read");
+    wait_for_exit(&rx);
+    drain_until_quiet(&rx);
+
+    let first = session.take_record().expect("첫 호출은 기록을 내준다");
+    assert!(
+        first.starts_with(b"\x1b[?25l\x1b[?2004h"),
+        "첫 기록은 모드 preamble 을 앞에 달고 나온다: {:?}",
+        String::from_utf8_lossy(&first)
+    );
+    // 모드 맵은 clear 대상이 아니라서 두 번째 호출도 preamble 을 만들 수 있다 —
+    // 화면이 없으면 그것까지 버린다는 것이 여기서 잠그는 계약이다. 그러지 않으면
+    // 글루의 "빈 바이트면 기록을 지운다" 규칙이 빈 화면 파일을 남긴다.
+    assert_eq!(session.take_record(), Some(Vec::new()));
+}

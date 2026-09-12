@@ -92,7 +92,8 @@ export interface Tab {
 export type TabKind =
   | {
       type: "terminal";
-      /** 휘발성 PTY 세션 id. 세션 종료 후에도 유지된다 (Exited 탭 표시용). */
+      /** 휘발성 PTY 세션 id. 살아 있는 세션에만 실린다 — 셸이 끝나면 비워지고,
+       *  마지막 화면은 기록 파일로 남는다 (ADR-0018). */
       ptySession: SessionId | null;
       status: TerminalStatus;
       cwd: string | null;
@@ -103,7 +104,9 @@ export type TabKind =
 
 export type TerminalStatus =
   | { type: "running" }
-  | { type: "exited"; code: number | null }
+  /** endedAtMs 는 종료 시각(epoch ms). 백엔드가 항상 직렬화하므로 선택 필드가
+   *  아니다 — 이 필드를 모르는 구 state.json 에서만 null 로 온다. */
+  | { type: "exited"; code: number | null; endedAtMs: number | null }
   /** 프로세스는 살아 있는데 시작 표식이 마감 안에 오지 않았다. 종착 상태가 아니다 —
    *  표식이 늦게 도착하면 running 으로 돌아온다 (근거는 model.rs 의 TerminalStatus). */
   | { type: "notStarted" };

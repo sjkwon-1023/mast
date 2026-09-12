@@ -20,16 +20,15 @@
 //!   전 탭의 `notification` = `NotificationState::None`, `last_activity_ms` =
 //!   `None`. pty_session 과 동일한 이유 — 죽은 세션이 남긴 needsInput 이
 //!   재시작을 넘어 사이드바에 유령처럼 남는 걸 막는다.
-//! - **셸이 없는 터미널 탭(`Exited`·`NotStarted`)은 `Running` 으로 되돌린다** (ADR-0010).
-//!   재시작 시점에 살아 있는 셸은 하나도 없으므로 이 상태들을 충실히 복원하면 그 탭이
-//!   부팅 재스폰 열거
+//! - **`NotStarted` 탭만 `Running` 으로 되돌린다**. 그 상태로 저장되면 부팅 재스폰 열거
 //!   ([`Dispatcher::running_terminal_tabs`](crate::command::Dispatcher::running_terminal_tabs))
-//!   에서 **영구히** 빠진다 — 앱을 다시 켜도 빈 pane + 배지로 남고 되살릴 길이 없다.
-//!   실기에서 PC 절전으로 WSL 이 통째로 내려가 전 탭이 한꺼번에 `Exited` 가 됐고
-//!   (2026-08-20), 그걸 되살리는 첫 부팅에서 셸 11개가 콜드 VM 에 몰려 6개가 시작에
-//!   실패해 `NotStarted` 로 남았다 — 두 상태가 같은 사고의 앞뒤라 규칙도 같다.
-//!   되살아난 셸은 같은 탭 id 로 스폰되므로 `HISTFILE` 과 resume 힌트가 그대로 다시
-//!   붙는다.
+//!   에서 빠져 사용자가 탭마다 Retry 를 눌러야 한다 — 실기에서 되살린 탭 11개가 콜드 VM
+//!   에 몰려 6개가 시작 표식을 못 낸 채 남은 상태다 (2026-08-20).
+//! - **`Exited` 는 그대로 둔다** (ADR-0018 D3, ADR-0010 의 되돌림을 반쪽 뒤집는다).
+//!   끝난 탭의 마지막 화면은 기록 파일로 남아 있어 복원 후에도 그대로 읽히고, 되살릴
+//!   길은 pane 배너의 Restart 다 — ADR-0010 의 되돌림은 그 버튼이 없던 시절 "되살릴
+//!   길이 아예 없다"를 푸는 장치였다. 되돌리면 사용자가 의도적으로 끝낸 셸까지 앱을
+//!   켤 때마다 되살아난다.
 //! - `next_id` 가 사용 중인 최대 안정 id(워크스페이스·pane·탭·**split** 포함 —
 //!   split 노드도 같은 단일 카운터 발급, ADR-0003) 이하면 `max+1` 로 수리하고
 //!   사유를 [`LoadOutcome::Restored`] 의 `repairs` 로 보고한다.
@@ -38,7 +37,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -233,8 +232,8 @@ fn validate_app(state: &AppState) -> Result<(), String> {
 }
 
 /// 복원 상태 sanitize (모듈 rustdoc 참조). 수리 사유들을 반환한다 — pty_session
-/// 소거·`Exited`/`NotStarted` → `Running` 되돌림·에이전트 상태/알림 초기화는 무조건
-/// 수행되는 정상 동작이라 사유에 포함하지 않는다.
+/// 소거·`NotStarted` → `Running` 되돌림·에이전트 상태/알림 초기화는 무조건 수행되는
+/// 정상 동작이라 사유에 포함하지 않는다.
 fn sanitize(state: &mut AppState) -> Vec<String> {
     let mut repairs = Vec::new();
     for ws in &mut state.workspaces {
@@ -250,11 +249,8 @@ fn sanitize(state: &mut AppState) -> Vec<String> {
                 } = &mut tab.kind
                 {
                     *pty_session = None;
-                    // 모듈 rustdoc "복원 시 sanitize" 의 셸 없는 상태 → Running 규칙.
-                    if matches!(
-                        status,
-                        TerminalStatus::Exited { .. } | TerminalStatus::NotStarted
-                    ) {
+                    // 모듈 rustdoc "복원 시 sanitize" — NotStarted 만 되돌린다.
+                    if matches!(status, TerminalStatus::NotStarted) {
                         *status = TerminalStatus::Running;
                     }
                 }
@@ -336,71 +332,169 @@ pub fn save_atomic(path: &Path, state: &AppState) -> io::Result<()> {
     Ok(())
 }
 
-/// Saver worker 로 보내는 메시지.
-enum SaverMsg {
-    /// 최신 상태로 교체 (coalesce). Box 는 채널 페이로드 이동 비용 절감용.
-    Schedule(Box<AppState>),
-    /// 대기분을 즉시 기록하고 ack — [`Saver::flush`] 의 동기성 보장.
-    Flush(mpsc::Sender<()>),
+/// [`Saver`] worker 와 호출자가 공유하는 슬롯. 채널이 아니라 **최신 1개짜리
+/// 슬롯**인 이유: `schedule` 은 `publish_state` 가 Dispatcher lock 을 쥔 채
+/// 부르므로 프로듀서 폭주가 곧 `AppState` clone 의 무한 적재가 된다 (CLAUDE.md
+/// "queue·buffer 는 전부 bounded"). 슬롯 교체는 큐잉이 아니라 덮어쓰기라
+/// 대기분이 1개를 넘지 않는다.
+struct SaverSlot {
+    /// 아직 기록되지 않은 최신 상태. 새 `schedule` 은 이 자리를 **교체**한다.
+    pending: Option<Box<AppState>>,
+    /// `pending` 이 `None → Some` 이 되는 순간 고정된다 — 연속 변이 중에도
+    /// 유실 창이 `debounce` 로 유계이게 하는 trailing debounce 의 핵심.
+    /// `pending` 이 `None` 이면 의미 없다.
+    deadline: Instant,
+    /// 지금까지 발급된 예약 세대 — `schedule` 마다 1 오른다. 슬롯은 큐가 아니라
+    /// 교체라 `pending` 에 든 상태의 세대가 곧 이 값이다.
+    scheduled: u64,
+    /// worker 가 **디스크에 쓴** 마지막 상태의 세대. worker 는 `pending` 을 집어갈 때
+    /// 본 `scheduled` 를 기억했다가 write 를 마친 뒤 그 값을 여기에 적는다 — 쓰고 난
+    /// 뒤의 `scheduled` 를 적으면 쓰는 동안 들어온 예약까지 쓴 것으로 ack 하게 된다.
+    ///
+    /// 완료 판정이 세대인 이유: "`pending` 이 빌 때까지" 로 판정하면 저장이 상태
+    /// 갱신보다 느린 환경에서 슬롯이 영영 비지 않아 종료 경로(`main.rs` 의
+    /// `router.flush_now()` → `saver.flush()`)가 끝나지 않는다 — OSC 프로듀서는
+    /// `flush_now()` 로 멈추지 않는다 (2026-09-12 리뷰).
+    written: u64,
+    /// flush 를 기다리는 호출자가 지목한 세대 — `written` 이 여기 닿을 때까지 worker 는
+    /// deadline 을 무시하고 즉시 쓴다. 불리언 플래그가 아닌 이유: 플래그는 "슬롯이 비는
+    /// 순간" 말고는 내릴 자리가 없어, 프로듀서가 write 마다 슬롯을 다시 채우는 동안
+    /// 한 번의 flush 가 trailing debounce 를 영구히 꺼 버린다 (2026-09-12 리뷰).
+    flush_target: u64,
+    /// Saver 가 Drop 중 — worker 는 대기분을 쓰고 종료한다.
+    closed: bool,
+    /// worker 가 사라졌다 (패닉·정상 종료). 이후의 `schedule`·`flush` 는 무한
+    /// 대기 대신 loud 하게 포기한다.
+    worker_dead: bool,
+}
+
+struct SaverShared {
+    slot: Mutex<SaverSlot>,
+    cond: Condvar,
+}
+
+/// 슬롯 lock — 포이즌은 무시하고 내용을 그대로 쓴다. 안에 든 것은 다음 저장
+/// 대상과 카운터뿐이라 패닉이 남긴 값도 의미가 유효하고, 여기서 패닉하면
+/// 종료 경로(`flush`)가 통째로 죽는다.
+fn lock_slot(shared: &SaverShared) -> MutexGuard<'_, SaverSlot> {
+    shared.slot.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// worker 가 어떤 경로로 끝나든 (패닉 포함) `worker_dead` 를 세우고 깨운다 —
+/// 없으면 `flush` 가 영영 오지 않을 ack 를 기다린다.
+struct WorkerDeadGuard<'a> {
+    shared: &'a SaverShared,
+}
+
+impl Drop for WorkerDeadGuard<'_> {
+    fn drop(&mut self) {
+        lock_slot(self.shared).worker_dead = true;
+        self.shared.cond.notify_all();
+    }
 }
 
 /// debounce 백그라운드 저장기. [`Saver::schedule`] 은 최신 상태만 남기고
-/// (coalesce), 첫 schedule 시점부터 `debounce` 경과 후 한 번 기록한다 (trailing).
+/// (대기분 ≤ 1), 첫 schedule 시점부터 `debounce` 경과 후 한 번 기록한다 (trailing).
 ///
 /// - **유실 창**: 프로세스가 크래시하면 마지막 기록 이후 debounce 창(≤ `debounce`)
 ///   안의 변이는 유실된다 — MVP 수용 (계획 B-1). deadline 을 첫 schedule 에
 ///   고정하므로 연속 변이 중에도 유실 창은 `debounce` 로 유계다.
+/// - **메모리**: 대기분은 항상 1개 — `schedule` 은 큐에 넣지 않고 슬롯을 교체한다.
 /// - **저장 실패**: loud stderr 만 남기고 패닉하지 않는다. 별도 재시도 루프 없이
 ///   다음 schedule 이 자연 재시도가 된다.
-/// - **종료**: [`Saver::flush`] 는 대기분을 동기적으로 기록하고, Drop 도 대기분을
-///   flush 한 뒤 worker 를 join 한다.
+/// - **종료**: [`Saver::flush`] 는 호출 시점까지의 예약분을 동기적으로 기록하고
+///   (그 뒤에 들어오는 예약은 기다리지 않는다 — 그쪽을 기다리면 반환이 프로듀서에
+///   묶인다), Drop 도 대기분을 flush 한 뒤 worker 를 join 한다.
 pub struct Saver {
-    /// Drop 에서 먼저 끊기 위해 Option — 끊기면 worker 가 대기분을 쓰고 종료한다.
-    tx: Option<mpsc::Sender<SaverMsg>>,
+    shared: Arc<SaverShared>,
+    debounce: Duration,
     worker: Option<thread::JoinHandle<()>>,
 }
 
 impl Saver {
     /// worker 스레드를 띄운다. `path` 는 [`save_atomic`] 대상.
     pub fn spawn(path: PathBuf, debounce: Duration) -> Self {
-        let (tx, rx) = mpsc::channel();
+        let shared = Arc::new(SaverShared {
+            slot: Mutex::new(SaverSlot {
+                pending: None,
+                deadline: Instant::now(),
+                scheduled: 0,
+                written: 0,
+                flush_target: 0,
+                closed: false,
+                worker_dead: false,
+            }),
+            cond: Condvar::new(),
+        });
+        let worker_shared = Arc::clone(&shared);
         let worker = thread::Builder::new()
             .name("mast-saver".into())
-            .spawn(move || worker_loop(&path, debounce, &rx))
+            .spawn(move || worker_loop(&path, &worker_shared))
             .expect("saver worker spawn failed");
         Self {
-            tx: Some(tx),
+            shared,
+            debounce,
             worker: Some(worker),
         }
     }
 
-    /// 저장 예약 — 이미 대기 중이면 최신 상태로 교체된다 (coalesce).
+    /// 저장 예약 — 이미 대기 중이면 최신 상태로 교체된다 (대기분 ≤ 1).
+    ///
+    /// 호출자(`publish_state`)가 Dispatcher lock 을 쥔 채 부르므로 이 함수는
+    /// 슬롯 lock 만 짧게 잡는다 — 디스크 IO 는 worker 가 lock 밖에서 한다.
     pub fn schedule(&self, state: AppState) {
-        let Some(tx) = &self.tx else { return };
-        if tx.send(SaverMsg::Schedule(Box::new(state))).is_err() {
+        let mut slot = lock_slot(&self.shared);
+        if slot.worker_dead {
             // worker 가 죽은 상태 — 저장이 안 되고 있음을 숨기지 않는다.
             eprintln!("[mast] persist: saver worker is gone; schedule dropped");
+            return;
         }
+        if slot.pending.is_none() {
+            slot.deadline = Instant::now() + self.debounce;
+        }
+        slot.scheduled += 1;
+        slot.pending = Some(Box::new(state));
+        drop(slot);
+        self.shared.cond.notify_all();
     }
 
     /// 대기분을 지금 기록하고 완료까지 동기 대기한다. 대기분이 없으면 no-op ack.
+    ///
+    /// 반환 시점에는 **이 호출 이전의 모든 `schedule` 이 디스크에 있다.** 근거는
+    /// 슬롯이 큐가 아니라는 것이다: 호출 시점의 세대(`scheduled`)가 디스크에 닿으면
+    /// 그 세대의 상태가 이전 예약을 전부 흡수한 최신본이므로 더 기다릴 것이 없다.
+    /// **호출 뒤에 들어온 예약은 기다리지 않는다** — 슬롯이 빌 때까지 기다리면 예약이
+    /// 저장보다 빠른 환경에서 영영 반환하지 못한다.
     pub fn flush(&self) {
-        let Some(tx) = &self.tx else { return };
-        let (ack_tx, ack_rx) = mpsc::channel();
-        if tx.send(SaverMsg::Flush(ack_tx)).is_err() {
+        let mut slot = lock_slot(&self.shared);
+        if slot.worker_dead {
             eprintln!("[mast] persist: saver worker is gone; flush dropped");
             return;
         }
-        if ack_rx.recv().is_err() {
-            eprintln!("[mast] persist: saver worker died before flush ack");
+        let target = slot.scheduled;
+        if slot.written >= target {
+            return;
+        }
+        slot.flush_target = slot.flush_target.max(target);
+        self.shared.cond.notify_all();
+        while slot.written < target {
+            if slot.worker_dead {
+                eprintln!("[mast] persist: saver worker died before flush ack");
+                return;
+            }
+            slot = self
+                .shared
+                .cond
+                .wait(slot)
+                .unwrap_or_else(PoisonError::into_inner);
         }
     }
 }
 
 impl Drop for Saver {
     fn drop(&mut self) {
-        // 송신단을 끊으면 worker 가 disconnect 를 보고 대기분을 flush 하고 종료한다.
-        drop(self.tx.take());
+        lock_slot(&self.shared).closed = true;
+        self.shared.cond.notify_all();
         if let Some(worker) = self.worker.take() {
             if worker.join().is_err() {
                 eprintln!("[mast] persist: saver worker thread panicked");
@@ -409,66 +503,63 @@ impl Drop for Saver {
     }
 }
 
-fn worker_loop(path: &Path, debounce: Duration, rx: &mpsc::Receiver<SaverMsg>) {
-    let mut pending: Option<Box<AppState>> = None;
-    // pending 이 Some 일 때만 유효 — pending 이 None→Some 이 되는 순간 고정된다.
-    let mut deadline = Instant::now();
+fn worker_loop(path: &Path, shared: &SaverShared) {
+    let _dead = WorkerDeadGuard { shared };
+    let mut slot = lock_slot(shared);
     loop {
-        let msg = if pending.is_some() {
-            let now = Instant::now();
-            if now >= deadline {
-                write_pending(path, &mut pending);
-                continue;
-            }
-            match rx.recv_timeout(deadline - now) {
-                Ok(msg) => msg,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    write_pending(path, &mut pending);
-                    continue;
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    // Drop 경로 — 대기분을 마지막으로 기록하고 종료.
-                    write_pending(path, &mut pending);
-                    return;
-                }
-            }
-        } else {
-            match rx.recv() {
-                Ok(msg) => msg,
-                Err(_) => return,
-            }
-        };
-        match msg {
-            SaverMsg::Schedule(state) => {
-                if pending.is_none() {
-                    deadline = Instant::now() + debounce;
-                }
-                pending = Some(state);
-            }
-            SaverMsg::Flush(ack) => {
-                write_pending(path, &mut pending);
-                // ack 수신측(flush 호출자)이 먼저 사라진 경우는 알릴 곳이 없다 —
-                // 데이터는 이미 기록됐으므로 무시해도 안전하다.
-                let _ = ack.send(());
-            }
+        // flush 요구는 그것이 지목한 세대가 디스크에 닿는 순간 스스로 꺼진다 — 슬롯이
+        // 비기를 기다려 내리지 않는다.
+        let flush_wanted = slot.written < slot.flush_target;
+        let due = slot.pending.is_some()
+            && (flush_wanted || slot.closed || Instant::now() >= slot.deadline);
+        if due {
+            // 집어가는 상태의 세대를 **여기서** 붙든다 — write 중에 들어온 예약이
+            // `scheduled` 를 올리므로, 쓴 뒤에 읽으면 쓰지 않은 상태를 ack 하게 된다.
+            let generation = slot.scheduled;
+            let state = slot.pending.take().expect("due 는 pending 이 Some 일 때만 참");
+            // 디스크 IO 는 반드시 lock 밖에서 — schedule 은 Dispatcher lock 을 쥔
+            // 프로듀서가 부른다.
+            drop(slot);
+            write_state(path, &state);
+            slot = lock_slot(shared);
+            slot.written = generation;
+            shared.cond.notify_all();
+            continue;
         }
+        if slot.closed {
+            return;
+        }
+        slot = if slot.pending.is_some() {
+            let timeout = slot.deadline.saturating_duration_since(Instant::now());
+            shared
+                .cond
+                .wait_timeout(slot, timeout)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0
+        } else {
+            shared
+                .cond
+                .wait(slot)
+                .unwrap_or_else(PoisonError::into_inner)
+        };
     }
 }
 
-/// 대기분이 있으면 기록. 실패는 loud stderr — 다음 schedule 이 자연 재시도.
-fn write_pending(path: &Path, pending: &mut Option<Box<AppState>>) {
-    if let Some(state) = pending.take() {
-        if let Err(err) = save_atomic(path, &state) {
-            eprintln!(
-                "[mast] persist: state save failed ({}): {err}",
-                path.display()
-            );
-        }
+/// 실패는 loud stderr — 다음 schedule 이 자연 재시도.
+fn write_state(path: &Path, state: &AppState) {
+    if let Err(err) = save_atomic(path, state) {
+        eprintln!(
+            "[mast] persist: state save failed ({}): {err}",
+            path.display()
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::mpsc;
+
     use super::*;
     use crate::model::{
         AgentStatus, NotificationState, Pane, PaneId, SplitDirection, SplitId, SplitTree, Tab,
@@ -731,12 +822,12 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_revives_exited_terminal_tabs() {
+    fn sanitize_keeps_exited_terminal_tabs() {
         let dir = tempfile::tempdir().unwrap();
         let path = state_path(&dir);
         // 실기 재현(2026-08-20): 앱이 살아 있는 동안 PC 절전으로 WSL 이 내려가 전 탭이
-        // 강제 종료 코드와 함께 Exited 로 저장된 상태. 이대로 복원하면 재스폰 열거에서
-        // 영구히 빠지므로 Running 으로 되돌아와야 한다.
+        // 강제 종료 코드와 함께 Exited 로 저장된 상태. 기록 파일이 남아 있으므로 복원
+        // 후에도 마지막 화면이 그대로 읽히고, 되살리기는 배너의 Restart 다 (ADR-0018 D3).
         let mut state = sample_state(Some(9), 7);
         for pane in state.workspaces[0].panes.values_mut() {
             for tab in &mut pane.tabs {
@@ -745,6 +836,7 @@ mod tests {
                 };
                 *status = TerminalStatus::Exited {
                     code: Some(1_073_807_364),
+                    ended_at_ms: Some(1_723_100_000_000),
                 };
             }
         }
@@ -764,12 +856,14 @@ mod tests {
                         assert_eq!(*pty_session, None, "pty_session 은 무조건 소거");
                         assert_eq!(
                             *status,
-                            TerminalStatus::Running,
-                            "Exited 는 재스폰 대상으로 되돌아와야 함"
+                            TerminalStatus::Exited {
+                                code: Some(1_073_807_364),
+                                ended_at_ms: Some(1_723_100_000_000)
+                            },
+                            "Exited 는 종료 코드·시각과 함께 그대로 남아야 함"
                         );
                     }
                 }
-                // 되돌림은 정상 동작이라 수리 사유가 아니다 (sanitize rustdoc).
                 assert!(repairs.is_empty(), "repairs: {repairs:?}");
             }
             other => panic!("Restored 여야 함: {other:?}"),
@@ -923,5 +1017,147 @@ mod tests {
         saver.schedule(state);
         drop(saver); // Drop 이 대기분을 flush 하고 join 한다.
         assert_eq!(read_revision(&path), 77);
+    }
+
+    #[test]
+    fn saver_keeps_at_most_one_pending_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        // debounce 를 크게 잡아 worker 가 창 안에서 슬롯을 비우지 않게 한다.
+        let saver = Saver::spawn(path.clone(), Duration::from_secs(60));
+        for revision in 1..=8u64 {
+            let mut state = sample_state(None, 7);
+            state.revision = revision;
+            saver.schedule(state);
+        }
+        {
+            let slot = lock_slot(&saver.shared);
+            let pending = slot.pending.as_ref().expect("대기분이 있어야 함");
+            assert_eq!(
+                pending.revision, 8,
+                "슬롯은 큐가 아니라 교체 — 8회 예약 뒤에도 대기분은 최신 1개"
+            );
+        }
+        assert!(!path.exists(), "창 안에서는 중간 기록이 없다");
+    }
+
+    #[test]
+    fn saver_debounce_deadline_is_fixed_at_the_first_schedule() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        let saver = Saver::spawn(path.clone(), Duration::from_millis(150));
+        // 30ms 간격으로 20회 예약한다. deadline 이 schedule 마다 밀리는 구현이면
+        // 마지막 예약(≈570ms) + 150ms 전에는 아무것도 쓰이지 않으므로, 루프가 끝난
+        // 직후의 이 관측이 두 구현을 가른다.
+        for revision in 1..=20u64 {
+            let mut state = sample_state(None, 7);
+            state.revision = revision;
+            saver.schedule(state);
+            thread::sleep(Duration::from_millis(30));
+        }
+        assert!(
+            path.exists(),
+            "deadline 이 첫 schedule 에 고정되면 연속 예약 중에도 기록이 난다"
+        );
+    }
+
+    #[test]
+    fn saver_flush_covers_every_schedule_made_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        // 4 MiB 짜리 상태 — save_atomic 의 write + fsync 가 수 ms 걸려야 "worker 가
+        // 쓰는 중" 이라는 창이 교체를 끼워 넣을 만큼 넓어진다. 작은 상태로는 창이
+        // 너무 좁아 교체가 항상 write 바깥에 떨어지고, 그러면 ack 순서를 어긴
+        // 구현도 통과해 버린다.
+        let bulky = |revision: u64| {
+            let mut state = sample_state(None, 7);
+            state.workspaces[0].name = "x".repeat(4 * 1024 * 1024);
+            state.revision = revision;
+            state
+        };
+        // debounce 0 — worker 가 예약분을 즉시 집어 간다.
+        let saver = Arc::new(Saver::spawn(path.clone(), Duration::ZERO));
+        saver.schedule(bulky(1));
+        // 슬롯이 비는 순간이 곧 "worker 가 lock 밖에서 1 을 쓰는 중" 이다. 교체는
+        // 반드시 그 안에서, 그리고 flush 호출보다 먼저 들어가야 한다 — 이 순서라야
+        // "write 를 끝낸 worker 가 pending 을 다시 보지 않고 flush 를 ack 하는"
+        // 구현이 갈라진다.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while lock_slot(&saver.shared).pending.is_some() {
+            assert!(Instant::now() < deadline, "worker 가 대기분을 가져가지 않음");
+            thread::yield_now();
+        }
+        saver.schedule(bulky(2));
+        assert!(
+            flush_within(&saver, Duration::from_secs(10)),
+            "flush 가 반환하지 않았다"
+        );
+        assert_eq!(
+            read_revision(&path),
+            2,
+            "worker 가 쓰는 동안 들어온 교체분까지 flush 가 덮어야 함"
+        );
+        let slot = lock_slot(&saver.shared);
+        assert_eq!(
+            slot.written, slot.scheduled,
+            "ack 시점의 written 은 마지막 예약 세대여야 함"
+        );
+    }
+
+    /// `flush()` 를 떼어 낸 스레드에서 돌리고 `limit` 안에 반환했는지만 돌려준다.
+    /// 직접 부르면 "ack 을 영영 올리지 않는" 부류의 회귀가 테스트 실패가 아니라 멈춘
+    /// CI 잡으로 나타난다 — `cargo test` 에는 테스트별 타임아웃이 없다.
+    fn flush_within(saver: &Arc<Saver>, limit: Duration) -> bool {
+        let flushing = Arc::clone(saver);
+        let (tx, rx) = mpsc::channel();
+        let flusher = thread::spawn(move || {
+            flushing.flush();
+            let _ = tx.send(());
+        });
+        let returned = rx.recv_timeout(limit).is_ok();
+        if returned {
+            flusher.join().unwrap();
+        }
+        returned
+    }
+
+    #[test]
+    fn saver_flush_returns_while_another_thread_keeps_scheduling() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        // 예약이 저장을 앞지르는 상황을 재현한다: 256 KiB 짜리 상태라 write 한 번이
+        // 수십 ms 걸리고, 프로듀서는 그 사이마다 슬롯을 다시 채운다. 프로듀서를 멈추는
+        // 것은 벽시계가 아니라 **이 스레드**다 — 느린 러너에서 프로듀서가 먼저 끝나
+        // 판정이 흐려지는 일이 없고, 슬롯이 비기를 기다리는 구현에서는 flush 가
+        // 반환하지 못해 프로듀서도 영영 멈추지 않는다.
+        let mut bulky = sample_state(None, 7);
+        bulky.workspaces[0].name = "x".repeat(256 * 1024);
+        let saver = Arc::new(Saver::spawn(path.clone(), Duration::ZERO));
+        let stop = Arc::new(AtomicBool::new(false));
+        let scheduled = Arc::new(AtomicU64::new(0));
+        let producer = {
+            let saver = Arc::clone(&saver);
+            let stop = Arc::clone(&stop);
+            let scheduled = Arc::clone(&scheduled);
+            thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    let mut state = bulky.clone();
+                    state.revision = scheduled.fetch_add(1, Ordering::SeqCst) + 1;
+                    saver.schedule(state);
+                }
+            })
+        };
+        // 슬롯이 실제로 다시 차기 시작한 뒤에 flush 한다.
+        while scheduled.load(Ordering::SeqCst) < 3 {
+            thread::yield_now();
+        }
+        let returned = flush_within(&saver, Duration::from_secs(10));
+        stop.store(true, Ordering::SeqCst);
+        producer.join().unwrap();
+        assert!(
+            returned,
+            "flush 가 프로듀서가 멈출 때까지 묶였다 — 세대가 아니라 슬롯이 비는 것으로 \
+             완료를 판정하고 있다"
+        );
     }
 }

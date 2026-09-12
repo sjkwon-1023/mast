@@ -13,13 +13,22 @@
 //!   가능성이 있는 세션 호출(write·resize·spawn)은 핸들을 얻은 뒤 lock 밖,
 //!   그리고 `spawn_blocking` 스레드에서 수행한다 (스파이크와 동일 규율 —
 //!   메인 스레드가 write 에 잡히면 ack_output 도 못 돌아 flow 영구 교착).
+//! - 기록 파일([`RecordStore`], ADR-0018)도 같은 규율 아래 있다: 디스크 I/O 는
+//!   Dispatcher lock 밖에서만 한다. exit 경로가 기록을 **모델 갱신보다 먼저**
+//!   쓰는 것도 여기서 나온다 ([`crate::sink`] 의 `on_exit`) — 프론트가
+//!   `state-changed` 를 보고 기록을 읽으므로 파일이 그때 이미 있어야 한다.
+//!   같은 경로가 쓰기 **전에** Dispatcher lock 을 한 번 잡았다 놓는 것은 스폰의
+//!   등록 장벽 겸 채택 확인이다: 그 lock 아래에서 `take_record`(세션 자기 mutex)까지는
+//!   불러도 되지만 — Dispatcher → 세션은 dispatch 와 같은 방향이다 — 파일 쓰기는
+//!   그 밖으로 나간다.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use tauri::{AppHandle, Emitter, Manager};
-use mast_core::command::Dispatcher;
+use mast_core::command::{Dispatcher, RegistryAudit};
 use mast_core::persist::Saver;
+use mast_core::record::RecordStore;
 use mast_core::session::{SessionId, SessionManager};
 
 use crate::reset_supervisor::ResetSupervisor;
@@ -47,6 +56,16 @@ impl SinkRegistry {
     pub fn remove(&self, id: SessionId) {
         self.sinks.lock().unwrap().remove(&id);
     }
+
+    /// 등록된 sink id 목록 — 오름차순, 내부 lock 은 복사 동안만. 코어의
+    /// [`SessionManager::ids`] 와 짝이며, 정합성 검사
+    /// ([`mast_core::command::audit_registries`])가 **Dispatcher lock 아래에서**
+    /// 두 레지스트리 스냅샷을 같이 뜨는 데 쓴다 — 그 순서의 근거는 그쪽 rustdoc.
+    pub fn ids(&self) -> Vec<SessionId> {
+        let mut ids: Vec<SessionId> = self.sinks.lock().unwrap().keys().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
 }
 
 /// Tauri managed state. `Arc` 는 `spawn_blocking` 의 `'static` 클로저와 sink
@@ -67,6 +86,53 @@ pub struct AppState {
     /// OSC 배치 라우터 (계획 18단계 glue) — sink 와 `Arc` 로 공유하며, 종료 시
     /// `RunEvent::Exit` 가 여기서 `flush_now` 를 부른다.
     pub router: Arc<OscRouter>,
+    /// 끝난 탭의 마지막 화면 기록 (ADR-0018) — 디렉터리 경로만 드는 값이라 자체
+    /// lock 이 없다. `TauriHost` 도 같은 `Arc` 를 들어 탭 닫기 경로에서 지운다.
+    pub records: Arc<RecordStore>,
+    /// 마지막 정합성 검사 결과 — [`crate::audit::run_audit`] 이 쓰고 진단 커맨드가
+    /// 읽는다. 검사 자체가 짧아 결과를 들고 있는 것은 표면을 위한 것이지 캐시가 아니다.
+    pub last_audit: Mutex<RegistryAudit>,
+    /// ③(모델 갱신)과 ④(레지스트리 해제) 사이에 있는 exit 들의 **세션 id** 집합
+    /// ([`crate::sink`]). 그 창 안의 세션은 어떤 탭도 참조하지 않으면서 두 레지스트리에
+    /// 아직 살아 있어 정합성 검사의 고아 정의에 그대로 걸린다 — 셸 열 개가 한꺼번에
+    /// 죽는 `wsl --shutdown` 이면 매번 걸린다. 검사는 Dispatcher lock 아래에서 이 집합을
+    /// **스냅샷보다 먼저** 읽고, 여기 있는 id 만 그 회차의 고아 후보에서 뺀다
+    /// ([`crate::audit`]) — 수(count)가 아니라 id 인 것은 진행 중인 exit 하나가 그와
+    /// 무관한 세션의 고아 판정까지 덮지 않게 하기 위함이다.
+    ///
+    /// 넣고 빼는 것은 [`ExitInFlight`] 가이드가 한다 — 손으로 짝을 맞추면 그 사이의
+    /// 패닉 하나가 표식을 영원히 세워 둔 채 되감기고, 그 뒤의 검사는 전부 조용히
+    /// 판정을 버린다.
+    pub exits_in_flight: Mutex<HashSet<SessionId>>,
+}
+
+/// 진행 중인 exit 표식의 RAII 가드 — 살아 있는 동안 그 세션 id 가
+/// [`AppState::exits_in_flight`] 에 들어 있다.
+///
+/// 되감기(panic) 로 빠져나가도 `Drop` 이 id 를 거둔다. 표식을 손으로 내리는 코드였을
+/// 때의 위험은 이것이다: ③④ 사이에서 한 번 패닉하면 그 뒤의 모든 검사가 "exit 진행 중"
+/// 을 보고 고아 판정을 버려, 정합성 검사가 있는데 아무것도 잡지 못하는 상태가 된다.
+pub struct ExitInFlight<'a> {
+    set: &'a Mutex<HashSet<SessionId>>,
+    id: SessionId,
+}
+
+impl<'a> ExitInFlight<'a> {
+    pub fn enter(set: &'a Mutex<HashSet<SessionId>>, id: SessionId) -> Self {
+        set.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id);
+        Self { set, id }
+    }
+}
+
+impl Drop for ExitInFlight<'_> {
+    fn drop(&mut self) {
+        self.set
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.id);
+    }
 }
 
 /// 현재 스냅샷을 `state-changed` 이벤트로 emit 하고 저장을 예약한다 (emit +

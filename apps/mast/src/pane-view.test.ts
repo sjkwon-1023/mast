@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { PaneView } from "./pane-view";
+import { PaneView, exitedNoticeText } from "./pane-view";
 import type { SendController, ViewRegistry, ViewerRegistry } from "./pane-view";
 import type { VisibleViewer } from "./view-reconcile";
 import type { ViewerKind, ViewerView } from "./viewer-view";
@@ -207,7 +207,7 @@ describe("PaneView tab strip rendering", () => {
       pane(
         [
           terminalTab(10),
-          terminalTab(11, { notification: "unread", status: { type: "exited", code: 1 } }),
+          terminalTab(11, { notification: "unread", status: { type: "exited", code: 1, endedAtMs: 1723100500000 } }),
           terminalTab(12),
         ],
         10,
@@ -519,7 +519,7 @@ describe("PaneView restart banner", () => {
     expect(banner(view).hidden).toBe(true);
   });
 
-  it("offers Retry on notStarted and Restart on exited, in place", () => {
+  it("offers Retry on notStarted and the exit notice on exited, in place", () => {
     const { view } = mount();
     view.update(pane([terminalTab(10, { status: { type: "notStarted" } })], 10), true, null, null);
     const el = banner(view);
@@ -529,7 +529,7 @@ describe("PaneView restart banner", () => {
     expect(child(el, ".pane-restart-retry").textContent).toBe("Retry");
 
     view.update(
-      pane([terminalTab(10, { status: { type: "exited", code: 1 } })], 10),
+      pane([terminalTab(10, { status: { type: "exited", code: 1, endedAtMs: 1723100500000 } })], 10),
       true,
       null,
       null,
@@ -538,7 +538,9 @@ describe("PaneView restart banner", () => {
     expect(banner(view)).toBe(el);
     expect(el.hidden).toBe(false);
     expect(el.classList.contains("exited")).toBe(true);
-    expect(child(el, "span").textContent).toBe("The shell has exited.");
+    // 배너는 code·시각을 그대로 말한다 (문구 자체는 exitedNoticeText 가 잠근다).
+    expect(child(el, "span").textContent).toBe(exitedNoticeText(1, 1723100500000));
+    expect(child(el, "span").textContent).toContain("(code 1)");
     expect(child(el, ".pane-restart-retry").textContent).toBe("Restart");
 
     view.update(pane([terminalTab(10)], 10), true, null, null);
@@ -548,11 +550,54 @@ describe("PaneView restart banner", () => {
   it("stays hidden for a viewer tab regardless of other tabs", () => {
     const { view } = mount();
     view.update(
-      pane([folderTab(11), terminalTab(10, { status: { type: "exited", code: 0 } })], 11),
+      pane([folderTab(11), terminalTab(10, { status: { type: "exited", code: 0, endedAtMs: 1723100500000 } })], 11),
       true,
       null,
       viewerMount(11),
     );
     expect(banner(view).hidden).toBe(true);
+  });
+});
+
+// 끝난 셸의 배너 문구 (ADR-0018) — code 와 시각은 각각 없을 수 있고, 없는 조각은
+// 통째로 빠진다. 시각은 로컬 시간대라 기대값도 로컬 Date 로 만든다.
+describe("exitedNoticeText", () => {
+  const ENDED = new Date(2026, 8, 12, 14, 32).getTime();
+
+  it("names the exit code and the local time", () => {
+    expect(exitedNoticeText(0, ENDED)).toBe(
+      "shell exited (code 0) at 14:32 — Restart opens a new shell here",
+    );
+  });
+
+  it("drops the code when the backend never learned it", () => {
+    expect(exitedNoticeText(null, ENDED)).toBe(
+      "shell exited at 14:32 — Restart opens a new shell here",
+    );
+  });
+
+  it("drops the time for a tab restored from a state.json without it", () => {
+    expect(exitedNoticeText(137, null)).toBe(
+      "shell exited (code 137) — Restart opens a new shell here",
+    );
+  });
+
+  it("still says what happened and what Restart does with neither", () => {
+    expect(exitedNoticeText(null, null)).toBe("shell exited — Restart opens a new shell here");
+  });
+
+  it("pads a single-digit hour and minute", () => {
+    expect(exitedNoticeText(0, new Date(2026, 8, 12, 9, 5).getTime())).toContain(" at 09:05 ");
+  });
+
+  // 디스크에서 복원된 숫자가 Date 로 읽히지 않을 수 있다 — 그때는 "at NaN:NaN" 대신
+  // 시각 조각을 통째로 뺀다 (없는 조각은 빼는 위 규율 그대로).
+  it("drops the time when it is not a readable date", () => {
+    expect(exitedNoticeText(0, Number.NaN)).toBe(
+      "shell exited (code 0) — Restart opens a new shell here",
+    );
+    expect(exitedNoticeText(0, 8.64e15 + 1)).toBe(
+      "shell exited (code 0) — Restart opens a new shell here",
+    );
   });
 });

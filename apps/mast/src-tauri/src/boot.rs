@@ -30,9 +30,11 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use mast_core::command::{CommandError, Dispatcher};
+use mast_core::record::RecordStore;
 
+use crate::commands::forget_record_after_respawn;
 use crate::state;
 use crate::winlog;
 
@@ -50,20 +52,32 @@ const WARMUP_DEADLINE: Duration = Duration::from_secs(30);
 
 /// 복원된 `Running`·세션 없음 탭들을 예열 뒤 간격을 두고 재스폰한다. 즉시 반환하고
 /// 실제 작업은 새 스레드에서 돈다 (모듈 doc).
-pub fn respawn_restored_tabs(handle: AppHandle, dispatcher: Arc<Mutex<Dispatcher>>) {
+///
+/// 되살릴 탭이 하나도 없어도 스레드는 뜬다 — 웨이브의 끝에 도는 정합성 검사와 진단
+/// 한 줄(ADR-0018)은 부팅마다 나와야 기준선 구실을 하고, Fresh 부팅(재스폰 0개)이야말로
+/// 그 기준선이다.
+pub fn respawn_restored_tabs(
+    handle: AppHandle,
+    dispatcher: Arc<Mutex<Dispatcher>>,
+    records: Arc<RecordStore>,
+) {
     let (targets, distros) = {
         let d = dispatcher.lock().unwrap();
         (d.running_terminal_tabs(), distinct_distros(&d))
     };
-    if targets.is_empty() {
-        return;
-    }
-    let stagger = stagger_from_env();
-    winlog!(
-        "boot: respawning {} tab(s), stagger {} ms",
-        targets.len(),
-        stagger.as_millis()
-    );
+    // 되살릴 탭이 없는 부팅에서는 페이싱 knob 을 읽지도 않는다 — 쓰이지 않을 값의
+    // 파싱 경고만 남으면 그 부팅이 페이싱을 했다는 오해를 준다.
+    let stagger = if targets.is_empty() {
+        Duration::ZERO
+    } else {
+        let stagger = stagger_from_env();
+        winlog!(
+            "boot: respawning {} tab(s), stagger {} ms",
+            targets.len(),
+            stagger.as_millis()
+        );
+        stagger
+    };
     // 스레드 생성 실패는 부팅 자체를 막지 않는다 — 탭이 안 살아날 뿐이고, 사용자는
     // 배너의 Restart 로 되살릴 수 있다. 그래도 조용히 넘기지는 않는다.
     if let Err(err) = std::thread::Builder::new()
@@ -72,30 +86,54 @@ pub fn respawn_restored_tabs(handle: AppHandle, dispatcher: Arc<Mutex<Dispatcher
             // knob 0 은 **페이싱 전체를 끈다**는 뜻이다 — 예열까지 건너뛰어야 v0.3.9 의
             // 버스트가 그대로 재현되고, 그 재현이 이 수정의 검증 절차다
             // (WINDOWS-BUILD §10 v0.3.10 item 1). 예열만 남기면 웜 VM 을 때리게 되어
-            // 재현이 실패하고, 그러면 수정이 듣는지도 확인할 수 없다.
-            if !stagger.is_zero() {
+            // 재현이 실패하고, 그러면 수정이 듣는지도 확인할 수 없다. 되살릴 탭이 없는
+            // 부팅에서는 예열도 하지 않는다 — 이 스레드가 도는 이유가 아래 검사뿐이라
+            // `wsl.exe` 를 띄울 근거가 없다.
+            if !targets.is_empty() && !stagger.is_zero() {
                 warm_wsl(&distros);
             }
             for (i, tab) in targets.iter().enumerate() {
                 if i > 0 && !stagger.is_zero() {
                     std::thread::sleep(stagger);
                 }
-                let d_guard = &mut *dispatcher.lock().unwrap();
-                match d_guard.respawn_tab(*tab) {
-                    Ok(_) => {}
-                    // 사용자가 wave 도중 그 탭·워크스페이스를 닫았다. wave 가 별도
-                    // 스레드로 옮겨 가면서 **정상 동작이 된** 경합이라 실패로 적지
-                    // 않는다 (상태·revision 은 불변이다).
-                    Err(CommandError::UnknownTarget { .. }) => {
-                        winlog!("boot: tab {} closed before respawn; skipped", tab.0);
+                let respawned = {
+                    let d_guard = &mut *dispatcher.lock().unwrap();
+                    let result = d_guard.respawn_tab(*tab);
+                    match &result {
+                        Ok(_) => {}
+                        // 사용자가 wave 도중 그 탭·워크스페이스를 닫았다. wave 가 별도
+                        // 스레드로 옮겨 가면서 **정상 동작이 된** 경합이라 실패로 적지
+                        // 않는다 (상태·revision 은 불변이다).
+                        Err(CommandError::UnknownTarget { .. }) => {
+                            winlog!("boot: tab {} closed before respawn; skipped", tab.0);
+                        }
+                        // 스폰 실패는 respawn_tab 이 이미 그 탭을 Exited{None} 으로 강등해
+                        // 상태에 반영했다 — 여기서는 loud 기록만 남긴다.
+                        Err(err) => {
+                            winlog!("boot: respawn failed (tab={}): {err}", tab.0);
+                        }
                     }
-                    // 스폰 실패는 respawn_tab 이 이미 그 탭을 Exited{None} 으로 강등해
-                    // 상태에 반영했다 — 여기서는 loud 기록만 남긴다.
-                    Err(err) => {
-                        winlog!("boot: respawn failed (tab={}): {err}", tab.0);
+                    state::publish_state(&handle, d_guard);
+                    result.is_ok()
+                };
+                // 되살아난 탭의 옛 화면은 이제 새 셸의 것이다 — 삭제는 lock 을 놓은
+                // 뒤다 (Restart 버튼 경로와 같은 헬퍼·같은 규율).
+                if respawned {
+                    forget_record_after_respawn(&records, *tab);
+                }
+            }
+            // 웨이브의 끝 — 부팅이 남긴 어긋남(스폰 실패로 강등된 탭, 복원이 놓친 세션)을
+            // 여기서 한 번 본다. 같은 자리에서 자원 그림 한 줄을 남기는 것이 진단의
+            // 기준선이다 (ADR-0018): 이후 수치는 이 줄과 비교해 읽는다.
+            match handle.try_state::<state::AppState>() {
+                Some(app_state) => {
+                    let audit = crate::audit::run_audit(&handle, &app_state, "boot");
+                    // 무언가 찾았다면 검사 쪽이 이미 같은 줄을 남겼다 — 두 번 찍지 않는다.
+                    if audit.is_empty() {
+                        crate::diagnostics::log_summary(&app_state, &audit, "boot");
                     }
                 }
-                state::publish_state(&handle, d_guard);
+                None => winlog!("boot: managed state unavailable; audit skipped"),
             }
         })
     {

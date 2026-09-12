@@ -4,6 +4,9 @@ Status: accepted (2026-08-20) · Amends [ADR-0004](0004-lifecycle-persistence-re
 decision 3 (state-faithful restore of `Exited` tabs) · Verification: WINDOWS-BUILD §10 v0.3.9
 item 4
 
+**Amended by [ADR-0018](0018-exited-tab-as-terminal-record.md)** (2026-09-12): restore keeps
+`Exited` and reverts only `NotStarted`; the forensics below are left as they were observed.
+
 ## Context
 
 A user reported that every terminal tab came back dead after closing and reopening the app on
@@ -49,6 +52,13 @@ the app is up**: sleep/shutdown with winmux open, `wsl --shutdown`, WSL OOM, or 
    previous run is alive, so a persisted process state is a statement about a run that is over.
    Boot then picks the tab up in the existing respawn enumeration and spawns it in its stored
    `cwd`.
+
+   *[Amended by [ADR-0018](0018-exited-tab-as-terminal-record.md): `sanitize` now **keeps**
+   `Exited` across a relaunch, because the exited tab's last screen survives as a record file
+   and a shell spawned over it would be a record the user never gets to read. The `NotStarted`
+   half of this rule is unchanged, and so is the rest of this decision's reasoning — what
+   removed the justification for the `Exited` half is the banner Restart this ADR itself added,
+   which is the way back that did not exist when the decision was made.]*
 
    This reverses ADR-0004 decision 3 for the `Exited` case. The fidelity that decision bought
    was never delivered — see above; keeping the status preserved nothing a user could see or

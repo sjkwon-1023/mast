@@ -31,7 +31,7 @@
 // | `F2` | 활성 워크스페이스 이름 변경 (사이드바 카드 인라인 편집) | keys.ts 판정 + main.ts window keydown capture |
 // | `Ctrl+Shift+R` | WebView 리로드 (F5 는 쓰지 않는다 — main.ts 주석 참조) | main.ts installReloadKey |
 // | `Ctrl+V` / `Ctrl+Shift+V` / `Shift+Insert` | 붙여넣기 (클립보드 → xterm paste) | terminal-view.ts customKeyEventHandler |
-// | `Ctrl+C` / `Ctrl+Shift+C` / `Ctrl+Insert` (선택 있을 때만) | 복사 — 선택 없는 `Ctrl+C` 는 SIGINT 로 통과 | terminal-view.ts customKeyEventHandler |
+// | `Ctrl+C` / `Ctrl+Shift+C` / `Ctrl+Insert` (선택 있을 때만) | 복사 — 선택 없는 `Ctrl+C` 는 SIGINT 로 통과 | terminal-view.ts `isCopySelectionKey` (기록 뷰도 같은 판정 — record-view.ts) |
 // | `Shift+Enter` (터미널 내) | ESC CR 재작성 — Claude Code 줄바꿈 관례 | terminal-view.ts customKeyEventHandler |
 // | `Esc` (send-mode 활성 중에만 — **현재 UI 진입점 없음: 휴면**) | 전달 대상 선택 취소 — 평시 Esc 는 PTY 소유 | workspace-view.ts (모드 활성 중에만 설치) |
 // | `Ctrl+PgUp` / `Ctrl+PgDn` (textViewer 포커스 중에만) | 이전/다음 512KiB 윈도우 | text-view.ts 뷰 내부 keydown |

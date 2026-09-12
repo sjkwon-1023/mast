@@ -11,6 +11,7 @@ pub mod model;
 pub mod notify;
 pub mod osc;
 pub mod persist;
+pub mod record;
 pub mod replay;
 pub mod reset;
 pub mod send;

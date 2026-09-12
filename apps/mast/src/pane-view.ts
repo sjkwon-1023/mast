@@ -155,7 +155,9 @@ function placeholderText(tab: Tab | null): string {
   const kind: TabKind = tab.kind;
   switch (kind.type) {
     case "terminal":
-      // ptySession 없는 terminal 탭 — visible 판정에서 제외된 경우.
+      // 세션 없는 terminal 탭 중 기록 뷰가 맡지 않는 것 — 세션 없는 exited 탭은
+      // 기록 뷰가 마운트되므로(ADR-0018) 여기 오지 않는다. 남는 것은 복원 직후의
+      // Running 탭(세션이 아직 없다 — 부팅 웨이브가 닿기 전)과 NotStarted 탭이다.
       return "(terminal tab without pty session)";
     case "folderBrowser":
       // 21단계 C1 이후로 folderBrowser 는 항상 마운트된다 — 이 문구는 뷰
@@ -170,12 +172,38 @@ function placeholderText(tab: Tab | null): string {
   }
 }
 
-/** 재시작 배너 문구 (영어 UI 텍스트) — 두 상태는 사용자에게 전혀 다른 상황이라
+/** 시작하지 못한 탭의 배너 문구 (영어 UI 텍스트) — exited 와 전혀 다른 상황이라
  *  안내가 갈린다: "아직 시작도 못 했다"(대개 WSL 이 느리다)와 "끝났다". */
-const RESTART_NOTICE = {
-  notStarted: "The shell has not started. WSL may be slow or unresponsive.",
-  exited: "The shell has exited.",
-} as const;
+const NOT_STARTED_NOTICE = "The shell has not started. WSL may be slow or unresponsive.";
+
+/** 끝난 탭의 배너 문구 — DOM-free 순수 함수라 테스트가 네 조합을 다 잠근다.
+ *
+ *  두 조각(code·시각)은 **각각** 빠질 수 있다: code 는 백엔드가 종료 코드를 얻지
+ *  못한 경우(강등·audit 수리)이고, 시각은 이 필드를 모르는 구 state.json 에서
+ *  복원된 탭이다. 없는 조각은 "unknown" 으로 적지 않고 통째로 뺀다 — 모르는 값을
+ *  자리만 채워 보여 주면 읽는 쪽이 그것도 정보라고 믿는다.
+ *
+ *  Restart 를 문장에 넣는 이유는 옆 버튼이 "같은 화면을 되살린다"로 읽히기 때문
+ *  이다 — 실제로는 새 셸이고, 기록은 그 순간 지워진다 (ADR-0018). */
+export function exitedNoticeText(code: number | null, endedAtMs: number | null): string {
+  const at = endedAtMs === null ? null : localHourMinute(endedAtMs);
+  const exit = code === null ? "" : ` (code ${code})`;
+  return `shell exited${exit}${at === null ? "" : ` at ${at}`} — Restart opens a new shell here`;
+}
+
+/** 로컬 시각 HH:MM, 읽을 수 없는 값이면 null — 날짜를 붙이지 않는 것은 배너가
+ *  "방금 끝났다"를 말하는 자리라서다. 앱을 껐다 켠 뒤의 기록도 같은 문구를 쓰지만,
+ *  그 경우 날짜까지 필요하면 탭이 아니라 기록 자체를 여는 길이 있어야 한다 (범위 밖).
+ *
+ *  null 을 돌려주는 길이 있는 이유: `ended_at_ms` 는 디스크에서 복원된 숫자라
+ *  `Date` 가 Invalid Date 로 읽는 값(범위 밖·NaN)일 수 있고, 그러면 배너에
+ *  `at NaN:NaN` 이 박힌다. 모르는 값은 조각째 빼는 것이 위 규율이다. */
+function localHourMinute(ms: number): string | null {
+  const at = new Date(ms);
+  if (!Number.isFinite(at.getTime())) return null;
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
 
 export class PaneView {
   readonly root: HTMLDivElement;
@@ -318,15 +346,21 @@ export class PaneView {
   /** 활성 탭 상태에 따라 배너를 켜고 문구·Restart 대상을 갱신한다. */
   private syncRestartBanner(pane: Pane): void {
     const tab = pane.tabs.find((t) => t.id === pane.activeTab) ?? null;
-    const status = tab !== null && tab.kind.type === "terminal" ? tab.kind.status.type : null;
-    const kind = status === "notStarted" || status === "exited" ? status : null;
-    this.restartTab = kind === null || tab === null ? null : tab.id;
+    const kind = tab !== null && tab.kind.type === "terminal" ? tab.kind : null;
+    // 배너가 뜨는 상태만 남긴다 — status 가 non-null 인 것이 곧 "배너를 켠다" 다.
+    const status = kind === null || kind.status.type === "running" ? null : kind.status;
+    this.restartTab = status === null || tab === null ? null : tab.id;
     this.syncRetryDisabled();
-    this.restartEl.hidden = kind === null;
-    this.restartEl.classList.toggle("exited", kind === "exited");
-    if (kind === null) return;
-    setText(this.restartTextEl, RESTART_NOTICE[kind]);
-    setText(this.restartButtonEl, kind === "exited" ? "Restart" : "Retry");
+    this.restartEl.hidden = status === null;
+    this.restartEl.classList.toggle("exited", status?.type === "exited");
+    if (status === null) return;
+    if (status.type === "exited") {
+      setText(this.restartTextEl, exitedNoticeText(status.code, status.endedAtMs));
+      setText(this.restartButtonEl, "Restart");
+    } else {
+      setText(this.restartTextEl, NOT_STARTED_NOTICE);
+      setText(this.restartButtonEl, "Retry");
+    }
   }
 
   /** 지금 배너가 가리키는 탭의 요청이 떠 있을 때만 버튼을 잠근다. */
@@ -436,8 +470,9 @@ export class PaneView {
 
   /** 스냅샷 반영 — 활성 테두리·탭바 갱신 + keep-alive 뷰 가시성 전환.
    *  visible 은 planViewSync 가, visibleViewer 는 planViewerSync 가 이 pane 에
-   *  대해 판정한 항목(없으면 null)이다. 탭 하나는 terminal 이거나 뷰어이지 둘
-   *  다일 수 없으므로 둘이 동시에 non-null 로 오지 않는다. */
+   *  대해 판정한 항목(없으면 null)이다. ADR-0018 이후로 terminal 탭도 뷰어가 될 수
+   *  있지만 둘이 동시에 non-null 로 오지는 않는다 — 판별자가 `ptySession` 이라
+   *  양쪽 통과 조건이 서로 배타적이다 (근거는 view-reconcile.ts 상단). */
   update(
     pane: Pane,
     active: boolean,

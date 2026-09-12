@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
 use mast_core::reset::{ResetConfig, ResetPolicy, ResetTrigger};
+use crate::state::AppState;
 use crate::{winlog, wintrace};
 
 /// env 하나를 u64 로 파싱한다. 미설정은 기본값, 잘못된 값(비정수·음수·비UTF-8)은
@@ -226,7 +227,7 @@ impl ResetSupervisor {
             let reason = describe_trigger(trigger, &g, &self.shared.cfg, now);
             g.suppressed_logged = false;
             drop(g);
-            perform_reset(&self.shared.app, &reason);
+            perform_reset(&self.shared.app, &reason, Some(trigger));
         } else {
             drop(g);
         }
@@ -239,7 +240,7 @@ impl ResetSupervisor {
     /// 직접 경로다. **UI 버튼으로 노출하지 않는다** (계획 v2 12장 원칙 — 디버깅·
     /// 향후 MCP 전용).
     pub fn reset_now(&self) {
-        perform_reset(&self.shared.app, "trigger=manual (reset_ui dev hook)");
+        perform_reset(&self.shared.app, "trigger=manual (reset_ui dev hook)", None);
     }
 }
 
@@ -267,8 +268,39 @@ fn describe_trigger(trigger: ResetTrigger, g: &Guarded, cfg: &ResetConfig, now: 
 /// WebView 리로드 — 세션·레이아웃·replay 는 전부 Rust 소유라 UI 만 원점으로
 /// 돌아가고, 프론트는 attach 프로토콜로 복원한다 (계획 v2 12장). 실패는 삼키지
 /// 않고 loud — 다음 트리거·수동 리로드(Ctrl+Shift+R)가 재시도 경로다.
-fn perform_reset(app: &AppHandle, reason: &str) {
+fn perform_reset(app: &AppHandle, reason: &str, trigger: Option<ResetTrigger>) {
     winlog!("reset: reloading webview ({reason})");
+    // 메모리 임계 발화는 "무언가가 자원을 붙잡고 있다"는 유일한 자동 신호다 — 그때의
+    // 백엔드 그림을 한 줄 남긴다 (ADR-0018 진단). 다른 트리거(idle·hidden·수동)는
+    // 자원과 무관하므로 찍지 않는다.
+    if matches!(trigger, Some(ResetTrigger::MemWatchdog)) {
+        // 수집은 **떼어 낸 스레드**에서 돈다. `diagnostics::collect` 가 탭을 세는 동안
+        // Dispatcher lock 을 기다리는데, 이 함수는 워크스페이스 전환 신호를 통해
+        // async `dispatch` 커맨드에서도 불린다 — 거기서 기다리면 다른 스폰이 쥔 lock
+        // 동안 Tokio worker 를 점유하고 리로드까지 늦춘다. 리로드는 백엔드 그림을
+        // 기다릴 이유가 없으므로 결과를 회수하지 않는다 (fire-and-forget).
+        //
+        // 대가는 이 줄이 **리로드 이전의 그림이 아니라는 것**이다: lock 대기가 길면
+        // 탭·세션·프로세스 수치가 리로드가 시작된 뒤의 값일 수 있고, 로그만 보고는
+        // 어느 쪽인지 가릴 수 없다. 그래서 context 가 그 사실까지 말한다.
+        let diag_app = app.clone();
+        let spawned = std::thread::Builder::new()
+            .name("mast-diag".into())
+            .spawn(move || match diag_app.try_state::<AppState>() {
+                Some(state) => {
+                    // 여기서 검사를 새로 돌리지 않는다 (주기 검사 없음이 D5 다) — 그래서
+                    // 줄의 `audit ...` 필드만 다른 시점의 값이다. 몇 시간 전 결과일 수 있는
+                    // 것을 갓 잰 수치와 한 줄에 두므로 context 가 그 사실을 말한다.
+                    let audit = state.last_audit.lock().unwrap().clone();
+                    let context = "reset memWatchdog (sampled around the reload; audit: last seen)";
+                    crate::diagnostics::log_summary(&state, &audit, context);
+                }
+                None => winlog!("reset: managed state unavailable; diagnostics skipped"),
+            });
+        if let Err(err) = spawned {
+            winlog!("reset: cannot spawn the diagnostics thread: {err}");
+        }
+    }
     match app.get_webview_window("main") {
         Some(window) => {
             if let Err(err) = window.reload() {
@@ -338,7 +370,7 @@ fn worker(shared: &Shared) {
             let reason = describe_trigger(trigger, &g, &shared.cfg, now);
             g.suppressed_logged = false;
             drop(g);
-            perform_reset(&shared.app, &reason);
+            perform_reset(&shared.app, &reason, Some(trigger));
             g = shared.guarded.lock().unwrap();
             continue; // cooldown 반영된 상태로 즉시 재판정 (연쇄 트리거 처리).
         }
@@ -378,24 +410,29 @@ fn worker(shared: &Shared) {
     }
 }
 
-/// WebView2 프로세스 메모리 측정 (Windows 전용) — Toolhelp 스냅샷으로 자기 PID 의
-/// 자손 트리를 만들고, 이미지명이 msedgewebview2.exe 인 프로세스의 PrivateUsage
-/// (PROCESS_MEMORY_COUNTERS_EX)를 합산한다 (계획 C-2).
+/// Windows 프로세스 측정 (Windows 전용). 워치독이 쓰는
+/// [`scan_descendant_webviews`] 는 Toolhelp 스냅샷으로 자기 PID 의 자손 트리를 만들고,
+/// 이미지명이 msedgewebview2.exe 인 프로세스의 PrivateUsage
+/// (PROCESS_MEMORY_COUNTERS_EX)를 합산한다 (계획 C-2). 프로세스 하나를 재는
+/// [`memory`]·[`handle_count`]·[`thread_count`] 는 백엔드 **자신**을 재는 진단
+/// ([`crate::diagnostics`], ADR-0018)도 쓴다 — 그래서 이 모듈이 `pub(crate)` 다.
 #[cfg(windows)]
-mod mem {
+pub(crate) mod mem {
     use std::collections::{HashMap, HashSet};
 
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, ERROR_NO_MORE_FILES, INVALID_HANDLE_VALUE,
     };
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-        TH32CS_SNAPPROCESS,
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, Thread32First, Thread32Next,
+        PROCESSENTRY32W, TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD, THREADENTRY32,
     };
     use windows_sys::Win32::System::ProcessStatus::{
         K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
     };
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessHandleCount, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
 
     /// 합산 대상 이미지명 (대소문자 무시 비교).
     const WEBVIEW_EXE: &str = "msedgewebview2.exe";
@@ -442,8 +479,8 @@ mod mem {
                 continue;
             }
             scan.matched += 1;
-            match private_usage(pid) {
-                Some(bytes) => scan.bytes = scan.bytes.saturating_add(bytes),
+            match memory(pid) {
+                Some(m) => scan.bytes = scan.bytes.saturating_add(m.private_bytes),
                 None => scan.failed += 1,
             }
         }
@@ -498,9 +535,16 @@ mod mem {
         String::from_utf16_lossy(&exe[..len]).eq_ignore_ascii_case(WEBVIEW_EXE)
     }
 
-    /// 프로세스의 PrivateUsage(bytes). 열기/조회 거부는 None — 호출측이 failed
-    /// 로 집계해 과소평가를 드러낸다.
-    fn private_usage(pid: u32) -> Option<u64> {
+    /// 한 프로세스의 메모리 수치. 워치독은 `private_bytes` 만 합산하고, 진단
+    /// ([`crate::diagnostics`])은 백엔드 자신의 working set 까지 읽는다.
+    pub(crate) struct Memory {
+        pub private_bytes: u64,
+        pub working_set_bytes: u64,
+    }
+
+    /// 프로세스의 PrivateUsage·WorkingSetSize(bytes). 열기/조회 거부는 None —
+    /// 워치독 쪽 호출측이 failed 로 집계해 과소평가를 드러낸다.
+    pub(crate) fn memory(pid: u32) -> Option<Memory> {
         // SAFETY: 실패 시 null 반환을 바로 검사한다.
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
         if handle.is_null() {
@@ -519,6 +563,59 @@ mod mem {
         };
         // SAFETY: 위에서 연 프로세스 핸들.
         unsafe { CloseHandle(handle) };
-        (ok != 0).then_some(counters.PrivateUsage as u64)
+        (ok != 0).then_some(Memory {
+            private_bytes: counters.PrivateUsage as u64,
+            working_set_bytes: counters.WorkingSetSize as u64,
+        })
+    }
+
+    /// 프로세스가 열고 있는 커널 핸들 수. 핸들 누수는 PTY 를 만들고 닫는 앱에서
+    /// 메모리보다 먼저 드러나는 신호라 진단이 따로 읽는다.
+    pub(crate) fn handle_count(pid: u32) -> Option<u32> {
+        // SAFETY: 실패 시 null 반환을 바로 검사한다.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            return None;
+        }
+        let mut count: u32 = 0;
+        // SAFETY: 유효한 프로세스 핸들과 스택 위 u32 출력 자리.
+        let ok = unsafe { GetProcessHandleCount(handle, &mut count) };
+        // SAFETY: 위에서 연 프로세스 핸들.
+        unsafe { CloseHandle(handle) };
+        (ok != 0).then_some(count)
+    }
+
+    /// 프로세스의 스레드 수. Win32 에 직접 묻는 API 가 없어 Toolhelp 스레드 스냅샷을
+    /// 훑어 소유 pid 로 거른다 — 스냅샷은 **전 시스템** 분량이라 프로세스 스캔과 같은
+    /// 비용이고, 그래서 진단 커맨드처럼 사람이 부를 때만 도는 자리에서만 쓴다.
+    pub(crate) fn thread_count(pid: u32) -> Option<u32> {
+        // SAFETY: 스냅샷 핸들은 아래에서 CloseHandle 로 닫는다.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        // SAFETY: THREADENTRY32 는 POD — zeroed 후 dwSize 만 채우는 관례 그대로.
+        let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        // SAFETY: 유효한 스냅샷 핸들과 dwSize 초기화된 entry.
+        let mut ok = unsafe { Thread32First(snapshot, &mut entry) };
+        // 첫 호출 실패는 열거 불능이다 — 0 개로 보고하면 "스레드가 없다"는 거짓이
+        // 되므로 프로세스 스캔과 같이 실패를 그대로 돌려준다.
+        if ok == 0 {
+            // SAFETY: 위에서 연 스냅샷 핸들.
+            unsafe { CloseHandle(snapshot) };
+            return None;
+        }
+        let mut count = 0u32;
+        while ok != 0 {
+            if entry.th32OwnerProcessID == pid {
+                count += 1;
+            }
+            // SAFETY: 위와 동일.
+            ok = unsafe { Thread32Next(snapshot, &mut entry) };
+        }
+        // SAFETY: 위에서 연 스냅샷 핸들.
+        unsafe { CloseHandle(snapshot) };
+        Some(count)
     }
 }

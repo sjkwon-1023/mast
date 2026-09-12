@@ -62,8 +62,8 @@
                 "title": "Terminal",
                 "kind": {
                   "type": "terminal",
-                  "ptySession": 12,
-                  "status": { "type": "exited", "code": null },
+                  "ptySession": null,
+                  "status": { "type": "exited", "code": null, "endedAtMs": 1723100500000 },
                   "cwd": null
                 },
                 "notification": "none",

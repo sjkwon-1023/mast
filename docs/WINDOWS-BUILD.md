@@ -353,14 +353,18 @@ button, 계획 v2 section 12).
 
 1. **Persistence round-trip** — build 2 workspaces with splits, tabs, and an adjusted
    splitter ratio → quit and restart the app → the full structure (workspaces, panes,
-   tabs, ratios, active selections, ids) is restored, and every terminal tab runs a
-   **fresh shell** (session content is not persisted — only structure).
-2. **A restart revives an exited tab** ([ADR-0010](adr/0010-restart-dead-terminal-tabs.md);
-   until v0.3.8 this item read the opposite — "exited tabs stay exited") — exit a shell
-   (`exit`) so the tab shows the exited badge and the Restart banner, restart the app → that
-   tab comes back with a **live shell** in its stored directory, no badge and no banner, and
-   the app is otherwise fully functional. Within a single run the badge stays until the user
-   presses Restart: mast does not resurrect a shell under the user.
+   tabs, ratios, active selections, ids) is restored, and every **`Running` or `NotStarted`**
+   terminal tab runs a **fresh shell** (a live session's content is not persisted — only
+   structure). An exited tab is the exception and comes back as its record, per item 2.
+2. **An exited tab stays exited across a restart, and Restart brings it back**
+   ([ADR-0018](adr/0018-exited-tab-as-terminal-record.md), which reverses the restore half of
+   [ADR-0010](adr/0010-restart-dead-terminal-tabs.md); this item read "a restart revives an
+   exited tab" from v0.3.9 to v0.3.23, and the opposite before v0.3.8) — exit a shell (`exit`)
+   so the tab shows the exited badge and the Restart banner, restart the app → that tab comes
+   back **exited**, showing its record with the Restart banner, and the app is otherwise fully
+   functional; only `Running` and `NotStarted` tabs respawn at boot. Within a single run the
+   badge likewise stays until the user presses Restart: mast does not resurrect a shell under
+   the user. The full record behaviour is §10 v0.3.25.
 3. **Corrupt state recovers loudly** — corrupt `state.json` (e.g. truncate it) in the app
    data dir, restart → the app starts fresh, keeps the original as
    `state.json.corrupt-<epoch>`, and logs the reason to stderr.
@@ -1652,16 +1656,22 @@ about. Zoom stays session-only: nothing is written back to `settings.json`.
    that asserts the value is never lost.
 
 4. **A dead terminal tab can be brought back** ([ADR-0010](adr/0010-restart-dead-terminal-tabs.md)) —
-   a shell that dies while the app is running no longer leaves a permanently dead tab. A
-   restart revives it automatically; within one run the pane banner's **Restart** does it on
-   demand. Both keep the tab id, so the tab's shell history and its agent resume hint come back
-   with it.
+   a shell that dies while the app is running no longer leaves a permanently dead tab. The pane
+   banner's **Restart** does it on demand, keeping the tab id, so the tab's shell history and its
+   agent resume hint come back with it.
+
+   > **Superseded in part by [ADR-0018](adr/0018-exited-tab-as-terminal-record.md) (v0.3.25).**
+   > A relaunch no longer revives an exited tab: it comes back exited, showing its record, with
+   > the Restart banner. The bullets below are amended accordingly; the item's remaining halves
+   > — Restart within one run, the history and resume hint, untouched live tabs — are unchanged.
+   > The record behaviour itself is verified by §10 v0.3.25.
 
    - **Restart-revives (the field failure).** With a few tabs open — at least one running an
      agent that has finished a turn, so a resume hint exists — run `wsl --shutdown` from
      PowerShell. Every tab must go to the `exited` badge with the Restart banner. Now close
-     mast and reopen it: **every tab must come back with a live shell** in its own directory,
-     no `exited` badge, and no `(terminal tab without pty session)` anywhere.
+     mast and reopen it: every tab must come back **exited with its record and a Restart
+     button** — and no `(terminal tab without pty session)` anywhere. Pressing Restart in a tab
+     must give it a live shell in its own directory.
    - **The history and the resume hint survived.** In a revived agent tab, press `↑` once: the
      `claude --resume <id>` (or `codex resume <id>`) line must be there, and running it must
      reattach to that conversation. Press `↑` again for the tab's earlier commands.
@@ -1675,8 +1685,9 @@ about. Zoom stays session-only: nothing is written back to `settings.json`.
      a tab and let it fail — it lands as `exited` with the Restart banner. Press **Restart**
      *in that same run*: it must fail again (the knob is still 1ms) and leave the badge and
      banner in place rather than a dead pane — i.e. the retry path stays available after a
-     failed retry. Then quit, relaunch **without** the knob: the tab must come back with a
-     live shell on its own. Before v0.3.9 that tab was dead for good on both counts.
+     failed retry. Then quit, relaunch **without** the knob: since v0.3.25 the tab comes back
+     exited, and its **Restart** must now succeed with a live shell. Before v0.3.9 that tab was
+     dead for good on both counts.
 
 ### v0.3.10 — verification
 
@@ -2174,6 +2185,62 @@ two workspaces throughout and switch with `Ctrl+1`/`Ctrl+2`.
    transcript and the terminal scrollback does not move, Codex is on the alternate screen here
    and ADR-0016's record is right about this machine. Report which one it is with the build and
    `codex --version`; the phone's ▲/▼ button rule (ADR-0016) depends on the answer.
+
+### v0.3.25 — verification
+
+An exited tab is now a record file, not a live session (ADR-0018). The core half is unit-tested;
+everything below needs the Windows build, because the exit path, the registries, the sweep and
+the diagnostics only exist there. Boot with `"log": true` throughout — `mast.log` is where the
+`diag:` and audit lines land — and keep an Explorer window on
+`%AppData%\app.mast.desktop\records\`.
+
+1. **Exit writes a record and releases the session.** In a tab, run something that leaves a
+   recognisable screen (`ls -la`, a short `git log`), then type `exit`.
+   - The pane must keep showing that screen — it is the record now, not an attach — with the
+     banner reading `shell exited (code 0) at HH:MM — Restart opens a new shell here`. The time
+     is the local clock; `exit 3` in a second tab must say `(code 3)`.
+   - `records\tab-<id>.bin` appears for that tab.
+   - In the dev console, `window.__mast.diagnostics()`: the tab is counted under `tabs.exited`,
+     `sessions.registered` and `sessions.sinks` are one lower than before the exit, and
+     `sessions.replayBytes` has dropped by roughly what that tab held (a tab that printed a
+     megabyte is the clearest case). `audit` must be empty — no orphans, no dangling tabs.
+   - Selecting text in the record and pressing `Ctrl+C` copies it (paste it somewhere to check);
+     `Ctrl+=` / `Ctrl+-` / `Ctrl+0` resize the record view **and** every live terminal by the
+     same step.
+2. **Restart replaces the record.** Click **Restart** in that pane: a new shell comes up in the
+   tab's stored cwd, the banner is gone, and `records\tab-<id>.bin` is deleted. `↑` still offers
+   the tab's resume hint (the tab id is unchanged).
+3. **A record survives a relaunch, and only `Running` tabs respawn.** With several tabs open,
+   some live and one exited, run `wsl --shutdown` from Windows: every tab exits and each pane
+   shows its record. Close mast and start it again.
+   - Every tab comes back **exited**, with its record on screen and a Restart button — no tab
+     respawns on its own, and `records\` still holds one file per tab. This is the behaviour
+     change: every release before this one restarted all of them at boot.
+   - Now restart one tab, close the app and relaunch: that tab (now `Running`) comes back with a
+     fresh shell, the others stay records.
+4. **Closing a tab deletes its record.** Close an exited tab (`Ctrl+W` or the tab's ×):
+   `records\tab-<id>.bin` disappears within a second. Same for closing a pane and for closing a
+   whole workspace — check a workspace whose tabs were all exited, all of their files must go.
+5. **A force-quit is cleaned up at the next boot.** With at least one exited tab present, kill
+   mast from Task Manager (End task), then delete nothing by hand and relaunch. If any record no
+   longer belongs to a tab in `state.json` — easiest to stage by killing the app right after
+   closing an exited tab — `mast.log` has one `boot: swept N orphan record file(s)` line and the
+   file is gone. A record whose tab still exists must **not** be swept.
+6. **The `diag:` lines.** `mast.log` has one `diag: boot …` line per launch, including a launch
+   with nothing to respawn. Its `sessions=`/`replay_bytes=`/`tabs …` numbers must match what
+   `window.__mast.diagnostics()` reports at that moment. A second `diag:` line appears only if
+   an audit finds something or the memory watchdog fires — there must be no periodic stream of
+   them while the app sits idle.
+7. **Many exits at once log no false orphans.** Open six or more tabs in one workspace, then make
+   them all exit within the same second (`wsl --shutdown`, or `mast send` an `exit` to each in a
+   loop). `mast.log` must contain **no** `audit (exit): released … orphan session(s)` line — the
+   `exits_in_flight` marker exists for exactly this window. Dangling-tab repairs are also not
+   expected here. Any orphan line in this scenario is the defect, and the whole block of audit
+   lines is what to report.
+8. **The phone is unchanged.** With the remote surface on, open an exited tab from the phone: it
+   still reports the tab as unavailable (HTTP 409), the same as before this release, and the
+   desktop's record view is not disturbed by the request. A live tab in the same workspace keeps
+   polling normally.
 
 ## 11. ARM64 cross-build notes
 

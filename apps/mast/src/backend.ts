@@ -55,6 +55,14 @@ export function detachTerminal(session: SessionId): Promise<void> {
   return invoke<void>("detach_terminal", { session });
 }
 
+/** 셸이 끝난 탭의 마지막 화면 기록을 읽는다 (ADR-0018). 응답은 attachTerminal ·
+ *  fsReadChunk 와 같은 raw body — 기록 파일의 바이트 그대로이고, 파일이 없으면
+ *  **빈 버퍼**다 (에러가 아니다: 기록이 지워졌거나 아무 것도 출력하지 않은 셸의
+ *  정상 경로다). */
+export function readTabRecord(tab: TabId): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>("read_tab_record", { tab });
+}
+
 /** 시작 표식이 오지 않은 탭에 셸을 다시 띄운다 (pane 배너의 Retry). 실패는
  *  CommandError 로 reject 되며, 그 경우에도 백엔드가 상태를 강등해 publish 한다. */
 export function respawnTab(tab: TabId): Promise<SessionId> {
@@ -84,6 +92,35 @@ export function ackOutput(id: SessionId, n: number): Promise<void> {
 /** 전체 세션 stats 조회 (진단용). */
 export function getStats(): Promise<SessionStats[]> {
   return invoke<SessionStats[]>("get_stats");
+}
+
+/** src-tauri `Diagnostics` DTO (ADR-0018) — 필드명은 camelCase (serde rename_all).
+ *  `process` 는 Windows 가 아니면 null 이고, Windows 에서도 개별 조회가 거부되면 그
+ *  필드만 null 이다 — 못 잰 값을 0 으로 채우지 않는 백엔드 계약의 미러다. */
+export interface Diagnostics {
+  process: {
+    privateBytes: number | null;
+    workingSetBytes: number | null;
+    handleCount: number | null;
+    threadCount: number | null;
+  } | null;
+  sessions: { registered: number; alive: number; sinks: number; replayBytes: number };
+  tabs: { running: number; exited: number; notStarted: number };
+  audit: {
+    orphanSessions: number[];
+    orphanSinks: number[];
+    /** `[탭 id, 세션 id]` — 탭이 참조하는 세션이 레지스트리에 없었다는 뜻이고,
+     *  백엔드가 그 탭을 이미 exited 로 수리한 뒤의 보고다. */
+    danglingTabs: [number, number][];
+  };
+}
+
+/** 백엔드 자원 진단 (dev 훅 window.__mast.diagnostics 전용 — UI 표면 없음).
+ *  호출 때마다 모델 ↔ 레지스트리 정합성 검사가 한 번 돌고, 그 결과 반영 뒤의
+ *  수치가 온다. 주기 폴링으로 쓰지 않는다 — Toolhelp 스레드 스냅샷은 전 시스템
+ *  분량이라 싸지 않다. */
+export function getDiagnostics(): Promise<Diagnostics> {
+  return invoke<Diagnostics>("get_diagnostics");
 }
 
 /** 활동 핑 (16단계 C-3) — throttled 사용자 입력 신호. `visible` 은
