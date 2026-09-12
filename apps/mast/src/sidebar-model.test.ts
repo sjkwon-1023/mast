@@ -189,7 +189,7 @@ describe("hasRunningTerminals", () => {
     expect(hasRunningTerminals(ws(1, { panes: { "1": pane(1, [viewerTab(10)]) } }))).toBe(false);
     expect(hasRunningTerminals(ws(2, { panes: { "1": pane(1, []) } }))).toBe(false);
     const exited = terminalTab(12);
-    if (exited.kind.type === "terminal") exited.kind.status = { type: "exited", code: 0 };
+    if (exited.kind.type === "terminal") exited.kind.status = { type: "exited", code: 0, endedAtMs: 1723100500000 };
     expect(hasRunningTerminals(ws(3, { panes: { "1": pane(1, [exited]) } }))).toBe(false);
   });
 

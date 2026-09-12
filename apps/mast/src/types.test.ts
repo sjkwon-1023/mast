@@ -272,11 +272,14 @@ describe("stage10-snapshot.json", () => {
     if (tab4.kind.type !== "terminal") throw new Error("tab4 must be terminal");
     expect(tab4.kind.cwd).toBe("/home/dev/code/mast");
 
-    // exited + code null + cwd null (nullable 계약).
+    // exited + code null + cwd null (nullable 계약). 끝난 탭은 세션을 놓았고
+    // (ADR-0018) 종료 시각을 싣는다.
     const tab6 = ws1.panes["3"].tabs[0];
     expect(tabKindLabel(tab6.kind)).toBe("terminal:exited:null");
     if (tab6.kind.type !== "terminal") throw new Error("tab6 must be terminal");
-    expect(tab6.kind.ptySession).toBe(12);
+    expect(tab6.kind.ptySession).toBeNull();
+    if (tab6.kind.status.type !== "exited") throw new Error("tab6 must be exited");
+    expect(tab6.kind.status.endedAtMs).toBe(1723100500000);
     expect(tab6.kind.cwd).toBeNull();
     expect(tab6.lastActivityMs).toBeNull();
   });

@@ -314,6 +314,8 @@ pub enum SessionEvent {
     SessionExited {
         session: SessionId,
         code: Option<u32>,
+        /// 종료 시각 (epoch ms) — 코어는 시계를 읽지 않으므로 글루가 주입한다.
+        ended_at_ms: u64,
     },
     /// 시작 표식이 마감 안에 오지 않았다. 세션은 **살아 있고** `pty_session` 도 그대로
     /// 유지된다 — 늦게 온 표식이 상태를 되돌릴 수 있어야 하기 때문이다.
@@ -475,7 +477,11 @@ impl Dispatcher {
     /// 세션 이벤트 반영. 상태가 실제로 바뀔 때만 `revision += 1`.
     pub fn apply_event(&mut self, ev: SessionEvent) {
         match ev {
-            SessionEvent::SessionExited { session, code } => {
+            SessionEvent::SessionExited {
+                session,
+                code,
+                ended_at_ms,
+            } => {
                 self.started_sessions.remove(&session);
                 let mut changed = false;
                 for ws in &mut self.state.workspaces {
@@ -483,18 +489,21 @@ impl Dispatcher {
                     for pane in ws.panes.values_mut() {
                         for tab in &mut pane.tabs {
                             if let TabKind::Terminal {
-                                pty_session: Some(s),
+                                pty_session,
                                 status,
                                 ..
                             } = &mut tab.kind
                             {
-                                if *s == session {
-                                    // pty_session 은 유지한다 (Exited 탭 표시용).
-                                    let next = TerminalStatus::Exited { code };
-                                    if *status != next {
-                                        *status = next;
-                                        changed = true;
-                                    }
+                                if *pty_session == Some(session) {
+                                    // 세션을 놓는다 — 죽은 세션에 attach 할 길을 남기지
+                                    // 않는 것이 기록(ADR-0018)의 전제다. 글루는 이 이벤트를
+                                    // 반영한 뒤 레지스트리에서도 세션·sink 를 지운다.
+                                    *pty_session = None;
+                                    *status = TerminalStatus::Exited {
+                                        code,
+                                        ended_at_ms: Some(ended_at_ms),
+                                    };
+                                    changed = true;
                                     exited.push(tab.id);
                                 }
                             }
@@ -526,10 +535,11 @@ impl Dispatcher {
                                 ..
                             } = &mut tab.kind
                             {
-                                // Running 만 강등한다. 마감 직전에 종료한 세션의
-                                // Exited 를 덮으면 이미 끝난 탭이 "시작 안 됨"으로
-                                // 되살아나고, 그 오분류는 워치독과 waiter 의 경합
-                                // 순서에 따라 재현조차 안 된다.
+                                // Running 만 강등해 NotStarted 재보고를 no-op 으로
+                                // 닫는다. 마감 직전에 종료한 세션의 경합 — 끝난 탭이
+                                // "시작 안 됨"으로 되살아나는 오분류 — 은 이제 위쪽
+                                // 패턴이 막는다: 자연 종료한 탭은 세션을 놓으므로
+                                // (ADR-0018) `pty_session: Some(s)` 에 걸리지 않는다.
                                 if *s == session && *status == TerminalStatus::Running {
                                     *status = TerminalStatus::NotStarted;
                                     changed = true;
@@ -552,9 +562,9 @@ impl Dispatcher {
     ///
     /// - 세션→탭 역매핑은 [`Self::apply_event`] 와 같은 선형 탐색이고, **미지 세션
     ///   은 무해한 no-op** 이다 (창이 열려 있는 동안 탭이 닫히는 정상 순서).
-    /// - **Exited 탭은 델타를 통째로 스킵**한다: 100ms 창 안에서 세션이 끝나면 즉시
-    ///   처리된 `SessionExited` 의 Idle 리셋 뒤에 지연된 배치가 죽은 탭에 알림을
-    ///   다시 도장하는 구멍이 생긴다.
+    /// - 끝난 탭에 지연 배치가 도착하는 창(100ms flush)은 그 no-op 이 덮는다 —
+    ///   `SessionExited` 가 `pty_session` 을 비우므로 죽은 탭은 세션 id 로 더 이상
+    ///   찾히지 않고, 알림·상태가 다시 도장되는 구멍도 함께 닫힌다.
     /// - `now_ms` 는 글루가 주입한다 (코어는 시계를 읽지 않는다).
     /// - revision 은 변경이 하나라도 있을 때 **배치당 1회** 오른다.
     pub fn apply_osc(&mut self, batch: OscBatch, now_ms: u64) -> bool {
@@ -597,16 +607,6 @@ impl Dispatcher {
             .get_mut(&pane)
             .expect("locate_session 이 존재를 보장")
             .tabs[ti];
-        if matches!(
-            tab.kind,
-            TabKind::Terminal {
-                status: TerminalStatus::Exited { .. },
-                ..
-            }
-        ) {
-            return false;
-        }
-
         let mut changed = false;
         // 늦게 도착한 표식이 경고를 거두는 경로다. 감지가 세션을 죽이지 않기 때문에
         // 존재할 수 있는 전이이며, 느린 콜드 스타트를 오탐해도 대가가 없는 근거이기도
@@ -678,12 +678,11 @@ impl Dispatcher {
     /// respawn 대상 열거 — **Running 터미널 탭 중 `pty_session` 이 None** 인 탭
     /// (= adopt 직후의 재스폰 대상).
     ///
-    /// 디스크에 `Exited` 로 저장된 탭은 persist sanitize 가 복원 시 `Running` 으로
-    /// 되돌리므로(ADR-0010) 여기에 그대로 잡힌다 — 재시작이 곧 되살리기다. 반면
-    /// **런타임에 죽어 `Exited` 가 된 탭은 이 열거의 대상이 아니다**: 이 함수는 부팅
-    /// 1회용이고, 실행 중 죽은 탭은 사용자가 pane 배너의 Restart 로
-    /// [`Self::respawn_tab`] 을 직접 부르는 경로를 탄다 (멋대로 되살리면 사용자가
-    /// 의도적으로 끝낸 셸까지 되살아난다).
+    /// **`Exited` 탭은 디스크에서 왔든 런타임에 죽었든 이 열거의 대상이 아니다** —
+    /// persist sanitize 는 `Exited` 를 그대로 두고 `NotStarted` 만 `Running` 으로
+    /// 되돌린다(ADR-0018 D3). 끝난 탭의 마지막 화면은 기록 파일로 남아 있고, 되살릴
+    /// 길은 pane 배너의 Restart([`Self::respawn_tab`])다 — 부팅이 멋대로 되살리면
+    /// 사용자가 의도적으로 끝낸 셸까지 함께 살아난다.
     pub fn running_terminal_tabs(&self) -> Vec<TabId> {
         let mut tabs = Vec::new();
         for ws in &self.state.workspaces {
@@ -901,10 +900,11 @@ impl Dispatcher {
     ///   탭(부팅 복원 경로 — 글루가 [`Self::running_terminal_tabs`] 스냅샷에서 뽑는다),
     ///   **(b) `NotStarted` 탭**(사용자 재시도 경로), **(c) `Exited` 탭**(죽은 셸
     ///   되살리기 — ADR-0010). (b)·(c)는 아직 세션 id 를 물고 있을 수 있어 — (b)는 감지가
-    ///   세션을 죽이지 않아서, (c)는 replay 표시를 위해 죽은 세션의 id 를 남겨 두어서 —
-    ///   새로 띄우기 전에 `host.kill` 로 정리한다(멱등 계약이라 이미 죽은 세션에도
-    ///   무해하고, 레지스트리에서 지워져야 이후 attach 가 옛 id 로 새지 않는다).
-    ///   재시작 복원 뒤라면 persist 가 `pty_session` 을 비워 두므로 None 인 채로 온다.
+    ///   세션을 죽이지 않아서, (c)는 `SessionExited` 를 거치지 않은 경로(글루의 정합성
+    ///   수리 전, 낡은 스냅샷)로 올 수 있어서 — 새로 띄우기 전에 `host.kill` 로
+    ///   정리한다(멱등 계약이라 이미 죽은 세션에도 무해하고, 레지스트리에서 지워져야
+    ///   이후 attach 가 옛 id 로 새지 않는다). 정상 경로의 (c)는 `pty_session` 이 이미
+    ///   None 이다.
     ///   그 외(미지 id·Running 인데 세션 있음)는 [`CommandError::UnknownTarget`] 이고
     ///   상태·revision 은 불변이다.
     ///
@@ -917,8 +917,8 @@ impl Dispatcher {
     ///   스폰 경로를 공유한다. 탭에 기록된 cwd 는 바꾸지 않는다 (생성 시점 값
     ///   보존 — 계획 0장 충실도 한계 명시).
     /// - 성공 시 `pty_session` 에 새 id 를 채우고, **스폰 실패 시 그 탭을
-    ///   `Exited { code: None }` 으로 강등한다** — dispatch 의 "실패 = 상태 불변"
-    ///   계약과 달리 강등 자체가 설계된 결과 상태다. 성공·강등 어느 쪽이든
+    ///   `Exited { code: None, ended_at_ms: None }` 으로 강등한다** — dispatch 의
+    ///   "실패 = 상태 불변" 계약과 달리 강등 자체가 설계된 결과 상태다. 성공·강등 어느 쪽이든
     ///   `revision += 1` 로 스냅샷에 전파된다.
     pub fn respawn_tab(&mut self, tab: TabId) -> Result<SessionId, CommandError> {
         let (wi, pane, ti) = self.locate_tab(tab)?;
@@ -965,12 +965,13 @@ impl Dispatcher {
                 Ok(session)
             }
             Err(err) => {
-                // 스폰 실패 강등. NotStarted·Exited 에서 온 재시도는 위에서 옛 세션을 kill 했고
-                // host 가 레지스트리에서도 지웠으므로, 그 id 를 남기면 이후 attach 가
-                // 미지 세션으로 실패한다 — Exited 탭이 세션 id 를 유지하는 이유(replay
-                // attach)를 만족하지 못하는 id 다.
+                // 스폰 실패 강등. 종료 시각은 없다 — 이 탭에서 끝난 셸이 없기 때문이고,
+                // 배너는 시각 조각을 생략한다.
                 *pty_session = None;
-                *status = TerminalStatus::Exited { code: None };
+                *status = TerminalStatus::Exited {
+                    code: None,
+                    ended_at_ms: None,
+                };
                 Err(err)
             }
         };
@@ -1461,8 +1462,10 @@ impl Dispatcher {
     /// 영구히 사라지는 탭들의 정리 — terminal 탭마다 소속 세션을 kill 하고, 그
     /// 탭들의 셸측 자원 해제를 호스트에 **한 번** 알린다. 뷰어 탭은 어느 쪽도 아니다.
     ///
-    /// kill 은 status 와 무관하다 (이미 Exited 여도 무해 — `SessionHost::kill` 은
-    /// 멱등 계약). 해제 통지는 세션 유무와도 무관하다: 스폰이 실패했거나 시작 표식이
+    /// kill 여부는 status 가 아니라 `pty_session` 유무만 본다 — 자연 종료한 탭은
+    /// 세션을 이미 놓았으므로(ADR-0018) 해제만 가고, 세션 id 를 문 채인 탭(NotStarted,
+    /// 혹은 비정상 경로의 Exited)은 kill 한다 (`SessionHost::kill` 은 멱등 계약이라
+    /// 이미 죽은 id 여도 무해). 해제 통지는 세션 유무와도 무관하다: 스폰이 실패했거나 시작 표식이
     /// 오지 않아 세션이 없는 탭도 자기 `HISTFILE` 은 이미 만들어져 있을 수 있다.
     ///
     /// kill 이 먼저인 것은 순서 계약이다 — 셸은 종료할 때 `HISTFILE` 을 쓰므로,
@@ -1997,18 +2000,21 @@ mod tests {
     }
 
     #[test]
-    fn exited_tab_close_still_kills_session() {
-        // "kill 은 status 무관" 의미론 고정 — 자연 종료(SessionExited 반영)된
-        // 탭을 닫아도 host.kill 이 호출된다 (kill 은 멱등 계약이라 늦은 호출 무해).
+    fn closing_an_exited_tab_releases_its_files_without_a_kill() {
+        // 자연 종료된 탭은 세션을 이미 놓았으므로(ADR-0018) kill 할 대상이 없다.
+        // 그래도 탭 id 는 release 에 실려야 한다 — HISTFILE·resume 힌트는 세션이
+        // 아니라 탭에 붙어 있고, 여기서 빠지면 그 파일이 영원히 남는다 (ADR-0013).
         let (mut d, host) = dispatcher();
-        let (_ws, pane) = create_ws(&mut d, "ws");
+        let (_ws, pane) = create_ws_on(&mut d, "ws", "Ubuntu");
         let (tab, session) = create_terminal_tab(&mut d, pane);
         d.apply_event(SessionEvent::SessionExited {
             session,
             code: Some(0),
+            ended_at_ms: 1_700_000_000_000,
         });
         d.dispatch(Command::CloseTab { tab }).unwrap();
-        assert_eq!(host.kills(), vec![session]);
+        assert!(host.kills().is_empty());
+        assert_eq!(host.releases(), vec![(vec![tab], Some("Ubuntu".into()))]);
     }
 
     #[test]
@@ -2587,7 +2593,7 @@ mod tests {
     }
 
     #[test]
-    fn session_exited_marks_tab_and_keeps_session_id() {
+    fn session_exited_drops_the_session_and_stamps_the_time() {
         let (mut d, _host) = dispatcher();
         let (ws, pane) = create_ws(&mut d, "ws");
         let (_tab, session) = create_terminal_tab(&mut d, pane);
@@ -2596,6 +2602,7 @@ mod tests {
         d.apply_event(SessionEvent::SessionExited {
             session,
             code: Some(0),
+            ended_at_ms: 1_700_000_000_000,
         });
         assert_eq!(d.state().revision, rev + 1);
         let TabKind::Terminal {
@@ -2606,15 +2613,35 @@ mod tests {
         else {
             panic!("terminal 탭이 아님");
         };
-        assert_eq!(*pty_session, Some(session), "pty_session 은 유지");
-        assert_eq!(*status, TerminalStatus::Exited { code: Some(0) });
+        assert_eq!(*pty_session, None, "죽은 세션은 탭이 놓는다");
+        assert_eq!(
+            *status,
+            TerminalStatus::Exited {
+                code: Some(0),
+                ended_at_ms: Some(1_700_000_000_000)
+            }
+        );
 
-        // 동일 이벤트 재도착 → 상태 변화 없음, revision 불변.
+        // 같은 세션의 재도착은 이제 세션 id 로 찾히지 않는다 — 미지 세션 no-op 과
+        // 같은 결과이고, 두 번째 시각이 첫 종료 시각을 덮지 않는다.
         d.apply_event(SessionEvent::SessionExited {
             session,
-            code: Some(0),
+            code: Some(9),
+            ended_at_ms: 1_700_000_999_999,
         });
         assert_eq!(d.state().revision, rev + 1);
+        let TabKind::Terminal { status, .. } =
+            &d.state().workspace(ws).unwrap().panes[&pane].tabs[0].kind
+        else {
+            panic!("terminal 탭이 아님");
+        };
+        assert_eq!(
+            *status,
+            TerminalStatus::Exited {
+                code: Some(0),
+                ended_at_ms: Some(1_700_000_000_000)
+            }
+        );
     }
 
     #[test]
@@ -2626,6 +2653,7 @@ mod tests {
         d.apply_event(SessionEvent::SessionExited {
             session: 999,
             code: None,
+            ended_at_ms: 1_700_000_000_000,
         });
         assert_eq!(serde_json::to_value(d.state()).unwrap(), before);
     }
@@ -3299,12 +3327,13 @@ mod tests {
     }
 
     #[test]
-    fn apply_osc_skips_whole_delta_for_exited_tab() {
+    fn a_late_delta_cannot_reach_an_exited_tab() {
         // 100ms 창 안에서 세션이 끝나면 즉시 처리된 SessionExited 의 Idle 리셋 뒤에
-        // 지연 배치가 도착한다 — 죽은 탭에 알림·상태를 다시 도장하면 안 된다.
+        // 지연 배치가 도착한다 — 죽은 탭에 알림·상태를 다시 도장하면 안 된다. 이제
+        // 그 탭은 세션을 놓은 상태라 역매핑(locate_session)에서 아예 빠진다.
         let (mut d, _host) = dispatcher();
         let (ws, pane) = create_ws(&mut d, "ws");
-        let (_tab, session) = create_terminal_tab(&mut d, pane);
+        let (tab, session) = create_terminal_tab(&mut d, pane);
         d.apply_osc(
             batch(&[(session, status_notify("mast:needsInput", "approve?"))]),
             1_000,
@@ -3312,11 +3341,13 @@ mod tests {
         d.apply_event(SessionEvent::SessionExited {
             session,
             code: Some(0),
+            ended_at_ms: 1_700_000_000_000,
         });
         assert_eq!(agent(&d, ws).0, AgentStatus::Idle);
+        assert_eq!(terminal_of(&d, tab).1, None, "세션을 놓은 뒤가 전제다");
         let before = serde_json::to_value(d.state()).unwrap();
 
-        // 제목·활동 시각까지 통째로 스킵 — 상태 변화 없음.
+        // 제목·활동 시각까지 통째로 무해 — 상태 변화 없음.
         assert!(!d.apply_osc(
             batch(&[
                 (session, OscEvent::Osc0Title("late".into())),
@@ -3712,6 +3743,7 @@ mod tests {
         d.apply_event(SessionEvent::SessionExited {
             session,
             code: Some(1),
+            ended_at_ms: 1_700_000_000_000,
         });
 
         assert!(host.releases().is_empty());
@@ -3728,6 +3760,7 @@ mod tests {
         d.apply_event(SessionEvent::SessionExited {
             session,
             code: Some(1),
+            ended_at_ms: 1_700_000_000_000,
         });
         host.set_fail_spawn(true);
         assert!(d.respawn_tab(tab).is_err());
@@ -3772,6 +3805,7 @@ mod tests {
         d.apply_event(SessionEvent::SessionExited {
             session: s1,
             code: Some(0),
+            ended_at_ms: 1_700_000_000_000,
         });
         assert_eq!(agent(&d, ws).0, AgentStatus::NeedsInput);
         assert_eq!(agent(&d, ws).1, Some(tab2));
@@ -3781,6 +3815,7 @@ mod tests {
         d.apply_event(SessionEvent::SessionExited {
             session: s2,
             code: Some(0),
+            ended_at_ms: 1_700_000_000_000,
         });
         assert_eq!(agent(&d, ws).0, AgentStatus::Idle);
         assert_eq!(agent(&d, ws).1, None);
@@ -3870,7 +3905,14 @@ mod tests {
                             id: PaneId(3),
                             tabs: vec![
                                 sessionless_tab(6, TerminalStatus::Running, Some("/custom")),
-                                sessionless_tab(7, TerminalStatus::Exited { code: Some(1) }, None),
+                                sessionless_tab(
+                                    7,
+                                    TerminalStatus::Exited {
+                                        code: Some(1),
+                                        ended_at_ms: Some(1_700_000_000_000),
+                                    },
+                                    None,
+                                ),
                             ],
                             active_tab: Some(TabId(6)),
                         },
@@ -3991,7 +4033,13 @@ mod tests {
         // 강등이 설계된 결과 상태 — pty_session 은 None 유지, revision 반영.
         assert_eq!(
             terminal_kind(&d, PaneId(2), 0),
-            (None, TerminalStatus::Exited { code: None })
+            (
+                None,
+                TerminalStatus::Exited {
+                    code: None,
+                    ended_at_ms: None
+                }
+            )
         );
         assert_eq!(d.state().revision, 4);
         // 강등된 탭도 다시 시도할 수 있다 (ADR-0010 — pane 배너의 Restart).
@@ -4005,9 +4053,11 @@ mod tests {
         assert_eq!(d.running_terminal_tabs(), vec![TabId(6)]);
     }
 
-    /// 실행 중 죽은 탭을 되살리는 경로 (ADR-0010). replay 표시용으로 남아 있던 죽은
-    /// 세션을 먼저 정리하고, **같은 탭 id** 로 다시 스폰해 HISTFILE·resume 힌트를
-    /// 그대로 물린다 — ↑ 한 번으로 죽은 에이전트 세션을 resume 하는 것이 요점이다.
+    /// 실행 중 죽은 탭을 되살리는 경로 (ADR-0010). 정상 경로로 온 Exited 탭은 세션을
+    /// 이미 놓았으므로(ADR-0018) 정리할 대상이 없고, **같은 탭 id** 로 다시 스폰해
+    /// HISTFILE·resume 힌트를 그대로 물린다 — ↑ 한 번으로 죽은 에이전트 세션을 resume
+    /// 하는 것이 요점이다. 세션 id 를 문 채 Exited 인 형태는 아래
+    /// `respawn_kills_a_stale_session_an_exited_tab_still_holds` 가 잠근다.
     #[test]
     fn respawn_revives_a_tab_that_died_at_runtime() {
         let (mut d, host) = adopted_dispatcher();
@@ -4016,16 +4066,18 @@ mod tests {
         d.apply_event(SessionEvent::SessionExited {
             session: s5,
             code: Some(1_073_807_364),
+            ended_at_ms: 1_700_000_000_000,
         });
         assert_eq!(
             terminal_kind(&d, PaneId(2), 0),
             (
-                Some(s5),
+                None,
                 TerminalStatus::Exited {
-                    code: Some(1_073_807_364)
+                    code: Some(1_073_807_364),
+                    ended_at_ms: Some(1_700_000_000_000)
                 }
             ),
-            "Exited 여도 replay 를 위해 세션 id 는 남는다"
+            "죽은 세션은 탭이 놓는다 — 마지막 화면은 기록 파일에 있다"
         );
 
         let revived = d.respawn_tab(TabId(5)).unwrap();
@@ -4034,12 +4086,51 @@ mod tests {
             terminal_kind(&d, PaneId(2), 0),
             (Some(revived), TerminalStatus::Running)
         );
-        assert_eq!(host.kills(), vec![s5], "죽은 세션을 레지스트리에서 정리한다");
+        assert!(host.kills().is_empty(), "정리할 세션이 남아 있지 않다");
         assert_eq!(host.spawns().last().unwrap().history_tab, Some(TabId(5).0));
     }
 
-    /// 디스크에서 온 `Exited` 탭(세션 id 없음)도 되살아난다 — persist sanitize 가
-    /// Running 으로 되돌리기 전에 직접 호출돼도 같은 결과여야 한다.
+    /// 방어 경로 — `SessionExited` 를 거치지 않고 세션 id 를 문 채 `Exited` 가 된 탭
+    /// (낡은 스냅샷·글루의 정합성 수리 전). 그 id 는 먼저 kill 로 정리해야 이후
+    /// attach 가 옛 id 로 새지 않는다.
+    #[test]
+    fn respawn_kills_a_stale_session_an_exited_tab_still_holds() {
+        let (mut d, host) = adopted_dispatcher();
+        let s5 = d.respawn_tab(TabId(5)).unwrap();
+        force_exited_with_session(&mut d, TabId(5), s5);
+
+        let revived = d.respawn_tab(TabId(5)).unwrap();
+        assert_ne!(revived, s5);
+        assert_eq!(host.kills(), vec![s5]);
+        assert_eq!(
+            terminal_kind(&d, PaneId(2), 0),
+            (Some(revived), TerminalStatus::Running)
+        );
+    }
+
+    /// `SessionExited` 로는 만들 수 없는 형태(Exited + 세션 id 유지)를 직접 세운다.
+    fn force_exited_with_session(d: &mut Dispatcher, tab: TabId, session: SessionId) {
+        // 같은 모듈의 테스트라 비공개 상태에 직접 닿는다.
+        for ws in &mut d.state.workspaces {
+            for pane in ws.panes.values_mut() {
+                for t in &mut pane.tabs {
+                    if t.id == tab {
+                        t.kind = TabKind::Terminal {
+                            pty_session: Some(session),
+                            status: TerminalStatus::Exited {
+                                code: Some(1),
+                                ended_at_ms: Some(1_700_000_000_000),
+                            },
+                            cwd: None,
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    /// 디스크에서 온 `Exited` 탭(세션 id 없음)도 되살아난다 — 복원은 이제 그 상태를
+    /// 그대로 두므로(ADR-0018 D3) 이것이 재시작 후 Restart 가 타는 정상 경로다.
     #[test]
     fn respawn_revives_a_stored_exited_tab_without_a_session() {
         let (mut d, host) = adopted_dispatcher();
@@ -4226,6 +4317,7 @@ mod tests {
         d.apply_event(SessionEvent::SessionExited {
             session: dead,
             code: Some(0),
+            ended_at_ms: 1_700_000_000_000,
         });
         assert_eq!(
             d.resolve_send_target(sender, "build"),
@@ -4325,6 +4417,7 @@ mod tests {
         d.apply_event(SessionEvent::SessionExited {
             session: dead,
             code: Some(0),
+            ended_at_ms: 1_700_000_000_000,
         });
         assert_eq!(
             d.resolve_send_target(sender, &format!("#{}", dead_tab.0)),
@@ -4408,6 +4501,7 @@ mod tests {
         d.apply_event(SessionEvent::SessionExited {
             session: dead,
             code: Some(1),
+            ended_at_ms: 1_700_000_000_000,
         });
 
         let tabs = d.list_tabs(sender);
@@ -4569,16 +4663,22 @@ mod tests {
         d.apply_event(SessionEvent::SessionExited {
             session,
             code: Some(0),
+            ended_at_ms: 1_700_000_000_000,
         });
+        assert_eq!(terminal_of(&d, tab).1, None, "세션을 놓은 뒤가 전제다");
         let rev = d.state().revision;
 
         // 마감이 종료 직후에 지나가는 경합 — 끝난 탭이 "시작 안 됨"으로 되살아나면
-        // 그 오분류는 워치독과 waiter 의 순서에 달려 재현조차 되지 않는다.
+        // 그 오분류는 워치독과 waiter 의 순서에 달려 재현조차 되지 않는다. 이제는
+        // 세션 id 로 찾히지 않는 것이 그 방어다.
         d.apply_event(SessionEvent::SessionStartupTimeout { session });
 
         assert_eq!(
             terminal_of(&d, tab).0,
-            TerminalStatus::Exited { code: Some(0) }
+            TerminalStatus::Exited {
+                code: Some(0),
+                ended_at_ms: Some(1_700_000_000_000)
+            }
         );
         assert_eq!(d.state().revision, rev, "a no-op must not bump the revision");
     }
@@ -4654,7 +4754,13 @@ mod tests {
         // attach 가 미지 세션으로 실패한다.
         assert_eq!(
             terminal_of(&d, tab),
-            (TerminalStatus::Exited { code: None }, None)
+            (
+                TerminalStatus::Exited {
+                    code: None,
+                    ended_at_ms: None
+                },
+                None
+            )
         );
         assert_eq!(host.kills(), vec![session]);
     }

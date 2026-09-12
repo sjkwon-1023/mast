@@ -207,7 +207,7 @@ describe("PaneView tab strip rendering", () => {
       pane(
         [
           terminalTab(10),
-          terminalTab(11, { notification: "unread", status: { type: "exited", code: 1 } }),
+          terminalTab(11, { notification: "unread", status: { type: "exited", code: 1, endedAtMs: 1723100500000 } }),
           terminalTab(12),
         ],
         10,
@@ -529,7 +529,7 @@ describe("PaneView restart banner", () => {
     expect(child(el, ".pane-restart-retry").textContent).toBe("Retry");
 
     view.update(
-      pane([terminalTab(10, { status: { type: "exited", code: 1 } })], 10),
+      pane([terminalTab(10, { status: { type: "exited", code: 1, endedAtMs: 1723100500000 } })], 10),
       true,
       null,
       null,
@@ -548,7 +548,7 @@ describe("PaneView restart banner", () => {
   it("stays hidden for a viewer tab regardless of other tabs", () => {
     const { view } = mount();
     view.update(
-      pane([folderTab(11), terminalTab(10, { status: { type: "exited", code: 0 } })], 11),
+      pane([folderTab(11), terminalTab(10, { status: { type: "exited", code: 0, endedAtMs: 1723100500000 } })], 11),
       true,
       null,
       viewerMount(11),

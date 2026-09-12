@@ -429,7 +429,9 @@ pub struct Tab {
 )]
 pub enum TabKind {
     Terminal {
-        /// 휘발성 PTY 세션 id. 세션 종료 후에도 유지된다 (Exited 탭 표시용).
+        /// 휘발성 PTY 세션 id. **살아 있는 세션에만 Some** 이다 — 셸이 끝나면
+        /// `SessionExited` 가 여기를 비우고, 마지막 화면은 메모리의 replay 가 아니라
+        /// 디스크의 기록 파일로 남는다 (ADR-0018).
         pty_session: Option<SessionId>,
         status: TerminalStatus,
         cwd: Option<String>,
@@ -451,10 +453,21 @@ pub enum TabKind {
 
 /// 터미널 탭의 프로세스 상태.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum TerminalStatus {
     Running,
-    Exited { code: Option<u32> },
+    /// 셸이 끝났다. `ended_at_ms` 는 글루가 주입한 벽시계(epoch ms)이며, 이 필드를
+    /// 모르는 구 `state.json` 은 None 으로 읽힌다 (`PERSIST_VERSION` 은 그대로 1).
+    /// 직렬화는 항상 한다 — 프론트 타입이 필수 필드로 미러한다.
+    Exited {
+        code: Option<u32>,
+        #[serde(default)]
+        ended_at_ms: Option<u64>,
+    },
     /// 시작 표식이 마감 안에 오지 않았다 (`SessionOptions::startup_deadline`).
     ///
     /// 감지 시점에는 프로세스가 **살아 있다** — 감지는 세션을 죽이지 않는다. 다만 재시작
@@ -683,6 +696,42 @@ mod tests {
         without.remove("agentStatusSource");
         let parsed: Workspace = serde_json::from_value(without.into()).unwrap();
         assert_eq!(parsed.agent_status_source, None);
+    }
+
+    #[test]
+    fn exited_status_serializes_ended_at_ms_and_defaults_it() {
+        let json = serde_json::to_value(TerminalStatus::Exited {
+            code: Some(0),
+            ended_at_ms: Some(1_723_100_000_000),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "exited",
+                "code": 0,
+                "endedAtMs": 1_723_100_000_000u64,
+            })
+        );
+
+        // None 이어도 키는 나온다 — 프론트가 필수 필드로 미러하기 때문이다.
+        let json = serde_json::to_value(TerminalStatus::Exited {
+            code: None,
+            ended_at_ms: None,
+        })
+        .unwrap();
+        assert_eq!(json["endedAtMs"], serde_json::Value::Null);
+
+        // 이 필드를 모르는 구 state.json (마이그레이션 없음).
+        let parsed: TerminalStatus =
+            serde_json::from_value(serde_json::json!({"type": "exited", "code": 1})).unwrap();
+        assert_eq!(
+            parsed,
+            TerminalStatus::Exited {
+                code: Some(1),
+                ended_at_ms: None
+            }
+        );
     }
 
     #[test]

@@ -468,6 +468,7 @@ fn screen_for_an_exited_tab_is_409_json() {
         .apply_event(SessionEvent::SessionExited {
             session,
             code: Some(0),
+            ended_at_ms: 1_700_000_000_000,
         });
     assert_json_error(
         &get(h.addr(), &format!("/api/tabs/{tab}/screen"), Some(TOKEN)),

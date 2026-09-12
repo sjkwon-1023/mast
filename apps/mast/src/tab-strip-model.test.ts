@@ -62,8 +62,8 @@ describe("tabStripModel", () => {
       1,
       [
         terminalTab(10, { status: { type: "running" } }),
-        terminalTab(11, { status: { type: "exited", code: 0 } }),
-        terminalTab(12, { status: { type: "exited", code: null } }),
+        terminalTab(11, { status: { type: "exited", code: 0, endedAtMs: 1723100500000 } }),
+        terminalTab(12, { status: { type: "exited", code: null, endedAtMs: 1723100500000 } }),
         viewerTab(13), // terminal 이 아니므로 exited 판정 대상이 아니다
       ],
       10,
@@ -83,7 +83,7 @@ describe("tabStripModel", () => {
   it("combines flags independently (active+exited+notification on one tab)", () => {
     const p = pane(
       1,
-      [terminalTab(10, { status: { type: "exited", code: 1 }, notification: "unread" })],
+      [terminalTab(10, { status: { type: "exited", code: 1, endedAtMs: 1723100500000 }, notification: "unread" })],
       10,
     );
     expect(tabStripModel(p)).toEqual([

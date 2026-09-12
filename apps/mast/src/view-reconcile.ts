@@ -59,7 +59,8 @@ export function planViewSync(
           tab.kind.type === "terminal" &&
           tab.kind.ptySession !== null
         ) {
-          // exited 세션도 attach 한다 — replay 표시가 Exited 탭의 존재 이유다.
+          // exited 탭은 세션을 이미 놓았으므로(ADR-0018) 여기서 걸러진다 — 마지막
+          // 화면을 그리는 것은 attach 가 아니라 기록이다.
           visible.push({ pane: pane.id, tab: tab.id, session: tab.kind.ptySession });
           visibleTabs.add(tab.id);
         }

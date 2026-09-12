@@ -14,7 +14,7 @@ function terminalTab(id: number, session: number | null, exited = false): Tab {
     kind: {
       type: "terminal",
       ptySession: session,
-      status: exited ? { type: "exited", code: 0 } : { type: "running" },
+      status: exited ? { type: "exited", code: 0, endedAtMs: 1723100500000 } : { type: "running" },
       cwd: null,
     },
     notification: "none",

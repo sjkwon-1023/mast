@@ -110,9 +110,10 @@ pub(crate) fn static_asset(assets: &AssetFn, key: &str) -> Response {
     }
 }
 
-/// 탭 → 살아 있는 세션. **살아 있음의 판정은 `TerminalStatus`** 까지 본다: `Exited`·
-/// `NotStarted` 탭도 `pty_session` 을 그대로 들고 있어서(ADR-0010 의 되살리기 경로)
-/// id 만 보면 죽은 탭을 살아 있다고 답하게 된다.
+/// 탭 → 살아 있는 세션. **살아 있음의 판정은 `TerminalStatus`** 까지 본다: `NotStarted`
+/// 탭은 `pty_session` 을 그대로 들고 있어(감지가 세션을 죽이지 않는다) id 만 보면
+/// 시작도 못 한 탭을 살아 있다고 답하게 된다. `Exited` 탭은 세션을 이미 놓았으므로
+/// (ADR-0018) 두 검사 중 어느 쪽에서든 걸린다.
 fn live_session(
     dispatcher: &Mutex<Dispatcher>,
     sessions: &SessionManager,
@@ -163,7 +164,10 @@ fn find_terminal(dispatcher: &Dispatcher, tab: TabId) -> Option<FoundTab> {
                     },
                     _ => FoundTab {
                         session: None,
-                        status: TerminalStatus::Exited { code: None },
+                        status: TerminalStatus::Exited {
+                            code: None,
+                            ended_at_ms: None,
+                        },
                     },
                 });
             }

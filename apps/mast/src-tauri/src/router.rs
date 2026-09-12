@@ -67,8 +67,8 @@ fn flush_window_from_env() -> Duration {
 }
 
 /// UNIX epoch 기준 현재 시각(ms). 시스템 시계가 epoch 이전이면(설정 이상) 0 —
-/// `last_activity_ms` 는 표시용 타임스탬프라 여기서 부팅을 막을 이유는 없다.
-fn now_ms() -> u64 {
+/// `last_activity_ms`·`ended_at_ms` 는 표시용 타임스탬프라 여기서 부팅을 막을 이유는 없다.
+pub(crate) fn now_ms() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(d) => u64::try_from(d.as_millis()).unwrap_or(u64::MAX),
         Err(_) => 0,

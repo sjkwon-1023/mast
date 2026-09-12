@@ -20,16 +20,15 @@
 //!   전 탭의 `notification` = `NotificationState::None`, `last_activity_ms` =
 //!   `None`. pty_session 과 동일한 이유 — 죽은 세션이 남긴 needsInput 이
 //!   재시작을 넘어 사이드바에 유령처럼 남는 걸 막는다.
-//! - **셸이 없는 터미널 탭(`Exited`·`NotStarted`)은 `Running` 으로 되돌린다** (ADR-0010).
-//!   재시작 시점에 살아 있는 셸은 하나도 없으므로 이 상태들을 충실히 복원하면 그 탭이
-//!   부팅 재스폰 열거
+//! - **`NotStarted` 탭만 `Running` 으로 되돌린다**. 그 상태로 저장되면 부팅 재스폰 열거
 //!   ([`Dispatcher::running_terminal_tabs`](crate::command::Dispatcher::running_terminal_tabs))
-//!   에서 **영구히** 빠진다 — 앱을 다시 켜도 빈 pane + 배지로 남고 되살릴 길이 없다.
-//!   실기에서 PC 절전으로 WSL 이 통째로 내려가 전 탭이 한꺼번에 `Exited` 가 됐고
-//!   (2026-08-20), 그걸 되살리는 첫 부팅에서 셸 11개가 콜드 VM 에 몰려 6개가 시작에
-//!   실패해 `NotStarted` 로 남았다 — 두 상태가 같은 사고의 앞뒤라 규칙도 같다.
-//!   되살아난 셸은 같은 탭 id 로 스폰되므로 `HISTFILE` 과 resume 힌트가 그대로 다시
-//!   붙는다.
+//!   에서 빠져 사용자가 탭마다 Retry 를 눌러야 한다 — 실기에서 되살린 탭 11개가 콜드 VM
+//!   에 몰려 6개가 시작 표식을 못 낸 채 남은 상태다 (2026-08-20).
+//! - **`Exited` 는 그대로 둔다** (ADR-0018 D3, ADR-0010 의 되돌림을 반쪽 뒤집는다).
+//!   끝난 탭의 마지막 화면은 기록 파일로 남아 있어 복원 후에도 그대로 읽히고, 되살릴
+//!   길은 pane 배너의 Restart 다 — ADR-0010 의 되돌림은 그 버튼이 없던 시절 "되살릴
+//!   길이 아예 없다"를 푸는 장치였다. 되돌리면 사용자가 의도적으로 끝낸 셸까지 앱을
+//!   켤 때마다 되살아난다.
 //! - `next_id` 가 사용 중인 최대 안정 id(워크스페이스·pane·탭·**split** 포함 —
 //!   split 노드도 같은 단일 카운터 발급, ADR-0003) 이하면 `max+1` 로 수리하고
 //!   사유를 [`LoadOutcome::Restored`] 의 `repairs` 로 보고한다.
@@ -233,8 +232,8 @@ fn validate_app(state: &AppState) -> Result<(), String> {
 }
 
 /// 복원 상태 sanitize (모듈 rustdoc 참조). 수리 사유들을 반환한다 — pty_session
-/// 소거·`Exited`/`NotStarted` → `Running` 되돌림·에이전트 상태/알림 초기화는 무조건
-/// 수행되는 정상 동작이라 사유에 포함하지 않는다.
+/// 소거·`NotStarted` → `Running` 되돌림·에이전트 상태/알림 초기화는 무조건 수행되는
+/// 정상 동작이라 사유에 포함하지 않는다.
 fn sanitize(state: &mut AppState) -> Vec<String> {
     let mut repairs = Vec::new();
     for ws in &mut state.workspaces {
@@ -250,11 +249,8 @@ fn sanitize(state: &mut AppState) -> Vec<String> {
                 } = &mut tab.kind
                 {
                     *pty_session = None;
-                    // 모듈 rustdoc "복원 시 sanitize" 의 셸 없는 상태 → Running 규칙.
-                    if matches!(
-                        status,
-                        TerminalStatus::Exited { .. } | TerminalStatus::NotStarted
-                    ) {
+                    // 모듈 rustdoc "복원 시 sanitize" — NotStarted 만 되돌린다.
+                    if matches!(status, TerminalStatus::NotStarted) {
                         *status = TerminalStatus::Running;
                     }
                 }
@@ -731,12 +727,12 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_revives_exited_terminal_tabs() {
+    fn sanitize_keeps_exited_terminal_tabs() {
         let dir = tempfile::tempdir().unwrap();
         let path = state_path(&dir);
         // 실기 재현(2026-08-20): 앱이 살아 있는 동안 PC 절전으로 WSL 이 내려가 전 탭이
-        // 강제 종료 코드와 함께 Exited 로 저장된 상태. 이대로 복원하면 재스폰 열거에서
-        // 영구히 빠지므로 Running 으로 되돌아와야 한다.
+        // 강제 종료 코드와 함께 Exited 로 저장된 상태. 기록 파일이 남아 있으므로 복원
+        // 후에도 마지막 화면이 그대로 읽히고, 되살리기는 배너의 Restart 다 (ADR-0018 D3).
         let mut state = sample_state(Some(9), 7);
         for pane in state.workspaces[0].panes.values_mut() {
             for tab in &mut pane.tabs {
@@ -745,6 +741,7 @@ mod tests {
                 };
                 *status = TerminalStatus::Exited {
                     code: Some(1_073_807_364),
+                    ended_at_ms: Some(1_723_100_000_000),
                 };
             }
         }
@@ -764,12 +761,14 @@ mod tests {
                         assert_eq!(*pty_session, None, "pty_session 은 무조건 소거");
                         assert_eq!(
                             *status,
-                            TerminalStatus::Running,
-                            "Exited 는 재스폰 대상으로 되돌아와야 함"
+                            TerminalStatus::Exited {
+                                code: Some(1_073_807_364),
+                                ended_at_ms: Some(1_723_100_000_000)
+                            },
+                            "Exited 는 종료 코드·시각과 함께 그대로 남아야 함"
                         );
                     }
                 }
-                // 되돌림은 정상 동작이라 수리 사유가 아니다 (sanitize rustdoc).
                 assert!(repairs.is_empty(), "repairs: {repairs:?}");
             }
             other => panic!("Restored 여야 함: {other:?}"),

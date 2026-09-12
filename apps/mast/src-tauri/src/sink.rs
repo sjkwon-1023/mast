@@ -25,7 +25,7 @@ use mast_core::osc::OscEvent;
 use mast_core::send::{decode_reply_path, decode_send_text};
 use mast_core::session::{Delivery, SessionId, SessionSink};
 
-use crate::router::OscRouter;
+use crate::router::{now_ms, OscRouter};
 use crate::state::{publish_state, AppState};
 use crate::{winlog, wintrace};
 
@@ -156,6 +156,7 @@ impl SessionSink for SinkHandle {
         dispatcher.apply_event(SessionEvent::SessionExited {
             session: self.0.session,
             code,
+            ended_at_ms: now_ms(),
         });
         publish_state(&self.0.app, &dispatcher);
     }
