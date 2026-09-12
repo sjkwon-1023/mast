@@ -1,9 +1,12 @@
 import { defineConfig } from "vite";
 
+import { xtermCompositionPatch } from "./src/xterm-composition-patch";
+
 // Tauri devUrl(tauri.conf.json)과 포트를 맞추기 위해 5174 고정 — spike(5173)와
 // 동시에 띄울 수 있게 포트를 분리한다.
 export default defineConfig({
   clearScreen: false,
+  plugins: [xtermCompositionPatch()],
   server: {
     port: 5174,
     strictPort: true,

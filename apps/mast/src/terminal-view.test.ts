@@ -9,6 +9,7 @@
 // @xterm/addon-fit 의 UMD 래퍼가 로드 시점에 `self` 를 읽어 node 환경에서는
 // import 가 곧바로 터진다 (pane-view.test.ts 와 같은 파일 전용 환경 지정).
 
+import { Terminal as HeadlessTerminal } from "@xterm/headless";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -19,6 +20,7 @@ import {
   isCopySelectionKey,
   restoreTargetLine,
   scrollOffsetToRemember,
+  scrollbackWipeRestoreOffset,
   shouldOpenLink,
 } from "./terminal-view";
 
@@ -234,5 +236,85 @@ describe("OutputSettle", () => {
     settle.noteChunk(10);
     settle.start(1000);
     expect(settle.poll(1000 + SETTLE_CAP_MS)).toEqual({ kind: "abandon" });
+  });
+});
+
+// ESC[3J 재인쇄 경로의 판정 (ADR-0019 amendment, v0.3.26) — 위로 올려 둔 pane 의
+// 스크롤백이 지워질 때만 자리를 붙잡는다.
+describe("scrollbackWipeRestoreOffset", () => {
+  it("위로 올려 둔 일반 버퍼면 하단 기준 오프셋을 돌려준다", () => {
+    expect(scrollbackWipeRestoreOffset(null, false, true, "normal", 1008, 993)).toBe(15);
+    expect(scrollbackWipeRestoreOffset(null, false, true, "normal", 96, 0)).toBe(96);
+  });
+
+  it("복원이 이미 진행 중이면 무시한다 — 진행 중인 값이 사용자의 원래 자리다", () => {
+    // 왕복 복원의 nudge 가 부르는 재인쇄, 그리고 한 재인쇄 안의 두 번째 ED 3.
+    // 여기서 지금 화면을 새로 잡으면 복원 중간 상태(맨 아래)를 목표로 삼는다.
+    expect(scrollbackWipeRestoreOffset(15, false, true, "normal", 1008, 900)).toBeNull();
+    expect(scrollbackWipeRestoreOffset(15, false, true, "normal", 0, 0)).toBeNull();
+  });
+
+  it("미뤄 둔 래치 해제가 남아 있으면 무시한다 — line 0 의 뷰는 사용자 자리가 아니다", () => {
+    expect(scrollbackWipeRestoreOffset(null, true, true, "normal", 1008, 0)).toBeNull();
+  });
+
+  it("replay 재생 중의 ED 3 은 무시한다 — 창에 보존된 과거의 재인쇄다", () => {
+    expect(scrollbackWipeRestoreOffset(null, false, false, "normal", 1008, 993)).toBeNull();
+  });
+
+  it("대체 버퍼는 무시한다 — 그 스크롤은 앱 상태다", () => {
+    expect(scrollbackWipeRestoreOffset(null, false, true, "alternate", 1008, 993)).toBeNull();
+  });
+
+  it("맨 아래를 보고 있었으면 아무 것도 하지 않는다 — 이미 출력을 따라간다", () => {
+    expect(scrollbackWipeRestoreOffset(null, false, true, "normal", 1008, 1008)).toBeNull();
+    expect(scrollbackWipeRestoreOffset(null, false, true, "normal", 0, 0)).toBeNull();
+  });
+});
+
+// **라이브러리 전제 잠금.** "커스텀 CSI 핸들러가 xterm 내장 ED 처리보다 먼저 돈다"
+// 는 위 판정이 서 있는 바닥이다 — 순서가 뒤집히면 훅은 이미 지워진 버퍼(baseY 0)를
+// 읽어 offset 0 → null 이 되고, 기능은 에러 없이 조용히 죽는다. 브라우저 빌드는
+// vitest 에서 띄울 수 없어 같은 5.5.0 의 headless 로 본다 (파서·버퍼는 공유 코어다).
+describe("ESC[3J 파서 훅", () => {
+  it("훅이 읽는 baseY/viewportY 는 스크롤백이 지워지기 전 값이다", async () => {
+    const term = new HeadlessTerminal({
+      cols: 20,
+      rows: 5,
+      scrollback: 1000,
+      // headless 5.5.0 은 buffer 를 이 옵션 뒤에 둔다 (v0.3.19 의 폰 검은 화면).
+      allowProposedApi: true,
+    });
+    const write = async (data: string): Promise<void> =>
+      new Promise<void>((resolve) => {
+        term.write(data, resolve);
+      });
+
+    await write(Array.from({ length: 100 }, (_, i) => `line ${i}\r\n`).join(""));
+    term.scrollLines(-20);
+
+    let captured: { baseY: number; viewportY: number } | null = null;
+    term.parser.registerCsiHandler({ final: "J" }, (params) => {
+      if (params[0] === 3) {
+        captured = {
+          baseY: term.buffer.active.baseY,
+          viewportY: term.buffer.active.viewportY,
+        };
+      }
+      return false; // 내장 ED 처리로 넘긴다
+    });
+
+    const before = {
+      baseY: term.buffer.active.baseY,
+      viewportY: term.buffer.active.viewportY,
+    };
+    expect(before.baseY).toBeGreaterThan(0);
+    expect(before.viewportY).toBeLessThan(before.baseY);
+
+    await write("\x1b[3J");
+    expect(captured).toEqual(before);
+    // false 를 돌려줬으므로 내장 처리가 이어져 스크롤백이 실제로 지워진다.
+    expect(term.buffer.active.baseY).toBe(0);
+    term.dispose();
   });
 });

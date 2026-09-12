@@ -214,3 +214,94 @@ from a different build; field confirmation is requested as part of the verificat
   buffer is the alternate one *or* mouse tracking is on" — may be firing for Claude Code tabs
   and not for Codex ones. Nothing here changes that code; the WINDOWS-BUILD item asks for the
   observation that decides it.
+
+## Amendment (v0.3.26) — the wipe itself starts the same restore
+
+Decision 4 treats the reprint as something that happens *inside* a round-trip restore. The user's
+own measurements on Windows say it also happens on its own, and the same class of defect then
+appears with no workspace switch involved:
+
+- Scroll a Codex tab up, resize the window: the pane jumps to the **top** of the transcript.
+- Scroll up while an answer is still printing: at the end of the answer the pane jumps to the top
+  as well. What provokes a reprint at that moment was not measured — a resize is the only trigger
+  this repo has measured, and it is not obviously involved here.
+- Typing anything afterwards puts the pane back at the bottom.
+
+**Mechanism.** All three follow from one library fact. xterm 5.5's ED 3 (`ESC[3J`) trims the
+scrollback and sets `ybase = ydisp = 0`, and it does **not** clear `isUserScrolling`. A user who
+scrolled up holds that latch (so does a restore of decision 2, which is why the round-trip case
+was the first one seen), so when the reprint wipes the scrollback the viewport stays at line 0
+while the reprinted history stacks up underneath it — the top of the transcript. Typing then ends
+it because xterm's own `scrollOnUserInput` jumps to the bottom, which is exactly the third
+observation. A pane already at the bottom holds no latch, follows the reprint down and never
+jumps; that is why the defect only ever shows on a pane the user had scrolled up.
+
+1. **The trigger is a parser hook on ED 3, not a heuristic about resizes.** `TerminalView`
+   registers `registerCsiHandler({ final: "J" })` and returns `false`, so xterm's own ED handling
+   runs after ours — the discipline the phone's `trackSgrMouse` already follows (ADR-0016). The
+   ordering is what makes the hook useful: a custom CSI handler runs **before** the built-in one,
+   so the `baseY`/`viewportY` read inside it are the values from just *before* the wipe, which is
+   the position the user was looking at and the only moment it still exists. That premise is a
+   library behaviour rather than ours, so it is locked by a test that drives a real
+   `@xterm/headless` instance through the same sequence.
+
+2. **What the hook does is start the restore machinery already here.** `beginScrollRestore` is
+   now the shared entry point of both paths: it sets the pending offset, swaps in a fresh
+   `OutputSettle` (the state machine is single-use — once it has answered, every later poll is
+   `abandon`) and installs the cancel listeners. The wipe path then arms the settle immediately,
+   where the round-trip path still arms it after the nudge. Everything downstream is unchanged
+   and unduplicated: the write-completion callback of the very chunk that carried the `ESC[3J`
+   runs `noteChunk → applyScrollRestore → rescheduleSettle` as it does for a round-trip, so the
+   pane follows the reprint up as the history refills, a position the shorter reprint no longer
+   has is refused rather than clamped (decision 2), and a key, wheel or scrollbar gesture
+   cancels (decision 5) with the same latch rules.
+
+3. **A wipe while a restore is pending is ignored.** The judgment is the pure
+   `scrollbackWipeRestoreOffset(pending, replayDone, bufferType, baseY, viewportY)`: a non-null
+   `pending` answers null, because the value already in flight is where the *user* was, while
+   what is on screen mid-restore is an intermediate state the machinery has not corrected yet.
+   That covers both the round-trip nudge's reprint and the second `ESC[3J` inside one reprint
+   (Codex sends `ESC[2J` + `ESC[3J`). A wipe while a deferred latch release is pending is
+   ignored as well: the view is then frozen at line 0 by a refused restore, not parked there by
+   the user, and because the release runs in the write callback while the hook runs during
+   parsing, the hook would otherwise read that artefact as "the whole transcript above the
+   bottom" and pin the pane at the top — the very symptom. A wipe arriving before a re-attach's
+   replay has finished parsing is ignored too — it is a past reprint preserved in the replay
+   window, not something the user saw (the first attach sets `replayDone` before its replay
+   because its queries are live, ADR-0009; a fresh terminal has offset 0, so the same wipes
+   fall out on that rule). The alternate buffer and an offset of 0 are excluded for the reasons
+   decision 7 gives.
+
+4. **`ESC[3J` is assumed to reach xterm on Windows; the log line is what proves it.** conhost
+   is understood to forward a client's ED 3 to the attached terminal in ConPTY mode — older
+   builds special-cased a scrollback erase in `AdaptDispatch::EraseInDisplay` so the state
+   machine would pass it on, and the current console emits `ESC[3J` on its own VT output path for
+   API-level clears (`WriteClearScreen`) — and the Linux-pty capture behind this ADR's fact 3
+   shows Codex sending it, but this repo has not observed a client's own `ESC[3J` arriving on
+   the Windows path. So the hook logs one opt-in line per detection
+   (`scroll: scrollback wiped N line(s) above the bottom — restoring`) and one at the end of each
+   restore. A field report of a jump **without** that line says the bytes never arrive and the
+   fix is in the wrong layer; a jump *with* it says the restore ran and lost. No screen content
+   is logged, per ADR-0014.
+
+5. **A wheel or scrollbar cancel hands the latch to the user, deferred release included.**
+   Decision 5 of this ADR says a non-keyboard cancel leaves the position alone, and with a
+   reprint in play that now has to be enforced rather than merely not-done: the refusal path
+   arms a *deferred* release whenever it runs at `baseY === 0`, which is every reprint's first
+   chunk, so a wheel arriving in that window used to leave the release armed and the next chunk
+   scrolled the user to the bottom (peer review 2026-09-12). The cancel therefore drops both
+   latch flags — we stop tracking a latch that is now the user's, and xterm clears it by itself
+   when they scroll back to the bottom. A key cancel still releases, as decision 5 says.
+
+**Accepted limits.** The Windows answer-end reprint has no measured trigger, so the fix is aimed
+at the wipe rather than at whatever causes it — if a jump ever happens without an `ESC[3J` this
+change cannot see it. The settle window stays the heuristic decision 4 admits, now also deciding
+when a reprint that nobody asked for is over. A `clear` typed into a pane the user has scrolled
+up is an `ESC[3J` as well: the restore starts, the (now empty) scrollback refuses the position
+and the pane ends at the bottom after the settle window — correct, but it spends a second getting
+there. And the intermediate states of a reprint are visible as before: the pane tracks the
+rebuild from the bottom up rather than sitting still. One window widened rather than opened:
+decision 3 of this ADR prefers a pending offset over the buffer when a tab is disposed mid-restore,
+and a restore is now pending for up to two seconds after *every* reprint, so leaving a workspace
+in that window remembers the pre-wipe offset even if the restore had been refused and the pane
+was in fact at the bottom — the same priority as before, reached more often.

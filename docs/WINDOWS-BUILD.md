@@ -397,7 +397,7 @@ button, 계획 v2 section 12).
 9. **Scrollback reading is activity** — with `MAST_RESET_IDLE_SECS=30`, read scrollback
    using **wheel only** (no keys) for over 30s → no reset fires (the throttled activity
    ping counts pure viewing as activity).
-10. **Kill survives** — force-kill the app from Task Manager, restart → state is restored
+11. **Kill survives** — force-kill the app from Task Manager, restart → state is restored
     except at most the last ≤500ms of structural mutations (save debounce window).
 
 ## 10. Stage 17+ / Checkpoint 2 manual verification
@@ -619,11 +619,11 @@ pane**, so leaving and returning is a real unmount/remount.
     editable field, no rename/delete/save control, typing into a focused text or markdown
     view does nothing, and the only file-scoped controls are the text viewer's window
     movement buttons and the markdown viewer's **open as text** button (both read-only).
-11. **Terminals stay alive across viewer switches** — start a long-running command (e.g.
+12. **Terminals stay alive across viewer switches** — start a long-running command (e.g.
     `top`) in a terminal tab, switch to a viewer tab in the same pane and back: the
     terminal is exactly where it was and still running, with **no replay flash** and no
     re-attach. Mounting a viewer must not disturb the keep-alive terminal views.
-12. **Unconfigured distro resolves automatically** — with **no** workspace distro and
+13. **Unconfigured distro resolves automatically** — with **no** workspace distro and
     **no** `MAST_DISTRO` (section 4), open a folder browser and a text file: both work,
     because the glue falls back to the WSL default distro (`wsl.exe -l -q`, cached for the
     process lifetime). Then set `MAST_DISTRO` to a second installed distro, restart, and
@@ -2242,20 +2242,75 @@ the diagnostics only exist there. Boot with `"log": true` throughout — `mast.l
    desktop's record view is not disturbed by the request. A live tab in the same workspace keeps
    polling normally.
 
-### v0.3.26 — verification (phone)
+### v0.3.26 — verification
 
-Arrow keys and a refresh button on the phone key bar/header (CLAUDE.md's Phone remote surface
-group). Field-only — none of this can be exercised on the Linux dev box.
+Front-end only, three changes: the scrollback-wipe scroll restore (ADR-0019 amendment, items
+1–7), the xterm composition patch (ADR-0020, items 8–9) and the phone's arrow keys and refresh
+button (items 10–14). Field-only throughout: the defects are a reprint this dev box has never
+produced and an IME it does not have, the judgment lives in a browser xterm, and the phone items
+need a phone. Boot with `"log": true` and keep `mast.log` open — item 5 is what tells a failed
+restore apart from bytes that never arrived. Item 9 turns the log **off** again on purpose.
 
-1. Open a plain bash tab from the phone. `↑` brings the previous command into the prompt, `↓`
+1. **A resize no longer throws a scrolled-up tab to the top.** In a Codex tab, scroll up so
+   identifiable lines sit well above the bottom, then resize the mast window a little. The same
+   lines must still be on screen, give or take a few (the transcript is rebuilt, so the position
+   is restored to within a line or two). Before this release the pane jumped to the very top of
+   the transcript and stayed there.
+2. **The end of an answer does not throw it either.** Ask Codex something long enough to read
+   while it prints, scroll up into the transcript while it is still working, and let the answer
+   finish: the pane must stay where you were. This is the trigger the user reported and whose
+   cause is unmeasured — if it still jumps, item 5's log lines decide where to look next.
+3. **Typing goes to the bottom, and that is xterm, not us.** After either of the above, type a
+   character: the pane jumps to the bottom. Expected, unchanged, and not a defect.
+4. **A tab at the bottom keeps following output.** With a Codex tab left at the bottom, resize
+   the window and let an answer finish: the pane must keep tracking new output with no pause and
+   no jump. Same for a plain bash tab and for an alternate-screen tab (Claude Code, `vim`,
+   `htop`) — nothing about those changes.
+5. **Every reprint leaves one log line.** For each of items 1 and 2, `mast.log` gets a
+   `scroll: scrollback wiped N line(s) above the bottom — restoring` line, followed by one
+   `scroll: restore ended …` line. **A jump with no `scroll: scrollback wiped` line is the
+   important report**: it means `ESC[3J` never reached xterm (the ConPTY pass-through this change
+   assumes), and the fix would belong in another layer entirely. Quote the lines either way.
+6. **`clear` in a scrolled-up pane ends at the bottom.** In a bash tab with a long scrollback,
+   scroll up, then send `clear` to it from another pane (`mast send`). The pane ends at the
+   bottom on a cleared screen within about a second. It may take that second to get there — the
+   restore starts, finds nothing to restore to and refuses — but it must not sit at the top and
+   it must follow output afterwards.
+7. **A wheel during a reprint keeps the place you chose.** In a Codex tab, ask for something
+   long, and while it is printing scroll up with the wheel and keep reading. The pane must stay
+   where you put it as output continues — a jump to the bottom a second later is the defect this
+   item exists for (`mast.log` will show `scroll: restore ended cancelled` at the moment of the
+   wheel; the bottom jump would come after it). Repeat with a scrollbar drag.
+8. **Korean arrives byte-for-byte, idle and busy.** The judge is what the PTY received, not what
+   a TUI drew, so capture it with `cat`:
+
+   ```bash
+   cat > /tmp/ime.txt      # in a mast tab; type 테스트 문장, then Ctrl+D
+   xxd /tmp/ime.txt        # expected: ed 85 8c ec 8a a4 ed 8a b8 20 eb ac b8 ec 9e a5
+   ```
+
+   First in an idle tab. Then with the main thread busy — a split next to it running
+   `yes | head -c 50000000`, or a Claude Code tab mid-answer — type the sentence again into the
+   `cat`. Before this release the busy run lost syllables or the space (`테트문장` is the
+   measured shape); now both runs must match the expected bytes. A Claude Code tab is *not* the
+   judge here, but as a final check type the same sentence into one during the busy run and read
+   what it shows.
+9. **The log's own cost.** Repeat item 8's busy run with `"log": false`. The bytes must still be
+   right (they must be right either way); the point is to notice whether the composition log
+   lines made the fault easier to hit before the fix, which decides how much to trust that log
+   as a reproduction tool in future IME reports. Note the answer in the report.
+
+**The phone's arrow keys and refresh button** (items 10–14).
+
+10. Open a plain bash tab from the phone. `↑` brings the previous command into the prompt, `↓`
    returns to where you started, and `←`/`→` move the cursor within the line.
-2. Open a Claude Code tab from the phone. `↑` recalls the previous prompt in the composer.
-3. Drive the tab screen into the black/error-notice state (e.g. toggle Wi-Fi off and back on
+11. Open a Claude Code tab from the phone. `↑` recalls the previous prompt in the composer.
+12. Drive the tab screen into the black/error-notice state (e.g. toggle Wi-Fi off and back on
    mid-poll, or force a screen render failure). Tap `↻`: the notice clears, the screen is rebuilt
    from a fresh snapshot, and the composer/key bar become usable again.
-4. With the on-screen keyboard up, tap a key-bar button (`Stop`, `Esc`, or an arrow): the
+13. With the on-screen keyboard up, tap a key-bar button (`Stop`, `Esc`, or an arrow): the
    keyboard must stay up — focus must not leave the composer.
-5. On an iPhone with a home indicator, confirm the bottom dock (composer + key bar) sits above
+14. On an iPhone with a home indicator, confirm the bottom dock (composer + key bar) sits above
    it and is not obscured.
 
 ## 11. ARM64 cross-build notes
