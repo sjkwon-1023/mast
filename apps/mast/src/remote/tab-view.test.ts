@@ -146,4 +146,39 @@ describe("TabView first frame", () => {
     // X10 리포트를 지어내지 않는다 — 받는 쪽이 읽지 못하면 원시 바이트가 입력으로 남는다.
     expect(posts).toEqual(["\x1b[5~"]);
   });
+
+  it("↑ sends the plain arrow escape when DECCKM is off", async () => {
+    const mounted = await mount(SCREEN);
+    (mounted.root.querySelector("button.key-up") as HTMLButtonElement).click();
+    await until(() => posts.length === 1, "an arrow escape to be posted");
+    expect(posts).toEqual(["\x1b[A"]);
+  });
+
+  it("↑ sends the DECCKM arrow escape once the snapshot enables it", async () => {
+    const mounted = await mount(`\x1b[?1h${PROMPT}`);
+    (mounted.root.querySelector("button.key-up") as HTMLButtonElement).click();
+    await until(() => posts.length === 1, "a DECCKM arrow escape to be posted");
+    expect(posts).toEqual(["\x1bOA"]);
+  });
+
+  it("↻ re-requests a full snapshot and re-enables input, even while disabled", async () => {
+    const mounted = await mount(SCREEN);
+    const textarea = mounted.root.querySelector("textarea") as HTMLTextAreaElement;
+    const refresh = mounted.root.querySelector("button.bar-refresh") as HTMLButtonElement;
+    const fetchMock = window.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockClear();
+
+    refresh.click();
+    // resetToFull 이 인스턴스를 접는 동안 입력은 비활성이다 — 새로고침 버튼
+    // 자체는 그 상태에서도 눌려야 한다 (controls 밖).
+    expect(textarea.disabled).toBe(true);
+    expect(refresh.disabled).toBe(false);
+
+    await until(() => !textarea.disabled, "input to be re-enabled after resync");
+    const screenUrls = fetchMock.mock.calls
+      .map((call) => String(call[0]))
+      .filter((url) => url.includes("/screen"));
+    expect(screenUrls.length).toBeGreaterThan(0);
+    for (const url of screenUrls) expect(url).not.toContain("since=");
+  });
 });

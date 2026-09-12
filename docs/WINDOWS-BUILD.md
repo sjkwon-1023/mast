@@ -2242,6 +2242,22 @@ the diagnostics only exist there. Boot with `"log": true` throughout — `mast.l
    desktop's record view is not disturbed by the request. A live tab in the same workspace keeps
    polling normally.
 
+### v0.3.26 — verification (phone)
+
+Arrow keys and a refresh button on the phone key bar/header (CLAUDE.md's Phone remote surface
+group). Field-only — none of this can be exercised on the Linux dev box.
+
+1. Open a plain bash tab from the phone. `↑` brings the previous command into the prompt, `↓`
+   returns to where you started, and `←`/`→` move the cursor within the line.
+2. Open a Claude Code tab from the phone. `↑` recalls the previous prompt in the composer.
+3. Drive the tab screen into the black/error-notice state (e.g. toggle Wi-Fi off and back on
+   mid-poll, or force a screen render failure). Tap `↻`: the notice clears, the screen is rebuilt
+   from a fresh snapshot, and the composer/key bar become usable again.
+4. With the on-screen keyboard up, tap a key-bar button (`Stop`, `Esc`, or an arrow): the
+   keyboard must stay up — focus must not leave the composer.
+5. On an iPhone with a home indicator, confirm the bottom dock (composer + key bar) sits above
+   it and is not obscured.
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy

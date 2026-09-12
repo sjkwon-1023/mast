@@ -88,15 +88,17 @@ export class TabView {
     header.className = "bar";
     const back = document.createElement("button");
     back.type = "button";
-    back.className = "bar-back";
+    back.className = "bar-btn";
     back.textContent = "‹ Back";
     back.addEventListener("click", () => this.options.onBack());
     const title = document.createElement("span");
     title.className = "bar-title";
     title.textContent = options.title;
-    const zoomOut = this.zoomButton("A−", -FONT_STEP_PX);
-    const zoomIn = this.zoomButton("A+", FONT_STEP_PX);
-    header.append(back, title, zoomOut, zoomIn);
+    const refresh = this.headerButton("↻", "bar-btn bar-refresh", () => this.refresh());
+    refresh.setAttribute("aria-label", "Refresh screen");
+    const zoomOut = this.headerButton("A−", "bar-btn", () => this.adjustFont(-FONT_STEP_PX));
+    const zoomIn = this.headerButton("A+", "bar-btn", () => this.adjustFont(FONT_STEP_PX));
+    header.append(back, title, refresh, zoomOut, zoomIn);
 
     this.noticeEl = document.createElement("div");
     this.noticeEl.className = "notice";
@@ -138,9 +140,25 @@ export class TabView {
         this.enqueue([{ type: "key", key: "ctrlC" }]),
       ),
       this.actionButton("Esc", "key", () => this.enqueue([{ type: "key", key: "escape" }])),
+      this.actionButton("↑", "key key-arrow key-up", () =>
+        this.enqueue([{ type: "key", key: "up" }]),
+      ),
+      this.actionButton("↓", "key key-arrow key-down", () =>
+        this.enqueue([{ type: "key", key: "down" }]),
+      ),
+      this.actionButton("←", "key key-arrow key-left", () =>
+        this.enqueue([{ type: "key", key: "left" }]),
+      ),
+      this.actionButton("→", "key key-arrow key-right", () =>
+        this.enqueue([{ type: "key", key: "right" }]),
+      ),
     );
 
-    this.root.append(header, this.noticeEl, screenArea, composer, keys);
+    const dock = document.createElement("div");
+    dock.className = "dock";
+    dock.append(composer, keys);
+
+    this.root.append(header, this.noticeEl, screenArea, dock);
     this.setInputEnabled(false);
 
     this.schedule = new PollSchedule({
@@ -193,18 +211,23 @@ export class TabView {
     return button;
   }
 
-  private zoomButton(label: string, delta: number): HTMLButtonElement {
+  /** 헤더 버튼 — 포커스를 뺏지 않는 것은 actionButton 과 같지만 `controls`(입력
+   *  준비 게이트)에는 넣지 않는다: 글자 크기·새로고침은 입력이 비활성인 상태에서도
+   *  눌려야 한다. */
+  private headerButton(label: string, className: string, onClick: () => void): HTMLButtonElement {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "bar-zoom";
+    button.className = className;
     button.textContent = label;
     button.addEventListener("pointerdown", (event) => event.preventDefault());
-    button.addEventListener("click", () => {
-      this.fontPx = clampFontPx(this.fontPx + delta);
-      saveFontPx(this.fontPx);
-      this.applyFont();
-    });
+    button.addEventListener("click", onClick);
     return button;
+  }
+
+  private adjustFont(delta: number): void {
+    this.fontPx = clampFontPx(this.fontPx + delta);
+    saveFontPx(this.fontPx);
+    this.applyFont();
   }
 
   private applyFont(): void {
@@ -414,6 +437,15 @@ export class TabView {
     if (this.term === null) return;
     this.destroyTerminal();
     this.state = { ...INITIAL_VIEW_STATE };
+  }
+
+  /** 데스크톱 Ctrl+Shift+R(WebView 리로드) 에 대응하는 폰 쪽 동작 — 페이지는
+   *  그대로 두고 클라이언트만 다시 동기화한다. `controls` 밖에 있어 화면이
+   *  검거나 오류 notice 상태(입력 비활성)에서도 눌린다. */
+  private refresh(): void {
+    this.setNotice(null);
+    this.resetToFull();
+    this.schedule.pollNow();
   }
 
   private reportInputError(error: unknown, item: InputItem): void {
