@@ -14,3 +14,16 @@ serde_json = "1"
 [dev-dependencies]
 # persist 테스트의 임시 디렉터리용
 tempfile = "3"
+
+# Windows ConPTY soak 테스트(`tests/soak_windows.rs`)의 프로세스 리소스 측정 전용.
+# 버전·feature 이름은 `apps/mast/src-tauri` 가 이미 쓰는 것과 같아 그래프에 크레이트가
+# 새로 늘지 않는다. Threading = GetCurrentProcess·GetProcessHandleCount,
+# ToolHelp = 스레드/프로세스 스냅샷, ProcessStatus = K32GetProcessMemoryInfo·
+# K32GetPerformanceInfo.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+] }
