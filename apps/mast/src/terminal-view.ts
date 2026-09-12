@@ -1054,8 +1054,16 @@ export class TerminalView {
     // 키로 취소한 경우에만 래치를 푼다 — 그 사용자는 "지금 여기서 계속"이 아니라
     // 입력을 시작한 것이고, 우리가 걸어 둔 래치를 그대로 두면 늦게 오는 재인쇄를
     // pane 이 따라가지 못한다. 휠·스크롤바 드래그는 반대다: 사용자가 자기 손으로
-    // 만든 스크롤 위치이므로 건드리면 그 조작을 되돌리는 셈이 된다.
-    if (ev.type === "keydown") this.releaseScrollLatch();
+    // 만든 스크롤 위치이므로 래치의 소유권을 그대로 넘긴다 — **미뤄 둔 해제까지
+    // 버려야** 한다 (peer review 2026-09-12). 버리지 않으면 다음 chunk 의 지연
+    // 해제가 방금 고른 자리를 맨 아래로 덮어쓴다: 복원이 거절돼 baseY 0 에서
+    // 해제가 미뤄진 직후가 정확히 그 상태이고, 재인쇄 때마다 그 창을 지난다.
+    if (ev.type === "keydown") {
+      this.releaseScrollLatch();
+    } else {
+      this.latchedByRestore = false;
+      this.releaseLatchOnNextChunk = false;
+    }
     this.endScrollRestore("cancelled");
   };
 

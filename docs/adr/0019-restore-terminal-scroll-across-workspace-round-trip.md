@@ -284,6 +284,15 @@ jumps; that is why the defect only ever shows on a pane the user had scrolled up
    fix is in the wrong layer; a jump *with* it says the restore ran and lost. No screen content
    is logged, per ADR-0014.
 
+5. **A wheel or scrollbar cancel hands the latch to the user, deferred release included.**
+   Decision 5 of this ADR says a non-keyboard cancel leaves the position alone, and with a
+   reprint in play that now has to be enforced rather than merely not-done: the refusal path
+   arms a *deferred* release whenever it runs at `baseY === 0`, which is every reprint's first
+   chunk, so a wheel arriving in that window used to leave the release armed and the next chunk
+   scrolled the user to the bottom (peer review 2026-09-12). The cancel therefore drops both
+   latch flags — we stop tracking a latch that is now the user's, and xterm clears it by itself
+   when they scroll back to the bottom. A key cancel still releases, as decision 5 says.
+
 **Accepted limits.** The Windows answer-end reprint has no measured trigger, so the fix is aimed
 at the wipe rather than at whatever causes it — if a jump ever happens without an `ESC[3J` this
 change cannot see it. The settle window stays the heuristic decision 4 admits, now also deciding
