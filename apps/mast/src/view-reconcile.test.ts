@@ -1,6 +1,10 @@
 // view-reconcile 검증 — planViewSync(부트 스윕(D4-b)·탭 닫힘·워크스페이스 밖
 // dispose·keep-alive 유지·세션 없는 active 탭)와 planViewerSync(21단계: 활성
 // 탭만 마운트·나머지 전부 dispose·탭 실존 플래그).
+//
+// ADR-0018 이후로 두 판정이 exited 터미널 탭에서 맞물린다: 세션을 놓은 탭은
+// planViewSync 의 dispose 로 내려가고 같은 탭이 planViewerSync 의 mount 로
+// 올라온다 — 그 교대를 두 describe 가 양쪽에서 잠근다.
 
 import { describe, expect, it } from "vitest";
 
@@ -156,13 +160,31 @@ describe("planViewSync", () => {
     expect(plan.detachSessions).toEqual([101]);
   });
 
-  it("keeps exited sessions visible (replay display)", () => {
+  it("disposes the terminal view of an exited tab inside the active workspace", () => {
+    // ADR-0018 의 계약 반전: exit 은 세션을 놓으므로(ptySession === null) 이 탭의
+    // 마지막 화면은 attach 가 아니라 기록 뷰가 그린다. 뷰를 내리지 않으면 pane 의
+    // setVisible 루프가 기록 뷰 위에 낡은 TerminalView 를 다시 띄운다.
     const snap = snapshot(
-      [workspace(1, [pane(1, [terminalTab(10, 100, true)], 10)], 1)],
+      [workspace(1, [pane(1, [terminalTab(10, null, true)], 10)], 1)],
       1,
     );
-    const plan = planViewSync([], snap);
-    expect(plan.visible).toEqual([{ pane: 1, tab: 10, session: 100 }]);
+    const plan = planViewSync([10], snap);
+    expect(plan.visible).toEqual([]);
+    expect(plan.dispose).toEqual([10]);
+    // 탭이 세션을 놓았으니 스윕할 세션도 없다 (dispose 가 detach 를 수행한다).
+    expect(plan.detachSessions).toEqual([]);
+  });
+
+  it("keeps the sibling terminal views of an exited tab alive", () => {
+    // 같은 pane 의 살아 있는 배경 탭까지 같이 내리면 안 된다 — dispose 확장의 범위
+    // 는 세션을 놓은 탭 하나다.
+    const snap = snapshot(
+      [workspace(1, [pane(1, [terminalTab(10, null, true), terminalTab(11, 101)], 10)], 1)],
+      1,
+    );
+    const plan = planViewSync([10, 11], snap);
+    expect(plan.dispose).toEqual([10]);
+    // 탭 11 은 이번 렌더에 attach 되지 않지만 alive 라 스윕 대상이 아니다.
     expect(plan.detachSessions).toEqual([]);
   });
 
@@ -212,12 +234,61 @@ describe("planViewerSync", () => {
     expect(plan.dispose).toEqual([]);
   });
 
-  it("never mounts a terminal tab", () => {
+  it("never mounts a live terminal tab", () => {
     const snap = snapshot(
       [workspace(1, [pane(1, [terminalTab(10, 100), folderTab(11)], 10)], 1)],
       1,
     );
     expect(planViewerSync([], snap).mount).toEqual([]);
+  });
+
+  it("mounts an exited terminal tab as a record view", () => {
+    const snap = snapshot(
+      [workspace(1, [pane(1, [terminalTab(10, null, true)], 10)], 1)],
+      1,
+    );
+    expect(planViewerSync([], snap).mount).toEqual([
+      {
+        pane: 1,
+        tab: 10,
+        kind: {
+          type: "terminal",
+          ptySession: null,
+          status: { type: "exited", code: 0, endedAtMs: 1723100500000 },
+          cwd: null,
+        },
+      },
+    ]);
+  });
+
+  it("does not mount a session-less terminal tab that never exited", () => {
+    // 부팅 복원 직후의 Running 탭 — 세션은 아직 없고(웨이브가 닿기 전) 끝난 셸도
+    // 없으므로 그릴 기록이 없다. pane 은 placeholder 로 남는다.
+    const snap = snapshot([workspace(1, [pane(1, [terminalTab(10, null)], 10)], 1)], 1);
+    expect(planViewerSync([], snap).mount).toEqual([]);
+  });
+
+  it("leaves an exited tab that still holds a session to the terminal path", () => {
+    // `SessionExited` 를 거치지 않고 온 상태(낡은 스냅샷·정합성 수리 전 —
+    // command.rs::respawn_tab 의 (c)). 기록 뷰는 세션을 놓은 탭만 맡으므로 이 탭은
+    // 여전히 터미널 경로다: planViewSync 가 attach 대상으로 세우고 기록 뷰는
+    // 마운트되지 않는다. audit 이 이 상태를 수리하면 그때 기록 뷰로 넘어간다.
+    const snap = snapshot(
+      [workspace(1, [pane(1, [terminalTab(10, 100, true)], 10)], 1)],
+      1,
+    );
+    expect(planViewerSync([], snap).mount).toEqual([]);
+    expect(planViewSync([], snap).visible).toEqual([{ pane: 1, tab: 10, session: 100 }]);
+  });
+
+  it("unmounts a record view when its tab stops being active", () => {
+    const snap = snapshot(
+      [workspace(1, [pane(1, [terminalTab(10, null, true), terminalTab(11, 101)], 11)], 1)],
+      1,
+    );
+    const plan = planViewerSync([10], snap);
+    expect(plan.mount).toEqual([]);
+    expect(plan.dispose).toEqual([{ tab: 10, tabExists: true }]);
   });
 
   it("disposes a viewer that became a background tab, flagging the tab as alive", () => {

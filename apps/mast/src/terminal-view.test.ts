@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { clampFontSize, shouldOpenLink } from "./terminal-view";
+import { clampFontSize, isCopySelectionKey, shouldOpenLink } from "./terminal-view";
 
 describe("clampFontSize", () => {
   it("범위 안의 값은 그대로 통과한다", () => {
@@ -64,5 +64,35 @@ describe("shouldOpenLink", () => {
     expect(shouldOpenLink("javascript:alert(1)", "none")).toBe(false);
     expect(shouldOpenLink("not a url", "none")).toBe(false);
     expect(shouldOpenLink("", "none")).toBe(false);
+  });
+});
+
+describe("isCopySelectionKey", () => {
+  // 판정이 터미널 뷰와 기록 뷰에 공유되므로(keys.ts 정본 표) 여기서 잠근다 —
+  // 갈라지면 한쪽 표면의 복사가 조용히 죽는다.
+  const key = (init: Partial<KeyboardEvent>): KeyboardEvent =>
+    ({ ctrlKey: false, shiftKey: false, altKey: false, key: "c", ...init }) as KeyboardEvent;
+
+  it("복사는 선택이 있을 때만이다 — 선택 없는 Ctrl+C 는 SIGINT 로 통과한다", () => {
+    expect(isCopySelectionKey(key({ ctrlKey: true }), true)).toBe(true);
+    expect(isCopySelectionKey(key({ ctrlKey: true }), false)).toBe(false);
+  });
+
+  it("Ctrl+Shift+C 와 Ctrl+Insert 도 같은 복사 키다", () => {
+    expect(isCopySelectionKey(key({ ctrlKey: true, shiftKey: true }), true)).toBe(true);
+    expect(isCopySelectionKey(key({ ctrlKey: true, key: "Insert" }), true)).toBe(true);
+  });
+
+  it("Shift+Insert 는 붙여넣기라 복사로 잡지 않는다", () => {
+    expect(isCopySelectionKey(key({ shiftKey: true, key: "Insert" }), true)).toBe(false);
+    expect(isCopySelectionKey(key({ ctrlKey: true, shiftKey: true, key: "Insert" }), true)).toBe(
+      false,
+    );
+  });
+
+  it("Alt 가 끼거나 Ctrl 이 없으면 터미널의 것이다", () => {
+    expect(isCopySelectionKey(key({ ctrlKey: true, altKey: true }), true)).toBe(false);
+    expect(isCopySelectionKey(key({}), true)).toBe(false);
+    expect(isCopySelectionKey(key({ ctrlKey: true, key: "v" }), true)).toBe(false);
   });
 });

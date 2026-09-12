@@ -129,10 +129,38 @@ let fontFamily = DEFAULT_FONT_FAMILY;
 let fontSize = DEFAULT_FONT_SIZE;
 let baseFontSize = DEFAULT_FONT_SIZE;
 
-/** 살아있는 TerminalView 레지스트리 — 줌은 "지금 열려 있는 모든 터미널"에
+/** 줌을 받아야 하는 터미널 표면 — TerminalView 와, 같은 글꼴로 여는 기록 뷰
+ *  (record-view.ts)가 구현한다. 구조 타입인 이유는 기록 뷰가 뷰어 수명을 타는
+ *  별도 클래스라서다 (ADR-0018) — 같은 키가 두 표면을 같은 스텝으로 움직여야
+ *  하므로 레지스트리는 하나여야 한다. */
+export interface TerminalFontTarget {
+  setFontSize(size: number): void;
+}
+
+/** 살아있는 터미널 표면 레지스트리 — 줌은 "지금 열려 있는 모든 터미널"에
  *  동시에 걸리므로 인스턴스 목록이 필요하다. 등록·해제는 생성자와 dispose 가
  *  짝으로 맡는다 (dispose 된 뷰가 남아 이미 죽은 xterm 을 건드리지 않게). */
-const liveViews = new Set<TerminalView>();
+const liveViews = new Set<TerminalFontTarget>();
+
+/** 뷰 생성자가 자신을 등록한다 — 해제는 dispose 의 unregisterTerminalFontTarget. */
+export function registerTerminalFontTarget(view: TerminalFontTarget): void {
+  liveViews.add(view);
+}
+
+export function unregisterTerminalFontTarget(view: TerminalFontTarget): void {
+  liveViews.delete(view);
+}
+
+/** 지금 터미널 표면을 여는 xterm 옵션 — 기록 뷰가 같은 글꼴·테마로 열기 위해
+ *  읽는다. 모듈 상태를 복사해 돌려주므로 호출자가 바꿔도 여기 값은 불변이다
+ *  (줌의 정본은 adjustFontSize 하나다). */
+export function terminalViewOptions(): {
+  fontSize: number;
+  fontFamily: string;
+  theme: ITheme;
+} {
+  return { fontSize, fontFamily, theme: { ...TERMINAL_THEME } };
+}
 
 /** 줌 ±1px (`Ctrl+=` / `Ctrl+-`) — 현재 유효 크기에 delta 를 더해 클램프하고,
  *  살아있는 모든 뷰에 적용한다. 이후 새로 열리는 탭도 모듈 상태를 읽으므로 같은
@@ -221,6 +249,33 @@ export function shouldOpenLink(uri: string, mouseTrackingMode: string): boolean 
   }
 }
 
+/** 선택 복사 키인지 — `Ctrl+C` · `Ctrl+Shift+C` · `Ctrl+Insert` 이고 선택이 있을
+ *  때만 참이다 (선택 없는 `Ctrl+C` 는 SIGINT 로 통과해야 하므로 여기서 거른다).
+ *
+ *  뷰 밖에 있는 이유: 기록 뷰(record-view.ts)가 **같은** 판정을 써야 한다. xterm 은
+ *  `disableStdin` 여부와 무관하게 `Ctrl+C` 의 keydown 을 스스로 cancel(preventDefault
+ *  + stopPropagation) 하므로, 앱이 가로채지 않는 터미널 표면에서는 브라우저의 copy
+ *  이벤트조차 발생하지 않아 복사가 조용히 죽는다. 규칙이 표면마다 갈리면 keys.ts
+ *  상단의 정본 표가 거짓이 되므로 판정은 한 군데다. */
+export function isCopySelectionKey(ev: KeyboardEvent, hasSelection: boolean): boolean {
+  if (!ev.ctrlKey || ev.altKey || !hasSelection) return false;
+  if (ev.key === "Insert") return !ev.shiftKey;
+  return ev.key.toLowerCase() === "c";
+}
+
+/** 선택 영역을 클립보드로 복사하고 선택을 해제한다 — 해제 덕에 곧바로 한 번 더
+ *  누르는 Ctrl+C 는 SIGINT 로 나간다 (Windows Terminal 과 같은 동작). */
+export async function copyTerminalSelection(term: Terminal): Promise<void> {
+  const text = term.getSelection();
+  if (text.length === 0) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    term.clearSelection();
+  } catch (err) {
+    console.error("clipboard write failed", err);
+  }
+}
+
 export class TerminalView {
   readonly root: HTMLDivElement;
   private readonly term: Terminal;
@@ -293,7 +348,7 @@ export class TerminalView {
       this.sendAck(n);
     });
     // 줌 대상 등록 — 해제는 dispose 가 짝으로 맡는다.
-    liveViews.add(this);
+    registerTerminalFontTarget(this);
   }
 
   /** 글꼴 크기 적용 (줌 경로 전용 — 모듈의 adjustFontSize/resetFontSize 가 부른다).
@@ -485,7 +540,7 @@ export class TerminalView {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    liveViews.delete(this);
+    unregisterTerminalFontTarget(this);
     // 백엔드 채널 슬롯도 분리한다 — 채널을 남겨두면 이후 출력이 Delivered 인데
     // ack 는 없는 상태로 pending 이 쌓여 백그라운드 세션이 paused 에 고착된다
     // (리뷰 finding). 분리 후 출력은 Dropped(detach 모드)로 보상 롤백되며 replay
@@ -552,6 +607,11 @@ export class TerminalView {
         this.enqueueWrite("\x1b\r");
         return false; // xterm 기본 CR 전송 차단
       }
+      if (isCopySelectionKey(ev, this.term.hasSelection())) {
+        ev.preventDefault();
+        void copyTerminalSelection(this.term);
+        return false;
+      }
       if (ev.key === "Insert") {
         // Windows 고전 조합 — 터미널 앱과 충돌하지 않는다.
         if (ev.shiftKey && !ev.ctrlKey && !ev.altKey) {
@@ -559,40 +619,16 @@ export class TerminalView {
           void this.pasteFromClipboard();
           return false;
         }
-        if (ev.ctrlKey && !ev.shiftKey && !ev.altKey && this.term.hasSelection()) {
-          ev.preventDefault();
-          void this.copySelection();
-          return false;
-        }
         return true;
       }
       if (!ev.ctrlKey || ev.altKey) return true;
-      const key = ev.key.toLowerCase();
-      if (key === "v") {
+      if (ev.key.toLowerCase() === "v") {
         ev.preventDefault();
         void this.pasteFromClipboard();
         return false;
       }
-      if (key === "c" && this.term.hasSelection()) {
-        ev.preventDefault();
-        void this.copySelection();
-        return false;
-      }
       return true;
     });
-  }
-
-  /** 선택 영역을 클립보드로 복사하고 선택을 해제한다 — 해제 덕에 곧바로 한 번 더
-   *  누르는 Ctrl+C 는 SIGINT 로 나간다 (Windows Terminal 과 같은 동작). */
-  private async copySelection(): Promise<void> {
-    const text = this.term.getSelection();
-    if (text.length === 0) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      this.term.clearSelection();
-    } catch (err) {
-      console.error("clipboard write failed", err);
-    }
   }
 
   /** 붙여넣기 경로: 클립보드를 읽어 xterm paste 로 주입한다. WebView2 가

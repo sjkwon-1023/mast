@@ -55,6 +55,14 @@ export function detachTerminal(session: SessionId): Promise<void> {
   return invoke<void>("detach_terminal", { session });
 }
 
+/** 셸이 끝난 탭의 마지막 화면 기록을 읽는다 (ADR-0018). 응답은 attachTerminal ·
+ *  fsReadChunk 와 같은 raw body — 기록 파일의 바이트 그대로이고, 파일이 없으면
+ *  **빈 버퍼**다 (에러가 아니다: 기록이 지워졌거나 아무 것도 출력하지 않은 셸의
+ *  정상 경로다). */
+export function readTabRecord(tab: TabId): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>("read_tab_record", { tab });
+}
+
 /** 시작 표식이 오지 않은 탭에 셸을 다시 띄운다 (pane 배너의 Retry). 실패는
  *  CommandError 로 reject 되며, 그 경우에도 백엔드가 상태를 강등해 publish 한다. */
 export function respawnTab(tab: TabId): Promise<SessionId> {

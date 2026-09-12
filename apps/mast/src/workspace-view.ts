@@ -16,9 +16,10 @@
 //
 // 뷰어 뷰 수명 (21단계): 시맨틱이 반대라(활성 탭만 마운트 — viewer-view.ts)
 // 병렬 레지스트리 viewerViews 를 두고 planViewerSync 로 집행한다. 두 레지스트리의
-// 키는 겹치지 않는다 (탭은 terminal 이거나 뷰어 하나다). dispose 시 탭이 아직
-// 스냅샷에 남아 있으면(단순 unmount) flushScroll 로 스크롤을 모델에 남기고,
-// 탭 자체가 사라졌으면 flush 없이 바로 내린다 — 없는 탭에 setViewerScroll 을
+// 키는 겹치지 않는다 — 셸이 끝난 터미널 탭도 뷰어로 마운트되지만(기록 뷰,
+// ADR-0018) 그 전이에서 planViewSync 가 터미널 뷰를 먼저 dispose 한다.
+// dispose 시 탭이 아직 스냅샷에 남아 있으면(단순 unmount) flushScroll 로 스크롤을
+// 모델에 남기고, 탭 자체가 사라졌으면 flush 없이 바로 내린다 — 없는 탭에 setViewerScroll 을
 // 보내면 unknownTarget 잡음이 되기 때문이다.
 //
 // focus 보상 경로 (계획 D7 — attach 자동 focus 제거의 대가): pendingFocus 1칸을
@@ -42,6 +43,7 @@ import { FolderView } from "./folder-view";
 import type { PaneRect } from "./keys";
 import { MarkdownView } from "./markdown-view";
 import { PaneView } from "./pane-view";
+import { RecordView } from "./record-view";
 import type { SendController, ViewRegistry, ViewerRegistry } from "./pane-view";
 import { SendMode, sendModePrompt } from "./send-mode";
 import { Splitter } from "./splitter";
@@ -417,7 +419,9 @@ export class WorkspaceView {
   /** 요청 → focus 할 뷰. 숨은 뷰는 대상이 아니다 (display:none 은 focus 불가) —
    *  표시 여부는 pane 의 shownTab 으로 판정한다. 뷰어 뷰도 대상이다 (21단계):
    *  둘 다 focus() 를 가지므로 20단계 키보드 내비·D7 보상이 뷰어 탭에서도
-   *  그대로 성립한다. 두 레지스트리는 키가 겹치지 않아 순서 의존이 없다. */
+   *  그대로 성립한다 — 기록 뷰(ADR-0018)까지 포함해서다. 두 레지스트리는 키가
+   *  겹치지 않아 순서 의존이 없다: 한 탭이 터미널 뷰와 기록 뷰를 동시에 갖는
+   *  중간 상태는 planViewSync 의 dispose 가 닫는다 (view-reconcile 상단). */
   private focusTarget(req: FocusRequest): TerminalView | ViewerView | null {
     if (req.kind === "activePane") {
       const ws = this.lastSnapshot === null ? null : activeWorkspace(this.lastSnapshot);
@@ -489,6 +493,11 @@ export class WorkspaceView {
     const distro = ws?.distro ?? null;
     let created: ViewerView;
     switch (target.kind.type) {
+      case "terminal":
+        // 셸이 끝난 탭 — 기록 파일이 화면 재료이고 distro·dispatch 가 필요 없다
+        // (ADR-0018). 뷰어 레지스트리에 사는 이유는 viewer-view.ts 참조.
+        created = new RecordView(parent, target.tab);
+        break;
       case "folderBrowser":
         created = new FolderView(
           parent,
