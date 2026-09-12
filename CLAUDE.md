@@ -553,6 +553,14 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   files need a lifetime — delete-on-close next to the tab's history files (ADR-0013) is the
   natural rule. Not started.
 
+- **Arrow keys and a refresh button on the phone — landed 2026-09-12** (v0.3.26). The key bar
+  gained ↑/↓/←/→ next to Stop/Esc — `protocol.ts::encodeInput` already encoded both arrow forms
+  (plain and DECCKM) for the desktop, so this only wires up the missing buttons. The new ↻
+  header button is not a page reload: it clears the notice, drops the headless terminal instance
+  and polls immediately without `since` so the reply is a fresh snapshot — the phone's
+  counterpart to the desktop's Ctrl+Shift+R. It stays outside `controls` on purpose, since its
+  whole point is recovering from the black-screen/error state where input is disabled.
+
 - **Remote surface over the LAN — landed 2026-09-05** (user request, v0.3.17). `settings.json`'s
   `"remote": { "port": N }` starts an HTTP server inside the app (off by default — nothing exists
   while off) that a phone on the same Wi-Fi reaches after scanning the sidebar's *Pair phone* QR:
