@@ -112,7 +112,6 @@ mod tests {
 
     #[test]
     fn exactly_high_water_pauses() {
-        // 경계값: pending == high 에서 Pause (초과가 아니라 도달 기준).
         let mut fc = FlowControl::new(100, 20);
         assert_eq!(fc.on_sent(100), FlowAction::Pause);
         assert!(fc.is_paused());
@@ -122,7 +121,7 @@ mod tests {
     fn no_duplicate_pause_while_paused() {
         let mut fc = FlowControl::new(100, 20);
         assert_eq!(fc.on_sent(150), FlowAction::Pause);
-        // 리더가 멈추기 전 잔여 전송 — 이미 paused 이므로 None.
+        // 리더가 멈추기 전 잔여 전송.
         assert_eq!(fc.on_sent(50), FlowAction::None);
         assert!(fc.is_paused());
         assert_eq!(fc.pending(), 200);
@@ -130,7 +129,6 @@ mod tests {
 
     #[test]
     fn exactly_low_water_resumes() {
-        // 경계값: pending == low 에서 Resume (미만이 아니라 도달 기준).
         let mut fc = FlowControl::new(100, 20);
         fc.on_sent(100);
         assert_eq!(fc.on_acked(79), FlowAction::None); // pending 21 > low
@@ -142,7 +140,6 @@ mod tests {
     fn no_resume_when_not_paused() {
         let mut fc = FlowControl::new(100, 20);
         fc.on_sent(50);
-        // paused 가 아니면 pending ≤ low 여도 Resume 을 내지 않는다.
         assert_eq!(fc.on_acked(40), FlowAction::None);
         assert_eq!(fc.pending(), 10);
     }
@@ -158,7 +155,6 @@ mod tests {
 
     #[test]
     fn over_ack_saturates_at_zero() {
-        // ack 초과 — pending 이 음수로 내려가지 않고 0 에서 멈춘다.
         let mut fc = FlowControl::new(100, 20);
         fc.on_sent(50);
         assert_eq!(fc.on_acked(200), FlowAction::None); // not paused → None
@@ -176,7 +172,6 @@ mod tests {
 
     #[test]
     fn pause_resume_cycle_repeats() {
-        // Resume 후 다시 high 에 도달하면 다시 Pause — 상태 머신이 순환한다.
         let mut fc = FlowControl::new(100, 20);
         assert_eq!(fc.on_sent(100), FlowAction::Pause);
         assert_eq!(fc.on_acked(80), FlowAction::Resume);
@@ -199,7 +194,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "low_water")]
     fn low_above_high_is_rejected() {
-        // 설정 오류는 조용히 넘어가지 않고 즉시 실패시킨다.
         let _ = FlowControl::new(100, 200);
     }
 
@@ -219,7 +213,7 @@ mod tests {
         let mut fc = FlowControl::new(100, 20);
         fc.on_sent(150);
         fc.reset();
-        // 구채널 잔여 ack — saturating 으로 0 에 머문다 (paused 아님 → None).
+        // 구채널 잔여 ack.
         assert_eq!(fc.on_acked(150), FlowAction::None);
         assert_eq!(fc.pending(), 0);
         assert!(!fc.is_paused());
@@ -227,7 +221,6 @@ mod tests {
 
     #[test]
     fn equal_high_and_low_allowed() {
-        // high == low 도 유효 — high 도달 시 Pause, 같은 값 이하로 ack 시 Resume.
         let mut fc = FlowControl::new(50, 50);
         assert_eq!(fc.on_sent(50), FlowAction::Pause);
         assert_eq!(fc.on_acked(0), FlowAction::Resume); // pending 50 == low

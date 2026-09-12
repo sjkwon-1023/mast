@@ -1,4 +1,4 @@
-// split 컨테이너 사이 4px 드래그 핸들 (11단계 청크 B — 계획 D2).
+// split 컨테이너 사이 4px 드래그 핸들 (계획 D2).
 //
 // 드래그 중에는 dispatch 없이 양쪽 자식의 flex-grow 만 로컬 갱신(프리뷰)하고,
 // 드래그 활성 가드(guard.begin)를 등록해 그 사이 도착하는 스냅샷(SessionExited
@@ -10,14 +10,14 @@
 import { flexPair, ratioFromPointer } from "./split-layout";
 import type { Command, CommandOutput, SplitDirection, SplitId } from "./types";
 
-/** 드래그 클램프의 pane 최소 픽셀 — 이보다 작게는 줄일 수 없다 (D2 픽셀 클램프). */
+/** 드래그 클램프의 pane 최소 픽셀 (계획 D2 픽셀 클램프). */
 export const MIN_PANE_PX = 80;
 
 /** 드래그 시작값과 이 폭 미만 차이면 dispatch 를 생략한다 — 제자리 드래그가
- *  무변경 revision 을 만드는 잡음 방지 (리뷰 메모). */
+ *  무변경 revision 을 만드는 잡음 방지. */
 export const RATIO_NOOP_EPS = 0.001;
 
-/** 드래그 활성 SplitId 집합의 등록/해제 — workspace-view 가 소유한다. */
+/** 드래그 활성 SplitId 집합은 workspace-view 가 소유한다. */
 export interface DragGuard {
   begin(id: SplitId): void;
   end(id: SplitId): void;
@@ -42,8 +42,8 @@ export class Splitter {
   readonly handle: HTMLDivElement;
   private dragging = false;
   private lastRatio: number | null = null;
-  /** 드래그 시작 시점의 ratio — pointerup 의 no-op 판정 기준. 모델 값을 직접
-   *  받지 않으므로 현재 flex-grow 쌍(applyRatio 가 설정)에서 역산한다. */
+  /** pointerup 의 no-op 판정 기준. 모델 값을 직접 받지 않으므로 현재
+   *  flex-grow 쌍(applyRatio 가 설정)에서 역산한다. */
   private startRatio: number | null = null;
   private disposed = false;
 
@@ -80,8 +80,8 @@ export class Splitter {
       MIN_PANE_PX,
     );
     this.lastRatio = ratio;
-    // 로컬 프리뷰 — dispatch 없음. flex-grow 만 갱신하고 basis 는 컨테이너
-    // 구축 시 설정된 0 그대로 둔다 (workspace-view.applyRatio 와 합의된 구조).
+    // basis 는 컨테이너 구축 시 설정된 0 그대로 둔다 (workspace-view.applyRatio
+    // 와 합의된 구조).
     const pair = flexPair(ratio);
     this.opts.first.style.flexGrow = String(pair.first);
     this.opts.second.style.flexGrow = String(pair.second);
@@ -97,8 +97,7 @@ export class Splitter {
     this.startRatio = null;
     if (ratio === null) return; // 이동 없는 클릭 — 프리뷰도 dispatch 도 없었다
     if (startRatio !== null && Math.abs(ratio - startRatio) < RATIO_NOOP_EPS) {
-      // 제자리 드래그 — dispatch 생략(무변경 revision 잡음 방지)하고 서브-eps
-      // 프리뷰 잔재만 모델 값으로 되돌린다.
+      // 서브-eps 프리뷰 잔재만 모델 값으로 되돌린다 (dispatch 는 생략).
       this.opts.restore();
       return;
     }
@@ -117,7 +116,7 @@ export class Splitter {
     this.lastRatio = null;
     this.startRatio = null;
     this.opts.guard.end(this.opts.splitId);
-    this.opts.restore(); // 적용된 프리뷰 잔재를 모델 값으로 되돌린다
+    this.opts.restore();
   }
 
   /** 재구축 시 호출 — 진행 중 드래그가 있으면 가드만 정리한다. 핸들 DOM 은

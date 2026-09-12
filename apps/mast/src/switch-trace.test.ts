@@ -1,5 +1,4 @@
-// SwitchTracer 정착 판정·수명 규칙 검증 — 시각을 인자로 주입해 결정적으로
-// 테스트한다 (performance.now 불사용, DOM-free).
+// 시각을 인자로 주입해 결정적으로 테스트한다 (performance.now 불사용, DOM-free).
 
 import { describe, expect, it } from "vitest";
 

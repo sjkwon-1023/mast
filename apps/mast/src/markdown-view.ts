@@ -1,5 +1,5 @@
-// markdownViewer 탭의 뷰 (21단계 청크 D) — 마크다운 파일을 렌더해 보여주고,
-// 활성인 동안 2초 주기 mtime 폴링으로 라이브 리로드한다.
+// markdownViewer 탭의 뷰 — 마크다운 파일을 렌더해 보여주고, 활성인 동안
+// 2초 주기 mtime 폴링으로 라이브 리로드한다.
 //
 // 이 파일의 세 계약이 나머지를 지배한다.
 //
@@ -66,8 +66,8 @@ const defaultTimers: TimerHost = {
   clearTimeout: (handle) => globalThis.clearTimeout(handle as number),
 };
 
-/** HTML 특수문자 이스케이프 — 파일에서 온 문자열이 마크업으로 해석되지 않게
- *  한다. 작은따옴표까지 덮는 이유는 속성값(title)에도 쓰이기 때문이다. */
+/** 파일에서 온 문자열이 마크업으로 해석되지 않게 한다. 작은따옴표까지 덮는
+ *  이유는 속성값(title)에도 쓰이기 때문이다. */
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -107,11 +107,10 @@ export function renderMarkdown(source: string): string {
 }
 
 export interface MtimePollerOptions {
-  /** 폴링 주기(ms). */
   intervalMs?: number;
-  /** 타이머 구현 (테스트 주입). 기본은 전역 setTimeout/clearTimeout. */
+  /** 테스트 주입용 — 기본은 전역 setTimeout/clearTimeout. */
   timers?: TimerHost;
-  /** 문서가 숨겨졌는지 — true 인 동안 폴링을 멈춘다. 기본은 document.hidden. */
+  /** true 인 동안 폴링을 멈춘다. 기본은 document.hidden. */
   isHidden?: () => boolean;
 }
 
@@ -142,8 +141,7 @@ export class MtimePoller {
     this.isHidden = options.isHidden ?? (() => document.hidden);
   }
 
-  /** 기준 mtime 을 고정하고 폴링을 시작(또는 재개)한다. 로드가 끝날 때마다
-   *  불려 기준이 실제로 화면에 그려진 내용을 가리키게 한다. */
+  /** 로드가 끝날 때마다 불려 기준이 실제로 화면에 그려진 내용을 가리키게 한다. */
   start(baselineMs: number): void {
     if (this.disposed) return;
     this.baseline = baselineMs;
@@ -151,8 +149,7 @@ export class MtimePoller {
     this.arm();
   }
 
-  /** visibilitychange 훅 — 숨으면 정지, 다시 보이면 재개한다. start 전이면
-   *  아무 일도 하지 않는다 (아직 볼 문서가 없다). */
+  /** visibilitychange 훅. start 전이면 아무 일도 하지 않는다 (아직 볼 문서가 없다). */
   sync(): void {
     if (this.disposed || !this.running) return;
     if (this.isHidden()) this.disarm();
@@ -165,14 +162,14 @@ export class MtimePoller {
     this.disarm();
   }
 
-  /** 테스트·진단용 — 지금 타이머가 걸려 있는가. */
+  /** 테스트·진단용. */
   get armed(): boolean {
     return this.handle !== null;
   }
 
   private arm(): void {
     if (this.disposed || !this.running || this.handle !== null) return;
-    // 숨은 동안은 무장 자체를 하지 않는다 — 재개는 sync() 가 한다.
+    // 재개는 sync() 가 한다.
     if (this.isHidden()) return;
     this.handle = this.timers.setTimeout(() => {
       this.handle = null;
@@ -210,17 +207,15 @@ function describeError(err: unknown): string {
   return typeof err === "string" ? err : String(err);
 }
 
-/** MiB 표기 (순수 — 로케일에 기대지 않는다). */
+/** 순수 — 로케일에 기대지 않는다. */
 function formatMiB(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 export interface MarkdownViewOptions {
-  /** 타이머 구현 (테스트 주입). 기본은 전역 setTimeout/clearTimeout. */
+  /** 테스트 주입용 — 기본은 전역 setTimeout/clearTimeout. */
   timers?: TimerHost;
-  /** 스크롤 settle 디바운스(ms). */
   settleMs?: number;
-  /** mtime 폴링 주기(ms). */
   pollMs?: number;
 }
 
@@ -339,7 +334,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     // 해제를 정한다. 창 구독 해제 함수는 dispose 까지 들고 있는다 (누수 금지).
     document.addEventListener("visibilitychange", this.onVisibilityChange);
     this.unsubscribeWindow = onWindowHiddenChange(this.onWindowHidden);
-    // 줌 대상 등록 — 해제는 dispose 가 짝으로 맡는다.
+    // 해제는 dispose 가 짝으로 맡는다.
     registerViewerFontTarget(this);
 
     this.load(false);
@@ -417,7 +412,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
 
   dispose(): void {
     this.disposed = true;
-    // 폴링 수명 = 뷰 수명 (파일 상단 계약 3) — 타이머·리스너를 전부 끊는다.
+    // 폴링 수명 = 뷰 수명 (파일 상단 계약 3).
     this.poller.dispose();
     document.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.unsubscribeWindow();
@@ -457,10 +452,10 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     this.loadDocument(token).catch((err: unknown) => {
       if (this.disposed || token !== this.loadToken) return;
       this.renderError(describeError(err));
-      // 실패는 폴링을 재시도 모드로 돌린다 (21단계 리뷰 finding): baseline 을
-      // 실존 불가능한 값으로 고정하면 다음 성공 stat 의 mtime 이 반드시 달라
-      // 자동 재로드가 걸린다 — 9P 과도 실패는 다음 주기에 스스로 낫고, 첫
-      // 로드부터 실패한 탭(없는 파일)도 파일이 생기면 재마운트 없이 복구된다.
+      // 실패는 폴링을 재시도 모드로 돌린다: baseline 을 실존 불가능한 값으로
+      // 고정하면 다음 성공 stat 의 mtime 이 반드시 달라 자동 재로드가 걸린다 —
+      // 9P 과도 실패는 다음 주기에 스스로 낫고, 첫 로드부터 실패한 탭(없는
+      // 파일)도 파일이 생기면 재마운트 없이 복구된다.
       this.poller.start(RETRY_BASELINE_MS);
     });
   }
@@ -536,9 +531,9 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
   /** 로드 실패 — 인라인 에러로 표면화하고 탭은 유지한다 (없는·삭제된 파일도
    *  모델에 남아 재시도가 가능해야 한다). 보류된 복원 위치는 소비하지 않는다:
    *  파일이 돌아오면 그때 원래 지점으로 복원된다. **본문은 지우지 않는다**
-   *  (21단계 리뷰 finding) — 라이브 리로드의 일시 실패(9P 과도 상태)에서
-   *  마지막으로 성공한 렌더를 배너 아래에 그대로 유지한다. 첫 로드 실패면
-   *  본문이 원래 비어 있어 배너만 남는 기존 표시와 같다. */
+   *  — 라이브 리로드의 일시 실패(9P 과도 상태)에서 마지막으로 성공한 렌더를
+   *  배너 아래에 그대로 유지한다. 첫 로드 실패면 본문이 원래 비어 있어 배너만
+   *  남는 기존 표시와 같다. */
   private renderError(message: string): void {
     this.setBanner(`cannot read ${this.path}: ${message}`, true);
   }

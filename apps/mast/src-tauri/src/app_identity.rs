@@ -111,12 +111,10 @@ const fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     false
 }
 
-/// 시작 메뉴 바로가기의 전체 경로.
 fn shortcut_path_in(appdata: &Path) -> PathBuf {
     appdata.join(START_MENU_RELATIVE).join(SHORTCUT_FILE_NAME)
 }
 
-/// 기존 .lnk 에서 읽어낸, 우리가 관리하는 두 값.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ExistingLink {
     /// `IShellLink::GetPath(SLGP_RAWPATH)` 로 읽은 대상 exe. 읽기 실패면 `None`.
@@ -147,11 +145,8 @@ fn needs_rewrite(existing: &ExistingLink, want_target: &Path, want_aumid: &str) 
 /// 이번 부팅에서 바로가기에 무슨 일을 했는지 — 로그 문구용.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShortcutOutcome {
-    /// 바로가기가 없어서 새로 만들었다.
     Created,
-    /// target·AUMID 가 달라져서 덮어썼다.
     Updated,
-    /// 이미 우리 값과 같아 아무것도 안 했다.
     UpToDate,
 }
 
@@ -200,8 +195,7 @@ fn register_inner() -> Result<ShortcutOutcome, String> {
     // `\\?\` verbatim 경로를 돌려주는데 그건 .lnk target 으로 부적절하다.
     let exe = std::env::current_exe().map_err(|err| format!("cannot resolve the exe path: {err}"))?;
 
-    // 프로세스 AUMID 선언 — 토스트 발신자 신원의 절반이고, 타스크바 그룹화·창
-    // 신원에도 쓰인다.
+    // 토스트 발신자 신원의 절반이고, 타스크바 그룹화·창 신원에도 쓰인다.
     let wide_aumid = to_wide(APP_USER_MODEL_ID);
     unsafe { SetCurrentProcessExplicitAppUserModelID(PCWSTR(wide_aumid.as_ptr())) }
         .map_err(|err| format!("SetCurrentProcessExplicitAppUserModelID failed: {err}"))?;
@@ -213,7 +207,6 @@ fn register_inner() -> Result<ShortcutOutcome, String> {
     ensure_shortcut(&shortcut, &exe, APP_USER_MODEL_ID)
 }
 
-/// 시작 메뉴 바로가기를 현재 exe·AUMID 에 맞춘다 (없으면 생성, 다르면 갱신, 같으면 무작업).
 fn ensure_shortcut(
     shortcut: &Path,
     exe: &Path,
@@ -253,7 +246,6 @@ fn ensure_shortcut(
     })
 }
 
-/// 기존 .lnk 에서 target 과 AUMID 를 읽는다.
 fn read_shortcut(shortcut: &Path) -> Result<ExistingLink, String> {
     use windows::core::{Interface, PCWSTR};
     use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
@@ -315,7 +307,7 @@ fn read_shortcut(shortcut: &Path) -> Result<ExistingLink, String> {
     Ok(ExistingLink { target, aumid })
 }
 
-/// .lnk 를 새로 쓴다 (기존 파일이 있으면 덮어쓴다).
+/// 기존 파일이 있으면 덮어쓴다 (`IPersistFile::Save` overwrite).
 fn write_shortcut(shortcut: &Path, exe: &Path, aumid: &str) -> Result<(), String> {
     use windows::core::{Interface, PCWSTR, PWSTR};
     use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
@@ -387,8 +379,6 @@ fn create_shell_link() -> Result<windows::Win32::UI::Shell::IShellLinkW, String>
         .map_err(|err| format!("cannot create the ShellLink COM object: {err}"))
 }
 
-/// 이 스코프 동안 COM 아파트를 보장한다.
-///
 /// `main()` 최선두에서 도는 코드라 아직 아무도 COM 을 초기화하지 않았다. 우리가 잡은
 /// 초기화 카운트는 스코프를 나가며 정확히 하나 되돌려, 뒤이어 도는 tauri/wry 의 COM
 /// 초기화에 간섭하지 않는다.

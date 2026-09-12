@@ -6,7 +6,7 @@
 
 use crate::http::Method;
 
-/// `GET /` 이 가리키는 자산 키. 정적 자산은 번들 안에서 `remote/` 아래에 있다.
+/// 정적 자산은 번들 안에서 `remote/` 아래에 있다.
 const INDEX_KEY: &str = "remote/index.html";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,7 +77,6 @@ pub(crate) fn route(method: Method, path: &str, query: Option<&str>) -> Route {
         }
         ["remote", tail @ ..] if method == Method::Get && !tail.is_empty() => {
             if tail.iter().all(|seg| is_safe_segment(seg)) {
-                // 세그먼트가 전부 규칙을 통과했으므로 경로를 그대로 키로 쓴다.
                 Route::Static {
                     key: rest.to_string(),
                 }

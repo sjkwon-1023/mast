@@ -1,6 +1,3 @@
-// split-layout 순수 함수 검증 — structureKey 구조 동일성, ratioFromPointer
-// 클램프 경계(양끝·minPanePx > rect 절반·퇴화 rect), flexPair.
-
 import { describe, expect, it } from "vitest";
 
 import { flexPair, ratioFromPointer, structureKey } from "./split-layout";
@@ -44,7 +41,6 @@ describe("structureKey", () => {
     expect(structureKey(split(10, "horizontal", 0.5, leaf(1), leaf(3)))).not.toBe(
       structureKey(base),
     );
-    // 중첩 위치가 다르면 (first 쪽 vs second 쪽) 키도 달라야 한다.
     const inner = split(11, "vertical", 0.5, leaf(2), leaf(3));
     expect(structureKey(split(10, "horizontal", 0.5, inner, leaf(1)))).not.toBe(
       structureKey(split(10, "horizontal", 0.5, leaf(1), inner)),

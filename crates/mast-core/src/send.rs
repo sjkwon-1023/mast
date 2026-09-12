@@ -40,7 +40,6 @@ use std::fmt;
 /// "크기 상한" 참조 — 스캐너 payload 상한이 실효 상한을 더 낮게 잡는다).
 pub const MAX_SEND_BYTES: usize = 32 * 1024;
 
-/// base64 payload 디코드 실패.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendDecodeError {
     /// 표준 알파벳(`A-Za-z0-9+/`, 끝에 `=` 패딩) 밖의 문자거나 길이가 불가능한 값.
@@ -226,7 +225,6 @@ fn decode_digit(b: u8) -> Option<u8> {
 mod tests {
     use super::*;
 
-    // 편의 헬퍼 — 성공 디코드를 UTF-8 문자열로 본다.
     fn decoded(b64: &str) -> String {
         String::from_utf8(decode_send_text(b64).expect("decode")).expect("utf8")
     }
@@ -323,7 +321,7 @@ mod tests {
 
     #[test]
     fn payload_over_the_cap_is_rejected() {
-        // 상한 + 1 byte 부터 거부되고, 거부 사유에 실제 크기가 실린다.
+        // 거부 사유에 실제 디코드 크기가 실린다.
         let b64 = "A".repeat(b64_len_for(MAX_SEND_BYTES + 1));
         assert_eq!(
             decode_send_text(&b64),
@@ -342,8 +340,6 @@ mod tests {
             Err(SendDecodeError::TooLarge { .. })
         ));
     }
-
-    // ---- 질의 회신 경로 (decode_reply_path) ----
 
     #[test]
     fn reply_path_accepts_tmp_paths() {

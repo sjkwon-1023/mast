@@ -1,4 +1,4 @@
-// textViewer 탭의 뷰 (21단계 청크 C2) — 파일을 512KiB **바이트 윈도우** 1개만
+// textViewer 탭의 뷰 — 파일을 512KiB **바이트 윈도우** 1개만
 // 메모리에 두고, 그 안에서 고정 행높이 가상 스크롤로 그린다.
 //
 // 이 파일의 두 계약이 나머지를 지배한다.
@@ -332,11 +332,11 @@ export function windowStartForRestore(
  *
  *  경계 판정은 창의 **커버 범위**로 한다: `start <= 0` 이면 first/prev,
  *  `end >= size` 면 next/last 가 잠긴다. "목표 시작이 지금과 같은가" 류의 이동
- *  판정은 쓰지 않는다 (18단계 후속 리뷰 finding) — 실제 마지막 창은 선두 부분행
- *  절삭 때문에 `win.start` 가 요청 시작(size−W)보다 커서, 이동 판정으로는
- *  next/last 가 영영 잠기지 않고 누를 때마다 같은 창을 재로드하며 스크롤 위치를
- *  덮는다. 파일이 창보다 작으면(start 0 + end=size) 넷 다 잠긴다. 키보드
- *  단축키(moveWindow 가드)도 같은 판정을 쓰므로 버튼과 키가 어긋나지 않는다. */
+ *  판정은 쓰지 않는다 — 실제 마지막 창은 선두 부분행 절삭 때문에 `win.start` 가
+ *  요청 시작(size−W)보다 커서, 이동 판정으로는 next/last 가 영영 잠기지 않고
+ *  누를 때마다 같은 창을 재로드하며 스크롤 위치를 덮는다. 파일이 창보다
+ *  작으면(start 0 + end=size) 넷 다 잠긴다. 키보드 단축키(moveWindow 가드)도
+ *  같은 판정을 쓰므로 버튼과 키가 어긋나지 않는다. */
 export function windowButtonsDisabled(
   current: { start: number; end: number },
   size: number,
@@ -479,7 +479,6 @@ function describeError(err: unknown): string {
   return typeof err === "string" ? err : String(err);
 }
 
-// ---------------------------------------------------------------------------
 // 구문 하이라이팅 (v0.3.6)
 //
 // 네 가지가 이 절의 설계를 지배한다.
@@ -499,7 +498,6 @@ function describeError(err: unknown): string {
 // 4. **대상 판정은 확장자 명시 맵**이다 — highlightAuto 는 쓰지 않는다 (전 언어
 //    시도라 비싸고, 짧은 파일에서 자주 틀린다). 맵에 없거나 settings.json 의
 //    highlightLanguages 밖이면 **모듈 로드 자체를 하지 않는다**.
-// ---------------------------------------------------------------------------
 
 /** hljs 에서 우리가 쓰는 표면 — 테스트가 가짜를 넣을 수 있게 구조적으로 좁혔다. */
 export interface HighlightApi {
@@ -695,7 +693,6 @@ async function loadHighlighter(language: string): Promise<HighlightApi> {
 export interface TextViewOptions {
   /** 타이머 구현 (테스트 주입). 기본은 전역 setTimeout/clearTimeout. */
   timers?: TimerHost;
-  /** 스크롤 settle 디바운스(ms). */
   settleMs?: number;
 }
 
@@ -822,8 +819,7 @@ export class TextView implements ViewerView, ViewerFontTarget {
     // 전용이다. 크기가 바뀌면 viewport 에 들어오는 행 수가 달라진다.
     this.resizeObserver = new ResizeObserver(() => this.renderSlice());
     this.resizeObserver.observe(this.root);
-    // 줌 대상 등록 — 해제는 dispose 가 짝으로 맡는다 (터미널 줌의 liveViews 와
-    // 같은 관례).
+    // 해제는 dispose 가 짝으로 맡는다 (터미널 줌의 liveViews 와 같은 관례).
     registerViewerFontTarget(this);
 
     this.load(this.pendingOffset ?? 0, true);
@@ -992,8 +988,7 @@ export class TextView implements ViewerView, ViewerFontTarget {
       return;
     }
 
-    // 복원은 저장된 위치를 창 가운데쯤에 두고(위쪽 문맥 확보), 창 이동은 계산된
-    // 시작을 그대로 쓴다. 전체 크기를 알아야 하는 계산이라 stat 뒤에 온다.
+    // 전체 크기를 알아야 하는 계산이라 stat 뒤에 온다.
     let start = restore
       ? windowStartForRestore(target, stat.size)
       : Math.max(0, Math.min(target, stat.size));
@@ -1001,9 +996,9 @@ export class TextView implements ViewerView, ViewerFontTarget {
     if (start >= stat.size) start = Math.max(0, stat.size - WINDOW_BYTES);
     // 목표가 행 시작이면 그 직전 바이트(개행)까지 읽어 둔다 — 선두 부분행 절삭이
     // 목표 행 자체를 먹어치우지 않게 하는 1바이트다. 그 1바이트는 요청 길이에
-    // **더해서** 읽는다 (리뷰 발견 버그): 안 더하면 창 커버가 [start-1, start-1+W)
-    // 로 밀려 마지막 창이 파일 끝 바이트에 닿지 못하고, 말미 절삭 탓에 파일의
-    // 마지막 행이 영영 화면에 뜨지 않는다.
+    // **더해서** 읽는다: 안 더하면 창 커버가 [start-1, start-1+W) 로 밀려
+    // 마지막 창이 파일 끝 바이트에 닿지 못하고, 말미 절삭 탓에 파일의 마지막
+    // 행이 영영 화면에 뜨지 않는다.
     const readOffset = start > 0 ? start - 1 : 0;
     const readLen = WINDOW_BYTES + (start - readOffset);
 
@@ -1102,7 +1097,6 @@ export class TextView implements ViewerView, ViewerFontTarget {
     for (let i = range.first; i < range.last; i += 1) {
       const el = document.createElement("div");
       el.className = "text-line";
-      // 하이라이트가 붙은 창이면 hljs 마크업을, 아니면 원문을 그대로 그린다.
       // innerHTML 에 넣는 문자열의 출처는 hljs 뿐이고 파일 내용은 그 안에서
       // 이스케이프돼 있다 (highlightLines 주석 — 픽스처 테스트가 잠근다).
       const html = this.highlighted?.[i];

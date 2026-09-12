@@ -1,4 +1,4 @@
-// 워크스페이스 전환 지연 tracer (14단계 청크 A-2) — 순수 모듈 (DOM-free, vitest).
+// 워크스페이스 전환 지연 tracer — 순수 모듈 (DOM-free, vitest).
 //
 // 계측 구간: switchWorkspace dispatch(t0) → 전환 스냅샷 렌더(markSnapshot) →
 // 새로 attach 되는 각 터미널의 replay 완료(markReplayDone — 완료점은 replay
@@ -66,15 +66,14 @@ export class SwitchTracer {
 
   constructor(private readonly onReport: (report: SwitchReport) => void) {}
 
-  /** 진행 중 trace 존재 여부 — 호출측의 저비용 가드용. */
+  /** 호출측의 저비용 가드용. */
   get tracing(): boolean {
     return this.trace !== null;
   }
 
-  /** 전환 계측 시작 — t0 은 switchWorkspace dispatch 시각. 미완 trace 는 폐기.
+  /** t0 은 switchWorkspace dispatch 시각. 미완 trace 는 폐기한다.
    *  반환 토큰을 discard 에 넘긴다 — 워크스페이스 id 기반 폐기는 같은 워크스페이스
-   *  연타에서 뒤의 유효 trace 를 앞 dispatch 실패가 죽이는 구멍이 있었다
-   *  (리뷰 finding). */
+   *  연타에서 뒤의 유효 trace 를 앞 dispatch 실패가 죽이는 구멍이 있었다. */
   begin(workspace: WorkspaceId, t0: number): number {
     this.seq += 1;
     this.trace = {
@@ -135,8 +134,8 @@ export class SwitchTracer {
     this.maybeSettle();
   }
 
-  /** 정착 판정 — 봉인됐고 전 탭이 완주했으면 report 를 1회 전달하고 trace 를
-   *  비운다 (onReport 재진입에도 안전하도록 비운 뒤 호출). */
+  /** 봉인됐고 전 탭이 완주했으면 report 를 1회 전달하고 trace 를 비운다
+   *  (onReport 재진입에도 안전하도록 비운 뒤 호출). */
   private maybeSettle(): void {
     const trace = this.trace;
     if (trace === null || !trace.sealed) return;
@@ -146,7 +145,7 @@ export class SwitchTracer {
     let end = snapshotAt;
     const perTab: SwitchTabReport[] = [];
     for (const [tab, entry] of trace.tabs) {
-      if (entry.doneAt === null) return; // 아직 완주 전 — 정착 보류
+      if (entry.doneAt === null) return;
       if (entry.doneAt > end) end = entry.doneAt;
       perTab.push({ tab, attachMs: entry.doneAt - entry.attachAt, replayBytes: entry.bytes });
     }

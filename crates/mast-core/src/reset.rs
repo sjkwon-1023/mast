@@ -13,7 +13,7 @@
 //!    자동 attach/resize/ack 은 물론 **stdin 기록 자체도** 입력으로 치지 않는다
 //!    (글루 계약 — xterm 은 단말 질의(DA·DSR 등)에 자동 응답하는 write 를 만들고
 //!    그 질의는 replay 재생에도 들어 있어, stdin 을 활동으로 치면 리셋 후 재발화
-//!    자기루프가 된다. 실제 타이핑은 프론트 활동 핑이 잡는다 — 16단계 리뷰).
+//!    자기루프가 된다. 실제 타이핑은 프론트 활동 핑이 잡는다).
 //! 2. **Hidden**: unfocused **또는** invisible 인 상태가 `hidden_ms` 연속되면
 //!    발화 — 계획 v2 원문("최소화 또는 포커스 아웃") 그대로의 **OR** 판정이다.
 //!    실기 이력: AND(둘 다 숨김)는 최소화 시 visibility 신호가 도착하지 않아
@@ -43,7 +43,7 @@
 //! 의심"을 cooldown 이 가리는 창이므로, [`ResetPolicy::suppressed`] 로 노출해
 //! 글루가 loud 로그하게 한다.
 
-/// 자동 리셋 설정. `Option` 필드의 `None` 은 해당 트리거 off.
+/// `Option` 필드의 `None` 은 해당 트리거 off.
 #[derive(Debug, Clone)]
 pub struct ResetConfig {
     /// 마지막 실제 입력 후 이 시간(ms) 경과 시 Idle 발화. `None` = off.
@@ -61,7 +61,7 @@ pub struct ResetConfig {
     pub cooldown_ms: u64,
 }
 
-/// 발화한 리셋의 원인 트리거. 글루가 로그·계측에 사용한다.
+/// 글루가 로그·계측에 사용한다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResetTrigger {
     Idle,
@@ -69,7 +69,7 @@ pub enum ResetTrigger {
     MemWatchdog,
 }
 
-/// 자동 리셋 판정 상태 머신. 모듈 문서의 트리거·금지·cooldown 계약을 구현한다.
+/// 모듈 문서의 트리거·금지·cooldown 계약을 구현한다.
 ///
 /// 호출 계약: 글루는 활동 신호(write_stdin·send_raw·dispatch·activity 핑)마다
 /// [`Self::on_user_input`], 창 이벤트마다 [`Self::on_focus`]/[`Self::on_visibility`],
@@ -78,12 +78,11 @@ pub enum ResetTrigger {
 /// wait_timeout 한 뒤 [`Self::poll`] 로 발화 여부를 묻는다.
 pub struct ResetPolicy {
     cfg: ResetConfig,
-    /// 마지막 실제 사용자 입력 시각. 생성 시각으로 초기화한다.
+    /// 생성 시각으로 초기화한다.
     last_input: u64,
-    /// Idle 발화 대기 상태 — 발화 시 false, 다음 실제 입력에서 true.
+    /// 발화 시 false, 다음 실제 입력에서 true.
     idle_armed: bool,
-    /// 마지막으로 보고된 창 포커스 상태 — hidden 판정의 OR 신호 중 하나
-    /// (모듈 문서 트리거 2).
+    /// hidden 판정의 OR 신호 중 하나 (모듈 문서 트리거 2).
     focused: bool,
     visible: bool,
     /// 현재 숨김 구간의 카운트다운 시작 시각. 표시 중이면 `None`.
@@ -101,8 +100,8 @@ pub struct ResetPolicy {
 }
 
 impl ResetPolicy {
-    /// 정책을 생성한다. 앱 시작 시점을 활동 기준선으로 삼고(입력 없이 `idle_ms`
-    /// 경과하면 발화), 창은 표시 상태로 가정한다 (실제 상태는 곧 이벤트로 동기화).
+    /// 앱 시작 시점을 활동 기준선으로 삼는다(입력 없이 `idle_ms` 경과하면 발화).
+    /// 창은 표시 상태로 가정한다 (실제 상태는 곧 이벤트로 동기화).
     ///
     /// 워치독 on 인데 `mem_poll_ms == 0` 이면 다음 샘플 시각이 항상 현재가 되어
     /// supervisor 가 busy loop 에 빠지는 설정 오류이므로 즉시 실패시킨다.
@@ -155,18 +154,16 @@ impl ResetPolicy {
         self.sync_hidden(now);
     }
 
-    /// focus·visibility 상태로 숨김 구간의 시작/종료 전이를 반영한다 —
     /// unfocused **또는** invisible 이면 숨김 (계획 v2 원문 OR, 모듈 문서 트리거 2).
     fn sync_hidden(&mut self, now: u64) {
         let hidden = !self.visible || !self.focused;
         match (hidden, self.hidden_since) {
             (true, None) => {
-                // 표시 → 숨김 전이: 카운트다운 시작.
                 self.hidden_since = Some(now);
                 self.hidden_fired = false;
             }
             (false, Some(_)) => {
-                // 숨김 → 표시 전이: 구간 종료. 다음 숨김은 새 구간으로 센다.
+                // 다음 숨김은 새 구간으로 센다.
                 self.hidden_since = None;
                 self.hidden_fired = false;
             }
@@ -181,7 +178,7 @@ impl ResetPolicy {
     /// 사라진다 (다시 초과하면 다음 샘플이 재예약한다).
     pub fn on_mem_sample(&mut self, bytes: u64, now: u64) {
         let Some(limit) = self.cfg.mem_limit_bytes else {
-            return; // 워치독 off — 샘플 무시.
+            return;
         };
         self.next_mem_sample_at = now.saturating_add(self.cfg.mem_poll_ms);
         if bytes > limit {
@@ -261,7 +258,6 @@ impl ResetPolicy {
     /// "무엇을 입력으로 치는가"(글루 계약)에서 성립한다.
     #[must_use]
     pub fn poll(&mut self, now: u64) -> Option<ResetTrigger> {
-        // 1) MemWatchdog: pending 이고 safe_idle 경과 시.
         if self.mem_pending && now >= self.last_input.saturating_add(self.cfg.safe_idle_ms) {
             if self.in_cooldown(now) {
                 self.suppressed = true;
@@ -269,8 +265,7 @@ impl ResetPolicy {
                 return Some(self.fire_mem(now));
             }
         }
-        // 2) Idle: armed 이고 idle_ms 경과 시 1회 발화 후 disarm. cooldown 에
-        //    막히면 armed 를 유지해 cooldown 종료 후 발화한다.
+        // cooldown 에 막히면 armed 를 유지해 cooldown 종료 후 발화한다.
         if let Some(idle_ms) = self.cfg.idle_ms {
             if self.idle_armed
                 && now >= self.last_input.saturating_add(idle_ms)
@@ -281,7 +276,6 @@ impl ResetPolicy {
                 return Some(ResetTrigger::Idle);
             }
         }
-        // 3) Hidden: 숨김 구간이 hidden_ms 연속되면 구간당 1회 발화.
         if let Some(hidden_ms) = self.cfg.hidden_ms {
             if let Some(since) = self.hidden_since {
                 if !self.hidden_fired
@@ -304,12 +298,11 @@ impl ResetPolicy {
         self.suppressed
     }
 
-    /// 워치독 pending 여부 (글루 로그·계측용).
+    /// 글루 로그·계측용.
     pub fn mem_pending(&self) -> bool {
         self.mem_pending
     }
 
-    /// 워치독 발화 — pending·suppressed 를 해제하고 cooldown 을 시작한다.
     fn fire_mem(&mut self, now: u64) -> ResetTrigger {
         self.mem_pending = false;
         self.suppressed = false;
@@ -330,7 +323,7 @@ impl ResetPolicy {
 mod tests {
     use super::*;
 
-    /// 기본 테스트 설정 — cooldown 0 으로 트리거 의미론을 격리한다.
+    /// cooldown 0 으로 트리거 의미론을 격리한다.
     fn cfg() -> ResetConfig {
         ResetConfig {
             idle_ms: Some(1_000),
@@ -365,8 +358,6 @@ mod tests {
             ..cfg()
         }
     }
-
-    // ---- Idle ----
 
     #[test]
     fn idle_fires_once_then_disarms_until_next_input() {
@@ -425,8 +416,6 @@ mod tests {
         assert_eq!(p.poll(60_000), None);
         assert_eq!(p.next_deadline(60_000), None);
     }
-
-    // ---- Hidden ----
 
     #[test]
     fn hidden_counts_on_either_focus_loss_or_invisibility() {
@@ -503,8 +492,6 @@ mod tests {
         assert_eq!(p.poll(500), Some(ResetTrigger::Hidden));
     }
 
-    // ---- MemWatchdog ----
-
     #[test]
     fn mem_sample_never_fires_directly_and_fires_at_safe_idle() {
         let mut p = ResetPolicy::new(mem_only(), 0);
@@ -580,8 +567,6 @@ mod tests {
         assert_eq!(p.poll(100), Some(ResetTrigger::Idle));
     }
 
-    // ---- cooldown ----
-
     #[test]
     fn cooldown_suppresses_watchdog_and_exposes_it() {
         let mut p = ResetPolicy::new(
@@ -628,8 +613,6 @@ mod tests {
         assert_eq!(p.poll(5_100), Some(ResetTrigger::Idle));
     }
 
-    // ---- 트리거별 off ----
-
     #[test]
     fn disabled_triggers_never_fire() {
         let mut p = ResetPolicy::new(
@@ -664,8 +647,6 @@ mod tests {
             0,
         );
     }
-
-    // ---- next_deadline ----
 
     #[test]
     fn next_deadline_takes_minimum_of_candidates() {

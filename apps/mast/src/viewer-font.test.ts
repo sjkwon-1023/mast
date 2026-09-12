@@ -45,7 +45,7 @@ function rootValue(name: string): string {
 
 describe("applyViewerFontSettings", () => {
   beforeEach(() => {
-    // 미설정 상태로 되돌린다 — 이 함수가 total 이라 이것만으로 충분하다.
+    // 이 함수가 total 이라 이 한 번의 호출만으로 충분하다.
     applyViewerFontSettings(settings(null, null));
   });
 
@@ -89,8 +89,8 @@ describe("applyViewerFontSettings", () => {
 // 여기서 잠그는 것은 모듈 상태의 규칙(클램프·기준값·라이브 밀어내기)이고, 그
 // 결과로 행 격자가 실제로 다시 앉는지는 뷰가 필요하므로 text-view.test.ts 몫이다.
 describe("뷰어 줌", () => {
-  /** 밀려온 크기를 기록만 하는 가짜 뷰 — 레지스트리 계약만 보면 되므로 DOM 이
-   *  필요 없다 (실제 격자 재계산은 text-view.test.ts 가 본다). */
+  /** 레지스트리 계약만 보면 되므로 DOM 이 필요 없다 (실제 격자 재계산은
+   *  text-view.test.ts 가 본다). */
   function target(): ViewerFontTarget & { sizes: number[] } {
     const sizes: number[] = [];
     return { sizes, setViewerFontSize: (size) => sizes.push(size) };
@@ -192,8 +192,8 @@ describe("뷰어 줌", () => {
 });
 
 describe("styles.css 의 뷰어 글꼴 계약", () => {
-  /** 주석을 걷어낸 스타일시트 원문 — 주석 안의 변수 언급이 아래 판정에 섞이지
-   *  않게 한다 (설명 주석이 변수 이름을 그대로 적고 있다).
+  /** 주석을 걷어내는 이유: 주석 안의 변수 언급이 아래 판정에 섞이지 않게 한다
+   *  (설명 주석이 변수 이름을 그대로 적고 있다).
    *
    *  파일을 직접 읽는 이유: vitest 는 CSS import 를 빈 모듈로 지워버려(`css:
    *  false` 기본값) `?raw` 로도 원문이 오지 않는다. 경로는 실행 cwd 가 아니라 이
@@ -203,7 +203,7 @@ describe("styles.css 의 뷰어 글꼴 계약", () => {
     "utf8",
   ).replace(/\/\*[\s\S]*?\*\//g, "");
 
-  /** `selector { body }` 쌍 (이 스타일시트는 @media 등 중첩 at-rule 이 없다). */
+  /** 이 스타일시트에는 @media 등 중첩 at-rule 이 없어 이 정규식으로 충분하다. */
   function rules(): { selector: string; body: string }[] {
     const out: { selector: string; body: string }[] = [];
     const re = /([^{}]+)\{([^{}]*)\}/g;

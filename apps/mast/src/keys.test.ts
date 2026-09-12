@@ -1,4 +1,4 @@
-// 키보드 판정의 계약 테스트 (20단계 + Ctrl+Shift 전역 단축키) — 매핑 전수·
+// 키보드 판정의 계약 테스트 (Ctrl+Shift 전역 단축키 포함) — 매핑 전수·
 // IME 가드·경계 조건. DOM 무의존 (리스너 설치·preventDefault·dispatch 배선은
 // main.ts 글루 소관).
 
@@ -18,7 +18,6 @@ import {
 import type { KeySpec, PaneRect } from "./keys";
 import type { Pane, Workspace } from "./types";
 
-/** 기본 no-modifier·조합 아님 spec — 테스트마다 필요한 것만 덮어쓴다. */
 function spec(over: Partial<KeySpec> & { key: string }): KeySpec {
   return { ctrl: false, alt: false, shift: false, isComposing: false, ...over };
 }
@@ -123,7 +122,6 @@ describe("keyAction", () => {
     expect(keyAction(spec({ key: "F2", ctrl: true }))).toBeNull();
     expect(keyAction(spec({ key: "F2", shift: true }))).toBeNull();
     expect(keyAction(spec({ key: "F2", alt: true }))).toBeNull();
-    // IME 조합 중에는 어떤 키도 가로채지 않는다.
     expect(keyAction(spec({ key: "F2", isComposing: true }))).toBeNull();
     // 다른 기능키는 전부 터미널 소유다 (F5 는 리로드로도 쓰지 않는다).
     expect(keyAction(spec({ key: "F1" }))).toBeNull();
@@ -348,7 +346,7 @@ describe("nextWorkspace", () => {
 });
 
 describe("activeTerminalCwd / pathBasename", () => {
-  // Ctrl+Shift+N 의 경로 해석 재료 — 활성 pane 의 표시 탭 cwd 우선, 없으면 rootPath.
+  // Ctrl+Shift+N 의 경로 해석 재료.
   function ws(cwd: string | null, rootPath: string | null): Workspace {
     return {
       id: 1,
@@ -386,8 +384,7 @@ describe("activeTerminalCwd / pathBasename", () => {
     expect(activeTerminalCwd(ws(null, null))).toBeNull();
   });
 
-  // 새 탭·분할의 cwd 재료 — 표시 탭이 터미널일 때만 그 cwd, 나머지는 null 로 코어의
-  // rootPath 기본값에 맡긴다.
+  // 새 탭·분할의 cwd 재료 — null 은 코어의 rootPath 기본값에 맡긴다는 뜻이다.
   it("paneTerminalCwd 는 표시 탭이 터미널일 때만 cwd 를 주고, 뷰어·빈 pane·cwd 미기록은 null", () => {
     expect(paneTerminalCwd(ws("/home/dev/proj", "/home/dev").panes["1"])).toBe("/home/dev/proj");
     expect(paneTerminalCwd(ws(null, "/home/dev").panes["1"])).toBeNull();

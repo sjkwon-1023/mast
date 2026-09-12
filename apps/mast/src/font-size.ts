@@ -17,7 +17,7 @@
 const FONT_SIZE_MIN = 6;
 const FONT_SIZE_MAX = 72;
 
-/** 줌 후 글꼴 크기 (순수) — 클램프 규칙의 단일 소스다. 테스트는 terminal-view 가
+/** 클램프 규칙의 단일 소스다. 테스트는 terminal-view 가
  *  다시 내보내는 이름을 잡는다 (terminal-view.test.ts — 그 파일은 xterm 을
  *  import 하므로 happy-dom 환경이고, 이 모듈만 쓰는 새 테스트는 그럴 필요가 없다).
  *  정수 px 로 유지한다 (xterm 이 소수 크기도 받지만 셀 폭 반올림이 fit 계산과

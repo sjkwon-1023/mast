@@ -36,15 +36,13 @@ emit() {
   printf '%s%s%s' "$ESC" "$1" "$2" > "$TTY"
 }
 
-# --- OSC 0: 아이콘 이름 + 창 제목 ---
+# OSC 0 제목: 아이콘 이름 + 창 제목
 
 case_header 1 "OSC 0 title, BEL terminator"
 emit "]0;mast-osc-test-case-1" "$BEL"
 
 case_header 2 "OSC 0 title, ST terminator"
 emit "]0;mast-osc-test-case-2" "$ST"
-
-# --- OSC 7: cwd (file:// URI) ---
 
 HOST="$(hostname)"
 CWD="$(pwd)"
@@ -55,7 +53,7 @@ emit "]7;file://${HOST}${CWD}" "$BEL"
 case_header 4 "OSC 7 cwd, ST terminator"
 emit "]7;file://${HOST}${CWD}" "$ST"
 
-# --- OSC 9: 알림 (iTerm2 계열, message만) ---
+# OSC 9 알림: iTerm2 계열, message만
 
 case_header 5 "OSC 9 notify, BEL terminator"
 emit "]9;mast-osc-test-case-5" "$BEL"
@@ -63,8 +61,7 @@ emit "]9;mast-osc-test-case-5" "$BEL"
 case_header 6 "OSC 9 notify, ST terminator"
 emit "]9;mast-osc-test-case-6" "$ST"
 
-# --- OSC 777: 알림 (urxvt 계열, notify;title;body) ---
-# 형식: \033]777;notify;제목;본문\007  (BEL) 또는 \033]777;notify;제목;본문\033\  (ST)
+# OSC 777 알림: urxvt 계열, notify;title;body
 
 case_header 7 "OSC 777 notify, BEL terminator"
 emit "]777;notify;mast-osc-test-case-7;OSC 777 BEL body" "$BEL"
@@ -72,16 +69,15 @@ emit "]777;notify;mast-osc-test-case-7;OSC 777 BEL body" "$BEL"
 case_header 8 "OSC 777 notify, ST terminator"
 emit "]777;notify;mast-osc-test-case-8;OSC 777 ST body" "$ST"
 
-# --- 분할 테스트: 한 시퀀스를 두 번의 write로 쪼개 청크 경계 처리 확인 ---
 # PTY 리더가 feed()를 여러 번 호출받아도(청크 경계에 걸려도) 시퀀스를 이어 붙여
-# 인식하는지 확인한다. 두 write 사이에 0.2초를 둔다.
+# 인식하는지 확인한다.
 
 case_header 9 "OSC 777, split across two writes (0.2s apart)"
 printf '%s]777;notify;mast-osc-test-case-9;split-' "$ESC" > "$TTY"
 sleep 0.2
 printf 'payload%s' "$BEL" > "$TTY"
 
-# --- mast: 상태 토큰 (18단계 hook 규약 — claude-hook-example.md) ---
+# mast: 상태 토큰 (18단계 hook 규약 — claude-hook-example.md)
 # 제목이 mast:<status> 면 상태 알림이다: 사이드바 상태 아이콘이 바뀌고, unread 는
 # needsInput·idle 만 세운다 (running 은 진행 신호 — dot 없음). 다른 워크스페이스로
 # 전환한 뒤 실행하면 사이드바에서 순서대로 running → needsInput → idle 로 바뀌는

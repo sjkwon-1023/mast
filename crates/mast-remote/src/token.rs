@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 
-/// 원시 토큰 바이트 수. 32B CSPRNG → base64url 무패딩 43자.
+/// 32B CSPRNG → base64url 무패딩 43자.
 const TOKEN_BYTES: usize = 32;
-/// 인코딩된 토큰의 길이. 파일에서 읽은 값을 이 길이로 먼저 거른다.
+/// 파일에서 읽은 값을 이 길이로 먼저 거른다.
 const TOKEN_CHARS: usize = 43;
 
 #[derive(Debug)]
@@ -45,8 +45,6 @@ impl std::error::Error for TokenError {
     }
 }
 
-/// 토큰 파일을 읽고, 없으면 만든다.
-///
 /// 재부팅마다 재페어링을 강요하지 않으려고 기존 값을 그대로 재사용한다. 대신 **읽을 때
 /// 검증**한다: 빈 파일·잘린 파일·다른 알파벳이 그대로 인증 비밀이 되면 추측 가능한 토큰으로
 /// 원격이 열린다. 검증에 실패해도 **다시 만들지 않는다** — 조용히 재생성하면 이미 페어링한
@@ -92,7 +90,7 @@ pub(crate) fn generate_token() -> Result<String, TokenError> {
     Ok(URL_SAFE_NO_PAD.encode(raw))
 }
 
-/// 토큰 파일 쓰기. unix 에서는 소유자만 읽게(0600) 만든다 — 개발기의 홈은 다른 계정이
+/// unix 에서는 소유자만 읽게(0600) 만든다 — 개발기의 홈은 다른 계정이
 /// 읽을 수 있고, 이 파일 하나가 원격 입력 권한이다. Windows 는 `%AppData%` 의 ACL 을
 /// 상속하므로 별도 처리가 없다.
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {

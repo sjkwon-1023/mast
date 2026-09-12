@@ -1,5 +1,3 @@
-// 목록 화면 — 워크스페이스 → pane → 탭.
-//
 // **모델 문자열은 전부 `textContent` 로만 들어간다.** 이 페이지의 토큰이
 // localStorage 에 있으므로 여기서의 XSS 는 곧 토큰 유출이고, 탭 제목·에이전트
 // 마지막 메시지는 터미널이 뱉은 임의 문자열이다. 그래서 `src/remote/` 어디에도
@@ -23,7 +21,7 @@ const AGENT_STATUS_LABELS: Record<AgentStatus, string> = {
 };
 
 export interface ListViewOptions {
-  /** 터미널 탭 하나를 연다. 뷰어 탭은 화면 API 가 없어 열 수 없다. */
+  /** 뷰어 탭은 화면 API 가 없어 열 수 없다. */
   onOpenTab: (tab: TabId, title: string) => void;
 }
 
@@ -147,7 +145,6 @@ function tabDetailEl(text: string): HTMLElement {
   return el;
 }
 
-/** 탭 한 줄의 부제 — 터미널은 상태, 뷰어는 종류다 (뷰어는 열 수 없다). */
 function tabDetail(kind: TabKind): string {
   switch (kind.type) {
     case "terminal":
@@ -168,8 +165,7 @@ function tabDetail(kind: TabKind): string {
   }
 }
 
-/** 화면에 보이는 순서대로 pane 을 늘어놓는다 — `panes` 는 id 키 맵이라 순서가
- *  없고, 순서를 아는 것은 레이아웃 트리뿐이다. */
+/** `panes` 는 id 키 맵이라 순서가 없고, 순서를 아는 것은 레이아웃 트리뿐이다. */
 function panesInLayoutOrder(ws: Workspace): Pane[] {
   const out: Pane[] = [];
   const walk = (node: SplitTree): void => {
@@ -185,7 +181,7 @@ function panesInLayoutOrder(ws: Workspace): Pane[] {
   return out;
 }
 
-/** 다시 그릴 필요가 있는지 판정하는 값 — 화면에 나오는 것만 담는다. */
+/** 화면에 나오는 것만 담는다. */
 function signatureOf(snapshot: StateSnapshot): string {
   return JSON.stringify(
     snapshot.state.workspaces.map((ws) => [

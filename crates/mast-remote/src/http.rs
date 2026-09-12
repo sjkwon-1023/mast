@@ -9,7 +9,7 @@ use std::io::Read;
 
 /// 요청 라인 + 헤더 전체의 바이트 상한. 넘기면 [`HeadError::TooLarge`] (서버는 431).
 pub(crate) const MAX_HEAD_BYTES: usize = 8192;
-/// 헤더 개수 상한 — httparse 에 넘기는 헤더 슬롯 배열의 크기가 곧 상한이다.
+/// httparse 에 넘기는 헤더 슬롯 배열의 크기가 곧 상한이다.
 pub(crate) const MAX_HEADERS: usize = 32;
 /// `POST /api/tabs/{id}/input` 본문 상한. 초과는 본문을 한 바이트도 읽기 전에 413.
 pub(crate) const MAX_BODY_BYTES: usize = 65_536;

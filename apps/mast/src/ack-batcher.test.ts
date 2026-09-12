@@ -1,11 +1,8 @@
-// AckBatcher 배칭 경계·타이머 동작 검증 — 주입한 fake timer로 결정적으로 테스트한다.
-
 import { describe, expect, it } from "vitest";
 
 import { AckBatcher, DEFAULT_ACK_THRESHOLD_BYTES } from "./ack-batcher";
 import type { TimerHost } from "./ack-batcher";
 
-/** 수동 진행식 fake timer — advance(ms)로 만기 콜백을 순서대로 실행한다. */
 class FakeTimers implements TimerHost {
   now = 0;
   private scheduled: { id: number; at: number; fn: () => void }[] = [];
@@ -68,7 +65,6 @@ describe("AckBatcher", () => {
     const { timers, flushes, batcher } = setup();
     batcher.add(DEFAULT_ACK_THRESHOLD_BYTES);
     expect(flushes).toEqual([DEFAULT_ACK_THRESHOLD_BYTES]);
-    // 즉시 flush 후 남은 타이머가 없어야 하고, 시간이 지나도 재flush가 없어야 한다
     expect(timers.pendingCount).toBe(0);
     timers.advance(50);
     expect(flushes).toEqual([DEFAULT_ACK_THRESHOLD_BYTES]);

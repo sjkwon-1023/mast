@@ -19,17 +19,15 @@
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
-/** 글루 emit 이벤트 이름 — main.rs 의 `WINDOW_HIDDEN_EVENT` 와 짝이다. */
+/** main.rs 의 `WINDOW_HIDDEN_EVENT` 와 짝이다. */
 export const WINDOW_HIDDEN_EVENT = "window-hidden";
 
-/** 이벤트 구독 설치 함수 (테스트 주입) — payload 를 풀어 handler 로 넘긴다. */
+/** 이벤트 구독 설치 함수 (테스트 주입). */
 export type HiddenListen = (handler: (hidden: boolean) => void) => Promise<UnlistenFn>;
 
 export type HiddenListener = (hidden: boolean) => void;
 
-/** 창 숨김 플래그 + 전이 통지 (순수 — vitest 대상).
- *
- *  글루도 전이에서만 emit 하지만 통지 판정을 여기서도 한 번 더 한다: 중복·재전송
+/** 글루도 전이에서만 emit 하지만 통지 판정을 여기서도 한 번 더 한다: 중복·재전송
  *  emit 이 와도 구독자(폴링 뷰)가 같은 상태로 두 번 깨어나지 않게 한다. */
 export class WindowVisibility {
   private hidden = false;
@@ -38,8 +36,8 @@ export class WindowVisibility {
 
   constructor(private readonly listen: HiddenListen) {}
 
-  /** 이벤트 구독을 **1회만** 설치한다. 두 번째 이후 호출은 no-op — 뷰 리셋
-   *  (WebView reload)은 모듈 상태째 새로 시작하므로 중복 설치 경로가 없다. */
+  /** 이벤트 구독을 **1회만** 설치한다. 뷰 리셋(WebView reload)은 모듈 상태째 새로
+   *  시작하므로 중복 설치 경로가 없다. */
   async init(): Promise<void> {
     if (this.installed) return;
     // await 앞에서 표시한다 — init 이 두 번 겹쳐 불려도 구독이 둘 생기지 않는다.
@@ -47,12 +45,12 @@ export class WindowVisibility {
     await this.listen((hidden) => this.set(hidden));
   }
 
-  /** 지금 창이 최소화 상태인가. 신호가 오기 전(부팅 직후)에는 false 다. */
+  /** 신호가 오기 전(부팅 직후)에는 false 다. */
   get isHidden(): boolean {
     return this.hidden;
   }
 
-  /** 전이 구독 — 해제 함수를 돌려준다 (구독자 수명 = 뷰 수명, 누수 금지). */
+  /** 구독자 수명 = 뷰 수명, 누수 금지. */
   subscribe(listener: HiddenListener): () => void {
     this.listeners.add(listener);
     return () => {
@@ -60,8 +58,7 @@ export class WindowVisibility {
     };
   }
 
-  /** 신호 반영 — 값이 실제로 바뀔 때만 구독자를 부른다.
-   *  (테스트에서 글루 없이 직접 주입할 수 있게 public — store.offer 전례.) */
+  /** 테스트에서 글루 없이 직접 주입할 수 있게 public — store.offer 전례. */
   set(hidden: boolean): void {
     if (this.hidden === hidden) return;
     this.hidden = hidden;
@@ -69,8 +66,8 @@ export class WindowVisibility {
   }
 }
 
-/** 앱 전역 인스턴스 — 창은 하나이고 신호도 하나다. 생성 시점에는 listen 을
- *  부르지 않는다 (import 만으로 IPC 를 건드리지 않게). */
+/** 창은 하나이고 신호도 하나다. 생성 시점에는 listen 을 부르지 않는다 (import
+ *  만으로 IPC 를 건드리지 않게). */
 const windowVisibility = new WindowVisibility((handler) =>
   listen<boolean>(WINDOW_HIDDEN_EVENT, (event) => handler(event.payload)),
 );
@@ -80,12 +77,11 @@ export function initWindowVisibility(): Promise<void> {
   return windowVisibility.init();
 }
 
-/** 창이 최소화 상태인가 — 폴링 게이팅용 조회. */
+/** 폴링 게이팅용 조회. */
 export function isWindowHidden(): boolean {
   return windowVisibility.isHidden;
 }
 
-/** 최소화/복원 전이 구독 — 해제 함수를 돌려준다. */
 export function onWindowHiddenChange(listener: HiddenListener): () => void {
   return windowVisibility.subscribe(listener);
 }

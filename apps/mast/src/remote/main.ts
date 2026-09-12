@@ -1,5 +1,3 @@
-// 폰 페이지의 진입점 — 부트(토큰 수령), 목록/탭 두 화면의 전환, 가시성 게이트.
-//
 // 토큰은 페어링 URL 의 **fragment**(`#t=…`)로 들어온다. fragment 는 요청에
 // 실리지 않으므로 서버 로그·프록시에 남지 않고, 우리는 그것을 localStorage 로
 // 옮긴 뒤 `history.replaceState` 로 주소창에서 지운다 — 지우지 않으면 화면 공유나
@@ -15,7 +13,6 @@ import type { TabId } from "../types";
 
 const STATE_POLL_INTERVAL_MS = 2000;
 
-/** URL fragment 의 토큰을 저장소로 옮기고 주소창에서 지운다. */
 function claimTokenFromFragment(): void {
   const hash = window.location.hash;
   if (!hash.startsWith("#")) return;
@@ -84,7 +81,6 @@ class RemoteApp {
     this.applyVisibility();
   }
 
-  /** 화면에 보이지 않는 쪽은 폴링하지 않는다 — 가려진 문서 전체도 마찬가지다. */
   private applyVisibility(): void {
     const shown = !document.hidden;
     this.listSchedule.setVisible(shown && this.tabView === null);
@@ -104,9 +100,7 @@ function showPairingHint(root: HTMLElement): void {
   root.replaceChildren(hint);
 }
 
-/** 앱 상자를 **보이는** 뷰포트에 맞춘다.
- *
- *  폰 브라우저는 키보드가 올라와도 문서의 레이아웃 높이를 줄이지 않고(iOS Safari 가
+/** 폰 브라우저는 키보드가 올라와도 문서의 레이아웃 높이를 줄이지 않고(iOS Safari 가
  *  특히 그렇다) "보이는 창"만 줄인다. 그러면 화면 아래에 붙은 입력칸이 키보드 밑으로
  *  들어가고, 위아래로 스크롤하면 사라졌다 나타났다 한다. `visualViewport` 가 그 보이는
  *  창의 높이와 위치를 주므로, 앱 상자를 그 크기로 잡고 스크롤은 상자 안(출력 영역)에서만

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 //
-// textViewer 뷰의 순수 계산 검증 (21단계 청크 C2 + 체크포인트 2 UX) — 윈도우
+// textViewer 뷰의 순수 계산 검증 — 윈도우
 // 절삭(부분행·UTF-8 파단 바이트), 가상 스크롤 슬라이스, byte offset ↔ 행 매핑,
 // 창 이동 계산·버튼 상태·키 판정·페이지 스크롤, 복원 창 시작, 스크롤 에코 가드,
 // settle 디바운스. 창 읽기·스크롤 왕복의 DOM·IPC 경로는 여기 대상이 아니다
@@ -55,7 +55,6 @@ function bytes(text: string): Uint8Array {
   return encoder.encode(text);
 }
 
-// --- 하이라이트 경로의 mock 배선 --------------------------------------------
 // vi.mock 은 hoist 되므로 팩토리가 참조하는 것은 전부 vi.hoisted 로 만든다.
 //
 // 언어 모듈 팩토리는 **처음 import 될 때 딱 한 번** 돈다 — 그래서 loads 카운터가
@@ -67,7 +66,6 @@ function bytes(text: string): Uint8Array {
 /** 백엔드가 돌려줄 파일 1개 — mount 헬퍼가 갈아 끼운다. */
 const file = vi.hoisted(() => ({ bytes: new Uint8Array(0) }));
 
-/** 언어 모듈이 실제로 import 된 횟수. */
 const loads = vi.hoisted(() => ({ python: 0, rust: 0, css: 0, json: 0 }));
 
 /** 수동으로 여는 관문 — 열기 전에는 그 언어 모듈의 import 가 끝나지 않는다. */
@@ -119,12 +117,10 @@ vi.mock("highlight.js/lib/languages/css", () => {
   return { default: () => ({}) };
 });
 
-/** 수식키 없는 keydown 1개 — 붙일 수식키만 덮어쓴다. */
 function key(name: string, mods: Partial<KeySpec> = {}): KeySpec {
   return { key: name, ctrl: false, alt: false, shift: false, isComposing: false, ...mods };
 }
 
-/** 수동 진행 가짜 타이머 — 등록된 콜백을 tick 으로 직접 발화시킨다. */
 class FakeTimers implements TimerHost {
   private next = 1;
   private readonly pending = new Map<number, { fn: () => void; ms: number }>();
@@ -143,14 +139,13 @@ class FakeTimers implements TimerHost {
     return this.pending.size;
   }
 
-  /** 등록된 마지막 타이머의 지연(ms) — 디바운스 창 확인용. */
+  /** 디바운스 창 확인용. */
   get lastDelay(): number | null {
     let delay: number | null = null;
     for (const entry of this.pending.values()) delay = entry.ms;
     return delay;
   }
 
-  /** 보류 중인 콜백 전부 발화. */
   fire(): void {
     const entries = [...this.pending.values()];
     this.pending.clear();
@@ -468,8 +463,8 @@ describe("windowButtonsDisabled", () => {
   it("locks the tail buttons on a leading-trimmed last window (start past size−W)", () => {
     // 실제 마지막 창은 요청 시작(size−W)이 행 경계가 아니라 선두 절삭으로
     // win.start 가 size−W 보다 커진다. "창이 움직이는가" 판정은 이 창에서
-    // next/last 를 영영 못 잠갔다 (리뷰 finding — 누르면 같은 창 재로드 +
-    // 스크롤 덮어쓰기). 커버 범위 판정(end >= size)은 정확히 잠근다.
+    // next/last 를 영영 못 잠갔다 (누르면 같은 창 재로드 + 스크롤
+    // 덮어쓰기). 커버 범위 판정(end >= size)은 정확히 잠근다.
     expect(windowButtonsDisabled({ start: 9_003, end: 10_000 }, size, windowBytes)).toEqual({
       first: false,
       prev: false,
@@ -654,10 +649,6 @@ describe("ScrollSettle", () => {
     expect(sent).toEqual([]);
   });
 });
-
-// ---------------------------------------------------------------------------
-// 구문 하이라이팅 (v0.3.6)
-// ---------------------------------------------------------------------------
 
 describe("languageForPath", () => {
   const active = DEFAULT_HIGHLIGHT_LANGUAGES;

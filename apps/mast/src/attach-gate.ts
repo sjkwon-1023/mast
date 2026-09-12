@@ -12,7 +12,7 @@
 import type { Frame } from "./frame";
 
 export interface GateResult {
-  /** term.write 로 전달할 바이트열들 — ack 은 write 완료 콜백에서 집계한다. */
+  /** ack 은 write 완료 콜백에서 집계한다. */
   deliver: Uint8Array[];
   /** 폐기됐지만 수신은 했으므로 즉시 ack 집계해야 하는 바이트 수. */
   discardedBytes: number;
@@ -24,7 +24,6 @@ export class AttachGate {
   private endOffset: number | null = null;
   private queued: Frame[] = [];
 
-  /** 채널 chunk 수신. 스냅샷 확정 전이면 큐잉만 하고 빈 결과를 돌려준다. */
   push(frame: Frame): GateResult {
     if (this.endOffset === null) {
       this.queued.push(frame);
@@ -33,8 +32,7 @@ export class AttachGate {
     return this.judge(frame);
   }
 
-  /** attach 응답 도착 — 스냅샷 끝 오프셋을 확정하고 큐잉분을 일괄 판정한다.
-   *  두 번 호출은 프로토콜 위반이므로 명확히 throw 한다. */
+  /** 두 번 호출은 프로토콜 위반이므로 명확히 throw 한다. */
   onSnapshot(endOffset: number): GateResult {
     if (this.endOffset !== null) {
       throw new Error("AttachGate: snapshot end offset already set");

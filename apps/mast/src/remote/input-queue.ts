@@ -17,7 +17,7 @@
 export const ENTER_DELAY_MS = 150;
 
 export interface InputItem {
-  /** PTY 로 그대로 갈 문자열 (인코딩은 protocol.ts 가 끝냈다). */
+  /** PTY 로 그대로 간다 (인코딩은 protocol.ts 가 끝냈다). */
   data: string;
   /** 앞 항목의 **응답이 온 뒤** 이만큼 기다렸다 보낸다. */
   delayBeforeMs?: number;
@@ -29,7 +29,7 @@ export interface InputQueueOptions {
    *  항목이었는지를 같이 주는 이유는 호출자가 그 입력을 되살릴 수 있어야 하기
    *  때문이다 (폰에서 손으로 친 텍스트가 실패 한 번에 사라지면 안 된다). */
   onError: (error: unknown, item: InputItem) => void;
-  /** 큐가 비었다 (성공 종료). 입력 컨트롤 잠금 해제에 쓴다. */
+  /** 성공으로 큐가 비었을 때만 호출된다. 입력 컨트롤 잠금 해제에 쓴다. */
   onIdle?: () => void;
 }
 
@@ -39,7 +39,7 @@ export class InputQueue {
 
   constructor(private readonly options: InputQueueOptions) {}
 
-  /** 큐에 남아 있는 항목 수 (전송 중인 것은 이미 빠져 있다). */
+  /** 전송 중인 것은 이미 빠져 있다. */
   get pending(): number {
     return this.items.length;
   }
@@ -53,7 +53,7 @@ export class InputQueue {
     void this.pump();
   }
 
-  /** 뷰가 사라질 때 아직 안 보낸 것을 버린다 (전송 중인 것은 못 막는다). */
+  /** 뷰가 사라질 때 호출한다 — 전송 중인 것은 못 막는다. */
   clear(): void {
     this.items.length = 0;
   }
