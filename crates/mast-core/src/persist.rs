@@ -124,7 +124,11 @@ pub fn load(path: &Path) -> LoadOutcome {
         }
         Some(_) => {}
     }
-    let persisted: PersistedState = match serde_json::from_value(value) {
+    let mut compatibility_value = value;
+    let removed_unknown_tabs = replace_unknown_tab_kinds(&mut compatibility_value);
+    // unknown kind 를 placeholder 로 바꾼 상태도 먼저 전체 검증한다. 탭을 지운 뒤
+    // 검증하면 중복 id 나 dangling layout 같은 기존 손상이 함께 사라질 수 있다.
+    let persisted: PersistedState = match serde_json::from_value(compatibility_value) {
         Ok(persisted) => persisted,
         Err(err) => return fresh_corrupt(path, format!("deserialize failed: {err}")),
     };
@@ -132,8 +136,136 @@ pub fn load(path: &Path) -> LoadOutcome {
     if let Err(err) = validate_app(&state) {
         return fresh_corrupt(path, format!("invariant violation: {err}"));
     }
-    let repairs = sanitize(&mut state);
+    remove_unknown_tabs(&mut state, &removed_unknown_tabs);
+    if let Err(err) = validate_app(&state) {
+        return fresh_corrupt(path, format!("invariant violation: {err}"));
+    }
+    let mut repairs = removed_unknown_tabs
+        .iter()
+        .map(|tab| {
+            format!(
+                "removed unknown tab kind {:?} (tab id {})",
+                tab.kind, tab.id
+            )
+        })
+        .collect::<Vec<_>>();
+    let dropped_max_id = removed_unknown_tabs.iter().map(|tab| tab.id).max();
+    let sanitize_repairs = match sanitize(&mut state, dropped_max_id) {
+        Ok(repairs) => repairs,
+        Err(err) => return fresh_corrupt(path, format!("invariant violation: {err}")),
+    };
+    repairs.extend(sanitize_repairs);
     LoadOutcome::Restored { state, repairs }
+}
+
+#[derive(Debug, Clone)]
+struct RemovedUnknownTab {
+    id: u64,
+    kind: String,
+}
+
+/// 현재 binary 가 이해하는 탭 kind tag 목록. 새 kind 를 추가할 때 이 목록도 함께
+/// 갱신해야 그 kind 가 호환성 제거 대상이 아니라 정상 역직렬화 대상이 된다.
+fn is_known_tab_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "terminal" | "folderBrowser" | "textViewer" | "markdownViewer"
+    )
+}
+
+/// typed deserialize 전에 unknown 탭의 kind 만 placeholder 로 치환한다. 탭의 다른
+/// 필드와 앱 구조는 이후 placeholder 상태를 deserialize·validate 하며 그대로 검증한다.
+fn replace_unknown_tab_kinds(value: &mut serde_json::Value) -> Vec<RemovedUnknownTab> {
+    let mut removed = Vec::new();
+    let Some(state) = value
+        .get_mut("state")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return removed;
+    };
+    let Some(workspaces) = state
+        .get_mut("workspaces")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return removed;
+    };
+    for workspace in workspaces {
+        let Some(panes) = workspace
+            .get_mut("panes")
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+        for pane in panes.values_mut() {
+            let Some(tabs) = pane
+                .get_mut("tabs")
+                .and_then(serde_json::Value::as_array_mut)
+            else {
+                continue;
+            };
+            for tab in tabs {
+                let Some(kind_name) = tab
+                    .get("kind")
+                    .and_then(serde_json::Value::as_object)
+                    .and_then(|kind| kind.get("type"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|kind| !is_known_tab_kind(kind))
+                    .map(str::to_owned)
+                else {
+                    continue;
+                };
+                let Some(id) = tab.get("id").and_then(serde_json::Value::as_u64) else {
+                    continue;
+                };
+                let Some(tab_object) = tab.as_object_mut() else {
+                    continue;
+                };
+                tab_object.insert("kind".into(), terminal_placeholder_kind());
+                removed.push(RemovedUnknownTab {
+                    id,
+                    kind: kind_name,
+                });
+            }
+        }
+    }
+    removed
+}
+
+fn terminal_placeholder_kind() -> serde_json::Value {
+    serde_json::to_value(TabKind::Terminal {
+        pty_session: None,
+        status: TerminalStatus::Running,
+        cwd: None,
+    })
+    .expect("terminal placeholder serialization cannot fail")
+}
+
+/// placeholder 상태의 구조 검증이 끝난 뒤 unknown 탭을 제거하고, 그 탭이 active 였던
+/// pane 은 남은 탭의 첫 항목으로 전환한다. 탭이 모두 사라지는 pane 은 유효한 빈 pane 이다.
+fn remove_unknown_tabs(state: &mut AppState, removed: &[RemovedUnknownTab]) {
+    if removed.is_empty() {
+        return;
+    }
+    let removed_ids: std::collections::BTreeSet<u64> = removed.iter().map(|tab| tab.id).collect();
+    for workspace in &mut state.workspaces {
+        for pane in workspace.panes.values_mut() {
+            let active_id = pane.active_tab;
+            let old_tabs = std::mem::take(&mut pane.tabs);
+            let mut survivors = Vec::with_capacity(old_tabs.len());
+            let mut active_removed = false;
+            for tab in old_tabs {
+                if removed_ids.contains(&tab.id.0) {
+                    active_removed |= active_id == Some(tab.id);
+                } else {
+                    survivors.push(tab);
+                }
+            }
+            pane.tabs = survivors;
+            if active_removed {
+                pane.active_tab = pane.tabs.first().map(|tab| tab.id);
+            }
+        }
+    }
 }
 
 /// 손상 처리 공통 경로: loud stderr + 백업 rename + `Fresh(Corrupt)`.
@@ -233,8 +365,9 @@ fn validate_app(state: &AppState) -> Result<(), String> {
 
 /// 복원 상태 sanitize (모듈 rustdoc 참조). 수리 사유들을 반환한다 — pty_session
 /// 소거·`NotStarted` → `Running` 되돌림·에이전트 상태/알림 초기화는 무조건 수행되는
-/// 정상 동작이라 사유에 포함하지 않는다.
-fn sanitize(state: &mut AppState) -> Vec<String> {
+/// 정상 동작이라 사유에 포함하지 않는다. 안정 ID의 다음 값을 만들 수 없으면 오류를
+/// 반환한다.
+fn sanitize(state: &mut AppState, reserved_max_id: Option<u64>) -> Result<Vec<String>, String> {
     let mut repairs = Vec::new();
     for ws in &mut state.workspaces {
         ws.agent_status = AgentStatus::Idle;
@@ -259,16 +392,18 @@ fn sanitize(state: &mut AppState) -> Vec<String> {
             }
         }
     }
-    let max_id = max_used_id(state);
+    let max_id = max_used_id(state).max(reserved_max_id.unwrap_or(0));
     if state.next_id <= max_id {
+        let next_id = max_id
+            .checked_add(1)
+            .ok_or_else(|| format!("max stable id {max_id} leaves no available next id"))?;
         repairs.push(format!(
-            "next_id {} <= max used stable id {max_id} — repaired to {}",
+            "next_id {} <= max used stable id {max_id} — repaired to {next_id}",
             state.next_id,
-            max_id + 1
         ));
-        state.next_id = max_id + 1;
+        state.next_id = next_id;
     }
-    repairs
+    Ok(repairs)
 }
 
 /// 사용 중인 안정 id 의 최댓값 — 워크스페이스·pane·탭·split 전부 (단일 카운터 발급).
@@ -635,6 +770,234 @@ mod tests {
                     .is_some_and(|n| n.contains(".corrupt-"))
             })
             .collect()
+    }
+
+    fn second_split_workspace() -> Workspace {
+        let mut workspace = sample_state(None, 100).workspaces.pop().unwrap();
+        workspace.id = WorkspaceId(7);
+        workspace.layout = SplitTree::Split {
+            id: SplitId(10),
+            direction: SplitDirection::Vertical,
+            ratio: 0.4,
+            first: Box::new(SplitTree::Leaf { pane: PaneId(8) }),
+            second: Box::new(SplitTree::Leaf { pane: PaneId(9) }),
+        };
+        workspace.panes = [
+            (PaneId(8), pane_with_tab(8, 11, None)),
+            (PaneId(9), pane_with_tab(9, 12, None)),
+        ]
+        .into();
+        workspace.active_pane = PaneId(8);
+        workspace
+    }
+
+    fn raw_persisted_value(state: AppState) -> serde_json::Value {
+        serde_json::to_value(PersistedState {
+            version: PERSIST_VERSION,
+            state,
+        })
+        .unwrap()
+    }
+
+    fn unknown_tab(id: u64, kind: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "title": format!("future-{id}"),
+            "kind": {"type": kind, "path": "/future"},
+            "notification": "unread",
+            "lastActivityMs": 123,
+        })
+    }
+
+    fn write_raw(path: &Path, value: &serde_json::Value) {
+        fs::write(path, serde_json::to_vec(value).unwrap()).unwrap();
+    }
+
+    fn assert_corrupt_value(value: serde_json::Value) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        write_raw(&path, &value);
+        match load(&path) {
+            LoadOutcome::Fresh(FreshReason::Corrupt { backup, error }) => {
+                assert!(backup.unwrap().exists());
+                assert!(
+                    error.contains("deserialize failed") || error.contains("invariant violation")
+                );
+            }
+            other => panic!("malformed persistence value must be Corrupt: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_tab_kinds_are_removed_without_disturbing_layout_or_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        let mut state = sample_state(None, 100);
+        state.workspaces.push(second_split_workspace());
+        let mut value = raw_persisted_value(state);
+
+        value["state"]["workspaces"][0]["panes"]["2"]["tabs"]
+            .as_array_mut()
+            .unwrap()
+            .push(unknown_tab(50, "futureViewer"));
+        value["state"]["workspaces"][0]["panes"]["2"]["tabs"][0]["kind"]["cwd"] =
+            serde_json::json!("/survivor/cwd");
+        value["state"]["workspaces"][0]["panes"]["3"]["tabs"]
+            .as_array_mut()
+            .unwrap()
+            .push(unknown_tab(51, "futureViewer"));
+        value["state"]["workspaces"][0]["panes"]["3"]["activeTab"] = serde_json::json!(51);
+        value["state"]["workspaces"][1]["rootPath"] = serde_json::json!("/workspace/two");
+        value["state"]["workspaces"][1]["panes"]["8"]["tabs"] =
+            serde_json::json!([unknown_tab(80, "futureViewer")]);
+        value["state"]["workspaces"][1]["panes"]["8"]["activeTab"] = serde_json::json!(80);
+        write_raw(&path, &value);
+
+        let LoadOutcome::Restored { state, repairs } = load(&path) else {
+            panic!("unknown tab kinds with valid surrounding state must restore");
+        };
+        assert_eq!(state.active_workspace, Some(WorkspaceId(1)));
+        assert_eq!(state.workspaces.len(), 2);
+        assert_eq!(
+            state.workspaces[0].layout.leaves(),
+            vec![PaneId(2), PaneId(3)]
+        );
+        assert_eq!(
+            state.workspaces[1].layout.leaves(),
+            vec![PaneId(8), PaneId(9)]
+        );
+        assert_eq!(
+            state.workspaces[1].root_path.as_deref(),
+            Some("/workspace/two")
+        );
+
+        let pane2 = &state.workspaces[0].panes[&PaneId(2)];
+        assert_eq!(pane2.active_tab, Some(TabId(5)));
+        assert_eq!(
+            pane2.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            vec![TabId(5)]
+        );
+        let TabKind::Terminal { cwd, .. } = &pane2.tabs[0].kind else {
+            panic!("the surviving tab must stay terminal");
+        };
+        assert_eq!(cwd.as_deref(), Some("/survivor/cwd"));
+
+        let pane3 = &state.workspaces[0].panes[&PaneId(3)];
+        assert_eq!(pane3.active_tab, Some(TabId(6)));
+        assert_eq!(
+            pane3.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            vec![TabId(6)]
+        );
+
+        let pane8 = &state.workspaces[1].panes[&PaneId(8)];
+        assert!(pane8.tabs.is_empty());
+        assert_eq!(pane8.active_tab, None);
+        for workspace in &state.workspaces {
+            workspace.validate().unwrap();
+        }
+        assert_eq!(
+            repairs,
+            vec![
+                "removed unknown tab kind \"futureViewer\" (tab id 50)",
+                "removed unknown tab kind \"futureViewer\" (tab id 51)",
+                "removed unknown tab kind \"futureViewer\" (tab id 80)",
+            ]
+        );
+
+        let roundtrip_path = dir.path().join("roundtrip.json");
+        save_atomic(&roundtrip_path, &state).unwrap();
+        let LoadOutcome::Restored {
+            state: roundtripped,
+            repairs,
+        } = load(&roundtrip_path)
+        else {
+            panic!("a repaired state must round-trip");
+        };
+        assert!(repairs.is_empty(), "round-trip repairs: {repairs:?}");
+        assert_eq!(roundtripped, state);
+    }
+
+    #[test]
+    fn unknown_tab_removal_does_not_mask_structural_corruption() {
+        let mut value = raw_persisted_value(sample_state(None, 100));
+        value["state"]["workspaces"][0]["panes"]["2"]["tabs"]
+            .as_array_mut()
+            .unwrap()
+            .push(unknown_tab(50, "futureViewer"));
+        value["state"]["workspaces"][0]["panes"]
+            .as_object_mut()
+            .unwrap()
+            .remove("3");
+        assert_corrupt_value(value);
+    }
+
+    #[test]
+    fn malformed_unknown_tab_is_corrupt() {
+        let mut value = raw_persisted_value(sample_state(None, 100));
+        let mut tab = unknown_tab(50, "futureViewer");
+        tab.as_object_mut().unwrap().remove("id");
+        value["state"]["workspaces"][0]["panes"]["2"]["tabs"]
+            .as_array_mut()
+            .unwrap()
+            .push(tab);
+        assert_corrupt_value(value);
+    }
+
+    #[test]
+    fn malformed_known_or_tagged_kind_is_corrupt() {
+        let mut missing_field = raw_persisted_value(sample_state(None, 100));
+        missing_field
+            .pointer_mut("/state/workspaces/0/panes/2/tabs/0/kind")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("status");
+        assert_corrupt_value(missing_field);
+
+        let mut missing_tag = raw_persisted_value(sample_state(None, 100));
+        missing_tag
+            .pointer_mut("/state/workspaces/0/panes/2/tabs/0/kind")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("type");
+        assert_corrupt_value(missing_tag);
+
+        let mut nonstring_tag = raw_persisted_value(sample_state(None, 100));
+        *nonstring_tag
+            .pointer_mut("/state/workspaces/0/panes/2/tabs/0/kind/type")
+            .unwrap() = serde_json::json!(42);
+        assert_corrupt_value(nonstring_tag);
+    }
+
+    #[test]
+    fn removed_unknown_ids_remain_reserved_for_the_allocator() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        let mut value = raw_persisted_value(sample_state(None, 2));
+        value["state"]["workspaces"][0]["panes"]["2"]["tabs"]
+            .as_array_mut()
+            .unwrap()
+            .push(unknown_tab(80, "futureViewer"));
+        write_raw(&path, &value);
+
+        let LoadOutcome::Restored { mut state, repairs } = load(&path) else {
+            panic!("unknown tab with valid surrounding state must restore");
+        };
+        assert_eq!(state.next_id, 81);
+        assert!(repairs.iter().any(|repair| repair.contains("tab id 80")));
+        assert!(repairs.iter().any(|repair| repair.contains("next_id")));
+        assert_eq!(state.alloc_id(), 81);
+    }
+
+    #[test]
+    fn dropped_max_id_is_reported_as_allocator_exhaustion() {
+        let mut value = raw_persisted_value(sample_state(None, 2));
+        value["state"]["workspaces"][0]["panes"]["2"]["tabs"]
+            .as_array_mut()
+            .unwrap()
+            .push(unknown_tab(u64::MAX, "futureViewer"));
+        assert_corrupt_value(value);
     }
 
     #[test]
