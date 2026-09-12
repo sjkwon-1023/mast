@@ -3,9 +3,10 @@
 //! - 터미널 출력: `tauri::ipc::Channel` 에 `[u64 LE offset][bytes]` 프레임을
 //!   `InvokeResponseBody::Raw` 로 전송한다 (JSON 직렬화 금지 — 계획 v2 2·12장).
 //!   프론트는 offset 으로 replay 스냅샷과의 겹침을 dedup 한다 (계획 2장).
-//! - exit: Dispatcher 에 `SessionExited` 를 반영하고 `publish_state` 로
-//!   `state-changed` emit + 저장 예약한다 (dispatch 와 함께 상태 변이의 유일한
-//!   두 경로 — 계획 15단계 B-2 저장 훅).
+//! - exit: 마지막 화면을 기록 파일로 남기고, Dispatcher 에 `SessionExited` 를
+//!   반영하고 `publish_state` 로 `state-changed` emit + 저장 예약한 뒤 세션·sink 를
+//!   레지스트리에서 놓는다 (dispatch 와 함께 상태 변이의 유일한 두 경로 — 계획
+//!   15단계 B-2 저장 훅. 순서 계약은 [`SinkHandle::on_exit`]).
 //! - OSC: [`OscRouter`] 에 밀어넣기만 한다 — 모델 반영은 라우터 worker 가 flush
 //!   창당 한 번 한다 (18단계 계획 glue 계약). 리더 스레드에서 Dispatcher lock 을
 //!   잡지 않는 경계가 여기다.
@@ -20,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager};
 use mast_core::command::{SessionEvent, TabInfo};
-use mast_core::model::{AppState as CoreState, TabKind};
+use mast_core::model::{AppState as CoreState, TabId, TabKind};
 use mast_core::osc::OscEvent;
 use mast_core::send::{decode_reply_path, decode_send_text};
 use mast_core::session::{Delivery, SessionId, SessionSink};
@@ -34,6 +35,11 @@ use crate::{winlog, wintrace};
 /// 수 있어야 하기 때문.
 pub struct TerminalSink {
     session: SessionId,
+    /// 이 세션이 실린 터미널 탭 — exit 이 기록 파일을 어디에 쓸지 정하는 유일한
+    /// 근거다 (파일명이 탭 id 유도, ADR-0018 D4). `ShellSpawnReq.history_tab` 이
+    /// 없는 스폰(히스토리 미할당 경로)에서는 None 이고, 그 세션의 exit 은 기록을
+    /// 남기지 않는다.
+    tab: Option<TabId>,
     app: AppHandle,
     /// 프론트 출력 채널 슬롯. attach 시 장착되고, send 실패(webview 소멸 등)
     /// 시 해제된다 — 이후 출력은 Dropped(detach 모드)로 흐른다.
@@ -50,9 +56,15 @@ pub struct TerminalSink {
 }
 
 impl TerminalSink {
-    pub fn new(session: SessionId, app: AppHandle, router: Arc<OscRouter>) -> Self {
+    pub fn new(
+        session: SessionId,
+        tab: Option<TabId>,
+        app: AppHandle,
+        router: Arc<OscRouter>,
+    ) -> Self {
         Self {
             session,
+            tab,
             app,
             channel: Mutex::new(None),
             attached_once: std::sync::atomic::AtomicBool::new(false),
@@ -138,11 +150,21 @@ impl SessionSink for SinkHandle {
         }
     }
 
+    /// 끝난 셸을 **세션에서 기록으로** 바꾸는 자리 (ADR-0018 D2). 호출자는 세션당
+    /// 정확히 한 번 도는 **waiter 스레드**다.
+    ///
+    /// 순서가 계약이다 — ① 기록 재료를 떠내고(`take_record`) ② 파일로 쓴 뒤
+    /// ③ Dispatcher lock 아래에서 모델을 갱신·publish 하고, lock 을 놓은 다음에야
+    /// ④ 세션·sink 를 레지스트리에서 놓는다. ②가 ③보다 뒤면 프론트가
+    /// `state-changed` 를 보고 아직 없는 기록을 읽는 창이 생기고, ④가 ③보다 앞이면
+    /// 프론트가 "Running + 세션 있음" 스냅샷으로 attach 해 미지 세션 에러를 본다.
+    /// 파일 I/O 가 lock 밖인 것은 `state.rs` 잠금 규율 그대로다.
+    ///
+    /// Dispatcher lock 을 여기서 잡아도 교착이 없는 근거는 종전과 같다: dispatch 가
+    /// lock 아래에서 부르는 kill 은 join 없는 신호라(코어 rustdoc) 이 스레드의 종료를
+    /// 기다리지 않는다. 탭이 먼저 닫힌 경우(CloseTab 선행)는 코어 `apply_event` 가
+    /// 미지 세션을 무해한 no-op 으로 흘린다.
     fn on_exit(&self, code: Option<u32>) {
-        // 리더 스레드에서 Dispatcher lock 을 잡는다 — 교착 없음: dispatch 가
-        // lock 아래에서 부르는 kill 은 join 없는 신호라(코어 rustdoc) 리더의
-        // 종료를 기다리지 않는다. 미지 세션(CloseTab 선행)은 코어 apply_event
-        // 가 무해한 no-op 으로 보장한다 (계획 0-5).
         let Some(state) = self.0.app.try_state::<AppState>() else {
             // 앱 teardown 중 관리 상태가 이미 내려간 경우뿐 — 기록만 남긴다.
             winlog!(
@@ -152,6 +174,41 @@ impl SessionSink for SinkHandle {
             return;
         };
         wintrace!("session {} exited (code={code:?})", self.0.session);
+
+        // ① 세션 핸들에 거는 유일한 호출이다 (join 도, 두 번째 메서드도 없다 —
+        // 여기서 세션을 기다리면 waiter 스레드가 자기 자신을 기다린다).
+        let record = state
+            .sessions
+            .get(self.0.session)
+            .and_then(|session| session.take_record());
+        // ② 기록은 모델 갱신보다 먼저 디스크에 있어야 한다(위 순서 계약). 실패는
+        // 한 줄로 드러내되 나머지 단계를 끊지 않는다 — 기록을 못 남기는 것과 탭이
+        // 영영 Running 으로 남는 것은 무게가 다르다.
+        match (self.0.tab, record) {
+            (Some(tab), Some(bytes)) if !bytes.is_empty() => {
+                if let Err(err) = state.records.write(tab, &bytes) {
+                    winlog!("on_exit: cannot write the record of tab {}: {err}", tab.0);
+                }
+            }
+            // 남길 화면이 없다(`take_record` 의 빈 바이트 계약) — 낡은 기록이 방금
+            // 끝난 셸의 화면 행세를 하지 않게 지운다.
+            (Some(tab), Some(_)) => {
+                if let Err(err) = state.records.remove(tab) {
+                    winlog!("on_exit: cannot remove the record of tab {}: {err}", tab.0);
+                }
+            }
+            // 세션이 이미 레지스트리에 없다 — 탭을 닫는 경로가 앞질렀고, 그 경로가
+            // 기록까지 지운다.
+            (Some(_), None) => wintrace!(
+                "on_exit: session {} is already released; no record taken",
+                self.0.session
+            ),
+            (None, _) => winlog!(
+                "on_exit: session {} has no tab; no record written",
+                self.0.session
+            ),
+        }
+
         let mut dispatcher = state.dispatcher.lock().unwrap();
         dispatcher.apply_event(SessionEvent::SessionExited {
             session: self.0.session,
@@ -159,6 +216,15 @@ impl SessionSink for SinkHandle {
             ended_at_ms: now_ms(),
         });
         publish_state(&self.0.app, &dispatcher);
+        // ③ 의 끝 — lock 은 스코프 끝이 아니라 여기서 놓는다, ④ 가 lock 밖이어야
+        // 한다 (위 순서 계약).
+        drop(dispatcher);
+
+        // ④ 레지스트리 해제 — 이 탭은 더 이상 세션을 참조하지 않으므로 남겨 두면
+        // 아무도 닿지 못하는 replay 버퍼와 sink 가 된다. `remove` 의 kill 은 멱등이라
+        // 이미 죽은 자식에 무해하다.
+        state.sinks.remove(self.0.session);
+        state.sessions.remove(self.0.session);
     }
 
     fn on_startup_timeout(&self) {

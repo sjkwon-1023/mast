@@ -32,7 +32,9 @@ use std::time::Duration;
 
 use tauri::AppHandle;
 use mast_core::command::{CommandError, Dispatcher};
+use mast_core::record::RecordStore;
 
+use crate::commands::forget_record_after_respawn;
 use crate::state;
 use crate::winlog;
 
@@ -50,7 +52,11 @@ const WARMUP_DEADLINE: Duration = Duration::from_secs(30);
 
 /// 복원된 `Running`·세션 없음 탭들을 예열 뒤 간격을 두고 재스폰한다. 즉시 반환하고
 /// 실제 작업은 새 스레드에서 돈다 (모듈 doc).
-pub fn respawn_restored_tabs(handle: AppHandle, dispatcher: Arc<Mutex<Dispatcher>>) {
+pub fn respawn_restored_tabs(
+    handle: AppHandle,
+    dispatcher: Arc<Mutex<Dispatcher>>,
+    records: Arc<RecordStore>,
+) {
     let (targets, distros) = {
         let d = dispatcher.lock().unwrap();
         (d.running_terminal_tabs(), distinct_distros(&d))
@@ -80,22 +86,31 @@ pub fn respawn_restored_tabs(handle: AppHandle, dispatcher: Arc<Mutex<Dispatcher
                 if i > 0 && !stagger.is_zero() {
                     std::thread::sleep(stagger);
                 }
-                let d_guard = &mut *dispatcher.lock().unwrap();
-                match d_guard.respawn_tab(*tab) {
-                    Ok(_) => {}
-                    // 사용자가 wave 도중 그 탭·워크스페이스를 닫았다. wave 가 별도
-                    // 스레드로 옮겨 가면서 **정상 동작이 된** 경합이라 실패로 적지
-                    // 않는다 (상태·revision 은 불변이다).
-                    Err(CommandError::UnknownTarget { .. }) => {
-                        winlog!("boot: tab {} closed before respawn; skipped", tab.0);
+                let respawned = {
+                    let d_guard = &mut *dispatcher.lock().unwrap();
+                    let result = d_guard.respawn_tab(*tab);
+                    match &result {
+                        Ok(_) => {}
+                        // 사용자가 wave 도중 그 탭·워크스페이스를 닫았다. wave 가 별도
+                        // 스레드로 옮겨 가면서 **정상 동작이 된** 경합이라 실패로 적지
+                        // 않는다 (상태·revision 은 불변이다).
+                        Err(CommandError::UnknownTarget { .. }) => {
+                            winlog!("boot: tab {} closed before respawn; skipped", tab.0);
+                        }
+                        // 스폰 실패는 respawn_tab 이 이미 그 탭을 Exited{None} 으로 강등해
+                        // 상태에 반영했다 — 여기서는 loud 기록만 남긴다.
+                        Err(err) => {
+                            winlog!("boot: respawn failed (tab={}): {err}", tab.0);
+                        }
                     }
-                    // 스폰 실패는 respawn_tab 이 이미 그 탭을 Exited{None} 으로 강등해
-                    // 상태에 반영했다 — 여기서는 loud 기록만 남긴다.
-                    Err(err) => {
-                        winlog!("boot: respawn failed (tab={}): {err}", tab.0);
-                    }
+                    state::publish_state(&handle, d_guard);
+                    result.is_ok()
+                };
+                // 되살아난 탭의 옛 화면은 이제 새 셸의 것이다 — 삭제는 lock 을 놓은
+                // 뒤다 (Restart 버튼 경로와 같은 헬퍼·같은 규율).
+                if respawned {
+                    forget_record_after_respawn(&records, *tab);
                 }
-                state::publish_state(&handle, d_guard);
             }
         })
     {

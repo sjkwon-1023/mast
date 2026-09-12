@@ -23,10 +23,12 @@ use tauri::ipc::{Channel, InvokeResponseBody, Response};
 use tauri::{AppHandle, Manager, State};
 use mast_core::command::{Command, CommandError, CommandOutput};
 use mast_core::model::TabId;
+use mast_core::record::RecordStore;
 use mast_core::session::{PtySession, SessionId};
 use mast_core::wslpath;
 
 use crate::state::{publish_state, AppState};
+use crate::winlog;
 
 /// `get_stats` 직렬화형 (spike 이식). 코어 `SessionStats` 는 serde 의존이 없어
 /// 글루 DTO 로 내보낸다. `id` 는 레지스트리 발급 `SessionId` — 커맨드·이벤트의
@@ -117,14 +119,60 @@ pub async fn respawn_tab(
     tab: u64,
 ) -> Result<SessionId, CommandError> {
     let dispatcher = Arc::clone(&state.dispatcher);
+    let records = Arc::clone(&state.records);
     tauri::async_runtime::spawn_blocking(move || {
-        let mut d = dispatcher.lock().unwrap();
-        let result = d.respawn_tab(TabId(tab));
-        publish_state(&app, &d);
+        let result = {
+            let mut d = dispatcher.lock().unwrap();
+            let result = d.respawn_tab(TabId(tab));
+            publish_state(&app, &d);
+            result
+        };
+        if result.is_ok() {
+            forget_record_after_respawn(&records, TabId(tab));
+        }
         result
     })
     .await
     .expect("respawn_tab task panicked")
+}
+
+/// 재시작에 **성공한** 탭의 기록 파일을 지운다 — 그 탭의 화면은 이제 새 셸의 것이고,
+/// 남겨 두면 다음 exit 까지 낡은 화면이 파일로 남는다 (ADR-0018 수명 규칙).
+///
+/// 재시작 실패에는 부르지 않는다: 실패한 재시도가 사용자가 보던 마지막 화면을 지우면
+/// 배너만 남은 빈 탭이 된다. 삭제 실패도 치명적이지 않아 로그로만 드러낸다 — 다음 exit
+/// 의 덮어쓰기나 부팅 sweep 이 뒤를 받는다.
+///
+/// 삭제가 스폰 **뒤**라, 새 셸이 그 사이에 죽어 버리면 방금 쓰인 새 기록을 지운다
+/// (탭은 Exited + 빈 기록 뷰). 창은 스폰→exit→파일 쓰기가 전부 들어가야 하는 폭이라
+/// 감수한다 — 순서를 뒤집으면 스폰 실패 때 마지막 화면을 잃는 위 경우가 상시화된다
+/// (ADR-0018 accepted limits).
+///
+/// 호출 지점이 둘(이 커맨드의 Restart 버튼 경로와 `boot.rs` 의 부팅 웨이브)이라 함수로
+/// 뺐다. 둘 다 **Dispatcher lock 을 놓은 뒤** 부른다 (`state.rs` 잠금 규율).
+pub(crate) fn forget_record_after_respawn(records: &RecordStore, tab: TabId) {
+    if let Err(err) = records.remove(tab) {
+        winlog!("could not remove the record of respawned tab {}: {err}", tab.0);
+    }
+}
+
+/// 끝난 터미널 탭의 **기록 바이트** (ADR-0018) — 프론트의 기록 뷰가 마운트 때 한 번
+/// 읽어 읽기 전용 터미널에 그대로 흘려보낸다. 응답은 `attach_terminal`·`fs_read_chunk`
+/// 와 같은 raw `Response` 다 (base64 왕복 없음).
+///
+/// **파일이 없으면 빈 body 이고 에러가 아니다** — 화면 없이 끝난 탭(빈 기록은 애초에
+/// 쓰지 않는다)과 기록이 이미 지워진 탭이 정상 상태이며, 뷰가 안내 한 줄을 그린다.
+///
+/// Dispatcher lock 도 세션 레지스트리도 타지 않는다: 기록은 모델 밖 파일이고 주소는
+/// 탭 id 하나다. I/O 는 `fs_read_chunk` 선례대로 `spawn_blocking` 안에서 돈다.
+#[tauri::command]
+pub async fn read_tab_record(state: State<'_, AppState>, tab: u64) -> Result<Response, String> {
+    let records = Arc::clone(&state.records);
+    let bytes = tauri::async_runtime::spawn_blocking(move || records.read(TabId(tab)))
+        .await
+        .map_err(|err| format!("read_tab_record task join failed (tab={tab}): {err}"))?
+        .map_err(|err| format!("cannot read the record of tab {tab}: {err}"))?;
+    Ok(Response::new(bytes.unwrap_or_default()))
 }
 
 /// 현재 상태 스냅샷 (`{ revision, state }`) — 부팅·재동기화용.

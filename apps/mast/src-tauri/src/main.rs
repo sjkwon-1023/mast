@@ -4,7 +4,8 @@
 //! # 부팅 순서 (계획 15단계 B-2 · 0장 manage-first)
 //!
 //! load(state.json) → Restored 면 `Dispatcher::adopt`(스폰 없음) / Fresh 면 빈
-//! dispatcher → **manage** → Fresh dogfood dispatch → 초기 `saver.schedule` → 탭별
+//! dispatcher → 기록 sweep(ADR-0018 — **첫 스폰 전**이어야 keep 집합이 낡지 않는다)
+//! → **manage** → Fresh dogfood dispatch → 초기 `saver.schedule` → 탭별
 //! respawn(회당 lock·publish, `boot` 모듈이 **별도 스레드**에서 예열 뒤 간격을 두고
 //! 돈다). **모든 스폰이 manage 뒤다** — 스폰이
 //! 먼저면 그 창에서 즉사한 셸의 on_exit 이 관리 상태를 못 찾아 소실된다
@@ -31,14 +32,17 @@ mod router;
 mod sink;
 mod state;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{Emitter, Manager};
-use mast_core::command::{Command, Dispatcher, NewTab};
+use mast_core::command::{Command, Dispatcher, NewTab, RegistryAudit};
+use mast_core::model::{AppState as CoreState, TabId, TabKind};
 use mast_core::persist::{self, FreshReason, LoadOutcome, Saver};
+use mast_core::record::RecordStore;
 use mast_core::session::SessionManager;
 
 /// Saver debounce 창 — 연속 변이를 1회 기록으로 합친다. 크래시 시 마지막 기록
@@ -54,6 +58,22 @@ const WINDOW_HIDDEN_EVENT: &str = "window-hidden";
 /// WebView2 의 `document.hasFocus()` 는 창이 비포커스여도 true 로 남는 경우가 있어
 /// (v0.3.6 필드 진단의 용의자 중 하나) 프론트가 자기 힘으로 포커스를 알 수 없다.
 const WINDOW_FOCUS_EVENT: &str = "window-focus";
+
+/// 기록 sweep 의 keep 집합 — 로드된 상태의 **모든 터미널 탭** id.
+///
+/// Exited 탭만이 아니라 전부인 이유: sweep 이 지우는 것은 "이제 어떤 탭도 주인이
+/// 아닌" 고아 파일이고(강제 종료로 삭제 경로를 못 탄 흔적), 살아 있는 탭의 낡은
+/// 기록은 그 탭이 재시작에 성공할 때 지워진다 (ADR-0018 수명 규칙).
+fn terminal_tab_ids(state: &CoreState) -> HashSet<TabId> {
+    state
+        .workspaces
+        .iter()
+        .flat_map(|ws| ws.panes.values())
+        .flat_map(|pane| &pane.tabs)
+        .filter(|tab| matches!(tab.kind, TabKind::Terminal { .. }))
+        .map(|tab| tab.id)
+        .collect()
+}
 
 /// corrupt 백업 결과를 로그용 문자열로 — rename 실패도 가리지 않고 원인 그대로.
 fn backup_label(backup: &Result<PathBuf, String>) -> String {
@@ -90,16 +110,19 @@ fn main() {
             // OSC 라우터는 sink 생성보다 먼저 — sink factory(TauriHost)가 핸들을
             // 물려 받아야 한다 (18단계 glue 계약).
             let router = Arc::new(router::OscRouter::spawn(handle.clone()));
+            // 앱 데이터 디렉터리에 state.json 과 기록 디렉터리가 나란히 앉는다. 경로
+            // 해석 실패는 부팅 불능이므로 setup 에러로 그대로 올린다 (가짜 진행 금지).
+            let app_data_dir = app.path().app_data_dir()?;
+            let state_path = app_data_dir.join("state.json");
+            let records = Arc::new(RecordStore::new(app_data_dir.join("records")));
+
             let tauri_host = host::TauriHost::new(
                 handle.clone(),
                 Arc::clone(&sessions),
                 Arc::clone(&sinks),
                 Arc::clone(&router),
+                Arc::clone(&records),
             );
-
-            // 상태 파일은 앱 데이터 디렉터리의 state.json. 경로 해석 실패는 부팅
-            // 불능이므로 setup 에러로 그대로 올린다 (가짜 진행 금지).
-            let state_path = app.path().app_data_dir()?.join("state.json");
 
             let (dispatcher, needs_dogfood) = match persist::load(&state_path) {
                 LoadOutcome::Restored { state, repairs } => {
@@ -134,6 +157,23 @@ fn main() {
                     (Dispatcher::new(Box::new(tauri_host)), true)
                 }
             };
+            // 기록 sweep 은 **어떤 셸보다도 먼저** 돈다 (아래 dogfood dispatch 와
+            // `boot::respawn_restored_tabs` 웨이브가 첫 스폰이다): keep 집합은 방금
+            // 로드한 상태에서 뜬 것이라, 그 뒤에 만들어진 탭의 기록까지 판정 대상이
+            // 되면 갓 생긴 탭의 기록을 고아로 오인해 지울 창이 생긴다.
+            match records.sweep(&terminal_tab_ids(dispatcher.state())) {
+                Ok(report) if report.removed != 0 || report.failed != 0 => winlog!(
+                    "boot: swept {} orphan record file(s); {} could not be removed",
+                    report.removed,
+                    report.failed
+                ),
+                Ok(_) => {}
+                // 청소를 못 했다고 부팅을 막지 않는다 — 남은 파일은 디스크만 차지한다.
+                Err(err) => winlog!(
+                    "boot: cannot sweep the record directory: {err}"
+                ),
+            }
+
             let dispatcher = Arc::new(Mutex::new(dispatcher));
             let saver = Arc::new(Saver::spawn(state_path, SAVE_DEBOUNCE));
             // 자동 UI 리셋 supervisor (계획 16단계 C-2) — env 설정 파싱 + worker
@@ -155,6 +195,8 @@ fn main() {
                 saver: Arc::clone(&saver),
                 reset,
                 router,
+                records: Arc::clone(&records),
+                last_audit: Mutex::new(RegistryAudit::default()),
             });
 
             // Fresh 부팅 dogfood — 직접 상태 조작 없이 커맨드 bus 경유로 초기
@@ -186,7 +228,7 @@ fn main() {
             // 탭별 재스폰 — 회당 lock 취득·해제 + publish (ADR-0016 결정 8: lock 사이에
             // 도착하는 on_exit/dispatch 가 끼어들 수 있어 이벤트 소실 창이 없다).
             // WSL 예열과 탭 간 간격은 `boot` 모듈 doc 참조 (실기 사고 2026-08-20).
-            boot::respawn_restored_tabs(handle.clone(), Arc::clone(&dispatcher));
+            boot::respawn_restored_tabs(handle.clone(), Arc::clone(&dispatcher), records);
 
             // 에이전트 알림 훅 프로비저닝 (fire-and-forget) — 부팅 경로를 붙잡지
             // 않도록 setup 의 맨 끝에서, 상태에 있는 distro 들 + 기본 distro 를
@@ -298,6 +340,8 @@ fn main() {
             commands::fs_list_dir,
             commands::fs_stat,
             commands::fs_read_chunk,
+            // 끝난 터미널 탭의 기록 바이트 (ADR-0018) — 기록 뷰가 마운트 때 1회.
+            commands::read_tab_record,
             // 원격 표면의 부팅 결과와 페어링 URL (ADR-0016 결정 9). 상태는 부팅당 1회,
             // 페어링은 다이얼로그를 열 때만.
             remote::remote_status,

@@ -13,13 +13,18 @@
 //!   가능성이 있는 세션 호출(write·resize·spawn)은 핸들을 얻은 뒤 lock 밖,
 //!   그리고 `spawn_blocking` 스레드에서 수행한다 (스파이크와 동일 규율 —
 //!   메인 스레드가 write 에 잡히면 ack_output 도 못 돌아 flow 영구 교착).
+//! - 기록 파일([`RecordStore`], ADR-0018)도 같은 규율 아래 있다: 디스크 I/O 는
+//!   Dispatcher lock 밖에서만 한다. exit 경로가 기록을 **모델 갱신보다 먼저**
+//!   쓰는 것도 여기서 나온다 ([`crate::sink`] 의 `on_exit`) — 프론트가
+//!   `state-changed` 를 보고 기록을 읽으므로 파일이 그때 이미 있어야 한다.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, Manager};
-use mast_core::command::Dispatcher;
+use mast_core::command::{Dispatcher, RegistryAudit};
 use mast_core::persist::Saver;
+use mast_core::record::RecordStore;
 use mast_core::session::{SessionId, SessionManager};
 
 use crate::reset_supervisor::ResetSupervisor;
@@ -47,6 +52,19 @@ impl SinkRegistry {
     pub fn remove(&self, id: SessionId) {
         self.sinks.lock().unwrap().remove(&id);
     }
+
+    /// 등록된 sink id 목록 — 오름차순, 내부 lock 은 복사 동안만. 코어의
+    /// [`SessionManager::ids`] 와 짝이며, 정합성 검사
+    /// ([`mast_core::command::audit_registries`])가 **Dispatcher lock 아래에서**
+    /// 두 레지스트리 스냅샷을 같이 뜨는 데 쓴다 — 그 순서의 근거는 그쪽 rustdoc.
+    // 검사를 도는 `audit` 모듈이 이 PR 의 다음 청크에 들어온다 — 그때까지 호출자가
+    // 없다 (계약은 같은 청크 쌍인 `SessionManager::ids` 와 함께 이미 잠겨 있다).
+    #[allow(dead_code)]
+    pub fn ids(&self) -> Vec<SessionId> {
+        let mut ids: Vec<SessionId> = self.sinks.lock().unwrap().keys().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
 }
 
 /// Tauri managed state. `Arc` 는 `spawn_blocking` 의 `'static` 클로저와 sink
@@ -67,6 +85,13 @@ pub struct AppState {
     /// OSC 배치 라우터 (계획 18단계 glue) — sink 와 `Arc` 로 공유하며, 종료 시
     /// `RunEvent::Exit` 가 여기서 `flush_now` 를 부른다.
     pub router: Arc<OscRouter>,
+    /// 끝난 탭의 마지막 화면 기록 (ADR-0018) — 디렉터리 경로만 드는 값이라 자체
+    /// lock 이 없다. `TauriHost` 도 같은 `Arc` 를 들어 탭 닫기 경로에서 지운다.
+    pub records: Arc<RecordStore>,
+    /// 마지막 정합성 검사 결과 — 진단 커맨드가 읽는 자리다. 쓰는 쪽(`audit` 모듈)과
+    /// 읽는 쪽(`get_diagnostics`)이 이 PR 의 다음 청크에 들어온다.
+    #[allow(dead_code)]
+    pub last_audit: Mutex<RegistryAudit>,
 }
 
 /// 현재 스냅샷을 `state-changed` 이벤트로 emit 하고 저장을 예약한다 (emit +
