@@ -19,7 +19,7 @@
 /** 서버 rate limit 창과 같은 길이 (ADR-0016 결정 4). */
 export const RATE_LIMIT_PAUSE_MS = 60_000;
 
-/** 폴링이 멈춘 이유 — 화면에 안내를 띄우는 쪽이 쓴다. */
+/** 화면에 안내를 띄우는 쪽이 쓴다. */
 export type HaltReason = "unauthorized" | "rateLimited";
 
 export interface PollScheduleOptions {
@@ -55,7 +55,7 @@ export class PollSchedule {
     this.onHalt = options.onHalt;
   }
 
-  /** 지금 유효한 세대. 요청을 쏘기 직전에 캡처한다. */
+  /** 요청을 쏘기 직전에 캡처한다. */
   get generation(): number {
     return this.generationValue;
   }

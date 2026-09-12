@@ -31,24 +31,23 @@
 
 import type { AgentStatus, WorkspaceId } from "./types";
 
-/** AudioContext 생성기 — 테스트가 가짜 컨텍스트를 주입하는 이음매다
+/** 테스트가 가짜 컨텍스트를 주입하는 이음매다
  *  (WebAudio 는 node 환경에 없고, happy-dom 에도 없다). */
 export type AudioContextFactory = () => AudioContext;
 
 const defaultFactory: AudioContextFactory = () => new AudioContext();
 
-/** 피크 게인 — 일부러 낮게(0.1) 잡는다. 알림은 존재를 알리는 정도면 충분하고,
+/** 일부러 낮게(0.1) 잡는다. 알림은 존재를 알리는 정도면 충분하고,
  *  작업 중 놀랄 만큼 크면 사용자가 소리를 아예 꺼 버린다. */
 const PEAK_GAIN = 0.1;
 
-/** 엔벨로프의 사실상 무음 값 — exponentialRamp 는 0 을 목표로 잡을 수 없어
- *  (0 이면 예외) 이 값으로 대신한다. */
+/** exponentialRamp 는 0 을 목표로 잡을 수 없어 (0 이면 예외) 이 값으로 대신한다. */
 const SILENT_GAIN = 0.0001;
 
-/** 상승 attack 시간(초) — 0 에서 즉시 켜면 클릭 잡음이 난다. */
+/** 0 에서 즉시 켜면 클릭 잡음이 난다. */
 const ATTACK_S = 0.02;
 
-/** 2음 스케줄(초) — 총 길이 0.3s. A5 → E6 의 상승 5도라 "질문/대기" 로 읽힌다
+/** 총 길이 0.3s. A5 → E6 의 상승 5도라 "질문/대기" 로 읽힌다
  *  (하강 음정은 완료·실패로 읽혀 의미가 반대다). */
 const TONES: readonly { freq: number; at: number; dur: number }[] = [
   { freq: 880, at: 0, dur: 0.16 },
@@ -58,23 +57,22 @@ const TONES: readonly { freq: number; at: number; dur: number }[] = [
 /** **휴면** (모듈 머리 주석 참조) — 지금 이 클래스를 부르는 배선은 없다. */
 export class Chime {
   private ctx: AudioContext | null = null;
-  /** 컨텍스트 생성이 실패한 환경 표시 — 재시도하지 않는다 (WebAudio 자체가 없는
-   *  환경이면 렌더마다 예외를 다시 만들 이유가 없다). */
+  /** 재시도하지 않는다 — WebAudio 자체가 없는 환경이면 렌더마다 예외를 다시
+   *  만들 이유가 없다. */
   private unavailable = false;
 
   constructor(private readonly createContext: AudioContextFactory = defaultFactory) {}
 
-  /** 사용자 제스처 훅 — 컨텍스트를 만들고 resume 한다 (autoplay 정책 unlock).
-   *  installChimeUnlock 이 첫 keydown/mousedown 에서 부른다. */
+  /** autoplay 정책 unlock — installChimeUnlock 이 첫 keydown/mousedown 에서 부른다. */
   unlock(): void {
     const ctx = this.context();
     if (ctx === null) return;
     this.resume(ctx);
   }
 
-  /** 차임 1회 재생 — 2음을 현재 시각 기준으로 스케줄한다. 컨텍스트가 안 돌고
-   *  있으면 resume 을 시도하되 **기다리지 않는다**: 제스처 이력이 있으면 대개
-   *  즉시 풀려 스케줄된 소리가 그대로 나고, 아니면 이번 소리는 조용히 사라진다. */
+  /** 컨텍스트가 안 돌고 있으면 resume 을 시도하되 **기다리지 않는다**: 제스처
+   *  이력이 있으면 대개 즉시 풀려 스케줄된 소리가 그대로 나고, 아니면 이번
+   *  소리는 조용히 사라진다. */
   play(): void {
     const ctx = this.context();
     if (ctx === null) return;
@@ -87,8 +85,7 @@ export class Chime {
     }
   }
 
-  /** 오실레이터 1음 — sine + 짧은 attack/decay 엔벨로프. 노드는 stop 뒤 자동
-   *  해제되므로 별도 정리가 없다. */
+  /** 노드는 stop 뒤 자동 해제되므로 별도 정리가 없다. */
   private schedule(ctx: AudioContext, freq: number, startAt: number, duration: number): void {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -117,8 +114,8 @@ export class Chime {
     return this.ctx;
   }
 
-  /** resume 시도 — 거부(autoplay 정책)는 삼킨다. 다음 제스처·다음 재생에서 다시
-   *  시도되므로 여기서 상태를 기억할 필요가 없다. */
+  /** 거부(autoplay 정책)는 삼킨다. 다음 제스처·다음 재생에서 다시 시도되므로
+   *  여기서 상태를 기억할 필요가 없다. */
   private resume(ctx: AudioContext): void {
     try {
       void ctx.resume().catch(() => undefined);
@@ -128,8 +125,7 @@ export class Chime {
   }
 }
 
-/** 사용자 제스처 unlock 배선 (**휴면** — 모듈 머리 주석 참조) — 첫 keydown/mousedown
- *  에서 1회 resume 한다.
+/** **휴면** — 모듈 머리 주석 참조.
  *  capture 단계로 다는 이유는 활동 핑과 같다: xterm 이 포커스를 쥐고 있어도 window
  *  까지 도달한다. 1회 뒤 리스너를 떼는 것은 이후 재생 경로가 알아서 resume 을
  *  재시도하기 때문이다 — 상시 리스너를 남길 이유가 없다. */
@@ -147,7 +143,7 @@ export function installChimeUnlock(chime: Chime, target: EventTarget = window): 
   target.addEventListener("mousedown", unlock, opts);
 }
 
-/** 전이 판정 입력 — 스냅샷 워크스페이스에서 쓰는 두 필드만 요구한다
+/** 스냅샷 워크스페이스에서 쓰는 두 필드만 요구한다
  *  (Workspace 전체를 요구하지 않아 테스트가 가볍다). */
 export interface AgentStatusEntry {
   id: WorkspaceId;

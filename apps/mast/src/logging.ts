@@ -21,27 +21,24 @@ import type { UiSettings } from "./backend";
 
 let enabled = false;
 
-/** 이 세션에서 프론트 로그가 켜져 있는가. */
 export function isLogging(): boolean {
   return enabled;
 }
 
-/** 한 줄 남긴다 — 꺼져 있으면 no-op. 실패는 삼킨다: 로그를 남기려다 기능이 죽는
- *  것이 로그가 없는 것보다 나쁘다. */
+/** 실패는 삼킨다: 로그를 남기려다 기능이 죽는 것이 로그가 없는 것보다 나쁘다. */
 export function log(text: string): void {
   if (!enabled) return;
   void logLine(text).catch(() => undefined);
 }
 
-/** 로그에 적을 키 이름. `ArrowLeft`·`Tab` 처럼 **이름이 두 글자 이상인** 키는 그대로
- *  두고, 인쇄 가능한 한 글자는 `(char)` 로 가린다 — 사용자가 친 글자를 파일에 남기지
- *  않으면서 "어떤 단축키가 삼켜졌나"는 그대로 읽히게 하는 선이다. */
+/** `ArrowLeft`·`Tab` 처럼 **이름이 두 글자 이상인** 키는 그대로 두고, 인쇄 가능한
+ *  한 글자는 `(char)` 로 가린다 — 사용자가 친 글자를 파일에 남기지 않으면서 "어떤
+ *  단축키가 삼켜졌나"는 그대로 읽히게 하는 선이다. */
 export function describeKey(key: string): string {
   return key.length > 1 ? key : "(char)";
 }
 
-/** 조합 중이라는 이유로 삼켜진 단축키 한 줄. 수식키가 붙은 조합만 부른다 —
- *  수식키 없는 키는 애초에 단축키가 아니라 입력이다. */
+/** 수식키가 붙은 조합만 부른다 — 수식키 없는 키는 애초에 단축키가 아니라 입력이다. */
 export function logSwallowedShortcut(ev: KeyboardEvent): void {
   if (!enabled) return;
   log(
@@ -50,11 +47,9 @@ export function logSwallowedShortcut(ev: KeyboardEvent): void {
   );
 }
 
-/** 부팅 배선 — 설정이 켜져 있을 때만 조합 이벤트 추적을 설치한다.
- *
- *  capture 단계 window 리스너인 이유는 xterm 의 숨은 textarea 가 이벤트를 소비해도
- *  먼저 보기 위해서다. 조합의 시작·갱신·끝이 **각각 도착했는지**가 관찰 대상이라,
- *  중간에 누가 멈추면 관찰 자체가 무의미해진다. */
+/** 부팅 배선 — capture 단계 window 리스너인 이유는 xterm 의 숨은 textarea 가 이벤트를
+ *  소비해도 먼저 보기 위해서다. 조합의 시작·갱신·끝이 **각각 도착했는지**가 관찰
+ *  대상이라, 중간에 누가 멈추면 관찰 자체가 무의미해진다. */
 export function installFrontEndLogging(
   settings: UiSettings,
   target: EventTarget = window,

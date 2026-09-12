@@ -1,5 +1,4 @@
-// ActivityPing throttle 의 계약 테스트 (계획 C-3) — 10초 창당 1회 + visibility
-// 즉시 통과. DOM 무의존 (시각은 인자로 주입).
+// ActivityPing throttle 의 계약 테스트 (계획 C-3) — DOM 무의존 (시각은 인자로 주입).
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -14,7 +13,6 @@ describe("ActivityPing", () => {
     ping.activity(9_999);
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenLastCalledWith(null);
-    // 경계값: 창 길이 도달 시점부터 다시 통과.
     ping.activity(10_000);
     expect(send).toHaveBeenCalledTimes(2);
   });
@@ -22,7 +20,6 @@ describe("ActivityPing", () => {
   it("연속 사용 중에는 창마다 정확히 1회 나간다 (핑 자체가 스팸이 되지 않는다)", () => {
     const send = vi.fn();
     const ping = new ActivityPing(send);
-    // 30초 동안 1초 간격 스크롤 → 0s/10s/20s/30s 의 4회만.
     for (let t = 0; t <= 30_000; t += 1_000) ping.activity(t);
     expect(send).toHaveBeenCalledTimes(4);
   });

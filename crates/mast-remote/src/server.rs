@@ -28,14 +28,13 @@ use crate::ratelimit::{RateLimiter, DEFAULT_CAP};
 use crate::routes::{route, Route};
 use crate::token::token_matches;
 
-/// 전역 동시 커넥션 상한. 넘으면 읽지도 답하지도 않고 즉시 닫는다.
+/// 넘으면 읽지도 답하지도 않고 즉시 닫는다.
 const MAX_CONNECTIONS: usize = 32;
-/// 커넥션 스트림의 read/write 타임아웃.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 /// 본문을 읽지 않고 거절했을 때 남은 입력을 비우는 총 예산 (시간·바이트).
 const DRAIN_BUDGET: Duration = Duration::from_secs(2);
 const DRAIN_BYTES: usize = 1024 * 1024;
-/// drain 중의 read 타임아웃 — 예산을 이 단위로 나눠 쓴다.
+/// 예산을 이 단위로 나눠 쓴다.
 const DRAIN_READ_TIMEOUT: Duration = Duration::from_millis(200);
 /// 요청 하나(헤드 + 본문)를 다 받는 데 허용하는 wall-clock 시간. [`IO_TIMEOUT`] 은
 /// **read 한 번**의 상한이라 그것만으로는 9초마다 1바이트씩 흘리는 클라이언트(slowloris)가
@@ -78,7 +77,7 @@ pub struct StaticAsset {
 /// 무인증 표면에 200 으로 나간다 (ADR-0016 결정 8).
 pub type AssetFn = Arc<dyn Fn(&str) -> Option<StaticAsset> + Send + Sync>;
 
-/// 로그 한 줄 싱크. 글루가 `winlog!` 로 연결한다.
+/// 글루가 `winlog!` 로 연결한다.
 pub type LogFn = Arc<dyn Fn(String) + Send + Sync>;
 
 pub struct RemoteConfig {
@@ -94,7 +93,7 @@ pub struct RemoteDeps {
     pub log: LogFn,
 }
 
-/// 살아 있는 서버 핸들. drop 하면 accept 스레드가 리스너와 함께 정리된다.
+/// drop 하면 accept 스레드가 리스너와 함께 정리된다.
 pub struct RemoteServer {
     local_addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
@@ -163,7 +162,6 @@ pub fn serve(cfg: RemoteConfig, deps: RemoteDeps) -> std::io::Result<RemoteServe
     })
 }
 
-/// `Arc<dyn Fn>` 는 그 자체로 호출 가능한 타입이 아니라 한 번 벗겨서 부른다.
 pub(crate) fn log_line(sink: &LogFn, message: String) {
     (sink.as_ref())(message);
 }
@@ -490,7 +488,7 @@ fn read_body(
     Some(body)
 }
 
-/// 응답 하나. `drain` 은 "본문을 읽지 않고 거절했다"는 표시다.
+/// `drain` 은 "본문을 읽지 않고 거절했다"는 표시다.
 pub(crate) struct Response {
     status: u16,
     reason: &'static str,
@@ -512,7 +510,7 @@ impl Response {
         }
     }
 
-    /// 본문이 없는 200 — `POST /input` 의 성공 응답이다.
+    /// `POST /input` 의 성공 응답이다.
     pub(crate) fn ok_empty() -> Self {
         Self::ok("text/plain", Vec::new())
     }

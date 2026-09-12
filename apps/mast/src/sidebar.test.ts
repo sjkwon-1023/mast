@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 //
-// 사이드바 DOM identity 검증 (18단계 B-6) — 순수 판정(reconcilePlan) 테스트가 못
+// 사이드바 DOM identity 검증 — 순수 판정(reconcilePlan) 테스트가 못
 // 잡는 부분을 잠근다: 판정이 patch 여도 렌더가 실제로 노드를 갈아치우면 클릭이
 // mousedown~click 사이에 유실된다 (ADR-0003 결정 7 의 스왈로). 그래서 "같은 노드
 // 객체(===)에 텍스트만 갱신됐는가"를 실제 DOM 으로 단언한다.
@@ -66,21 +66,20 @@ function snapshot(
   return { revision, state: { workspaces, activeWorkspace, nextId: 100, revision } };
 }
 
-/** 카드 안의 자식 조회 — 없으면 던진다 (테스트에서 null 분기를 없애기 위함). */
+/** 없으면 던진다 — 테스트에서 null 분기를 없애기 위함. */
 function child(card: Element, selector: string): HTMLElement {
   const found = card.querySelector<HTMLElement>(selector);
   if (found === null) throw new Error(`missing ${selector}`);
   return found;
 }
 
-/** 카드의 이름 편집 입력 (F2 대상). */
 function renameInput(card: Element): HTMLInputElement {
   const found = card.querySelector<HTMLInputElement>(".ws-card-rename");
   if (found === null) throw new Error("missing .ws-card-rename");
   return found;
 }
 
-/** 편집 입력에 키를 하나 보낸다 — 실제 리스너(keydown)와 같은 경로. */
+/** 실제 리스너(keydown)와 같은 경로로 보낸다. */
 function press(input: HTMLInputElement, key: string): void {
   input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
 }
@@ -89,8 +88,7 @@ function mount(): {
   sidebar: Sidebar;
   cards: () => HTMLElement[];
   dispatched: Command[];
-  /** "+ New workspace" 콜백 호출 횟수 — 폴더 선택 흐름은 main.ts 소유라
-   *  사이드바는 콜백만 부른다. */
+  /** 폴더 선택 흐름은 main.ts 소유라 사이드바는 콜백만 부른다. */
   newWorkspaceCalls: () => number;
   /** "Pair phone" 버튼 — 원격 표면이 떠 있을 때만 보인다. */
   pairBtn: () => HTMLButtonElement;
@@ -252,14 +250,13 @@ describe("Sidebar inline rename (F2)", () => {
     sidebar.beginRename();
     expect(input.hidden).toBe(false);
     expect(name.hidden).toBe(true);
-    expect(input.value).toBe("ws 2"); // 현재 이름이 채워진다
+    expect(input.value).toBe("ws 2");
 
     // 앞뒤 공백은 UI 가 다듬어 보낸다 (코어는 받은 값을 그대로 저장한다).
     input.value = "  renamed  ";
     press(input, "Enter");
 
     expect(dispatched).toEqual([{ type: "renameWorkspace", workspace: 2, name: "renamed" }]);
-    // 확정하면 편집이 끝나고 카드가 원래 모습으로 돌아온다.
     expect(input.hidden).toBe(true);
     expect(name.hidden).toBe(false);
   });
@@ -345,7 +342,6 @@ describe("Sidebar interaction across patches", () => {
     cards()[1].click();
     expect(dispatched).toEqual([]);
 
-    // 반대로 비활성이 된 ws 1 은 다시 전환을 보낸다.
     cards()[0].click();
     expect(dispatched).toEqual([{ type: "switchWorkspace", workspace: 1 }]);
   });
@@ -356,7 +352,7 @@ describe("Sidebar close (× 버튼 · Ctrl+Shift+Q)", () => {
     vi.unstubAllGlobals();
   });
 
-  /** confirm 을 고정 응답으로 갈아 끼운다 — 호출 인자까지 보기 위해 spy 를 돌려준다. */
+  /** 호출 인자까지 보기 위해 spy 를 돌려준다. */
   function stubConfirm(answer: boolean): ReturnType<typeof vi.fn> {
     const spy = vi.fn(() => answer);
     vi.stubGlobal("confirm", spy);
@@ -430,7 +426,7 @@ describe("Sidebar drag reordering", () => {
     );
   }
 
-  /** 카드를 집어 y 로 끌고 놓는다 — 실제 리스너와 같은 이벤트 순서. */
+  /** 실제 리스너와 같은 이벤트 순서로 끌고 놓는다. */
   function drag(card: HTMLElement, fromY: number, toY: number): void {
     pointer(card, "pointerdown", fromY);
     pointer(card, "pointermove", toY);

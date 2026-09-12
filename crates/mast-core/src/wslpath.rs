@@ -1,4 +1,4 @@
-//! WSL 경로 형태 검증 + `\\wsl.localhost` UNC 매핑 (21단계 계획 core 계약).
+//! WSL 경로 형태 검증 + `\\wsl.localhost` UNC 매핑.
 //!
 //! 뷰어 탭(folderBrowser·textViewer)의 파일 접근은 Windows 쪽 Rust 가
 //! `\\wsl.localhost\<distro>\...` UNC 경로로 수행한다 — Windows→WSL 방향이라
@@ -230,7 +230,7 @@ fn join_linux(prefix: &str, tail: &str) -> String {
 /// UNC 의 공유 이름 자리에 그대로 들어가는 값이라 구분자·NUL·빈 이름을 거부하고,
 /// 경로 컴포넌트와 같은 규칙(`.`/`..`, `:`, 후행 점·공백)도 적용한다 — 출처가
 /// 본인 설정(env·워크스페이스 필드)이라 위협은 아니지만, 밀수 가드의 커버리지가
-/// 경로에만 있고 공유 이름에는 없는 비대칭을 남기지 않는다 (21단계 리뷰 finding).
+/// 경로에만 있고 공유 이름에는 없는 비대칭을 남기지 않는다.
 fn validate_distro(distro: &str) -> Result<(), String> {
     if distro.is_empty() {
         return Err("distro must not be empty".to_owned());
@@ -381,9 +381,6 @@ mod tests {
         assert!(err.contains("absolute"), "{err}");
     }
 
-    // ---- 역변환 (폴더 선택 대화상자 → 워크스페이스 root_path·distro) ----
-
-    /// 테스트 가독용 — (distro, path) 를 소유 문자열 쌍으로 편다.
     fn from_win(path: &str) -> (Option<String>, String) {
         from_windows_path(path).unwrap_or_else(|e| panic!("{path:?} 거부됨: {e}"))
     }

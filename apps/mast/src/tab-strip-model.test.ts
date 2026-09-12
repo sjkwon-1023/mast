@@ -1,6 +1,3 @@
-// tab-strip-model 검증 — active·exited·notification 조합과 탭 순서 보존,
-// 그리고 18단계 B-7 의 렌더 판정(tabStripPlan)·pane 배지 판정(paneUnread).
-
 import { describe, expect, it } from "vitest";
 
 import { paneUnread, sameTabButton, tabStripModel, tabStripPlan } from "./tab-strip-model";
@@ -64,7 +61,7 @@ describe("tabStripModel", () => {
         terminalTab(10, { status: { type: "running" } }),
         terminalTab(11, { status: { type: "exited", code: 0 } }),
         terminalTab(12, { status: { type: "exited", code: null } }),
-        viewerTab(13), // terminal 이 아니므로 exited 판정 대상이 아니다
+        viewerTab(13),
       ],
       10,
     );
@@ -116,7 +113,6 @@ describe("tabStripModel", () => {
   });
 });
 
-/** 판정 테스트용 버튼 모델 — 기본은 평범한 비활성 탭. */
 function button(tab: number, over: Partial<TabButtonModel> = {}): TabButtonModel {
   return {
     tab,
@@ -168,7 +164,7 @@ describe("tabStripPlan", () => {
   });
 
   it("rebuilds when a tab id is swapped in at the same index", () => {
-    // 길이는 같지만 id 가 다르다 — 키잉 대상이 바뀌었으므로 패치 불가.
+    // 키잉 대상이 바뀌었으므로 패치 불가.
     expect(tabStripPlan([button(10), button(11)], [button(10), button(12)])).toBe("rebuild");
   });
 });

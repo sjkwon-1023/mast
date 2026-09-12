@@ -302,8 +302,7 @@ export class TabView {
     });
   }
 
-  /** 버퍼의 마지막 줄들을 텍스트로 옮긴다. 맨 아래를 보고 있었으면 따라 내려간다 —
-   *  위로 올려 읽는 중이면 자리를 지킨다. */
+  /** 맨 아래를 보고 있었으면 따라 내려간다 — 위로 올려 읽는 중이면 자리를 지킨다. */
   private render(term: Terminal): void {
     const buffer = term.buffer.active;
     const [start, end] = tailRange(buffer.length, MAX_SCREEN_LINES);
@@ -390,9 +389,8 @@ export class TabView {
     this.textEl.value = "";
   }
 
-  /** 액션을 인코딩해 큐에 넣고, 넣은 항목을 돌려준다 (입력 컨트롤이 아직
-   *  비활성이면 빈 배열). 두 번째 이후 항목의 지연이 CR 을 텍스트에서 떼어
-   *  놓는 간격이다. */
+  /** 입력 컨트롤이 아직 비활성이면 빈 배열. 두 번째 이후 항목의 지연이 CR 을
+   *  텍스트에서 떼어 놓는 간격이다. */
   private enqueue(actions: InputAction[]): InputItem[] {
     if (!this.inputReady) return [];
     const modes = this.modes();
@@ -410,8 +408,8 @@ export class TabView {
     await postInput(this.options.tab, session, data);
   }
 
-  /** 들고 있던 인스턴스를 버리고 처음부터 다시 받는다. 이미 아무것도 없으면
-   *  건드리지 않는다 — 실패가 2초마다 반복되는 동안 세대만 계속 올리게 된다. */
+  /** 이미 아무것도 없으면 건드리지 않는다 — 실패가 2초마다 반복되는 동안
+   *  세대만 계속 올리게 된다. */
   private resetToFull(): void {
     if (this.term === null) return;
     this.destroyTerminal();

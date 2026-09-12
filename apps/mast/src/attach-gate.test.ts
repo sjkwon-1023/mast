@@ -1,5 +1,4 @@
-// AttachGate 검증 — 스냅샷 전 큐잉, 경계 offset dedup, 폐기분 포함 전량 ack
-// (코어 session.rs reattach rustdoc 의 호출자 계약을 프론트 쪽에서 잠근다).
+// 코어 session.rs reattach rustdoc 의 호출자 계약을 프론트 쪽에서 잠근다.
 
 import { describe, expect, it } from "vitest";
 
@@ -23,8 +22,8 @@ describe("AttachGate", () => {
 
   it("judges queued chunks at snapshot time: overlap discarded, rest delivered", () => {
     const gate = new AttachGate();
-    gate.push(frame(0, 10)); // 스냅샷 구간과 전체 겹침 → 폐기
-    const tail = frame(20, 7); // 스냅샷 이후 출력 → 전달
+    gate.push(frame(0, 10));
+    const tail = frame(20, 7);
     gate.push(tail);
     const result = gate.onSnapshot(20);
     expect(result.deliver).toEqual([tail.bytes]);

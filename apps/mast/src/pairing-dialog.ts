@@ -6,7 +6,6 @@
 //
 // QR 인코더(`uqr`)는 **dynamic import 로만** 들여온다 — 정적으로 import 하면
 // 앱을 켤 때마다 아무도 안 쓰는 인코더 바이트를 엔트리 청크로 지고 부팅한다.
-// 빌드 산출물에서 별도 청크로 갈라졌는지가 D 청크의 검증 항목이다.
 //
 // 네이티브 `<dialog>` 를 쓰는 이유는 모달 처리(포커스 트랩·Esc 닫기·백드롭)를
 // 브라우저가 이미 하기 때문이다.
@@ -15,7 +14,6 @@ import { remoteFirewallAllow, remoteFirewallStatus, remotePairing } from "./back
 import type { AllowOutcome, FirewallStatus } from "./backend";
 import { formatCommandError } from "./command-error";
 
-/** 다이얼로그가 보여 줄 세 가지 결말. */
 export type PairingResult =
   | { state: "on"; url: string }
   | { state: "off" }
@@ -24,7 +22,6 @@ export type PairingResult =
 /** 설정에 `remote` 키가 없을 때의 안내 (사용자 노출 문자열이라 영어). */
 export const REMOTE_OFF_MESSAGE = 'Remote access is off — set "remote" in settings.json';
 
-/** 결말 → 다이얼로그 본문 한 줄. 켜져 있으면 URL 자체가 본문이다. */
 export function pairingMessage(result: PairingResult): string {
   switch (result.state) {
     case "on":
@@ -36,8 +33,8 @@ export function pairingMessage(result: PairingResult): string {
   }
 }
 
-/** 커맨드 호출 → 결말. reject 는 백엔드가 만든 사유 문자열이라 그대로 쓰고,
- *  문자열이 아닌 것만 공통 포맷터에 넘긴다. */
+/** reject 는 백엔드가 만든 사유 문자열이라 그대로 쓰고, 문자열이 아닌 것만
+ *  공통 포맷터에 넘긴다. */
 export async function resolvePairing(): Promise<PairingResult> {
   try {
     const pairing = await remotePairing();
@@ -48,9 +45,9 @@ export async function resolvePairing(): Promise<PairingResult> {
   }
 }
 
-/** 방화벽 상태 → 상태줄 한 줄. currentProfiles 덮어쓰기는 allowed/firewallOff/blocked
- *  에는 적용하지 않는다 — 앞의 둘은 프로필과 무관하고, blocked 는 차단 규칙 이름이
- *  이 상태가 존재하는 이유라 Public 안내에 묻히면 안 된다. */
+/** currentProfiles 덮어쓰기는 allowed/firewallOff/blocked 에는 적용하지 않는다 —
+ *  앞의 둘은 프로필과 무관하고, blocked 는 차단 규칙 이름이 이 상태가 존재하는
+ *  이유라 Public 안내에 묻히면 안 된다. */
 export function firewallMessage(status: FirewallStatus): string {
   const { state, port, currentProfiles } = status;
   const detail = status.detail ?? "?";
@@ -87,9 +84,9 @@ export function firewallMessage(status: FirewallStatus): string {
   }
 }
 
-/** Allow 버튼을 보여줄지. unknown 은 프로필 검사 없이 항상 보여준다 — 판정
- *  자체가 실패했으니 시도해 보게 둔다(적용 스크립트는 domain,private 로 고정돼
- *  있어 Public 가드 없이도 안전하다). */
+/** unknown 은 프로필 검사 없이 항상 보여준다 — 판정 자체가 실패했으니 시도해
+ *  보게 둔다(적용 스크립트는 domain,private 로 고정돼 있어 Public 가드 없이도
+ *  안전하다). */
 export function firewallActionable(status: FirewallStatus): boolean {
   switch (status.state) {
     case "unknown":
@@ -105,7 +102,6 @@ export function firewallActionable(status: FirewallStatus): boolean {
   }
 }
 
-/** 적용 시도 결과 → 상태줄 한 줄. */
 export function allowOutcomeMessage(outcome: AllowOutcome): string {
   switch (outcome.outcome) {
     case "declined":
@@ -118,7 +114,7 @@ export function allowOutcomeMessage(outcome: AllowOutcome): string {
   }
 }
 
-/** 열려 있는 다이얼로그 — 버튼 연타로 두 장이 겹치지 않게 한다. */
+/** 버튼 연타로 다이얼로그가 두 장 겹치지 않게 한다. */
 let openDialog: HTMLDialogElement | null = null;
 
 export function openPairingDialog(): void {
@@ -169,15 +165,13 @@ export function openPairingDialog(): void {
   })();
 }
 
-/** reject 값 → 상태줄 문구. resolvePairing 과 같은 규칙 — 문자열이면 그대로,
- *  아니면 공통 포맷터로. */
+/** resolvePairing 과 같은 규칙 — 문자열이면 그대로, 아니면 공통 포맷터로. */
 function firewallErrorMessage(error: unknown): string {
   return typeof error === "string" && error !== "" ? error : formatCommandError(error);
 }
 
-/** 방화벽 상태줄·Allow 버튼을 붙이고 배선한다. 페어링이 켜져 있을 때만
- *  호출된다. close 버튼은 이미 append 돼 있으므로 그 앞에 끼워 URL·QR 아래·
- *  Close 위 순서를 만든다. */
+/** 페어링이 켜져 있을 때만 호출된다. close 버튼은 이미 append 돼 있으므로
+ *  그 앞에 끼워 URL·QR 아래·Close 위 순서를 만든다. */
 function installFirewallSection(dialog: HTMLDialogElement, close: HTMLButtonElement): void {
   const line = document.createElement("p");
   line.className = "pairing-firewall";
@@ -225,9 +219,9 @@ function installFirewallSection(dialog: HTMLDialogElement, close: HTMLButtonElem
   })();
 }
 
-/** 모듈 하나의 변 길이가 이보다 작아지지 않게 한다 (카메라가 못 읽는다). */
+/** 모듈 하나의 변이 이보다 작으면 카메라가 못 읽는다. */
 const MIN_MODULE_PX = 3;
-/** QR 을 그릴 목표 크기 (CSS px). */
+/** 단위는 CSS px. */
 const TARGET_PX = 260;
 
 async function drawQr(canvas: HTMLCanvasElement, text: string): Promise<void> {

@@ -16,7 +16,7 @@
 //! 여기서 나오는 모드 이벤트를 **누가 소비하는지**(sink 가 아니라 세션)와 어떤
 //! 모드를 추적할지는 [`crate::session`] 의 정책이다 — 이 모듈은 감지만 한다.
 
-/// 감지된 OSC 이벤트. 문자열은 payload 를 UTF-8 lossy 변환한 결과다.
+/// 문자열은 payload 를 UTF-8 lossy 변환한 결과다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OscEvent {
     /// OSC 0 — 창 제목 설정.
@@ -122,8 +122,8 @@ pub enum OscEvent {
 /// payload 상한 (bytes). 초과하는 시퀀스는 통째로 폐기한다 — 악성/폭주 입력 방어.
 /// 64KiB 인 이유: `mast-send` 의 텍스트 계약이 32KiB(디코드 후)이고 base64
 /// 팽창(4/3) + 헤더를 더하면 payload 가 ~44KiB 까지 자란다 — 4096 이면 문서화된
-/// 상한이 실효 ~3KB 로 무음 축소된다 (리뷰 finding). 버퍼는 세션당 진행 중
-/// 시퀀스 1개뿐이라 메모리 상한은 세션 수 × 64KiB 로 유계다.
+/// 상한이 실효 ~3KB 로 무음 축소된다. 버퍼는 세션당 진행 중 시퀀스 1개뿐이라
+/// 메모리 상한은 세션 수 × 64KiB 로 유계다.
 const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 
 /// CSI 파라미터·중간 바이트 상한. 예산의 단위는 모드 하나당 약 5바이트다
@@ -141,8 +141,8 @@ const CAN: u8 = 0x18;
 /// SUB — CAN과 동일하게 시퀀스를 중단시킨다.
 const SUB: u8 = 0x1a;
 
-/// 스캐너 내부 상태. 상태가 `feed` 호출 사이에 유지되므로 한 시퀀스가
-/// 여러 청크에 걸쳐 나뉘어 와도 인식된다.
+/// 상태가 `feed` 호출 사이에 유지되므로 한 시퀀스가 여러 청크에 걸쳐 나뉘어
+/// 와도 인식된다.
 enum State {
     /// 일반 텍스트 — ESC 를 기다린다.
     Ground,
@@ -156,7 +156,6 @@ enum State {
     CollectEsc,
 }
 
-/// OSC 증분 상태 머신.
 pub struct OscScanner {
     state: State,
     buf: Vec<u8>,
@@ -290,22 +289,18 @@ impl OscScanner {
         events
     }
 
-    /// 새 OSC payload 수집을 시작한다.
     fn begin_collect(&mut self) {
         self.buf.clear();
         self.overflow = false;
         self.state = State::Collect;
     }
 
-    /// 새 CSI 파라미터 수집을 시작한다.
     fn begin_csi(&mut self) {
         self.buf.clear();
         self.overflow = false;
         self.state = State::Csi;
     }
 
-    /// 최종 바이트를 만난 시점의 CSI 처리 — overflow 였으면 폐기, 아니면 분류.
-    ///
     /// 버퍼를 `take` 하지 않고 빌려 쓴 뒤 `clear` 하는 것은 **hot path 라서**다.
     /// 출력의 거의 모든 SGR·커서 이동 CSI 가 이 분기를 지나가므로, `take` 로
     /// 소유권을 넘겼다가 드롭하면 시퀀스마다 malloc/free 가 한 번씩 붙는다.
@@ -324,13 +319,11 @@ impl OscScanner {
         event
     }
 
-    /// 미종결 시퀀스를 버리고 수집 상태를 초기화한다.
     fn discard(&mut self) {
         self.buf.clear();
         self.overflow = false;
     }
 
-    /// 종결자를 만난 시점의 처리 — overflow 였으면 폐기, 아니면 파싱.
     fn finish(&mut self) -> Option<OscEvent> {
         let overflowed = self.overflow;
         let payload = std::mem::take(&mut self.buf);
@@ -377,7 +370,6 @@ fn parse_csi(params: &[u8], final_byte: u8) -> Option<OscEvent> {
                 set: final_byte == b'h',
             })
         }
-        // DECSTR — soft reset.
         b'p' if is_decstr_params(params) => Some(OscEvent::TerminalReset { soft: true }),
         _ => None,
     }
@@ -452,7 +444,6 @@ fn parse_payload(payload: &[u8]) -> Option<OscEvent> {
 mod tests {
     use super::*;
 
-    // 편의 헬퍼 — 한 번에 feed 하고 이벤트만 반환.
     fn scan(bytes: &[u8]) -> Vec<OscEvent> {
         OscScanner::new().feed(bytes)
     }
@@ -475,7 +466,7 @@ mod tests {
 
     #[test]
     fn osc2_title_parsed_as_osc0title() {
-        // OSC 2 는 OSC 0 과 동일하게 Osc0Title 로 파스된다(ConPTY 재인코딩 대비 별칭).
+        // ConPTY 가 제목을 OSC 2 로 재인코딩할 가능성에 대비한 별칭.
         assert_eq!(
             scan(b"\x1b]2;my title\x07"),
             vec![OscEvent::Osc0Title("my title".into())]
@@ -484,7 +475,6 @@ mod tests {
 
     #[test]
     fn osc0_title_still_parsed_after_osc2_alias_added() {
-        // "2" 별칭 추가가 기존 OSC 0 처리에 회귀를 만들지 않는지 확인.
         assert_eq!(
             scan(b"\x1b]0;another title\x1b\\"),
             vec![OscEvent::Osc0Title("another title".into())]
@@ -886,7 +876,6 @@ mod tests {
         );
     }
 
-    // 편의 헬퍼 — DECSET/DECRST 기대값.
     fn dec(modes: &[u16], set: bool) -> OscEvent {
         OscEvent::DecPrivateMode {
             modes: modes.to_vec(),
@@ -979,7 +968,6 @@ mod tests {
         input.push(b'h');
         let mut s = OscScanner::new();
         assert_eq!(s.feed(&input), vec![]);
-        // 폐기 후에도 스캐너는 정상 동작해야 한다.
         assert_eq!(s.feed(b"\x1b[?25l"), vec![dec(&[25], false)]);
     }
 

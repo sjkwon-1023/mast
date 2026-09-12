@@ -13,9 +13,8 @@ use std::time::{Duration, Instant};
 
 /// 실패를 세는 창의 길이이자, 차단이 유지되는 길이.
 const WINDOW: Duration = Duration::from_secs(60);
-/// 창 안에서 허용하는 인증 실패 횟수. 이 수를 **넘는** 실패(11번째)가 차단을 건다.
+/// 이 수를 **넘는** 실패(11번째)가 차단을 건다.
 const MAX_FAILURES: usize = 10;
-/// 기본 항목 상한.
 pub(crate) const DEFAULT_CAP: usize = 256;
 
 struct Entry {
@@ -86,9 +85,9 @@ impl RateLimiter {
         }
     }
 
-    /// 창 안에 남아 있는 실패 횟수. 로그 한 줄이 "이 IP 의 몇 번째 실패인가"를 말할 수
-    /// 있게 하는 값이고, 판정에는 쓰이지 않는다 — 판정은
-    /// [`record_failure`](Self::record_failure) 의 반환이 단독으로 한다.
+    /// 로그 한 줄이 "이 IP 의 몇 번째 실패인가"를 말할 수 있게 하는 값이고, 판정에는
+    /// 쓰이지 않는다 — 판정은 [`record_failure`](Self::record_failure) 의 반환이 단독으로
+    /// 한다.
     pub(crate) fn failures_in_window(&self, ip: IpAddr, now: Instant) -> usize {
         match self.entries.get(&ip) {
             Some(entry) => entry

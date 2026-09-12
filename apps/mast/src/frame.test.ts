@@ -1,10 +1,9 @@
-// frame.ts 파서 검증 — [u64 LE offset][bytes] 프레이밍, MAX_SAFE_INTEGER 가드.
+// [u64 LE offset][bytes] 프레이밍, MAX_SAFE_INTEGER 가드.
 
 import { describe, expect, it } from "vitest";
 
 import { FRAME_HEADER_BYTES, parseAttachBody, parseFrame } from "./frame";
 
-/** offset 헤더 + body 로 프레임 바이트열을 만든다. */
 function buildFrame(offset: bigint, body: number[]): Uint8Array {
   const buf = new Uint8Array(FRAME_HEADER_BYTES + body.length);
   new DataView(buf.buffer).setBigUint64(0, offset, true);

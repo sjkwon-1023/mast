@@ -1,6 +1,3 @@
-// sidebar-model 검증 — 상태 매핑·경로 축약 경계·null 생략·집계 unread,
-// 그리고 렌더 판정(reconcilePlan)의 skip/patch/rebuild 3분기.
-
 import { describe, expect, it } from "vitest";
 
 import {
@@ -113,7 +110,7 @@ describe("sidebarModel", () => {
   it("aggregates unread across every pane and tab of the workspace", () => {
     const models = sidebarModel(
       [
-        // 백그라운드 pane 의 탭 하나만 unread — 상태 중립 알림의 표면화 경로.
+        // 상태 중립 알림의 표면화 경로.
         ws(1, {
           panes: {
             "1": pane(1, [terminalTab(10), terminalTab(11)]),
@@ -162,7 +159,6 @@ describe("abbreviatePath", () => {
   });
 
   it("does not treat a /home-prefixed name as the home dir itself", () => {
-    // /home 바로 아래가 아닌 /homeX, /home 자체는 ~ 치환 대상이 아니다.
     expect(abbreviatePath("/home")).toBe("/home");
     expect(abbreviatePath("/homelab/x")).toBe("/homelab/x");
   });

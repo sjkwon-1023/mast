@@ -39,7 +39,7 @@ export function clearToken(): void {
   }
 }
 
-/** HTTP 상태를 그대로 실은 실패. 폴링 스케줄이 401·429 를 이 값으로 읽는다. */
+/** 폴링 스케줄이 401·429 를 이 값으로 읽는다. */
 export class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -50,7 +50,6 @@ export class HttpError extends Error {
   }
 }
 
-/** 폰이 서버에 보내는 화면 요청의 결과. */
 export interface ScreenReply {
   meta: ScreenMeta;
   bytes: Uint8Array;

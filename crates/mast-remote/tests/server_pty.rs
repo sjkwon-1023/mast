@@ -39,7 +39,7 @@ impl SessionSink for DropSink {
     fn on_exit(&self, _code: Option<u32>) {}
 }
 
-/// 코어 테스트의 `sh_spec` 과 같은 사양으로 실제 셸을 띄우는 호스트.
+/// 사양은 코어 테스트의 `sh_spec` 과 같다.
 struct PtyHost {
     sessions: Arc<SessionManager>,
 }
@@ -219,7 +219,7 @@ fn serve_again(h: &Harness) -> RemoteServer {
     .expect("bind a second server")
 }
 
-/// `GET /screen`. `since` 는 (offset, 세션 토큰) — 둘 다 없으면 첫 요청(reset)이다.
+/// `since` 는 (offset, 세션 토큰) — 둘 다 없으면 첫 요청(reset)이다.
 fn screen(h: &Harness, since: Option<(u64, &str)>) -> Reply {
     screen_on(h.addr(), h.tab, since)
 }
@@ -239,7 +239,6 @@ fn screen_on(addr: SocketAddr, tab: u64, since: Option<(u64, &str)>) -> Reply {
     )
 }
 
-/// `POST /input` — 본문은 그대로, 세션 토큰은 호출자가 준 것.
 fn input(h: &Harness, session: &str, body: &[u8]) -> Reply {
     let mut raw = format!(
         "POST /api/tabs/{}/input?session={session} HTTP/1.1\r\nHost: mast\r\n\
@@ -256,7 +255,6 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-/// 전체 스냅샷에 `needle` 이 나타날 때까지 폴링한다.
 fn wait_for(h: &Harness, needle: &[u8]) -> Reply {
     let deadline = Instant::now() + TIMEOUT;
     loop {
@@ -459,7 +457,6 @@ fn input_truncated_before_content_length_is_400_and_not_written() {
     let mut stream = connect(h.addr());
     stream.write_all(head.as_bytes()).unwrap();
     stream.write_all(b"echo TRUNC").unwrap();
-    // 선언한 40 바이트 중 10 바이트만 보내고 우리 쪽 쓰기를 닫는다.
     stream.shutdown(Shutdown::Write).unwrap();
     let reply = read_reply(&mut stream);
     assert_eq!(reply.status, 400, "{}", reply.text());

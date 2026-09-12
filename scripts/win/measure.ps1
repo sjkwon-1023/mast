@@ -53,10 +53,8 @@ $ErrorActionPreference = "Stop"
 
 function Get-ProcessTreeIds {
     <#
-        루트 프로세스 이름(exe)으로 시작해 Win32_Process 테이블을 한 번 읽고,
-        부모 PID 체인으로 연결된 모든 자손 PID를 반복적으로 수집한다.
-        WebView2는 별도 프로세스 트리(브라우저/렌더러/GPU)로 뜨므로 이렇게 해야
-        전체 비용이 잡힌다.
+        WebView2는 별도 프로세스 트리(브라우저/렌더러/GPU)로 뜨므로 부모 PID 체인을
+        따라 자손까지 모아야 전체 비용이 잡힌다.
     #>
     param([string]$RootName)
 
@@ -74,8 +72,8 @@ function Get-ProcessTreeIds {
         return @()
     }
 
-    # 자손 탐색: 이번 회전에서 새로 추가된 PID가 없을 때까지 반복한다.
-    # (트리 깊이가 얼마든 수렴한다 — WebView2 자손이 몇 단계든 상관없다.)
+    # 새로 추가된 PID가 없을 때까지 돌리므로 트리 깊이가 얼마든 수렴한다 —
+    # WebView2 자손이 몇 단계든 상관없다.
     $changed = $true
     while ($changed) {
         $changed = $false

@@ -1,4 +1,4 @@
-// 순수 레이아웃 계산 모듈 (DOM-free — vitest 대상, 11단계 청크 B).
+// 순수 레이아웃 계산 모듈 (DOM-free — vitest 대상).
 //
 // 방향 규약: SplitDirection 은 pane 이 **나열되는 축**이다 —
 // "horizontal" = 가로 나열(좌|우, CSS flex-direction: row),
@@ -41,12 +41,6 @@ export function structureKey(tree: SplitTree): string {
 /** 포인터 위치 → split ratio (first 비율). 결과는 항상 finite 하고 개구간
  *  (0, 1) 안이다 — 모델 검증(InvalidRatio)을 UI 픽셀 클램프가 분담한다 (D2).
  *
- *  - direction 축의 rect 시작~크기로 비율을 내고,
- *  - 양쪽 pane 이 minPanePx 미만이 되지 않게 [min/span, 1 - min/span] 으로
- *    클램프하되, 그 범위가 개구간을 벗어나면 OPEN_INTERVAL_EPS 로 좁힌다.
- *  - minPanePx 가 rect 절반을 넘어 양쪽 최소를 동시에 만족할 수 없으면 0.5.
- *  - rect 크기가 0 이하이거나 입력이 비유한(NaN 등)이면 0.5 (안전 기본값).
- *
  *  주: 핸들 두께(4px)는 무시하는 근사다 — 프리뷰와 pointerup dispatch 가 같은
  *  값을 쓰므로 일관되고, 오차는 핸들 폭 이내다. */
 export function ratioFromPointer(
@@ -69,8 +63,8 @@ export function ratioFromPointer(
   return Math.min(Math.max(raw, lo), hi);
 }
 
-/** ratio → 양쪽 자식의 flex-grow 쌍. flex-basis 0 과 조합하면 (핸들을 제외한)
- *  가용 공간이 first:second = ratio:(1-ratio) 로 나뉜다. */
+/** flex-basis 0 과 조합하면 (핸들을 제외한) 가용 공간이
+ *  first:second = ratio:(1-ratio) 로 나뉜다. */
 export function flexPair(ratio: number): { first: number; second: number } {
   return { first: ratio, second: 1 - ratio };
 }

@@ -11,8 +11,8 @@
 
 import type { TerminalModes } from "./modes";
 
-/** `screen` 응답 헤더의 파싱 결과. `session` 은 서버가 만든 `<epoch>:<id>` 지만
- *  이쪽은 불투명 문자열로만 다룬다 — 같은지 다른지만 본다. */
+/** `session` 은 서버가 만든 `<epoch>:<id>` 지만 이쪽은 불투명 문자열로만
+ *  다룬다 — 같은지 다른지만 본다. */
 export interface ScreenMeta {
   endOffset: number;
   reset: boolean;
@@ -33,13 +33,11 @@ export interface ViewState {
   phase: ScreenPhase;
   /** 다음 델타 요청에 실을 offset. `full` 단계에서는 의미가 없다. */
   since: number;
-  /** 마지막 응답이 준 세션 토큰. 아직 못 받았으면 null. */
   session: string | null;
   cols: number;
   rows: number;
 }
 
-/** 아무것도 받기 전의 상태. */
 export const INITIAL_VIEW_STATE: ViewState = {
   phase: "full",
   since: 0,
@@ -65,8 +63,8 @@ const HEADER_COLS = "X-Mast-Cols";
 const HEADER_ROWS = "X-Mast-Rows";
 const HEADER_SESSION = "X-Mast-Session";
 
-/** 응답 헤더 → 메타. 하나라도 없거나 모양이 틀리면 null 이다 — 부분적으로 읽어
- *  두면 offset 이나 크기가 기본값으로 조용히 채워져 화면이 어긋난다. */
+/** 하나라도 없거나 모양이 틀리면 null 이다 — 부분적으로 읽어 두면 offset 이나
+ *  크기가 기본값으로 조용히 채워져 화면이 어긋난다. */
 export function parseScreenMeta(headerGet: (name: string) => string | null): ScreenMeta | null {
   const endOffset = parseCount(headerGet(HEADER_END_OFFSET));
   const cols = parseCount(headerGet(HEADER_COLS));
@@ -87,9 +85,7 @@ function parseCount(raw: string | null): number | null {
   return Number.isSafeInteger(n) ? n : null;
 }
 
-/** 이 응답을 이어 붙일 수 없어 인스턴스를 버려야 하는가.
- *
- *  `ready` 단계에서만 의미가 있다. reset 은 서버가 "네 offset 은 이미 replay
+/** `ready` 단계에서만 의미가 있다. reset 은 서버가 "네 offset 은 이미 replay
  *  창 밖이다" 라고 말한 것이고, 크기·세션 변화는 우리가 보고 있던 화면이 더는
  *  같은 화면이 아니라는 뜻이다 (탭 Restart 는 새 PtySession 이다). */
 export function needsRecreate(prev: ViewState, got: ScreenMeta): boolean {
