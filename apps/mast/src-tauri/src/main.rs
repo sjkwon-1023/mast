@@ -36,7 +36,7 @@ mod state;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -199,7 +199,7 @@ fn main() {
                 router,
                 records: Arc::clone(&records),
                 last_audit: Mutex::new(RegistryAudit::default()),
-                exits_in_flight: AtomicUsize::new(0),
+                exits_in_flight: Mutex::new(HashSet::new()),
             });
 
             // Fresh 부팅 dogfood — 직접 상태 조작 없이 커맨드 bus 경유로 초기

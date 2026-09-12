@@ -17,17 +17,22 @@
 //!
 //! exit 은 모델 갱신(③)과 레지스트리 해제(④)를 lock 을 사이에 두고 나눈다
 //! ([`crate::sink`]). 그 창의 세션은 "탭이 참조하지 않는데 레지스트리에 있다" —
-//! 고아의 정의 그대로다. 그래서 검사는 lock 아래에서 `exits_in_flight` 를 **스냅샷
-//! 보다 먼저** 읽고, 0 이 아니면 그 회차의 고아 판정을 통째로 버린다. 순서가
-//! 뒤집히면 방금 ④ 를 끝낸 exit 이 표식을 내린 뒤에 찍힌 낡은 스냅샷을 믿게 된다.
-//! 함수적 피해는 없지만(어차피 죽는 세션이다) 진단이 정상 종료마다 "고아"를 외치면
-//! 이 검사가 존재하는 이유가 사라진다.
+//! 고아의 정의 그대로다. 그래서 검사는 lock 아래에서 `exits_in_flight` 의 **세션 id
+//! 집합**을 스냅샷보다 먼저 읽고, 거기 있는 id 만 그 회차의 고아 후보에서 뺀다.
+//! 순서가 뒤집히면 방금 ④ 를 끝낸 exit 이 표식을 거둔 뒤에 찍힌 낡은 스냅샷을 믿게
+//! 된다. 함수적 피해는 없지만(어차피 죽는 세션이다) 진단이 정상 종료마다 "고아"를
+//! 외치면 이 검사가 존재하는 이유가 사라진다.
+//!
+//! 빼는 것이 **그 id 들뿐**인 것은 판정을 최대한 살리기 위해서다: 회차 전체를 버리면
+//! 셸 하나가 죽는 동안 생긴 진짜 고아가 그 exit 에 가려 보이지 않는다. 표식은 RAII
+//! 가드([`crate::state::ExitInFlight`])가 넣고 뺀다 — 되감기로 빠져나간 exit 하나가
+//! 표식을 남겨 이후의 모든 판정을 조용히 버리게 두지 않는다.
 //!
 //! 검사 결과에 **백엔드 재시작도 webview 리로드도 달지 않는다** (CLAUDE.md 비목표):
 //! 반응은 이 두 가지와 로그 한 줄이 전부다. 주기 타이머도 없다 — 호출 지점은
 //! exit, Close* 성공, 부팅 웨이브 끝, 진단 커맨드 네 곳이다.
 
-use std::sync::atomic::Ordering;
+use std::sync::PoisonError;
 
 use tauri::AppHandle;
 use mast_core::command::{audit_registries, RegistryAudit, SessionEvent};
@@ -60,7 +65,11 @@ pub fn audit_once(app: &AppHandle, state: &AppState, context: &str) -> RegistryA
     let audit = {
         let mut dispatcher = state.dispatcher.lock().unwrap();
         // 표식 → 스냅샷 순서가 계약이다 (모듈 doc).
-        let exiting = state.exits_in_flight.load(Ordering::SeqCst) > 0;
+        let exiting = state
+            .exits_in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         // 두 스냅샷은 이 lock 아래에서 뜬다 (모듈 doc). 각 `ids()` 는 자기 레지스트리
         // 내부 lock 을 복사 동안만 잡는다.
         let mut audit = audit_registries(
@@ -68,13 +77,16 @@ pub fn audit_once(app: &AppHandle, state: &AppState, context: &str) -> RegistryA
             &state.sessions.ids(),
             &state.sinks.ids(),
         );
-        if exiting && !(audit.orphan_sessions.is_empty() && audit.orphan_sinks.is_empty()) {
-            wintrace!(
-                "audit ({context}): {} orphan candidate(s) dropped — an exit is between its model update and its registry release",
-                audit.orphan_sessions.len().max(audit.orphan_sinks.len())
-            );
-            audit.orphan_sessions.clear();
-            audit.orphan_sinks.clear();
+        if !exiting.is_empty() {
+            let before = audit.orphan_sessions.len() + audit.orphan_sinks.len();
+            audit.orphan_sessions.retain(|id| !exiting.contains(id));
+            audit.orphan_sinks.retain(|id| !exiting.contains(id));
+            let excluded = before - (audit.orphan_sessions.len() + audit.orphan_sinks.len());
+            if excluded > 0 {
+                wintrace!(
+                    "audit ({context}): {excluded} orphan candidate(s) excluded — their exit is between its model update and its registry release"
+                );
+            }
         }
         // 탭이 참조하는 세션이 레지스트리에 없다 — 죽일 대상이 없으므로 탭만 Exited 로
         // 되돌린다. 그러면 `pty_session` 이 비어 배너의 Restart 로 되살릴 수 있다.

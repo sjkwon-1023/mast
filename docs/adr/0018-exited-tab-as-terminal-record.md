@@ -158,12 +158,20 @@ and the diagnostics would otherwise report a number nothing bounds.
 
    **An exit in flight is not an orphan.** Between ③ and ④ of decision 2 a session is exactly
    "registered and referenced by no tab" — the definition of an orphan — so every normal exit
-   would raise one. `AppState.exits_in_flight` is incremented before ③ and decremented after ④,
-   and the audit reads it **under the Dispatcher lock, before taking the snapshot**; a non-zero
-   value discards that round's orphan verdict (dangling repair is unaffected, since it does not
-   depend on the window). Reading it after the snapshot would trust a snapshot taken before an
-   exit that has since lowered the marker. Nothing would be destroyed — the session is dying
+   would raise one. `AppState.exits_in_flight` is the **set of session ids** currently in that
+   window: `on_exit` enters an RAII guard (`ExitInFlight`) before ③ and drops it after ④, and the
+   audit reads the set **under the Dispatcher lock, before taking the snapshot**, then removes
+   exactly those ids from that round's orphan lists (dangling repair is unaffected, since it does
+   not depend on the window). Reading it after the snapshot would trust a snapshot taken before
+   an exit that has since released its marker. Nothing would be destroyed — the session is dying
    anyway — but a check that cries "orphan" on every clean exit is a check nobody will read.
+
+   It is a set of ids and not a counter for two reasons. A counter suppresses the *whole* round's
+   orphan verdict, so a genuine orphan created while any shell happens to be dying is invisible
+   until the next call; and a counter has to be lowered by hand, so a panic between the increment
+   and the decrement leaves it raised forever and every later audit silently drops its verdict.
+   The guard releases on an unwinding panic as well, and only the ids actually in flight are
+   excluded.
 
    It runs at four points and **there is no timer**: the tail of `on_exit`, after a successful
    `CloseTab`/`ClosePane`/`CloseWorkspace` (in `spawn_blocking`, because it waits on the
@@ -256,6 +264,11 @@ and the diagnostics would otherwise report a number nothing bounds.
 - **The phone sees a blank frame, then 409.** Between ① and ③ the replay is empty while the tab
   still reads `Running` with a session id, so a `screen` poll gets a reset with only the
   preamble. The end state is the same 409 as before; only the intermediate frame is new.
+- **The same ①→③ window is visible on the desktop.** An attach that lands there — a workspace
+  switch, F5, the idle webview reload — still sees `Running` with a session id, so it attaches and
+  gets a reattach carrying only the mode preamble: an empty pane. It lasts as long as the record
+  write plus the wait for the Dispatcher lock (the reason `write` does not fsync), and the next
+  render mounts the record view over it.
 - **An attach in flight when the exit lands shows one error frame.** `attach_terminal` can be on
   its way to a session that ④ has just released; the front end reports an unknown-session error
   for that frame and the next render draws the record.
@@ -278,6 +291,12 @@ and the diagnostics would otherwise report a number nothing bounds.
 - **Records are plaintext on disk, unencrypted**, like `state.json` next to them. They are
   deleted by the four rules above, and a force-quit between a close and its delete leaves files
   that only the next boot's sweep collects.
+- **The records directory has no total-size cap.** Each rule in decision 4 bounds one file — one
+  per exited tab, up to the ~1 MiB a record can be — and nothing bounds their sum. A record is
+  kept across relaunches (decision 3), so a workspace-wide shutdown that exits twenty tabs leaves
+  up to tens of megabytes on disk until each one is restarted, closed, or swept by a boot that no
+  longer knows those tabs. A total cap, or an age-based sweep, is the follow-up; the sweep already
+  running at boot is where either would go.
 - **The audit runs at four points, not continuously.** Drift created between them is invisible
   until one of them fires; `get_diagnostics` is the manual door for exactly that reason.
 - **The glue half of all of this cannot be executed by any gate.** `apps/mast/src-tauri` does not

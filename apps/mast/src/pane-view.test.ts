@@ -589,4 +589,15 @@ describe("exitedNoticeText", () => {
   it("pads a single-digit hour and minute", () => {
     expect(exitedNoticeText(0, new Date(2026, 8, 12, 9, 5).getTime())).toContain(" at 09:05 ");
   });
+
+  // 디스크에서 복원된 숫자가 Date 로 읽히지 않을 수 있다 — 그때는 "at NaN:NaN" 대신
+  // 시각 조각을 통째로 뺀다 (없는 조각은 빼는 위 규율 그대로).
+  it("drops the time when it is not a readable date", () => {
+    expect(exitedNoticeText(0, Number.NaN)).toBe(
+      "shell exited (code 0) — Restart opens a new shell here",
+    );
+    expect(exitedNoticeText(0, 8.64e15 + 1)).toBe(
+      "shell exited (code 0) — Restart opens a new shell here",
+    );
+  });
 });

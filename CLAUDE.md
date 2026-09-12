@@ -709,6 +709,11 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   whether killing `wsl.exe` actually reaps the Linux-side relay — the incident's zombies were
   `/init` relays that survived with `PPID=1`, and WINDOWS-BUILD §10 v0.3.9 item 2 measures it.
 
+- **The records directory has no total-size cap** (2026-09-12, not started). ADR-0018 bounds one
+  record (~1 MiB) but not their sum, and a record survives relaunches, so a shutdown that exits
+  twenty tabs can leave tens of megabytes sitting until each tab is restarted, closed or swept.
+  A total cap or an age-based sweep belongs in the boot sweep that already runs.
+
 - **No bulk Restart of exited tabs after a sleep or `wsl --shutdown`** (2026-09-12, not started).
   ADR-0018 keeps `Exited` across a relaunch, so a night's sleep leaves every tab waiting for its
   own banner click; a workspace-level "restart all exited tabs" needs the boot wave's pacing

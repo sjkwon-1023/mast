@@ -18,9 +18,8 @@
 //!   쓰는 것도 여기서 나온다 ([`crate::sink`] 의 `on_exit`) — 프론트가
 //!   `state-changed` 를 보고 기록을 읽으므로 파일이 그때 이미 있어야 한다.
 
-use std::collections::HashMap;
-use std::sync::atomic::AtomicUsize;
-use std::sync::{Arc, Mutex};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use tauri::{AppHandle, Emitter, Manager};
 use mast_core::command::{Dispatcher, RegistryAudit};
@@ -89,12 +88,47 @@ pub struct AppState {
     /// 마지막 정합성 검사 결과 — [`crate::audit::run_audit`] 이 쓰고 진단 커맨드가
     /// 읽는다. 검사 자체가 짧아 결과를 들고 있는 것은 표면을 위한 것이지 캐시가 아니다.
     pub last_audit: Mutex<RegistryAudit>,
-    /// ③(모델 갱신)과 ④(레지스트리 해제) 사이에 있는 exit 의 수 ([`crate::sink`]).
-    /// 그 창 안의 세션은 어떤 탭도 참조하지 않으면서 두 레지스트리에 아직 살아 있어
-    /// 정합성 검사의 고아 정의에 그대로 걸린다 — 셸 열 개가 한꺼번에 죽는
-    /// `wsl --shutdown` 이면 매번 걸린다. 검사는 Dispatcher lock 아래에서 이 값을
-    /// 먼저 읽고, 0 이 아니면 그 회차의 고아 판정을 버린다 ([`crate::audit`]).
-    pub exits_in_flight: AtomicUsize,
+    /// ③(모델 갱신)과 ④(레지스트리 해제) 사이에 있는 exit 들의 **세션 id** 집합
+    /// ([`crate::sink`]). 그 창 안의 세션은 어떤 탭도 참조하지 않으면서 두 레지스트리에
+    /// 아직 살아 있어 정합성 검사의 고아 정의에 그대로 걸린다 — 셸 열 개가 한꺼번에
+    /// 죽는 `wsl --shutdown` 이면 매번 걸린다. 검사는 Dispatcher lock 아래에서 이 집합을
+    /// **스냅샷보다 먼저** 읽고, 여기 있는 id 만 그 회차의 고아 후보에서 뺀다
+    /// ([`crate::audit`]) — 수(count)가 아니라 id 인 것은 진행 중인 exit 하나가 그와
+    /// 무관한 세션의 고아 판정까지 덮지 않게 하기 위함이다.
+    ///
+    /// 넣고 빼는 것은 [`ExitInFlight`] 가이드가 한다 — 손으로 짝을 맞추면 그 사이의
+    /// 패닉 하나가 표식을 영원히 세워 둔 채 되감기고, 그 뒤의 검사는 전부 조용히
+    /// 판정을 버린다.
+    pub exits_in_flight: Mutex<HashSet<SessionId>>,
+}
+
+/// 진행 중인 exit 표식의 RAII 가드 — 살아 있는 동안 그 세션 id 가
+/// [`AppState::exits_in_flight`] 에 들어 있다.
+///
+/// 되감기(panic) 로 빠져나가도 `Drop` 이 id 를 거둔다. 표식을 손으로 내리는 코드였을
+/// 때의 위험은 이것이다: ③④ 사이에서 한 번 패닉하면 그 뒤의 모든 검사가 "exit 진행 중"
+/// 을 보고 고아 판정을 버려, 정합성 검사가 있는데 아무것도 잡지 못하는 상태가 된다.
+pub struct ExitInFlight<'a> {
+    set: &'a Mutex<HashSet<SessionId>>,
+    id: SessionId,
+}
+
+impl<'a> ExitInFlight<'a> {
+    pub fn enter(set: &'a Mutex<HashSet<SessionId>>, id: SessionId) -> Self {
+        set.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id);
+        Self { set, id }
+    }
+}
+
+impl Drop for ExitInFlight<'_> {
+    fn drop(&mut self) {
+        self.set
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.id);
+    }
 }
 
 /// 현재 스냅샷을 `state-changed` 이벤트로 emit 하고 저장을 예약한다 (emit +

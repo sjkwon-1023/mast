@@ -64,8 +64,12 @@ pub struct Diagnostics {
 /// 지금의 수치를 모은다. `audit` 는 호출자가 방금 돌린 결과다 — 여기서 검사를 돌리지
 /// 않는 것은 [`crate::audit::run_audit`] 이 발견 시 이 함수를 부르기 때문이다(재귀 방지).
 ///
-/// Dispatcher lock 은 탭을 세는 동안만, 레지스트리 lock 은 그 안쪽에서 각자 잠깐만
-/// 잡는다.
+/// 잠금은 **겹치지 않는다**: 레지스트리 수치(`sessions.stats()`·`sinks.ids()`)를 먼저
+/// 각자의 lock 아래에서 뜨고, 그 lock 들을 다 놓은 뒤에 Dispatcher lock 을 탭 세는
+/// 동안만 잡는다. 어느 쪽도 다른 쪽 안에서 잡히지 않으므로 정합성 검사의 잠금 순서
+/// (Dispatcher 먼저, [`crate::audit`])와 충돌할 여지가 없다. 두 수치가 같은 순간의
+/// 것이 아니라는 뜻이기도 한데, 진단은 어긋남을 **판정**하는 자리가 아니라 수치를
+/// 보여 주는 자리다 — 판정은 그 검사가 한다.
 pub fn collect(state: &AppState, audit: RegistryAudit) -> Diagnostics {
     let stats = state.sessions.stats();
     let sessions = SessionCounts {

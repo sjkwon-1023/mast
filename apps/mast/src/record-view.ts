@@ -72,8 +72,9 @@ export class RecordView implements ViewerView, TerminalFontTarget {
 
     const { fontSize, fontFamily, theme } = terminalViewOptions();
     this.term = new Terminal({
-      // 스크롤백은 터미널 뷰와 같다 — 기록의 상한이 replay cap(1 MiB)이라 긴
-      // 기록도 이 창 안에서 위로 되감긴다.
+      // 스크롤백은 터미널 뷰와 같다. 1 MiB 기록은 5,000 행을 넘을 수 있어 그런
+      // 기록은 **꼬리만** 되감긴다 — 앞부분은 xterm 이 버린다. 종전의 attach 경로도
+      // 같은 replay 를 같은 스크롤백의 터미널에 흘려보냈으므로 보이는 범위는 그대로다.
       scrollback: 5000,
       // 입력 경로 없음 — 붙어 있는 PTY 가 없으므로 타이핑이 갈 곳이 없다.
       // 선택은 xterm 기본 동작 그대로이고, 복사는 아래에서 따로 배선한다.

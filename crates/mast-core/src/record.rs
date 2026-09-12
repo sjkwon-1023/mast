@@ -48,16 +48,21 @@ impl RecordStore {
         self.dir.join(file_name(tab))
     }
 
-    /// 기록을 원자적으로 쓴다 — tmp 에 쓰고 rename 한다. 중간에 죽어도 반쯤 쓰인
-    /// 파일이 기록 행세를 하지 못한다. rename 전 `sync_all` 은 `persist::save_atomic`
-    /// 과 같은 이유다(이름만 바뀌고 내용이 빈 파일 방지).
+    /// 기록을 tmp 에 쓰고 rename 한다 — 중간에 죽어도 반쯤 쓰인 파일이 기록 행세를
+    /// 하지 못한다.
+    ///
+    /// `state.json` 과 달리 **fsync 하지 않는다.** 기록은 버려도 되는 화면 한 장이고,
+    /// 원자성은 rename 이 이미 준다. 대신 fsync 는 exit 순서의 ①(replay 를 비운 직후)
+    /// 과 ③(모델 갱신) **사이**에 들어앉아, 그 창에 걸린 attach 가 빈 replay 를 받는
+    /// 시간을 디스크 지연만큼 늘린다 (ADR-0018 D2·수용 한계). 대가는 이것뿐이다:
+    /// rename 직후 OS 가 죽으면 잘린 파일이 남을 수 있고, 그것은 읽는 쪽에 "기록된
+    /// 화면이 없다"로 보인다 — 잃는 것이 끝난 셸의 마지막 화면 하나다.
     pub fn write(&self, tab: TabId, bytes: &[u8]) -> io::Result<()> {
         fs::create_dir_all(&self.dir)?;
         let final_path = self.path(tab);
-        let tmp = self.dir.join(format!("{}.tmp", file_name(tab)));
+        let tmp = self.dir.join(tmp_file_name(tab));
         let mut file = fs::File::create(&tmp)?;
         file.write_all(bytes)?;
-        file.sync_all()?;
         drop(file);
         fs::rename(&tmp, &final_path)
     }
@@ -99,8 +104,10 @@ impl RecordStore {
     ///
     /// 파일명이 `tab-<u64>.bin` 으로 파싱되는 항목만 판정 대상이다. 파싱되지 않는
     /// 항목은 우리가 쓴 것이 아니므로 건드리지 않는다 — 사용자가 같은 디렉터리에
-    /// 무언가 두었을 때 앱이 그것을 지우는 일은 없어야 한다. tmp 는 이름과 무관하게
-    /// 지운다(rename 전에 죽은 흔적이라 아무도 참조하지 않는다).
+    /// 무언가 두었을 때 앱이 그것을 지우는 일은 없어야 한다. 남은 tmp 도 같은 규율을
+    /// 따른다: `.tmp` 를 떼고도 `tab-<u64>.bin` 이어야 지운다(우리가 쓰는 tmp 이름이
+    /// 정확히 그것이다). 그쪽만 이름을 안 보면 `foo.tmp` 를 남의 것인 줄 모르고 지운다.
+    /// 우리 tmp 는 rename 전에 죽은 흔적이라 keep 집합과 무관하게 지운다.
     ///
     /// **항목 하나의 실패로 멈추지 않는다.** Windows 에서는 다른 프로세스가 열고
     /// 있는 파일 하나(두 번째 인스턴스, 갓 쓴 파일을 훑는 백신)가 sharing violation
@@ -128,13 +135,13 @@ impl RecordStore {
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            let doomed = if name.ends_with(".tmp") {
-                true
-            } else {
-                match parse_file_name(name) {
+            let doomed = match name.strip_suffix(".tmp") {
+                // 우리 tmp 만 지운다 — 참조하는 탭이 있든 없든 rename 전에 죽은 흔적이다.
+                Some(stem) => parse_file_name(stem).is_some(),
+                None => match parse_file_name(name) {
                     Some(tab) => !keep.contains(&tab),
                     None => false,
-                }
+                },
             };
             if !doomed {
                 continue;
@@ -151,6 +158,12 @@ impl RecordStore {
 
 fn file_name(tab: TabId) -> String {
     format!("tab-{}.bin", tab.0)
+}
+
+/// [`RecordStore::write`] 의 tmp 이름. `sweep` 이 남은 tmp 를 알아보는 근거도 이것이라
+/// 한 곳에서 만든다 — 이름이 갈리면 sweep 이 자기 쓰레기를 못 알아본다.
+fn tmp_file_name(tab: TabId) -> String {
+    format!("{}.tmp", file_name(tab))
 }
 
 /// `tab-<u64>.bin` 만 탭 id 로 읽는다. `u64::from_str` 이 받아 주는 `+7` 같은 형태는
@@ -247,9 +260,10 @@ mod tests {
         store.write(TabId(1), b"keep").unwrap();
         store.write(TabId(2), b"drop").unwrap();
         let dir = store.path(TabId(1)).parent().unwrap().to_path_buf();
-        // rename 전에 죽은 흔적과, 우리가 쓰지 않은 이름 둘.
-        fs::write(dir.join("tab-2.bin.tmp"), b"half").unwrap();
+        // rename 전에 죽은 흔적과, 우리가 쓰지 않은 이름들.
+        fs::write(dir.join("tab-7.bin.tmp"), b"half").unwrap();
         fs::write(dir.join("tab-+3.bin"), b"not ours").unwrap();
+        fs::write(dir.join("foo.tmp"), b"not ours either").unwrap();
         fs::write(dir.join("notes.txt"), b"user file").unwrap();
 
         let keep: HashSet<TabId> = [TabId(1)].into_iter().collect();
@@ -263,12 +277,37 @@ mod tests {
 
         assert!(store.read(TabId(1)).unwrap().is_some());
         assert!(store.read(TabId(2)).unwrap().is_none());
-        assert!(!dir.join("tab-2.bin.tmp").exists());
+        assert!(!dir.join("tab-7.bin.tmp").exists());
         assert!(
             dir.join("tab-+3.bin").exists(),
             "파싱 안 되는 .bin 은 우리 것이 아니다"
         );
+        assert!(
+            dir.join("foo.tmp").exists(),
+            "우리 tmp 이름이 아닌 .tmp 도 우리 것이 아니다"
+        );
         assert!(dir.join("notes.txt").exists());
+    }
+
+    /// 우리 tmp 는 그 탭이 keep 에 있어도 지운다 — rename 전에 죽은 흔적이라
+    /// 아무도 참조하지 않는다.
+    #[test]
+    fn sweep_removes_our_tmp_even_for_a_kept_tab() {
+        let (_dir, store) = store();
+        store.write(TabId(1), b"keep").unwrap();
+        let dir = store.path(TabId(1)).parent().unwrap().to_path_buf();
+        fs::write(dir.join("tab-1.bin.tmp"), b"half").unwrap();
+
+        let keep: HashSet<TabId> = [TabId(1)].into_iter().collect();
+        assert_eq!(
+            store.sweep(&keep).unwrap(),
+            SweepReport {
+                removed: 1,
+                failed: 0
+            }
+        );
+        assert!(store.read(TabId(1)).unwrap().is_some());
+        assert!(!dir.join("tab-1.bin.tmp").exists());
     }
 
     #[test]

@@ -186,16 +186,21 @@ const NOT_STARTED_NOTICE = "The shell has not started. WSL may be slow or unresp
  *  Restart 를 문장에 넣는 이유는 옆 버튼이 "같은 화면을 되살린다"로 읽히기 때문
  *  이다 — 실제로는 새 셸이고, 기록은 그 순간 지워진다 (ADR-0018). */
 export function exitedNoticeText(code: number | null, endedAtMs: number | null): string {
-  const at = endedAtMs === null ? "" : ` at ${localHourMinute(endedAtMs)}`;
+  const at = endedAtMs === null ? null : localHourMinute(endedAtMs);
   const exit = code === null ? "" : ` (code ${code})`;
-  return `shell exited${exit}${at} — Restart opens a new shell here`;
+  return `shell exited${exit}${at === null ? "" : ` at ${at}`} — Restart opens a new shell here`;
 }
 
-/** 로컬 시각 HH:MM — 날짜를 붙이지 않는 것은 배너가 "방금 끝났다"를 말하는 자리라
- *  서다. 앱을 껐다 켠 뒤의 기록도 같은 문구를 쓰지만, 그 경우 날짜까지 필요하면
- *  탭이 아니라 기록 자체를 여는 길이 있어야 한다 (범위 밖). */
-function localHourMinute(ms: number): string {
+/** 로컬 시각 HH:MM, 읽을 수 없는 값이면 null — 날짜를 붙이지 않는 것은 배너가
+ *  "방금 끝났다"를 말하는 자리라서다. 앱을 껐다 켠 뒤의 기록도 같은 문구를 쓰지만,
+ *  그 경우 날짜까지 필요하면 탭이 아니라 기록 자체를 여는 길이 있어야 한다 (범위 밖).
+ *
+ *  null 을 돌려주는 길이 있는 이유: `ended_at_ms` 는 디스크에서 복원된 숫자라
+ *  `Date` 가 Invalid Date 로 읽는 값(범위 밖·NaN)일 수 있고, 그러면 배너에
+ *  `at NaN:NaN` 이 박힌다. 모르는 값은 조각째 빼는 것이 위 규율이다. */
+function localHourMinute(ms: number): string | null {
   const at = new Date(ms);
+  if (!Number.isFinite(at.getTime())) return null;
   const pad = (n: number): string => String(n).padStart(2, "0");
   return `${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }

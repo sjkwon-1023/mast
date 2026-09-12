@@ -916,24 +916,35 @@ impl Dispatcher {
     ///   기본값, 80×24, history_tab = 이 탭의 id — [`Command::CreateTab`] 과 같은
     ///   스폰 경로를 공유한다. 탭에 기록된 cwd 는 바꾸지 않는다 (생성 시점 값
     ///   보존 — 계획 0장 충실도 한계 명시).
-    /// - 성공 시 `pty_session` 에 새 id 를 채우고, **스폰 실패 시 그 탭을
-    ///   `Exited { code: None, ended_at_ms: None }` 으로 강등한다** — dispatch 의
-    ///   "실패 = 상태 불변" 계약과 달리 강등 자체가 설계된 결과 상태다. 성공·강등 어느 쪽이든
-    ///   `revision += 1` 로 스냅샷에 전파된다.
+    /// - 성공 시 `pty_session` 에 새 id 를 채우고, **스폰 실패 시 그 탭을 `Exited` 로
+    ///   강등한다** — dispatch 의 "실패 = 상태 불변" 계약과 달리 강등 자체가 설계된 결과
+    ///   상태다. (c)에서 온 재시도였다면 **원래의 `code`·`ended_at_ms` 를 그대로 둔다**:
+    ///   실패한 재스폰은 기록 파일을 지우지 않으므로(ADR-0018 D4) 화면은 여전히 그
+    ///   셸의 것이고, 배너도 같은 종료를 말해야 한다. (a)·(b)에서 온 강등은 이 탭에서
+    ///   끝난 셸이 없으므로 `code: None, ended_at_ms: None` 이고, 배너가 두 조각을
+    ///   생략한다. 성공·강등 어느 쪽이든 `revision += 1` 로 스냅샷에 전파된다.
     pub fn respawn_tab(&mut self, tab: TabId) -> Result<SessionId, CommandError> {
         let (wi, pane, ti) = self.locate_tab(tab)?;
-        // 적격성 검사 — 통과 못 하면 상태·revision 불변으로 에러.
-        let (tab_cwd, stale) = match &self.state.workspaces[wi].panes[&pane].tabs[ti].kind {
+        // 적격성 검사 — 통과 못 하면 상태·revision 불변으로 에러. 함께 떠 두는
+        // `prior_exit` 은 스폰이 실패했을 때 되돌려 놓을 종료 정보다.
+        let kind = &self.state.workspaces[wi].panes[&pane].tabs[ti].kind;
+        let (tab_cwd, stale, prior_exit) = match kind {
             TabKind::Terminal {
                 pty_session: None,
                 status: TerminalStatus::Running,
                 cwd,
-            } => (cwd.clone(), None),
+            } => (cwd.clone(), None, None),
             TabKind::Terminal {
                 pty_session,
-                status: TerminalStatus::NotStarted | TerminalStatus::Exited { .. },
+                status: status @ (TerminalStatus::NotStarted | TerminalStatus::Exited { .. }),
                 cwd,
-            } => (cwd.clone(), *pty_session),
+            } => {
+                let prior_exit = match status {
+                    TerminalStatus::Exited { code, ended_at_ms } => Some((*code, *ended_at_ms)),
+                    _ => None,
+                };
+                (cwd.clone(), *pty_session, prior_exit)
+            }
             _ => return Err(unknown("respawnable tab", tab.0)),
         };
         // 새 셸을 띄우기 전에 정리한다 — 남겨 두면 이 탭이 놓아 버린 세션이 되고,
@@ -965,13 +976,14 @@ impl Dispatcher {
                 Ok(session)
             }
             Err(err) => {
-                // 스폰 실패 강등. 종료 시각은 없다 — 이 탭에서 끝난 셸이 없기 때문이고,
-                // 배너는 시각 조각을 생략한다.
+                // 스폰 실패 강등. 원래 Exited 였다면 그 종료 정보를 그대로 되돌려 놓는다 —
+                // 실패한 재스폰은 기록 파일을 지우지 않아 화면은 여전히 그 셸의 것이고,
+                // 여기서 code·시각을 지우면 배너만 화면과 다른 이야기를 하게 된다.
+                // NotStarted·세션 없는 Running 에서 온 강등에는 지목할 종료가 없어 둘 다
+                // None 이고, 배너가 그 조각들을 생략한다.
+                let (code, ended_at_ms) = prior_exit.unwrap_or((None, None));
                 *pty_session = None;
-                *status = TerminalStatus::Exited {
-                    code: None,
-                    ended_at_ms: None,
-                };
+                *status = TerminalStatus::Exited { code, ended_at_ms };
                 Err(err)
             }
         };
@@ -4142,6 +4154,34 @@ mod tests {
         );
         // 부팅 열거는 여전히 세션 없는 Running 탭만 — 방금 살아난 탭은 빠진다.
         assert_eq!(d.running_terminal_tabs(), vec![TabId(6)]);
+    }
+
+    /// 실패한 재스폰은 **그 셸의 종료 정보를 지우지 않는다** (ADR-0018). 기록 파일은
+    /// 실패 시 남으므로 pane 에는 여전히 그 셸의 마지막 화면이 서 있고, 배너가 code·시각을
+    /// 잃으면 화면과 다른 이야기를 하게 된다.
+    #[test]
+    fn respawn_failure_keeps_the_exit_an_exited_tab_already_had() {
+        let (mut d, host) = adopted_dispatcher();
+        let s5 = d.respawn_tab(TabId(5)).unwrap();
+        d.apply_event(SessionEvent::SessionExited {
+            session: s5,
+            code: Some(137),
+            ended_at_ms: 1_700_000_000_000,
+        });
+
+        host.set_fail_spawn(true);
+        let err = d.respawn_tab(TabId(5)).unwrap_err();
+        assert!(matches!(err, CommandError::SpawnFailed { .. }), "{err:?}");
+        assert_eq!(
+            terminal_kind(&d, PaneId(2), 0),
+            (
+                None,
+                TerminalStatus::Exited {
+                    code: Some(137),
+                    ended_at_ms: Some(1_700_000_000_000)
+                }
+            )
+        );
     }
 
     /// 실행 중 죽은 탭을 되살리는 경로 (ADR-0010). 정상 경로로 온 Exited 탭은 세션을

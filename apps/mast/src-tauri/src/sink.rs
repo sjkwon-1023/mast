@@ -27,7 +27,7 @@ use mast_core::send::{decode_reply_path, decode_send_text};
 use mast_core::session::{Delivery, SessionId, SessionSink};
 
 use crate::router::{now_ms, OscRouter};
-use crate::state::{publish_state, AppState};
+use crate::state::{publish_state, AppState, ExitInFlight};
 use crate::{winlog, wintrace};
 
 /// 세션 1개 분의 sink. 레지스트리(`SinkRegistry`)와 리더 스레드([`SinkHandle`])가
@@ -211,9 +211,11 @@ impl SessionSink for SinkHandle {
 
         // ③④ 는 밖에서 보면 하나여야 한다: 그 사이의 세션은 탭이 놓았는데 레지스트리에는
         // 남아 있어 동시에 도는 정합성 검사가 고아로 읽는다. 표식은 ③ 의 lock 을 잡기
-        // **전**에 세운다 — 검사는 lock 아래에서 이 값을 먼저 읽으므로(`audit`), 그래야
-        // 검사가 0 을 본 회차에는 ③ 이 아직 일어나지 않았음이 보장된다.
-        state.exits_in_flight.fetch_add(1, Ordering::SeqCst);
+        // **전**에 세운다 — 검사는 lock 아래에서 이 집합을 먼저 읽으므로(`audit`), 그래야
+        // 검사가 이 id 를 못 본 회차에는 ③ 이 아직 일어나지 않았음이 보장된다. 가드로
+        // 드는 것은 되감기 때문이다: ③④ 사이의 패닉이 표식을 남기면 그 뒤의 모든 검사가
+        // 조용히 고아 판정을 버린다.
+        let exiting = ExitInFlight::enter(&state.exits_in_flight, self.0.session);
 
         let mut dispatcher = state.dispatcher.lock().unwrap();
         dispatcher.apply_event(SessionEvent::SessionExited {
@@ -231,7 +233,9 @@ impl SessionSink for SinkHandle {
         // 이미 죽은 자식에 무해하다.
         state.sinks.remove(self.0.session);
         state.sessions.remove(self.0.session);
-        state.exits_in_flight.fetch_sub(1, Ordering::SeqCst);
+        // ④ 의 끝 — 표식은 여기서 내린다. 이 세션은 이제 어느 레지스트리에도 없으므로
+        // 고아 후보로 잡힐 수 없다.
+        drop(exiting);
 
         // ⑤ 이 exit 이 어긋남을 남기지 않았는지 본다 — 검사도 Dispatcher lock 을 잡으므로
         // ④ 뒤, 즉 이 함수가 레지스트리를 다 정리한 뒤여야 방금 놓은 세션이 고아로
