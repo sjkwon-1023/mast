@@ -196,10 +196,12 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   binding at all — so every relaunch produced an empty pane with an `exited` badge and no way
   back. A normal app quit never caused it (nothing kills the PTYs before the exit flush, and
   Tauri leaves via `std::process::exit`); the trigger is a shell dying *while the app is up*:
-  sleep/shutdown, `wsl --shutdown`, WSL OOM, or typing `exit`. Landed: restore normalizes
-  `Exited` → `Running` so a restart revives every tab in its stored `cwd`, `respawn_tab`
-  accepts `Exited` (killing the stale replay session first), and the ADR-0009 pane banner now
-  covers `exited` with a **Restart** button. Revival keeps the tab id, so `HISTFILE` and the
+  sleep/shutdown, `wsl --shutdown`, WSL OOM, or typing `exit`. Landed: `respawn_tab`
+  accepts `Exited` (killing the stale replay session first), the ADR-0009 pane banner now
+  covers `exited` with a **Restart** button, and restore normalized `Exited` → `Running` so a
+  restart revived every tab in its stored `cwd` — that last half was reversed by ADR-0018, which
+  keeps `Exited` across a restart so the record is still there to read (the `NotStarted`
+  normalization below stands). Revival keeps the tab id, so `HISTFILE` and the
   per-tab resume hint come back with it — `↑` gives `claude --resume <id>`. Decisions and the
   rejected alternatives: [ADR-0010](docs/adr/0010-restart-dead-terminal-tabs.md). Verification:
   WINDOWS-BUILD §10 v0.3.9 item 4. **Follow-up the same day** (v0.3.10): the first boot that used
@@ -637,11 +639,12 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 
 #### Logging and diagnostics
 
-- **No backend resource diagnostics for a long-running session** (2026-09-11, not started).
-  When a warning fires there is nothing to capture: backend RSS/private bytes, live and exited
-  session counts, replay bytes, handle and thread counts where available, orphan counts. It
-  must not be paired with an automatic backend restart — that destroys live PTYs and the agents
-  inside them, which the non-goals above rule out.
+- **Backend resource diagnostics — landed 2026-09-12** (v0.3.25). `get_diagnostics` and
+  `window.__mast.diagnostics()` report process private bytes, working set, handle and thread
+  counts, registered/alive sessions, sinks, retained replay bytes, tab counts by status and the
+  last consistency check; one `diag:` line reaches `mast.log` at the end of the boot wave, on an
+  audit finding and when the memory watchdog fires. No timer, and **no automatic backend restart**
+  hangs off any of it. [ADR-0018](docs/adr/0018-exited-tab-as-terminal-record.md) #6.
 
 - **Opt-in runtime log — landed 2026-08-22** (user request, v0.3.12). Until now everything the
   app said at runtime went to `eprintln!` and the release build is
@@ -706,21 +709,10 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   whether killing `wsl.exe` actually reaps the Linux-side relay — the incident's zombies were
   `/init` relays that survived with `PPID=1`, and WINDOWS-BUILD §10 v0.3.9 item 2 measures it.
 
-- **The persistence handoff channel is unbounded** (2026-09-11, not started). A producer burst
-  can queue an arbitrary number of cloned `AppState` snapshots at the saver. Replace or wrap it
-  with a latest-state slot or a bounded channel; the opt-in log's bounded, drop-rather-than-block
-  queue (ADR-0014) is the precedent.
-
-- **Nothing cross-checks the model's session ids against `SessionManager` and `SinkRegistry`**
-  (2026-09-11, not started). Drift between the three is invisible today. Log a mismatch loudly,
-  and auto-clean a session only when it is provably orphaned — ADR-0010 makes an exited tab
-  revivable under the same id, so a missing sink is not by itself proof.
-
-- **An exited tab keeps a live tab's replay budget** (2026-09-11, not started). A finished tab
-  still holds up to 1 MiB of replay although nothing will attach to it again except to read the
-  final screen. Measure whether 128–256 KiB still preserves a useful last screen and transcript
-  before changing the per-session behaviour. Same cap as the *1MiB-replay workspace switch*
-  entry, wanted smaller for a different reason.
+- **No bulk Restart of exited tabs after a sleep or `wsl --shutdown`** (2026-09-12, not started).
+  ADR-0018 keeps `Exited` across a relaunch, so a night's sleep leaves every tab waiting for its
+  own banner click; a workspace-level "restart all exited tabs" needs the boot wave's pacing
+  (ADR-0010 amendment) to avoid the cold-VM race it would otherwise reproduce.
 
 - **No Windows PTY resource soak test** (2026-09-11, not started). Nothing exercises
   create/close/respawn at volume on the platform where the handles actually live. The shape:
@@ -736,6 +728,30 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 
 - **≤100MB RAM** — ~129MB at checkpoint 2 sits inside the 100–150MB adoption band
   (ADR-0001); getting under 100MB is a v2 optimization.
+
+- **The persistence handoff channel is unbounded — landed 2026-09-12** (v0.3.25). `Saver` keeps
+  one pending `Box<AppState>` in a slot each `schedule` replaces, so a publish burst queues at
+  most one snapshot. The debounce deadline is still fixed at the first schedule of a pending run,
+  and a flush is acknowledged only once the slot is empty — `flush()` returning still means every
+  earlier schedule is on disk, which the shutdown order in `main.rs` depends on. ADR-0018 #8.
+
+- **Nothing cross-checked the model's session ids against the registries — landed 2026-09-12**
+  (v0.3.25). `audit_registries` (core, pure) names orphan sessions, orphan sinks and dangling
+  tabs; the glue runs it after an exit, after a successful Close*, at the end of the boot wave and
+  inside `get_diagnostics` — no timer. It takes the **Dispatcher lock first** and snapshots the
+  registries under it, or a session created between two snapshots is misjudged as dangling and its
+  live shell cut; an exit mid-release is excluded by the `exits_in_flight` marker. Orphans are
+  released, a dangling tab is repaired to `Exited`, findings are logged — nothing restarts.
+  ADR-0018 #5.
+
+- **An exited tab kept a live tab's replay budget — landed 2026-09-12** (v0.3.25). An exited tab
+  is now a **record**: the last screen (mode preamble + replay snapshot) is written to
+  `records/tab-<id>.bin` at exit and the `PtySession`, its replay buffer and its sink are all
+  released, so a finished tab holds no session memory at full fidelity — the 128–256 KiB
+  compromise this entry asked for is moot. The file is rendered read-only on the viewer lifecycle,
+  survives a relaunch (`sanitize` keeps `Exited`, partly reversing ADR-0010), and is deleted by a
+  successful Restart, by closing the tab and by a boot sweep.
+  [ADR-0018](docs/adr/0018-exited-tab-as-terminal-record.md).
 
 - **Per-tab shell history GC — landed 2026-08-22 as delete-on-close** (user decision,
   v0.3.11). Closing a tab now deletes its `~/.mast/history/tab-<id>`, its

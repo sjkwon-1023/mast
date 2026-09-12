@@ -90,10 +90,9 @@ history 로 읽으라고 명시하므로 그대로 둔다. `eslint-disable`·`al
 ## 7. 진행 상태
 
 - [x] PR #21 머지, main 갱신, 워크트리 4개 생성
-- [x] PR 1 → #23 (soak 테스트)
-- [x] PR 3 `/review-plan` 확정 (`exited-tab-record-plan.md`)
-- [ ] PR 3 구현 → 게이트 → change-critic → codex 리뷰 → PR
-- [ ] PR 2 조사 → 설계 → 구현 → 게이트 → codex 리뷰 → PR
-- [ ] PR 1 구현 → 2렌즈 리뷰 → 게이트 → PR
-- [ ] PR 4 정리 → 반증 검증 → 게이트 → PR
-- [ ] 이 문서를 ADR 로 증류하고 삭제
+- [x] PR 1 soak 테스트 → #23
+- [x] PR 2 스크롤 복원 → #25 (조사 → 구현 → change-critic → codex 리뷰 4건 반영, 0.3.24)
+- [x] PR 3 exited-tab record + hygiene → #22 (`/review-plan` 확정 → 청크 1a·1b·2·3·4·5·6 → ADR-0018, 0.3.25;
+      확정 실행계획 `exited-tab-record-plan.md` 는 ADR 로 증류되어 삭제됨)
+- [x] PR 4 주석 정리 → #24
+- [ ] 네 PR 머지 후 이 문서 삭제 (각 PR 본문과 ADR-0018·0019 가 기록을 대신한다)

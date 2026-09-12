@@ -4,6 +4,9 @@ Status: accepted (2026-08-20) · Amends [ADR-0004](0004-lifecycle-persistence-re
 decision 3 (state-faithful restore of `Exited` tabs) · Verification: WINDOWS-BUILD §10 v0.3.9
 item 4
 
+**Amended by [ADR-0018](0018-exited-tab-as-terminal-record.md)** (2026-09-12): restore keeps
+`Exited` and reverts only `NotStarted`; the forensics below are left as they were observed.
+
 ## Context
 
 A user reported that every terminal tab came back dead after closing and reopening the app on

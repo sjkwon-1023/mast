@@ -2,6 +2,9 @@
 
 Status: accepted (2026-08-22) · Verification: WINDOWS-BUILD §10 v0.3.11 item 2
 
+**Amended by [ADR-0018](0018-exited-tab-as-terminal-record.md)** (2026-09-12): the same release
+path now also deletes the tab's record file, `records/tab-<id>.bin`.
+
 ## Context
 
 Every mast terminal tab gets private state inside WSL. The spawn wrapper points `HISTFILE` at

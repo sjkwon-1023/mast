@@ -1726,7 +1726,7 @@ dependencies = [
 
 [[package]]
 name = "mast-app"
-version = "0.3.23"
+version = "0.3.25"
 dependencies = [
  "anyhow",
  "mast-core",
