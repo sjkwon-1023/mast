@@ -156,8 +156,21 @@ impl Kind {
 
 enum Ev {
     FirstOutput,
+    /// conhost 의 커서 위치 질의(`ESC[6n`)가 도착했다 — 답해야 자식이 돈다 (아래).
+    CursorQuery,
     Exit,
 }
+
+/// ConPTY 가 세션 첫머리에 보내는 커서 위치 질의(DSR). `portable-pty` 는 모든
+/// 의사 콘솔을 `PSEUDOCONSOLE_INHERIT_CURSOR` 로 열고, 그러면 conhost 는 이 질의에
+/// 대한 응답(CPR, `ESC[<row>;<col>R`)이 올 때까지 **자식 프로세스를 세워 둔다** —
+/// 답이 없으면 `cmd.exe /c exit` 조차 끝나지 않아 `child.wait()` 가 영영 돌아오지
+/// 않는다 (2026-09-12 첫 Windows 실행에서 0번 사이클이 정확히 이렇게 60초에 걸렸다;
+/// 앱은 xterm 이 답해 주므로 같은 문제가 없다 — terminal-view.ts 의 체크포인트 1
+/// "빈 화면, bytes_out=4" 사고와 같은 서명). 그래서 이 sink 는 질의를 보면 알리고,
+/// 사이클 루프가 xterm 대신 답한다.
+const CURSOR_QUERY: &[u8] = b"\x1b[6n";
+const CURSOR_REPLY: &[u8] = b"\x1b[1;1R";
 
 /// 최소 sink. `on_output` 이 `Dropped` 를 돌려주므로 리더가 flow 계정을 스스로
 /// 보상 롤백한다 — ack 하는 소비자가 없어도 paused 로 고착되지 않는다.
@@ -167,9 +180,14 @@ struct SoakSink {
 }
 
 impl SessionSink for SoakSink {
-    fn on_output(&self, _offset: u64, _bytes: &[u8]) -> Delivery {
+    fn on_output(&self, _offset: u64, bytes: &[u8]) -> Delivery {
         if !self.saw_output.swap(true, Ordering::Relaxed) {
             let _ = self.tx.send(Ev::FirstOutput);
+        }
+        // 실측상 질의는 자기 chunk 하나로 온다 (4바이트 첫 read). chunk 경계에 걸치는
+        // 경우는 다루지 않는다 — 그러면 사이클이 EXIT_TIMEOUT 에 걸려 실패로 드러난다.
+        if bytes.windows(CURSOR_QUERY.len()).any(|w| w == CURSOR_QUERY) {
+            let _ = self.tx.send(Ev::CursorQuery);
         }
         Delivery::Dropped
     }
@@ -217,21 +235,47 @@ fn run_cycle(cfg: &Config, kind: Kind, cycle: u32) {
         Kind::KillAfterOutput => {
             // 첫 출력이 오기 전에 프로세스가 끝나 버릴 수도 있다 — 그 경우 여기서
             // 받는 것은 Exit 이고, 아래 wait_exit 를 건너뛰어야 영영 기다리지 않는다.
-            if let Ok(Ev::Exit) = rx.recv_timeout(FIRST_OUTPUT_WAIT) {
-                exited = true;
+            // 질의는 첫 출력 그 자체이므로 여기서도 답한다.
+            let deadline = Instant::now() + FIRST_OUTPUT_WAIT;
+            loop {
+                let left = deadline.saturating_duration_since(Instant::now());
+                match rx.recv_timeout(left) {
+                    Ok(Ev::CursorQuery) => {
+                        answer_cursor_query(&session);
+                        continue;
+                    }
+                    Ok(Ev::Exit) => exited = true,
+                    Ok(Ev::FirstOutput) => {
+                        // 첫 출력이 곧 질의다 — 같은 chunk 의 CursorQuery 가 바로 뒤에
+                        // 줄 서 있으므로 kill 전에 꺼내 답한다. 순서를 지키지 않으면
+                        // 답장이 죽은 세션에 가고, 실측상 그것 자체는 무해하지만
+                        // "kill 뒤 질의 응답" 이라는 잡음이 사이클 셋마다 남는다.
+                        while let Ok(Ev::CursorQuery) = rx.try_recv() {
+                            answer_cursor_query(&session);
+                        }
+                    }
+                    Err(_) => {}
+                }
+                break;
             }
             session.kill();
         }
         Kind::KillImmediately => session.kill(),
     }
     if !exited {
-        wait_exit(&rx, cycle);
+        wait_exit(&session, &rx, cycle);
     }
     // 명시적 drop — Drop 이 kill 을 한 번 더 부르고(멱등) master·writer 를 회수한다.
     drop(session);
 }
 
-fn wait_exit(rx: &Receiver<Ev>, cycle: u32) {
+/// conhost 의 커서 위치 질의에 xterm 대신 답한다 (`CURSOR_QUERY` 주석). 쓰기 실패는
+/// 세션이 이미 죽었거나 kill 된 뒤라는 뜻이라 무시한다 — 그 exit 은 곧 채널로 온다.
+fn answer_cursor_query(session: &PtySession) {
+    let _ = session.write(CURSOR_REPLY);
+}
+
+fn wait_exit(session: &PtySession, rx: &Receiver<Ev>, cycle: u32) {
     let deadline = Instant::now() + EXIT_TIMEOUT;
     loop {
         let left = deadline
@@ -245,6 +289,7 @@ fn wait_exit(rx: &Receiver<Ev>, cycle: u32) {
             });
         match rx.recv_timeout(left) {
             Ok(Ev::Exit) => return,
+            Ok(Ev::CursorQuery) => answer_cursor_query(session),
             Ok(Ev::FirstOutput) => {}
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
