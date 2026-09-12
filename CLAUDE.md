@@ -571,6 +571,14 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   files need a lifetime — delete-on-close next to the tab's history files (ADR-0013) is the
   natural rule. Not started.
 
+- **Arrow keys and a refresh button on the phone — landed 2026-09-12** (v0.3.26). The key bar
+  gained ↑/↓/←/→ next to Stop/Esc — `protocol.ts::encodeInput` already encoded both arrow forms
+  (plain and DECCKM) for the desktop, so this only wires up the missing buttons. The new ↻
+  header button is not a page reload: it clears the notice, drops the headless terminal instance
+  and polls immediately without `since` so the reply is a fresh snapshot — the phone's
+  counterpart to the desktop's Ctrl+Shift+R. It stays outside `controls` on purpose, since its
+  whole point is recovering from the black-screen/error state where input is disabled.
+
 - **Remote surface over the LAN — landed 2026-09-05** (user request, v0.3.17). `settings.json`'s
   `"remote": { "port": N }` starts an HTTP server inside the app (off by default — nothing exists
   while off) that a phone on the same Wi-Fi reaches after scanning the sidebar's *Pair phone* QR:
@@ -756,14 +764,17 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   own banner click; a workspace-level "restart all exited tabs" needs the boot wave's pacing
   (ADR-0010 amendment) to avoid the cold-VM race it would otherwise reproduce.
 
-- **Windows PTY resource soak — landed 2026-09-12 (compile-gated only; first Windows run
-  pending)**. `crates/mast-core/tests/soak_windows.rs` (`#[ignore]`, Windows-only) rotates 500–
-  1,000 create / kill / rapid-respawn cycles through `PtySession` and judges that handles,
-  threads, private bytes and the `conhost`/`OpenConsole`/`wsl`/`wslhost`/`wslrelay` counts come
-  back to a settled post-warm-up baseline — process counts with no slack, since a leftover relay
-  is the defect itself. `scripts/win/soak-pty.ps1` runs it and keeps the log and CSV; the rule,
-  the columns and the env knobs are in `docs/WINDOWS-BUILD.md` §13. It was written on the Linux
-  box, so only the Windows-target clippy has seen it — nothing is verified until someone runs it.
+- **Windows PTY resource soak — landed 2026-09-12, first Windows run PASS the same day**.
+  `crates/mast-core/tests/soak_windows.rs` (`#[ignore]`, Windows-only) rotates 500–1,000 create /
+  kill / rapid-respawn cycles through `PtySession` and judges that handles, threads, private
+  bytes and the `conhost`/`OpenConsole`/`wsl`/`wslhost`/`wslrelay` counts come back to a settled
+  post-warm-up baseline — process counts with no slack, since a leftover relay is the defect
+  itself. First run: `cmd` 1,000 cycles and `wsl` 500 cycles both returned every counter to
+  baseline (handles 74 → 74, threads 5 → 5, private +0.4 MB, process counts unchanged) —
+  numbers in `docs/WINDOWS-BUILD.md` §13. The first attempt hung at cycle 0 in both modes and
+  taught something general: conhost holds a ConPTY child until the terminal answers its
+  start-up cursor query (`ESC[6n`), which xterm does for the app and the soak's sink now does
+  itself; `ClosePseudoConsole` was never the blocker. `scripts/win/soak-pty.ps1` runs it.
 
 - **The `portable-pty`/ConPTY shutdown path has never been audited on a supported Windows 11
   build** (2026-09-11, not started). Verify that pseudoconsole, pipe, process and thread handles
@@ -771,7 +782,11 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   unless the soak test above turns up a leak. The soak test is the instrument for it — its three
   cycle patterns are exactly normal exit, explicit kill and rapid respawn, so the audit is
   reading its handle and process columns rather than building a second harness (failed spawn
-  stays uncovered).
+  stays uncovered). Its first run (1,500 cycles, 2026-09-12) returned handles, threads and
+  process counts exactly to baseline, which answers the three covered paths for that build;
+  the probe that diagnosed the run also showed that dropping the PTY writer while the child is
+  alive makes conhost end it with `0xC000013A` (`STATUS_CONTROL_C_EXIT`) — harmless in
+  `session.rs` today, a fabricated exit code if the drop order ever changes.
 
 - **≤100MB RAM** — ~129MB at checkpoint 2 sits inside the 100–150MB adoption band
   (ADR-0001); getting under 100MB is a v2 optimization.

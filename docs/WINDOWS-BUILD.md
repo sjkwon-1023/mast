@@ -2244,11 +2244,12 @@ the diagnostics only exist there. Boot with `"log": true` throughout — `mast.l
 
 ### v0.3.26 — verification
 
-Front-end only: the scrollback-wipe restore (ADR-0019 amendment, items 1–6) and the xterm
-composition patch (ADR-0020, items 7–8). Field-only: the defects are a reprint this dev box has
-never produced and an IME this dev box does not have, and the whole judgment lives in a browser
-xterm. Boot with `"log": true` and keep `mast.log` open — item 5 is what tells a failed restore
-apart from bytes that never arrived. Item 8 turns the log **off** again on purpose.
+Front-end only, three changes: the scrollback-wipe scroll restore (ADR-0019 amendment, items
+1–6), the xterm composition patch (ADR-0020, items 7–8) and the phone's arrow keys and refresh
+button (items 9–13). Field-only throughout: the defects are a reprint this dev box has never
+produced and an IME it does not have, the judgment lives in a browser xterm, and the phone items
+need a phone. Boot with `"log": true` and keep `mast.log` open — item 5 is what tells a failed
+restore apart from bytes that never arrived. Item 8 turns the log **off** again on purpose.
 
 1. **A resize no longer throws a scrolled-up tab to the top.** In a Codex tab, scroll up so
    identifiable lines sit well above the bottom, then resize the mast window a little. The same
@@ -2293,6 +2294,19 @@ apart from bytes that never arrived. Item 8 turns the log **off** again on purpo
    right (they must be right either way); the point is to notice whether the composition log
    lines made the fault easier to hit before the fix, which decides how much to trust that log
    as a reproduction tool in future IME reports. Note the answer in the report.
+
+**The phone's arrow keys and refresh button** (items 9–13).
+
+9. Open a plain bash tab from the phone. `↑` brings the previous command into the prompt, `↓`
+   returns to where you started, and `←`/`→` move the cursor within the line.
+10. Open a Claude Code tab from the phone. `↑` recalls the previous prompt in the composer.
+11. Drive the tab screen into the black/error-notice state (e.g. toggle Wi-Fi off and back on
+   mid-poll, or force a screen render failure). Tap `↻`: the notice clears, the screen is rebuilt
+   from a fresh snapshot, and the composer/key bar become usable again.
+12. With the on-screen keyboard up, tap a key-bar button (`Stop`, `Esc`, or an arrow): the
+   keyboard must stay up — focus must not leave the composer.
+13. On an iPhone with a home indicator, confirm the bottom dock (composer + key bar) sits above
+   it and is not obscured.
 
 ## 11. ARM64 cross-build notes
 
@@ -2461,11 +2475,27 @@ threads and ConPTY helper processes a terminal session owns live on Windows, and
 in the repository exercised them at volume on the platform where they actually exist —
 `crates/mast-core/tests/session_integration.rs` is `#![cfg(unix)]`.
 
-> **Not yet run on Windows.** The test was written on the Linux dev box, where only the
-> compile gates apply (`cargo clippy --target x86_64-pc-windows-msvc` compiles it; the
-> `#[ignore]` keeps it out of the normal `cargo test`). Nobody has executed it yet, so the
-> numbers below describe the rule it applies, not an observed result. The first Windows run
-> is what turns this section into a regression reference.
+> **First Windows run: 2026-09-12, both modes PASS** (Windows 11, `rustc` stable-msvc, run
+> from a `%TEMP%` copy of `main` at 99247e0 plus the fix below). `cmd` mode, 1,000 cycles in
+> 20 s: handles 74 → 74, threads 5 → 5, private bytes 1.34 → 1.65 MB, `conhost` 13 /
+> `OpenConsole` 0 / `wsl` 6 / `wslhost` 5 / `wslrelay` 1 unchanged from baseline to final.
+> `wsl` mode, 500 cycles in 24 s: handles 74 → 74, threads 5 → 5, private 1.34 → 1.74 MB,
+> the same five process counts unchanged. Kernel pool moved by ±5 MB, which is machine noise.
+> Those numbers are the regression reference this section now carries.
+>
+> The very first attempt hung at cycle 0 with "on_exit was not called within 60s" in **both**
+> modes, and the cause is worth knowing beyond this test: `portable-pty` opens every
+> pseudoconsole with `PSEUDOCONSOLE_INHERIT_CURSOR`, so conhost's first output is a cursor
+> position query (`ESC[6n`) and it **holds the child process until a CPR reply arrives** —
+> even `cmd.exe /c exit` never runs to completion, and `child.wait()` never returns. The app
+> is unaffected because xterm answers the query (the checkpoint-1 "blank screen, bytes_out=4"
+> incident in `terminal-view.ts` was this same handshake seen from the other side); the soak
+> has no xterm, so its sink now answers `ESC[1;1R` itself. `ClosePseudoConsole` never blocked
+> in any probe (≤1 ms with a reader mid-`read()` and with none), so the waiter's order in
+> `session.rs` is not implicated. One side finding from the same probe: dropping the PTY
+> **writer** while the child is alive makes conhost end the client with
+> `0xC000013A` (`STATUS_CONTROL_C_EXIT`) — `session.rs` only drops it after the child is dead
+> or being killed, so it is harmless today, but a premature drop would fabricate that code.
 
 ### Running it
 
@@ -2492,6 +2522,10 @@ real `wsl.exe`, so 500 cycles is minutes, not seconds. `-Mode cmd` trades WSL co
 speed and is the right mode when the question is about ConPTY itself.
 
 ### What it measures, and what it does not
+
+The sink answers ConPTY's start-up cursor query (`ESC[6n` → `ESC[1;1R`) on every cycle,
+because conhost holds the child until that reply arrives (see the callout above) — without
+it no `NaturalExit` cycle can ever finish.
 
 Each cycle is one `PtySession` through one of three patterns, rotating: **(A)** a program
 that exits on its own (`wsl.exe --exec /bin/true` / `cmd.exe /c exit`) waited out to

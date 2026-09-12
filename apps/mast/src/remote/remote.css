@@ -66,30 +66,22 @@ body {
   white-space: nowrap;
 }
 
-.bar-zoom {
+/* 헤더 버튼(Back·↻·A−·A+) 공통 크기·테두리·여백. */
+.bar-btn {
   flex: 0 0 auto;
   min-width: var(--touch);
   min-height: var(--touch);
-  color: var(--fg);
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 14px;
-}
-
-.bar-title {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.bar-back {
-  min-height: var(--touch);
-  padding: 0 12px;
+  padding: 0 10px;
   color: var(--fg);
   background: transparent;
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 15px;
+}
+
+.bar-title {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .notice {
@@ -256,12 +248,21 @@ body {
   font-size: 16px;
 }
 
-.composer {
+/* composer 와 키 바를 하나의 dock 으로 묶는다 — 배경·위쪽 경계·홈 인디케이터
+   여백을 각자 지면 사이에 이음매가 생긴다. */
+.dock {
   display: flex;
   flex: 0 0 auto;
+  flex-direction: column;
   gap: 8px;
-  padding: 8px;
+  padding: 8px 8px calc(10px + env(safe-area-inset-bottom));
+  background: var(--bg-raised);
   border-top: 1px solid var(--border);
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
 }
 
 .composer-text {
@@ -292,9 +293,7 @@ body {
 
 .keys {
   display: flex;
-  flex: 0 0 auto;
   gap: 8px;
-  padding: 0 8px 10px;
 }
 
 .key {
@@ -310,6 +309,10 @@ body {
 .key-stop {
   color: var(--danger);
   border-color: var(--danger);
+}
+
+.key-arrow {
+  font-size: 18px;
 }
 
 button:disabled {
