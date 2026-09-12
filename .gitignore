@@ -15,6 +15,9 @@ desktop.ini
 # Logs
 *.log
 
+# PTY soak results (scripts/win/soak-pty.ps1 default -OutDir)
+soak-results/
+
 # Node
 node_modules
 dist/

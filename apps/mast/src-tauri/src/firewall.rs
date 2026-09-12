@@ -27,8 +27,8 @@ use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRule;
 #[cfg(windows)]
 use windows::Win32::System::{Com::IDispatch, Variant::VARIANT};
 
-/// 우리가 만드는 규칙의 이름. 감지(stalePath·중복 제거)와 스크립트가 같은 문자열을
-/// 봐야 하므로 상수 하나로 둔다.
+/// 감지(stalePath·중복 제거)와 스크립트가 같은 문자열을 봐야 하므로 상수 하나로
+/// 둔다.
 const RULE_NAME: &str = "mast remote (LAN)";
 
 /// `NET_FW_IP_PROTOCOL_TCP` / `_ANY` 의 수치. 판정은 COM 없이 도는 순수 함수라
@@ -69,8 +69,8 @@ pub struct AllowOutcome {
     pub status: FirewallStatus,
 }
 
-/// 판정 결과. `FirewallStatus::state` 문자열과 1:1 이고, 값을 들고 있는 갈래의 값이
-/// 그대로 `detail` 이 된다.
+/// `FirewallStatus::state` 문자열과 1:1 이고, 값을 들고 있는 갈래의 값이 그대로
+/// `detail` 이 된다.
 #[derive(Debug, PartialEq, Eq)]
 enum Verdict {
     FirewallOff,
@@ -152,8 +152,6 @@ fn normalize_exe(path: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// 규칙의 `LocalPorts` 가 우리 포트를 덮는가.
-///
 /// `Protocol=Any` 면 포트는 그 규칙의 조건이 아니다 — Windows 의 "이 앱의 통신을
 /// 허용하시겠습니까" 프롬프트가 만드는 규칙이 정확히 그 모양(프로그램만 지정,
 /// 프로토콜 Any, 포트 없음)이라, 이 면제가 없으면 **가장 흔한 정상 허용**이
@@ -181,8 +179,7 @@ fn ports_cover(protocol: i32, local_ports: &str, port: u16) -> bool {
     })
 }
 
-/// 비트마스크를 사람이 읽는 프로필 이름으로. 대화상자가 "지금 이 네트워크"를
-/// 그대로 보여 주는 데 쓴다.
+/// 대화상자가 "지금 이 네트워크"를 그대로 보여 주는 데 쓴다.
 fn profile_names(mask: i32) -> Vec<String> {
     [
         (PROFILE_DOMAIN, "Domain"),
@@ -195,16 +192,12 @@ fn profile_names(mask: i32) -> Vec<String> {
     .collect()
 }
 
-/// 활성 프로필 **전부**에서 방화벽이 꺼져 있는가.
-///
 /// 활성 프로필이 하나도 없으면(네트워크 미연결) 꺼진 것으로 보지 않는다 — 그때는
 /// 포트를 이야기할 무대 자체가 없고, "방화벽이 꺼져 있다"는 안내는 거짓이 된다.
 fn firewall_off(enabled_per_active_profile: &[bool]) -> bool {
     !enabled_per_active_profile.is_empty() && enabled_per_active_profile.iter().all(|on| !on)
 }
 
-/// 규칙의 `RemoteAddresses` 가 폰이 오는 방향(같은 LAN)을 실제로 덮는가.
-///
 /// 인터넷 대역으로 스코프된 Block 은 흔하고 그것까지 `blocked` 로 세면 정상 PC 가
 /// 막혔다고 보고되며, 반대로 특정 IP 로 스코프된 Allow 를 `allowed` 로 세면 폰이
 /// 못 붙는데 버튼이 사라진다. 빈 값과 `*` 는 "모든 주소"다 (포트와 같은 규약).
@@ -213,8 +206,7 @@ fn remote_covers_lan(remote_addresses: &str) -> bool {
     value.is_empty() || value == "*" || value.to_ascii_lowercase().contains("localsubnet")
 }
 
-/// 규칙 목록에서 상태 하나를 고른다. COM 을 타지 않으므로 이 함수가 단위 테스트의
-/// 본체다.
+/// COM 을 타지 않으므로 이 함수가 단위 테스트의 본체다.
 fn judge(target: &Target, rules: &[RuleRecord], all_profiles_off: bool) -> Verdict {
     if all_profiles_off {
         return Verdict::FirewallOff;
@@ -342,8 +334,6 @@ struct Collected {
     firewall_off: bool,
 }
 
-/// 이 스코프 동안 COM 아파트를 보장한다.
-///
 /// `app_identity::ComScope` 와 모양은 같지만 **아파트가 다르다**: 저쪽은 셸
 /// 인터페이스라 STA 를, 여기는 `spawn_blocking` 풀의 아무 스레드에서나 도는
 /// 인프로세스 서버라 MTA 를 요청한다. `RPC_E_CHANGED_MODE` 는 그 스레드가 이미 다른
@@ -416,8 +406,8 @@ impl Drop for VariantSlot {
     }
 }
 
-/// 규칙 하나를 COM 게터로 읽는다. 게터 실패는 그 규칙만 버린다 — 서드파티가 넣은
-/// 규칙 하나가 깨졌다고 전체 판정을 포기할 이유가 없다.
+/// 게터 실패는 그 규칙만 버린다 — 서드파티가 넣은 규칙 하나가 깨졌다고 전체 판정을
+/// 포기할 이유가 없다.
 ///
 /// 이름을 먼저 읽는 것은 비용이 아니라 정확도 때문이다: 우리 이름의 규칙은 꺼져
 /// 있거나 아웃바운드여도 stalePath 판정과 중복 제거(delete)가 봐야 한다. 그 밖의
@@ -459,8 +449,8 @@ fn read_rule(rule: &INetFwRule) -> Option<RuleRecord> {
     })
 }
 
-/// 방화벽 정책 전체를 한 번 읽는다. COM 스코프는 이 함수 안에서 열고 닫는다 —
-/// 승격 실행([`run_elevated_netsh`])은 스코프 밖에서 돈다.
+/// COM 스코프는 이 함수 안에서 열고 닫는다 — 승격 실행([`run_elevated_netsh`])은
+/// 스코프 밖에서 돈다.
 #[cfg(windows)]
 fn read_policy() -> Result<Collected, String> {
     use windows::core::Interface;
@@ -600,8 +590,6 @@ fn system_directory() -> Result<std::path::PathBuf, String> {
         .map_err(|_| "the Windows system directory path is not valid Unicode".to_owned())
 }
 
-/// 승격된 netsh 를 띄우고 끝날 때까지 기다린다.
-///
 /// `cmd.exe` 를 거치지 않고, netsh 는 시스템 디렉터리의 절대 경로로 부른다 (PATH
 /// 탐색 금지 — ADR-0012 와 같은 규율). 그 디렉터리는 `%SystemRoot%` 환경변수가
 /// 아니라 `GetSystemDirectoryW` 에서 얻는다: 환경변수는 같은 사용자 권한의 어떤
@@ -684,7 +672,7 @@ fn run_elevated_netsh(script: &std::path::Path) -> Result<Applied, String> {
     outcome
 }
 
-/// 규칙을 실제로 쓴다. 성공/거절은 `Ok`, 그 밖은 `Err(사유)`.
+/// 성공/거절은 `Ok`, 그 밖은 `Err(사유)`.
 #[cfg(windows)]
 fn apply(port: u16) -> Result<Applied, String> {
     let exe = current_exe_exact()?;

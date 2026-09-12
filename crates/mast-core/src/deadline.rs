@@ -67,7 +67,7 @@ mod tests {
 
     use super::*;
 
-    /// 값 하나를 흉내내는 자원 — 회수되지 않으면 누수다.
+    /// 회수되지 않으면 누수다.
     struct Resource(u32);
 
     #[test]

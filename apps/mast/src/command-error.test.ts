@@ -1,6 +1,3 @@
-// formatCommandError 검증 — 7개 CommandError variant 의 한 줄 요약과 계약 밖
-// payload(문자열·객체·undefined) 폴백.
-
 import { describe, expect, it } from "vitest";
 
 import { formatCommandError } from "./command-error";

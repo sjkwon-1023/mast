@@ -2132,6 +2132,60 @@ is the only place the firewall lines land. Run the PowerShell commands as admini
    failed — `netsh -f`'s behaviour on a failing line and its exit code are undocumented, and
    this is the only place they get answered.
 
+### v0.3.24 — verification
+
+Front-end only ([ADR-0019](adr/0019-restore-terminal-scroll-across-workspace-round-trip.md)).
+Field-only, because the behaviour needs a real agent tab and a real workspace round-trip. Use
+two workspaces throughout and switch with `Ctrl+1`/`Ctrl+2`.
+
+1. **A Codex tab keeps its place, and does not flash the top on the way.** In a Codex tab,
+   scroll the terminal up so the transcript shows something identifiable well above the bottom.
+   Switch to the other workspace, wait a second, switch back: the same lines are on screen, give
+   or take a few (the pane redraws its history on the way back, so the position is restored to
+   within a line or two, not exactly). **Watch the second it takes to settle** — the pane may
+   show the bottom briefly while the history is redrawn, but it must never show the *top* of the
+   transcript and then jump down; that was the defect this release fixes. Repeat two or three
+   more times — it should hold every time, not only the first.
+2. **A plain shell keeps its place too.** In a bash tab run something with a long scrollback
+   (`seq 1 5000`), scroll up to a known number, round-trip the workspace: that number is still
+   on screen.
+3. **A bottom-pinned tab is untouched.** A tab left at the bottom comes back at the bottom, and
+   an alternate-screen tab (Claude Code, or `vim`/`htop`) round-trips exactly as it did in
+   v0.3.23 — nothing about its screen or scroll behaviour changes.
+4. **Typing and the wheel cancel the restore.** Scroll a Codex tab up, switch away, switch back
+   and press a key (or scroll the wheel) immediately on return: the pane stays where your gesture
+   put it and does not jump back up a moment later. The key only counts while **that** pane has
+   focus (ADR-0019 decision 5), so in a split, typing into the other pane must not disturb this
+   one.
+5. **A cancelled restore still follows new output.** This is the defect class that cost two
+   review rounds, so run it twice. Scroll a Codex tab up, switch away, switch back and press
+   **Ctrl alone** (a modifier, so nothing is typed) the instant it returns; then wait for the
+   reprint to finish and let the agent print something new — the pane must scroll with it. A
+   pane that sits still while output arrives below is the frozen state (ADR-0019 decision 2);
+   report the timing of your key press if you see it.
+6. **Leaving again mid-restore keeps the place.** Scroll a Codex tab up, switch away, switch
+   back and — without waiting for the redraw to settle — switch away again immediately, then
+   back a third time: the place is still restored. Losing it on the third visit is the
+   carry-over defect (ADR-0019 decision 3).
+7. **A scrollbar drag cancels it too.** Same setup, but on return grab the pane's scrollbar and
+   drag it instead of using the wheel: the restore is abandoned and the pane stays where you
+   dragged it. This is the one cancel signal whose DOM target is **unverified on WebView2** — the
+   handler only counts a mouse-down inside `.xterm-viewport`, and whether Chromium's overlay-off
+   scrollbar (v0.3.11) delivers the event with that element as the target has not been checked
+   anywhere but by reading the code. If the drag does *not* cancel, say so: the fix is to widen
+   the target test, not to abandon the narrowing (a plain click to focus a pane must keep not
+   cancelling).
+8. **A reload does not keep the place.** Scroll up, press F5: the tab comes back at the bottom.
+   That is the documented boundary (ADR-0019 decision 3), not a defect.
+9. **A closed tab leaves nothing behind.** Scroll a tab up, close it, open a new terminal tab in
+   the same pane: the new tab starts at the bottom.
+10. **Which screen does Codex actually use here?** (Answers the conflict in ADR-0019's Context.)
+   In a live Codex tab, scroll the wheel: if the *terminal's* scrollback moves, Codex is drawing
+   inline on the normal buffer, as it did on the Linux dev box. If the app scrolls its own
+   transcript and the terminal scrollback does not move, Codex is on the alternate screen here
+   and ADR-0016's record is right about this machine. Report which one it is with the build and
+   `codex --version`; the phone's ▲/▼ button rule (ADR-0016) depends on the answer.
+
 ### v0.3.25 — verification
 
 An exited tab is now a record file, not a live session (ADR-0018). The core half is unit-tested;
@@ -2345,3 +2399,152 @@ away from being undone.
      hint one `Up` away.
 
    Only after all of that: delete `%APPDATA%\app.winmux.desktop` and `~/.winmux`.
+
+## 13. PTY resource soak test
+
+`crates/mast-core/tests/soak_windows.rs` creates, kills and respawns a `PtySession`
+hundreds of times and checks that the test process's resources **come back to where they
+started**. It answers the backlog item "No Windows PTY resource soak test": the handles,
+threads and ConPTY helper processes a terminal session owns live on Windows, and nothing
+in the repository exercised them at volume on the platform where they actually exist —
+`crates/mast-core/tests/session_integration.rs` is `#![cfg(unix)]`.
+
+> **Not yet run on Windows.** The test was written on the Linux dev box, where only the
+> compile gates apply (`cargo clippy --target x86_64-pc-windows-msvc` compiles it; the
+> `#[ignore]` keeps it out of the normal `cargo test`). Nobody has executed it yet, so the
+> numbers below describe the rule it applies, not an observed result. The first Windows run
+> is what turns this section into a regression reference.
+
+### Running it
+
+```powershell
+cd <repo>\scripts\win
+.\soak-pty.ps1                                  # 500 WSL cycles, results under <repo>\soak-results
+.\soak-pty.ps1 -Cycles 1000 -Mode cmd           # 1,000 ConPTY-only cycles (no WSL), much faster
+.\soak-pty.ps1 -Cycles 1000 -OutDir C:\temp\soak
+```
+
+The script only moves its three parameters into environment variables, runs the test and
+tees stdout to `soak-<mode>-<timestamp>.log` next to `soak-<mode>-<timestamp>.csv`. The
+equivalent by hand:
+
+```powershell
+$env:MAST_SOAK_CYCLES = "500"
+$env:MAST_SOAK_MODE = "wsl"
+$env:MAST_SOAK_CSV = "C:\temp\soak.csv"
+cargo test -p mast-core --release --test soak_windows -- --ignored --nocapture
+```
+
+Run it on an otherwise quiet machine, and expect it to take a while: a WSL cycle spawns a
+real `wsl.exe`, so 500 cycles is minutes, not seconds. `-Mode cmd` trades WSL coverage for
+speed and is the right mode when the question is about ConPTY itself.
+
+### What it measures, and what it does not
+
+Each cycle is one `PtySession` through one of three patterns, rotating: **(A)** a program
+that exits on its own (`wsl.exe --exec /bin/true` / `cmd.exe /c exit`) waited out to
+`on_exit`; **(B)** a long-lived program (`wsl.exe --exec sleep 5` / `cmd.exe /k`) killed
+after its first output or 200 ms, whichever comes first; **(C)** the same long-lived program
+killed immediately after spawn — the rapid-respawn case. Every cycle waits for `on_exit`
+with a 60 s cap and **fails** rather than hangs if it does not arrive.
+
+The WSL program's 5 s lifetime is deliberately far shorter than the settle cap: a relay that
+`kill()` failed to reap but that would have expired on its own has to be gone well before the
+verdict, or the test cannot tell it apart from a real leak. `cmd.exe /k` needs no such bound —
+it is the ConPTY's direct child, so killing it is the reap.
+
+In scope: `PtySession` only — spawn, the reader and waiter threads, `kill()`, and the PTY
+handles they own. Out of scope: the app's `SessionManager`, `SinkRegistry`, the Tauri glue
+and the WebView. A green soak therefore does not clear the app of leaks; a red one says the
+cause is in the core or in `portable-pty`/ConPTY, which is a much smaller place to look.
+
+The measured counters, all read for the **test process itself** unless stated otherwise:
+
+| Column | Source | Judged |
+|---|---|---|
+| `handles` | `GetProcessHandleCount` | yes |
+| `threads` | Toolhelp `TH32CS_SNAPTHREAD`, filtered to this PID | yes |
+| `private_bytes` | `K32GetProcessMemoryInfo` → `PROCESS_MEMORY_COUNTERS_EX.PrivateUsage` | yes |
+| `working_set_bytes` | the same call's `WorkingSetSize` | no — reported |
+| `conhost`, `openconsole`, `wsl`, `wslhost`, `wslrelay` | Toolhelp `TH32CS_SNAPPROCESS`, image name, case-insensitive, **system-wide** | yes |
+| `kernel_paged_bytes`, `kernel_nonpaged_bytes` | `K32GetPerformanceInfo` `KernelPaged`/`KernelNonpaged` × `PageSize` | no — reported |
+
+The process counts are system-wide because there is no reliable way to attribute a conhost
+to one session after it has been orphaned — which is exactly the failure being hunted. That
+also means another terminal opening during the run moves those columns, which is why the
+rule compares against a baseline rather than expecting a fixed number.
+
+In `wsl` mode the killed program is a Linux `sleep 5`, and killing `wsl.exe` on the Windows
+side is not known to reap the Linux-side relay — that is the open question ADR-0009 left. The
+`wslrelay`/`wslhost` columns are where it would show: those are Windows processes, so a relay
+that survives its `wsl.exe` is counted, while a stranded Linux `sleep` is not (it expires on
+its own after 5 s either way).
+
+Kernel pool is machine-wide and cannot be attributed to this process at all, so it is
+printed and never judged. It is there because a pool that climbs across the run alongside a
+flat private-bytes column is the signature worth chasing by hand.
+
+### Reading the table
+
+Every run prints the full table to stdout — pass, fail, or an abort mid-run (a hung session,
+a spawn failure, a Win32 sampling failure): the measuring phase runs under `catch_unwind`, so
+the table and the CSV are written first and the original panic is re-raised afterwards. The
+same rows go to CSV when `MAST_SOAK_CSV` is set. The `phase` column says what each row is:
+
+- `warmup_settle` — polling after the warm-up cycles, waiting for the counters to stop moving.
+- `baseline` — the last `warmup_settle` row, relabelled. **This is the reference.**
+- `cycle` — one sample every `MAST_SOAK_SAMPLE_EVERY` measured cycles. These show the trend;
+  they are never judged, because a cycle sample is taken mid-flight and is expected to bounce.
+- `final_settle` — the same polling after the last cycle.
+- `final` — the last `final_settle` row, relabelled. **This is what is compared.**
+
+Settling polls every 500 ms. The warm-up settle stops as soon as two consecutive samples agree
+on all judged counters. The final settle needs more than agreement: it stops early only when the
+sample is *also* back inside the pass rule below, because a counter that is elevated and simply
+not moving yet — a helper process that is still on its way out — satisfies "two samples agree"
+just as well as a recovered one, and the process counts have no slack. Either way the poll ends
+at `MAST_SOAK_SETTLE_SECS`, and the last sample is then judged as it stands; a real leak still
+fails there, and a straggler has had the whole window to leave.
+
+The baseline is settled too, not taken the instant warm-up ends. A baseline captured while the
+last warm-up cycle's threads are still winding down is inflated, and an inflated baseline hides
+the leak the test exists to find.
+
+### Pass/fail
+
+Comparing `final` against `baseline`:
+
+- `handles` ≤ baseline + `MAST_SOAK_HANDLE_SLACK` (16)
+- `threads` ≤ baseline + `MAST_SOAK_THREAD_SLACK` (4)
+- `private_bytes` ≤ baseline + `MAST_SOAK_PRIVATE_SLACK_MB` (32) MB
+- each of the five process counts ≤ baseline — **no slack**; a leftover conhost or WSL relay
+  is the defect, not noise
+
+Any violation panics with one sentence per counter naming the baseline, the final value and
+how far it overshot. The point of the slack is that the runtime itself allocates lazily; the
+point of it being small is that a leak of 500 cycles is not 16 handles.
+
+### Tuning
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MAST_SOAK_CYCLES` | 500 | measured cycles after warm-up |
+| `MAST_SOAK_MODE` | `wsl` | `wsl` (real `wsl.exe` path) or `cmd` (ConPTY only) |
+| `MAST_SOAK_WARMUP` | 10 | unmeasured cycles before the baseline is taken |
+| `MAST_SOAK_SAMPLE_EVERY` | 25 | one `cycle` row every N cycles |
+| `MAST_SOAK_SETTLE_SECS` | 30 | cap on each settle poll |
+| `MAST_SOAK_CSV` | unset | CSV path; without it, stdout only |
+| `MAST_SOAK_HANDLE_SLACK` | 16 | handle allowance |
+| `MAST_SOAK_THREAD_SLACK` | 4 | thread allowance |
+| `MAST_SOAK_PRIVATE_SLACK_MB` | 32 | private-bytes allowance, MB |
+
+A malformed value fails the test immediately rather than falling back to the default — a soak
+that quietly ran a different configuration cannot be read afterwards.
+
+`wsl` mode uses the default distro (no `-d`), unlike the app, which honours `MAST_DISTRO`.
+Nothing in the test depends on which distro answers.
+
+This is also the instrument for the open "`portable-pty`/ConPTY shutdown path has never been
+audited" item: run it, then check the handle and process columns against a Process Explorer
+handle listing of the test process for the shutdown paths (normal exit, explicit kill, rapid
+respawn) that the three cycle patterns cover.

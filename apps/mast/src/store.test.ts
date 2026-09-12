@@ -1,11 +1,9 @@
-// store 검증 — revision 가드(순수 함수)와 Store.offer 의 stale 폐기·구독 통지.
-
 import { describe, expect, it } from "vitest";
 
 import { Store, shouldAdopt } from "./store";
 import type { StateSnapshot } from "./types";
 
-/** 최소 스냅샷 픽스처 — 가드는 revision 만 본다. */
+/** 가드는 revision 만 본다. */
 function snap(revision: number): StateSnapshot {
   return {
     revision,
@@ -21,8 +19,8 @@ describe("shouldAdopt", () => {
 
   it("adopts only strictly newer revisions", () => {
     expect(shouldAdopt(5, 6)).toBe(true);
-    expect(shouldAdopt(5, 5)).toBe(false); // 동일 revision 재수신 → 폐기
-    expect(shouldAdopt(5, 4)).toBe(false); // 늦게 도착한 stale → 폐기
+    expect(shouldAdopt(5, 5)).toBe(false);
+    expect(shouldAdopt(5, 4)).toBe(false);
     expect(shouldAdopt(0, 0)).toBe(false);
   });
 });
@@ -42,8 +40,8 @@ describe("Store.offer", () => {
     const seen: number[] = [];
     store.subscribe((s) => seen.push(s.revision));
     store.offer(snap(5));
-    store.offer(snap(4)); // stale — get_state 응답이 이벤트보다 늦은 경우
-    store.offer(snap(5)); // 동일 revision 재수신
+    store.offer(snap(4)); // get_state 응답이 이벤트보다 늦은 경우
+    store.offer(snap(5));
     expect(seen).toEqual([5]);
     expect(store.snapshot?.revision).toBe(5);
   });
@@ -74,6 +72,6 @@ describe("Store.offer", () => {
     unsubscribe();
     store.offer(snap(2));
     expect(seen).toEqual([1]);
-    expect(store.snapshot?.revision).toBe(2); // 스냅샷 자체는 계속 갱신된다
+    expect(store.snapshot?.revision).toBe(2);
   });
 });

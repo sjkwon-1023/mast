@@ -35,7 +35,7 @@ use mast_core::session::SessionId;
 use crate::state::{publish_state, AppState};
 use crate::winlog;
 
-/// 트레일링 flush 창 기본값 — 이 창 안에 도착한 OSC 는 한 배치로 합쳐진다.
+/// 이 창 안에 도착한 OSC 는 한 배치로 합쳐진다.
 const DEFAULT_FLUSH_MS: u64 = 100;
 
 /// `MAST_OSC_FLUSH_MS` → flush 창 (`MAST_RESET_*` knob 과 같은 규율: 미설정은
@@ -66,8 +66,8 @@ fn flush_window_from_env() -> Duration {
     Duration::from_millis(ms)
 }
 
-/// UNIX epoch 기준 현재 시각(ms). 시스템 시계가 epoch 이전이면(설정 이상) 0 —
-/// `last_activity_ms`·`ended_at_ms` 는 표시용 타임스탬프라 여기서 부팅을 막을 이유는 없다.
+/// 시스템 시계가 epoch 이전이면(설정 이상) 0 — `last_activity_ms`·`ended_at_ms` 는 표시용
+/// 타임스탬프라 여기서 부팅을 막을 이유는 없다.
 pub(crate) fn now_ms() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(d) => u64::try_from(d.as_millis()).unwrap_or(u64::MAX),
@@ -75,21 +75,20 @@ pub(crate) fn now_ms() -> u64 {
     }
 }
 
-/// pending 뮤텍스 아래 상태 — 누적 배치 + 종료 신호.
 struct RouterState {
     batch: OscBatch,
     /// [`OscRouter::drop`] 이 세운다 — worker 는 남은 배치를 비우고 종료한다.
     closed: bool,
 }
 
-/// worker 와 핸들이 공유하는 부분. `app` 은 반영 시점에만 쓰인다 (push 는 안 쓴다).
+/// `app` 은 반영 시점에만 쓰인다 (push 는 안 쓴다).
 struct RouterInner {
     app: AppHandle,
     pending: Mutex<RouterState>,
     cond: Condvar,
 }
 
-/// OSC 라우터 핸들. sink(리더 스레드)와 관리 상태가 `Arc` 로 공유한다.
+/// sink(리더 스레드)와 관리 상태가 `Arc` 로 공유한다.
 pub struct OscRouter {
     inner: Arc<RouterInner>,
     /// Drop 에서 join 하기 위해 Option — 꺼내서 join 한다 (Saver 와 같은 규율).
@@ -123,9 +122,8 @@ impl OscRouter {
         }
     }
 
-    /// OSC 이벤트 하나를 배치에 합치고 worker 를 깨운다. **리더 스레드 핫패스** —
-    /// 여기서 하는 일은 pending lock 아래 merge + notify 가 전부다 (모듈 doc 의
-    /// 잠금 규율).
+    /// **리더 스레드 핫패스** — 여기서 하는 일은 pending lock 아래 merge + notify 가
+    /// 전부다 (모듈 doc 의 잠금 규율).
     pub fn push(&self, session: SessionId, event: &OscEvent) {
         let mut state = self.inner.pending.lock().unwrap();
         state.batch.merge(session, event);
@@ -155,8 +153,6 @@ impl Drop for OscRouter {
     }
 }
 
-/// worker 본체 — (1) 배치가 생기거나 닫힐 때까지 잠들고, (2) 트레일링 창만큼 더
-/// 모은 뒤, (3) pending lock 밖에서 반영한다.
 fn worker_loop(inner: &RouterInner, window: Duration) {
     loop {
         let mut state = inner.pending.lock().unwrap();
@@ -184,9 +180,6 @@ fn worker_loop(inner: &RouterInner, window: Duration) {
 
 /// 배치를 Dispatcher 에 반영하고, **바뀐 경우에만** 스냅샷을 발행한다. 빈 배치는
 /// lock 조차 잡지 않는다.
-///
-/// Windows toast 알림(계획 v2 9장)을 붙인다면 이 지점이 자연스러운 훅이다 —
-/// 창당 1회, 이미 unread 판정이 끝난 상태다 (18단계 범위 밖).
 fn apply_batch(inner: &RouterInner, batch: OscBatch) {
     if batch.is_empty() {
         return;

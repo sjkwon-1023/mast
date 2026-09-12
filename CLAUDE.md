@@ -88,12 +88,29 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   `second` (right/bottom), so a root wrap either takes the insertion side as a parameter or
   is right/bottom-only.
 
-- **Codex transcript and scroll position do not survive a workspace round-trip** (2026-09-11,
-  not started). Switching away and back rebuilds the pane's xterm from the replay, so a Codex
-  TUI returns pinned to the bottom. Investigate the reattach path first — the replay followed by
-  the forced `SIGWINCH` resize nudge — rather than reaching for a workspace-wide keep-alive:
-  disposing an inactive workspace's xterm instances is the memory model (ADR-0004), not an
-  oversight, and the principles above rule out keeping renderers alive for visual state.
+- **Codex transcript and scroll position did not survive a workspace round-trip — landed
+  2026-09-12** (v0.3.24). The suspected culprit was innocent: measurement on the user's own
+  `codex-cli 0.153.4` showed its default UI never touches the alternate screen and never enables
+  mouse tracking, so the transcript is plain normal-buffer scrollback and the scroll position is
+  xterm-side state (`viewportY` vs `baseY`) that the replay cannot carry — the nudge is
+  irrelevant to it, and in fact *rebuilds* a Codex tab's scrollback (a resize makes Codex reprint
+  its whole history, ~96 KB / 1,038 lines, which reconstructs 972 lines even from an 8 KiB
+  replay). Fixed front-end only: `WorkspaceView` remembers the bottom-relative offset of a tab it
+  disposes on workspace leave and `TerminalView` re-applies it after the replay, on every parsed
+  chunk while the reprint runs, and once when that output goes quiet — cancelled by a key while
+  that pane has focus, a wheel notch, or a scrollbar drag (a click to focus the pane does not).
+  A position the rebuilt scrollback no longer has is **refused**, not clamped to line 0:
+  `scrollToLine` latches xterm's `isUserScrolling`, so a clamped restore froze the pane at the
+  top of the transcript for good. Releasing that latch is the subtle half — in the *browser*
+  build `scrollToBottom()` goes through `Viewport.scrollLines`, which returns at a zero delta and
+  never reaches the buffer service that clears the flag, so a release asked for at the reprint's
+  `ESC[3J` (`ybase = ydisp = 0`) is a no-op and is deferred to the next chunk; a key cancel
+  releases too, a wheel or scrollbar cancel does not (that scroll is the user's). `@xterm/headless`
+  clears it there, which is why a headless probe passed and a peer review against the real
+  browser build did not. Decisions
+  and the accepted limits (WebView-lifetime memory, heuristic settle window, ~192 KB of replay
+  per round-trip still unaddressed): [ADR-0019](docs/adr/0019-restore-terminal-scroll-across-workspace-round-trip.md).
+  Verification: WINDOWS-BUILD §10 v0.3.24.
 
 - **1MiB-replay workspace switch is ~236ms with visible flicker** (ADR-0004) — candidates:
   smaller replay cap, progressive replay, hide-until-parsed. Since v0.3.15 the replay
@@ -103,10 +120,12 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   and scroll position* item: if a reattach still feels slow once that lands, shrinking the cap
   or replaying progressively is the next lever.
 
-- **Attach-time redraw fires even for a session already attached in this WebView lifetime**
-  (2026-09-11, not started). The redraw/resize side effects exist for the recovery path after a
-  real WebView reset; a session re-shown inside the same lifetime does not need them. Narrow the
-  policy without losing the reset recovery.
+- **Attach-time redraw fires even for a session already attached in this WebView lifetime —
+  closed 2026-09-12** (ADR-0019 decision 6). Narrowing it would drop the resize reprint that
+  rebuilds a Codex tab's scrollback from whatever the replay window happens to hold, which is
+  worth more than the redraw it saves. The remaining open cost is the ~192 KB of replay each
+  round-trip spends on that reprint; the cheaper lever is one resize instead of the current
+  two-step nudge, not skipping it.
 
 - **Korean IME composition can get stuck, and every shortcut dies with it** (user report
   2026-08-22, not fixed). Typing Korean produced a previously typed syllable repeating, no
@@ -719,17 +738,22 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   own banner click; a workspace-level "restart all exited tabs" needs the boot wave's pacing
   (ADR-0010 amendment) to avoid the cold-VM race it would otherwise reproduce.
 
-- **No Windows PTY resource soak test** (2026-09-11, not started). Nothing exercises
-  create/close/respawn at volume on the platform where the handles actually live. The shape:
-  500–1,000 cycles recording process private bytes, handle count, thread count,
-  `conhost`/`OpenConsole` and `wsl.exe` process counts, plus system paged/nonpaged pool where
-  practical. The assertion that matters is that the counts come back near baseline, not that
-  they stay flat within a cycle.
+- **Windows PTY resource soak — landed 2026-09-12 (compile-gated only; first Windows run
+  pending)**. `crates/mast-core/tests/soak_windows.rs` (`#[ignore]`, Windows-only) rotates 500–
+  1,000 create / kill / rapid-respawn cycles through `PtySession` and judges that handles,
+  threads, private bytes and the `conhost`/`OpenConsole`/`wsl`/`wslhost`/`wslrelay` counts come
+  back to a settled post-warm-up baseline — process counts with no slack, since a leftover relay
+  is the defect itself. `scripts/win/soak-pty.ps1` runs it and keeps the log and CSV; the rule,
+  the columns and the env knobs are in `docs/WINDOWS-BUILD.md` §13. It was written on the Linux
+  box, so only the Windows-target clippy has seen it — nothing is verified until someone runs it.
 
 - **The `portable-pty`/ConPTY shutdown path has never been audited on a supported Windows 11
   build** (2026-09-11, not started). Verify that pseudoconsole, pipe, process and thread handles
   are released on normal exit, explicit kill, failed spawn and rapid respawn. Verification work
-  unless the soak test above turns up a leak.
+  unless the soak test above turns up a leak. The soak test is the instrument for it — its three
+  cycle patterns are exactly normal exit, explicit kill and rapid respawn, so the audit is
+  reading its handle and process columns rather than building a second harness (failed spawn
+  stays uncovered).
 
 - **≤100MB RAM** — ~129MB at checkpoint 2 sits inside the 100–150MB adoption band
   (ADR-0001); getting under 100MB is a v2 optimization.

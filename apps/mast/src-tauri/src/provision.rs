@@ -36,7 +36,7 @@ use crate::winlog;
 const SETUP_VERSION: u32 = 11;
 
 /// 프로세스 수명 캐시 — **해석된** distro 이름 기준으로 앱 실행당 1회만 스폰한다.
-/// 기본 distro(None)는 claim 전에 실제 이름으로 해석된다 (보안 리뷰 finding):
+/// 기본 distro(None)는 claim 전에 실제 이름으로 해석된다:
 /// `""` 키를 그대로 쓰면 기본 배포판이 어느 워크스페이스의 named distro 와 같은
 /// 물리 distro 일 때 키가 갈려(`""` vs `"Ubuntu"`) 첫 부팅에서 설치 스크립트 두
 /// 개가 동시에 돌고, settings.json read-modify-write 경합으로 훅이 중복 배선되거나
@@ -90,7 +90,7 @@ pub fn ensure_provisioned(_app: &AppHandle, distro: Option<&str>) {
     });
 }
 
-/// 기본 배포판 이름 해석 — `commands.rs` 의 질의(성공만 OnceLock 캐시)를 공유한다.
+/// `commands.rs` 의 기본 배포판 질의(성공만 OnceLock 캐시)를 공유한다.
 #[cfg(windows)]
 fn default_distro_name() -> Option<String> {
     crate::commands::default_distro().ok()
@@ -102,7 +102,6 @@ fn default_distro_name() -> Option<String> {
     None
 }
 
-/// 설치 스크립트를 `wsl.exe [-d <distro>] -- bash -s` 의 stdin 으로 흘린다.
 #[cfg(windows)]
 fn run(distro: Option<&str>) -> Result<(), String> {
     use std::io::Write;
@@ -165,9 +164,9 @@ fn run(distro: Option<&str>) -> Result<(), String> {
     ))
 }
 
-/// 자식 프로세스 메시지 디코드. **wsl.exe 자신이 내는 오류**(배포판 없음, WSL
-/// 미설치 등)는 UTF-16LE 이고 **설치 스크립트가 내는 메시지**는 UTF-8 이라, NUL
-/// 바이트가 섞여 있으면 전자로 보고 디코드한다. 진단 문자열이라 lossy 로 충분하다
+/// **wsl.exe 자신이 내는 오류**(배포판 없음, WSL 미설치 등)는 UTF-16LE 이고
+/// **설치 스크립트가 내는 메시지**는 UTF-8 이라, NUL 바이트가 섞여 있으면 전자로
+/// 보고 디코드한다. 진단 문자열이라 lossy 로 충분하다
 /// (`commands.rs::decode_utf16le` 와 같은 규율).
 #[cfg(windows)]
 fn decode_message(bytes: &[u8]) -> String {

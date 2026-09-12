@@ -2,9 +2,7 @@
 //
 // 실기 결함의 핵심은 "신호가 아예 오지 않는 것"이라 글루 쪽 판정(0x0 Resized =
 // 최소화)은 Windows 실기 확인 항목이다. 여기서 잠그는 것은 그 신호가 도착한
-// **뒤**의 프론트 계약이다: ① 구독을 한 번만 설치하는가, ② 플래그가 신호대로
-// 움직이는가, ③ 전이일 때만 통지하는가(중복 emit 에 뷰가 두 번 깨지 않는다),
-// ④ 해제 함수가 실제로 구독을 끊는가(뷰 dispose 후 누수 금지).
+// **뒤**의 프론트 계약이다.
 //
 // listen 을 주입해 Tauri IPC 없이 순수하게 돌린다 (DOM 도 쓰지 않는다).
 
@@ -12,7 +10,6 @@ import { describe, expect, it } from "vitest";
 
 import { WindowVisibility } from "./window-visibility";
 
-/** 주입 listen — 설치 횟수를 세고, 등록된 handler 를 emit 으로 직접 발화시킨다. */
 class FakeListen {
   installs = 0;
   unlistens = 0;
@@ -26,7 +23,7 @@ class FakeListen {
     });
   };
 
-  /** 글루 emit 1회. 설치 전이면 결함이므로 조용히 넘기지 않는다. */
+  /** 설치 전이면 결함이므로 조용히 넘기지 않는다. */
   emit(hidden: boolean): void {
     if (this.handler === null) throw new Error("emit before listen was installed");
     this.handler(hidden);
@@ -81,7 +78,7 @@ describe("WindowVisibility", () => {
     vis.subscribe((hidden) => seen.push(hidden));
 
     fake.emit(true);
-    fake.emit(true); // 중복 emit 은 통지하지 않는다 (뷰가 두 번 깨지 않게)
+    fake.emit(true); // 뷰가 두 번 깨지 않게
     fake.emit(false);
     fake.emit(false);
     expect(seen).toEqual([true, false]);

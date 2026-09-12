@@ -1,5 +1,4 @@
-// SendMode 상태 머신의 계약 테스트 (17단계 D4) — arm/resolve/cancel 전이와
-// 프롬프트 문자열. DOM 무의존 (배선·전달 실행은 workspace-view 통합 코드 소관).
+// DOM 무의존 (배선·전달 실행은 workspace-view 통합 코드 소관).
 
 import { describe, expect, it } from "vitest";
 

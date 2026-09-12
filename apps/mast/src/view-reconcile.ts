@@ -94,6 +94,21 @@ export function planViewSync(
   return { dispose, detachSessions, visible };
 }
 
+/** 스냅샷 **전체**(비활성 워크스페이스 포함)의 탭 id 집합.
+ *
+ *  "이 탭이 아직 존재하는가"는 dispose 의 두 원인을 가르는 판정이다 — 워크스페이스
+ *  이탈(탭은 남아 있다)과 탭 닫힘(사라졌다). 뷰어는 스크롤 flush 를 보낼지에,
+ *  터미널은 스크롤 위치를 기억할지에 같은 답을 쓴다 (ADR-0019). */
+export function existingTabIds(snapshot: StateSnapshot): Set<TabId> {
+  const existing = new Set<TabId>();
+  for (const w of snapshot.state.workspaces) {
+    for (const pane of Object.values(w.panes)) {
+      for (const tab of pane.tabs) existing.add(tab.id);
+    }
+  }
+  return existing;
+}
+
 // ── 뷰어 탭 수명 (21단계 청크 C1) ────────────────────────────────────────
 //
 // 터미널의 keep-alive 와 반대다 (계획 v2 "탭 타입별 동작"): 뷰어 뷰는 활성
@@ -170,12 +185,7 @@ export function planViewerSync(
 
   // 탭 실존 판정은 스냅샷 **전체** 스캔이다 — 비활성 워크스페이스로 옮겨간
   // 탭도 "남아 있는" 탭이라 flush 대상이다.
-  const existing = new Set<TabId>();
-  for (const w of state.workspaces) {
-    for (const pane of Object.values(w.panes)) {
-      for (const tab of pane.tabs) existing.add(tab.id);
-    }
-  }
+  const existing = existingTabIds(snapshot);
 
   const dispose: ViewerDispose[] = [];
   for (const tab of alive) {

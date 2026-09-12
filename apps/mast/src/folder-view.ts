@@ -1,10 +1,10 @@
-// folderBrowser 탭의 뷰 (21단계 청크 C1) — fs_list_dir 로 읽은 항목을 dirs-first
-// 로 나열하고, 디렉터리 클릭은 NavigateFolder, 파일 클릭은 뷰어 탭 생성
-// (확장자에 따라 markdownViewer 또는 textViewer — 청크 D)으로 잇는다.
+// folderBrowser 탭의 뷰 — fs_list_dir 로 읽은 항목을 dirs-first 로 나열하고,
+// 디렉터리 클릭은 NavigateFolder, 파일 클릭은 뷰어 탭 생성(확장자에 따라
+// markdownViewer 또는 textViewer)으로 잇는다.
 //
 // 탐색이 뷰 내부 상태가 아니라 **dispatcher 명령**인 것이 이 파일의 핵심 계약이다
-// (계획 v2 4장 + 21단계 계획): 현재 경로는 모델(TabKind::FolderBrowser.path)이
-// 소유하고, 뷰는 스냅샷이 내려준 kind 를 그릴 뿐이다. 그래서 앱을 재시작해도
+// (계획 v2 4장): 현재 경로는 모델(TabKind::FolderBrowser.path)이 소유하고,
+// 뷰는 스냅샷이 내려준 kind 를 그릴 뿐이다. 그래서 앱을 재시작해도
 // 경로가 복원되고(persist), 어떤 탐색이든 revision 을 남긴다. 파일 **내용** 읽기
 // (fs_*)만 attach_terminal 류 콘텐츠 플레인 직접 invoke 다.
 //
@@ -29,8 +29,8 @@ import type { Command, CommandOutput, NewTab, PaneId, TabId } from "./types";
 /** UI 발 dispatch — main.ts dispatchUI 래퍼 (실패는 상태 라인에 표면화되고 null). */
 type DispatchFn = (cmd: Command) => Promise<CommandOutput | null>;
 
-/** 화면에 그릴 행 1개. path 는 그 행이 가리키는 **절대 경로**(부모 행 포함)이고,
- *  parent 는 `..` 행 표시다. */
+/** path 는 그 행이 가리키는 **절대 경로**(부모 행 포함)이고, parent 는 `..` 행
+ *  표시다. */
 export interface FolderRow {
   label: string;
   path: string;
@@ -49,7 +49,6 @@ export function parentPath(path: string): string | null {
   return `/${parts.join("/")}`;
 }
 
-/** 디렉터리 경로 + 항목명 → 자식 절대 경로 (후행 `/` 중복 방지). */
 export function joinPath(dir: string, name: string): string {
   return dir.endsWith("/") ? `${dir}${name}` : `${dir}/${name}`;
 }
@@ -70,7 +69,7 @@ export function sortEntries(entries: readonly DirEntry[]): DirEntry[] {
   });
 }
 
-/** 현재 경로 + 항목 목록 → 행 모델. 루트가 아니면 맨 앞에 `..` 행이 붙는다. */
+/** 루트가 아니면 맨 앞에 `..` 행이 붙는다. */
 export function folderRows(path: string, entries: readonly DirEntry[]): FolderRow[] {
   const rows: FolderRow[] = [];
   const parent = parentPath(path);
@@ -79,7 +78,6 @@ export function folderRows(path: string, entries: readonly DirEntry[]): FolderRo
   }
   for (const entry of sortEntries(entries)) {
     rows.push({
-      // 디렉터리는 이름 뒤에 `/` 를 붙여 한눈에 구분되게 한다.
       label: entry.is_dir ? `${entry.name}/` : entry.name,
       path: joinPath(path, entry.name),
       isDir: entry.is_dir,
@@ -90,7 +88,7 @@ export function folderRows(path: string, entries: readonly DirEntry[]): FolderRo
   return rows;
 }
 
-/** 파일 클릭이 만드는 뷰어 탭 명세 (순수 — 21단계 청크 D).
+/** 파일 클릭이 만드는 뷰어 탭 명세 (순수).
  *
  *  `.md`/`.markdown` 만 markdownViewer 로, 나머지는 전부 textViewer 로 연다.
  *  확장자는 **basename 의 마지막 점 뒤**로 본다: 선두 점은 dotfile 표시이지
@@ -203,7 +201,7 @@ export class FolderView implements ViewerView {
    *  인덱스로 오가므로 둘을 같이 들고 있는다). */
   private rows: FolderRow[] = [];
   private rowEls: HTMLButtonElement[] = [];
-  /** 선택 행 인덱스 — 빈 목록이면 -1. */
+  /** 빈 목록이면 -1. */
   private selected = -1;
 
   constructor(
@@ -230,8 +228,8 @@ export class FolderView implements ViewerView {
     this.listEl = document.createElement("div");
     this.listEl.className = "folder-list";
     // 스크롤 컨테이너 자체를 focus 대상으로 둔다 (text/markdown 뷰어와 같은
-    // 관례) — 여기가 프로그램적 focus 대상(D7 보상 경로)이자 키보드 탐색의
-    // 주인이다. Tab 순서에는 넣지 않는다.
+    // 관례) — 여기가 프로그램적 focus 대상이자 키보드 탐색의 주인이다.
+    // Tab 순서에는 넣지 않는다.
     this.listEl.tabIndex = -1;
 
     // 리스너는 root 에 둔다 — focus 가 리스트에 있든 행 버튼(마우스 클릭 직후)에
@@ -244,8 +242,8 @@ export class FolderView implements ViewerView {
     this.load();
   }
 
-  /** 스냅샷 반영 — 경로가 바뀐 경우(NavigateFolder)만 다시 읽는다. 무변경
-   *  렌더마다 재목록하면 매 revision 이 9P 왕복이 된다. */
+  /** 무변경 렌더마다 재목록하면 매 revision 이 9P 왕복이 되므로, 경로가 바뀐
+   *  경우(NavigateFolder)만 다시 읽는다. */
   update(kind: ViewerKind): void {
     if (kind.type !== "folderBrowser") {
       // 탭의 kind 종류는 생성 후 바뀌지 않는다 — 오면 레지스트리 배선 결함이다.
@@ -321,7 +319,7 @@ export class FolderView implements ViewerView {
     this.rowEls = rows.map((row, index) => this.rowButton(row, index));
     this.selected = -1;
     this.listEl.replaceChildren(...this.rowEls);
-    // 초기 선택은 `..` 를 건너뛴 첫 실제 행이다 (리뷰 finding): `..` 를 집으면
+    // 초기 선택은 `..` 를 건너뛴 첫 실제 행이다: `..` 를 집으면
     // "Enter 로 진입 → 곧바로 Enter" 가 하위 탐색이 아니라 부모로 되튀는 동작이
     // 된다. 실제 행이 없으면(빈 디렉터리) `..` 라도 집는다 — 나갈 길은 남긴다.
     const firstReal = rows.findIndex((row) => !row.parent);
@@ -329,9 +327,8 @@ export class FolderView implements ViewerView {
     if (hadFocus) this.listEl.focus();
   }
 
-  /** 선택 갱신 — 이전/현재 행만 만진다. scroll 이면 선택 행이 보이는 범위 밖으로
-   *  나가지 않을 만큼만 스크롤한다 (block: "nearest" — 목록을 매번 가운데로
-   *  튀게 하지 않는다). */
+  /** scroll 이면 선택 행이 보이는 범위 밖으로 나가지 않을 만큼만 스크롤한다
+   *  (block: "nearest" — 목록을 매번 가운데로 튀게 하지 않는다). */
   private select(index: number, scroll: boolean): void {
     const prev = this.selected;
     if (prev >= 0 && prev < this.rowEls.length) this.rowEls[prev].classList.remove("selected");
@@ -342,10 +339,7 @@ export class FolderView implements ViewerView {
     if (scroll) el.scrollIntoView({ block: "nearest" });
   }
 
-  /** 뷰 내부 keydown (파일 상단 계약) — 전역 가로채기와 층이 다르고, 수식키 없는
-   *  키만 folderKeyAction 이 받는다.
-   *
-   *  preventDefault 는 두 가지를 막는다: 방향키·PageUp/Down 의 컨테이너 기본
+  /** preventDefault 는 두 가지를 막는다: 방향키·PageUp/Down 의 컨테이너 기본
    *  스크롤(선택의 scrollIntoView 와 이중으로 움직인다)과, 행 버튼이 focus 를
    *  쥔 상태(마우스 클릭 직후)에서 Enter 가 네이티브 click 까지 발화시켜 같은
    *  행을 두 번 여는 것. */

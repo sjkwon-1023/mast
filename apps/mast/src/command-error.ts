@@ -1,5 +1,4 @@
-// CommandError(dispatch reject payload) → 상태 라인용 한 줄 영어 요약 (순수,
-// vitest 대상 — 11단계 청크 B).
+// CommandError(dispatch reject payload) → 상태 라인용 한 줄 영어 요약.
 //
 // backend.dispatch 는 실패 시 CommandError 직렬화 객체로 reject 되지만
 // (command.rs CommandError — internal tag "type"), IPC 레벨 실패 등 계약 밖
@@ -7,7 +6,7 @@
 // 삼키지 않고 "Command failed: ..." 로 그대로 노출한다 (가리지 않기).
 //
 // variant 를 하나라도 빠뜨리면 사용자에게 원본 JSON 이 그대로 노출되므로,
-// switch 끝에 assertNever 가드를 둬 표류를 컴파일 타임에 잡는다 (21단계).
+// switch 끝에 assertNever 가드를 둬 표류를 컴파일 타임에 잡는다.
 
 import type { CommandError } from "./types";
 
@@ -26,9 +25,8 @@ function isCommandError(e: unknown): e is CommandError {
   );
 }
 
-/** 계약 밖 payload 의 표시 문자열 — 문자열은 그대로, 객체는 JSON, 그 외/실패는
- *  String() 폴백. (JSON.stringify 는 undefined·symbol 에서 undefined 를 주고
- *  순환 참조에서 throw 하므로 둘 다 폴백 처리한다.) */
+/** JSON.stringify 는 undefined·symbol 에서 undefined 를 주고 순환 참조에서
+ *  throw 하므로 둘 다 String() 으로 폴백한다. */
 function describeUnknown(e: unknown): string {
   if (typeof e === "string") return e;
   try {
@@ -46,7 +44,6 @@ function assertNever(value: never): string {
   return `Command failed: ${describeUnknown(value)}`;
 }
 
-/** dispatch 실패 payload 의 한 줄 요약 (영어 UI 텍스트 — 상태 라인 표시용). */
 export function formatCommandError(e: unknown): string {
   if (isCommandError(e)) {
     switch (e.type) {

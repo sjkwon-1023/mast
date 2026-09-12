@@ -19,6 +19,19 @@
 //   4) 직후 resize nudge — 항상 rows-1 → rows 2단 호출로 SIGWINCH 를 강제한다
 //      (10단계 계획 0-2). 프론트는 PTY 현재 크기를 모르고, 특히 F5 리로드에서는
 //      실측 == PTY 현재 크기라 동일 크기 재설정이 no-op 이 되기 때문이다.
+//      이 nudge 는 재그리기만 시키는 것이 아니라 **스크롤백을 복구**하기도 한다 —
+//      Codex 는 resize 마다 자기 히스토리를 통째로 다시 인쇄하므로(실측 약 96 KB·
+//      1,038줄) replay 창이 잘라낸 스크롤백이 되살아난다 (ADR-0019).
+//
+// 스크롤 위치 복원 (ADR-0019): 워크스페이스를 떠날 때 뷰가 dispose 되는데(ADR-0004
+// 메모리 모델), 스크롤 위치는 xterm 쪽 상태(viewportY 대 baseY)라 replay 바이트에
+// 실리지 않는다. workspace-view 가 dispose 직전 값을 탭별로 기억했다가 다음 생성
+// 때 restoreScrollOffset 으로 넘기고, 여기서 되돌린다 — replay 재생 직후 한 번,
+// 그 뒤 **파싱되는 chunk 마다**, 그리고 재인쇄가 잠잠해진 시점에 한 번 더. 한 번
+// 으로 끝나지 않는 이유는 위 nudge 가 유발한 재인쇄가 ESC[3J 로 스크롤백을 지웠다
+// 다시 쌓기 때문이다(그래서 중간에는 기억한 자리가 아직 없다). 그 사이 사용자가
+// 키(이 pane 이 포커스일 때)·휠·스크롤바 드래그로 개입하면 복원을 버린다 —
+// 사용자 의도가 앱의 되돌리기보다 우선이다.
 //
 // 복사/붙여넣기 키 처리는 spike terminal-tile.ts 에서 그대로 가져왔다 (Windows
 // Terminal 컨벤션 — 이미 Windows 검증 완료된 코드):
@@ -276,6 +289,102 @@ export async function copyTerminalSelection(term: Terminal): Promise<void> {
   }
 }
 
+// 스크롤 위치 복원의 순수 판정 (ADR-0019) — 좌표는 **하단으로부터의 줄 수**다.
+// 절대 줄 번호를 쓰지 않는 이유는 attach 말미의 nudge 가 유발하는 재인쇄가
+// 스크롤백을 통째로 갈아치우기 때문이다: 줄 번호는 그때 의미를 잃지만 "아래에서
+// 몇 줄 위"는 재인쇄된 히스토리에서도 같은 자리를 가리킨다.
+
+/** dispose 직전에 기억해 둘 스크롤 위치 — 기억할 것이 없으면 null.
+ *
+ *  **아직 복원 중이면(pending 非null) 버퍼가 아니라 그 값이 답이다**: replay·
+ *  재인쇄가 끝나기 전의 버퍼는 사용자가 보던 자리를 아직 담고 있지 않아, 그대로
+ *  읽으면 돌아오자마자 다시 떠난 탭이 기억을 잃는다 (peer review 2026-09-12).
+ *
+ *  **대체 버퍼는 기억하지 않는다**: 그 화면의 스크롤 오프셋은 앱 상태라(Codex 의
+ *  Ctrl+T 전사 오버레이는 PageUp 을 자기가 처리한다) 터미널이 되돌릴 대상이
+ *  아니고, 실측상 replay 가 그 화면을 그대로 실어 나른다. 맨 아래(offset 0)도
+ *  기억하지 않는다 — 재-attach 의 기본 위치가 이미 맨 아래다. */
+export function scrollOffsetToRemember(
+  pending: number | null,
+  bufferType: "normal" | "alternate",
+  baseY: number,
+  viewportY: number,
+): number | null {
+  if (pending !== null) return pending;
+  if (bufferType !== "normal") return null;
+  const offset = baseY - viewportY;
+  return offset > 0 ? offset : null;
+}
+
+/** 기억해 둔 하단 기준 오프셋 → 지금 버퍼에서 scrollToLine 에 넘길 줄 번호.
+ *  스크롤백이 그때보다 짧아 그 자리가 아직/영영 없으면 **거절한다**(null).
+ *
+ *  0 으로 접으면 안 된다: scrollToLine 은 xterm 의 isUserScrolling 을 걸어 뷰가
+ *  이후 출력을 따라가지 않게 만들고, 그 상태로 전사 맨 위에 붙으면 pane 이 그대로
+ *  얼어붙는다 (실측: 이후 2,000줄이 들어와도 viewportY 는 0). 해제 책임은 호출자
+ *  몫이다 — releaseScrollLatch 주석 참조. baseY === offset 은 진짜 맨 위라
+ *  유효한 0 이다. */
+export function restoreTargetLine(baseY: number, offset: number): number | null {
+  if (offset > baseY) return null;
+  return baseY - offset;
+}
+
+/** 마지막 chunk 후 이만큼 조용하면 재인쇄가 끝난 것으로 본다. */
+export const SETTLE_QUIET_MS = 250;
+/** nudge 후 이 시간이 지나면 출력이 계속되더라도 그 자리에서 복원한다. */
+export const SETTLE_CAP_MS = 2_000;
+
+/** OutputSettle.poll 의 답 — 호출자는 wait 면 nextCheckAt 에 다시 묻고,
+ *  restore/abandon 이면 타이머를 걷는다. */
+export type SettlePoll =
+  | { kind: "wait"; nextCheckAt: number }
+  | { kind: "restore" }
+  | { kind: "abandon" };
+
+/** nudge 뒤 출력이 잠잠해지는 시점의 상태기계 — 시간은 호출자가 넣는다(순수).
+ *
+ *  타이머를 스스로 들지 않는 이유는 이 판정이 계약이기 때문이다: "마지막 chunk 후
+ *  250 ms, 단 nudge 후 2,000 ms 를 넘기지 않는다"와 "nudge 뒤 chunk 가 하나도
+ *  없었으면 복원할 것이 없다"(replay 직후의 1차 복원 결과가 그대로 남아 있다)를
+ *  시계 없이 테스트로 잠근다. */
+export class OutputSettle {
+  private startedAt: number | null = null;
+  private lastChunkAt: number | null = null;
+  private finished = false;
+
+  /** nudge 완료 시점 — 여기서부터 상한 창이 돈다. */
+  start(now: number): void {
+    this.startedAt = now;
+  }
+
+  /** term.write 완료 1건. start 전과 종료 후는 세지 않는다 — 전자는 replay·
+   *  dedup 구간이라 재인쇄가 아니고, 후자는 이미 판정이 끝났다. */
+  noteChunk(now: number): void {
+    if (this.finished || this.startedAt === null) return;
+    this.lastChunkAt = now;
+  }
+
+  /** 사용자 개입·dispose 로 복원을 버린다 — 이후 poll 은 abandon 뿐이다. */
+  cancel(): void {
+    this.finished = true;
+  }
+
+  poll(now: number): SettlePoll {
+    if (this.finished || this.startedAt === null) return { kind: "abandon" };
+    const cap = this.startedAt + SETTLE_CAP_MS;
+    const due =
+      this.lastChunkAt === null ? cap : Math.min(this.lastChunkAt + SETTLE_QUIET_MS, cap);
+    if (now < due) return { kind: "wait", nextCheckAt: due };
+    this.finished = true;
+    return this.lastChunkAt === null ? { kind: "abandon" } : { kind: "restore" };
+  }
+}
+
+/** 복원을 취소시키는 사용자 개입 — 키(스크롤 키 포함)·휠·스크롤바 드래그.
+ *  xterm 의 onData 는 쓰지 않는다: nudge 가 유발한 라이브 질의에 xterm 이 스스로
+ *  내는 DA/CPR 응답도 같은 경로로 나와, 사용자와 터미널을 구분할 수 없다. */
+const RESTORE_CANCEL_EVENTS = ["keydown", "wheel", "mousedown"] as const;
+
 export class TerminalView {
   readonly root: HTMLDivElement;
   private readonly term: Terminal;
@@ -300,6 +409,17 @@ export class TerminalView {
    *  직렬화해 발행 순서 = 도착 순서를 보장한다 (타이핑은 간격이 있어 체감 지연
    *  없음 — 왕복 1회가 겹치지 않게 될 뿐이다). */
   private writeQueue: Promise<void> = Promise.resolve();
+  /** 이번 attach 에서 되돌릴 스크롤 위치(하단 기준 줄 수) — 복원할 것이 없거나
+   *  이미 끝났으면 null 이고, 그동안은 타이머·취소 리스너도 존재하지 않는다. */
+  private restoreOffset: number | null;
+  private readonly settle = new OutputSettle();
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  private cancelListeners = false;
+  /** scrollToLine 으로 xterm 의 isUserScrolling 래치를 걸었을 가능성 — 그 래치는
+   *  우리가 건 것이므로 우리가 푼다 (releaseScrollLatch). */
+  private latchedByRestore = false;
+  /** baseY 0 에서 해제가 무효로 끝난 상태 — 다음 chunk 에서 다시 시도한다. */
+  private releaseLatchOnNextChunk = false;
 
   /** stdin write 직렬화 진입점 — onData·submit 공용. */
   private enqueueWrite(data: string): void {
@@ -318,7 +438,12 @@ export class TerminalView {
      *  1회 호출한다 (페인트 근사 완료점). 계측 중이 아닌 attach 에는 undefined —
      *  그 경우 콜백·rAF 를 아예 걸지 않아 오버헤드가 없다. */
     private readonly onTraceReplayDone?: (bytes: number) => void,
+    /** 이 탭이 워크스페이스를 떠나기 직전의 스크롤 위치(하단 기준 줄 수) —
+     *  workspace-view 의 기억에서 1회성으로 꺼내 온다 (ADR-0019). 평시 attach
+     *  (신규 탭·F5·최초 표시)에는 undefined 라 복원 기계가 아예 돌지 않는다. */
+    restoreScrollOffset?: number,
   ) {
+    this.restoreOffset = restoreScrollOffset ?? null;
     this.root = document.createElement("div");
     this.root.className = "term-host";
     parent.appendChild(this.root);
@@ -450,11 +575,30 @@ export class TerminalView {
     return this.term.modes.bracketedPasteMode;
   }
 
+  /** dispose 직전 workspace-view 가 읽어 가는 스크롤 위치 (ADR-0019) — 판정은
+   *  모듈의 scrollOffsetToRemember 가 한다. 복원이 아직 진행 중이면 버퍼가 아니라
+   *  그 pending 값이 답이다 (돌아오자마자 다시 떠나는 경로에서 기억이 증발하던
+   *  결함). 이미 해제됐거나 term.open 전이면 버퍼가 없으니 pending 뿐이다. */
+  rememberedScrollOffset(): number | null {
+    if (this.disposed) return null;
+    if (!this.opened) return this.restoreOffset;
+    const buffer = this.term.buffer.active;
+    return scrollOffsetToRemember(
+      this.restoreOffset,
+      buffer.type,
+      buffer.baseY,
+      buffer.viewportY,
+    );
+  }
+
   /** attach 수행 — 생성 직후 정확히 1회 호출한다. 실패는 그대로 reject 로
    *  올린다 (호출자가 뷰를 정리하고 에러를 노출한다 — 가리지 않는다). */
   async attach(): Promise<void> {
     this.term.open(this.root);
     this.opened = true;
+    // 복원 대기가 있으면 취소 리스너부터 건다 — attach 전 구간에서 사용자 개입이
+    // 이기게 (설치·해제는 이 한 쌍이 전부다).
+    this.installRestoreCancel();
     // 초기 fit — 여기서 잡힌 실측 cols/rows 를 아래 resize nudge 에 쓴다.
     this.fit();
     this.installCopyPasteKeys();
@@ -495,6 +639,9 @@ export class TerminalView {
       this.term.write(replay, () => {
         // 파싱 완료 — 이 시점부터의 onData 는 라이브 응답·사용자 입력이다.
         this.replayDone = true;
+        // 첫 복원 (ADR-0019) — replay 가 그린 스크롤백 기준. nudge 재인쇄가
+        // 이걸 밀어내면 이후 chunk 마다의 재적용이 다시 잡는다.
+        this.applyScrollRestore();
         // 전환 계측 완료점 — replay write 완료 콜백 + rAF 1회 보정 (계획 A-2:
         // 실제 페인트가 아닌 근사, report 의 approximatePaint 가 명시).
         if (traceDone !== undefined) requestAnimationFrame(() => traceDone(bytes));
@@ -527,6 +674,10 @@ export class TerminalView {
       console.error("resize nudge failed", err);
     }
 
+    // 이제부터는 재인쇄가 잠잠해지는 시점을 센다 — 그때가 복원을 끝내는
+    // 지점이다 (ADR-0019).
+    this.armScrollRestore();
+
     // 자동 focus 없음 (D7) — attach 전에 focus() 가 요청된 경우만 여기서 적용한다.
     // 숨은 상태로 attach 가 끝났으면 focus 는 버린다 (사용자가 이미 떠났다).
     if (this.focusPending) {
@@ -541,6 +692,10 @@ export class TerminalView {
     if (this.disposed) return;
     this.disposed = true;
     unregisterTerminalFontTarget(this);
+    this.endScrollRestore();
+    // 뷰가 사라지므로 미뤄 둔 래치 해제도 의미가 없다 (xterm 자체가 곧 dispose).
+    this.latchedByRestore = false;
+    this.releaseLatchOnNextChunk = false;
     // 백엔드 채널 슬롯도 분리한다 — 채널을 남겨두면 이후 출력이 Delivered 인데
     // ack 는 없는 상태로 pending 이 쌓여 백그라운드 세션이 paused 에 고착된다
     // (리뷰 finding). 분리 후 출력은 Dropped(detach 모드)로 보상 롤백되며 replay
@@ -576,6 +731,26 @@ export class TerminalView {
       // ack 은 write 완료 콜백에서 집계 — 렌더 소비 속도가 flow 에 반영된다.
       this.term.write(bytes, () => {
         this.batcher.add(bytes.byteLength);
+        // 미뤄 둔 래치 해제 — **복원이 이미 끝났어도** 한다. 래치는 우리가 건
+        // 것이라 푸는 것도 우리 책임이고, baseY 가 0 을 벗어난 지금이 브라우저
+        // xterm 에서 해제가 실제로 먹는 첫 순간이다 (releaseScrollLatch 주석).
+        if (this.releaseLatchOnNextChunk && this.term.buffer.active.baseY > 0) {
+          this.releaseScrollLatchNow();
+        }
+        // 재인쇄가 잠잠해졌는지의 유일한 신호 (ADR-0019) — 도착이 아니라 파싱
+        // 완료 시점이라, settle 이 끝났을 때 baseY 가 이미 최신이다.
+        //
+        // 그리고 매 chunk 마다 위치를 다시 맞춘다 (settle 무장 전후 모두 — 두
+        // resize await 사이에 오는 것도 재인쇄 chunk 다). 재인쇄는 ESC[3J 로
+        // 스크롤백을 지우고 다시 쌓으므로 중간 상태에서는 기억한 자리가 아직
+        // 없는데, 그때마다 맨 아래로 따라붙였다가 자리가 생기면 되돌아간다 —
+        // 그래서 어느 순간에 취소돼도 화면이 전사 맨 위에 얼어붙지 않는다.
+        if (this.restoreOffset !== null) {
+          const now = performance.now();
+          this.settle.noteChunk(now);
+          this.applyScrollRestore();
+          this.rescheduleSettle(now);
+        }
       });
     }
     // 폐기분도 수신은 했으므로 즉시 ack 집계 — 전량 ack 계약 (flow 계정 일치).
@@ -662,6 +837,140 @@ export class TerminalView {
       return;
     }
     if (await clipboardHasImage()) this.enqueueWrite("\x16");
+  }
+
+  /** settle 무장 (nudge 직후 1회) — 여기서부터 "언제 복원을 끝낼지"를 센다.
+   *  복원할 것이 없으면 아무 것도 걸지 않는다 — 평시 attach 에는 타이머도
+   *  리스너도 생기지 않는다. */
+  private armScrollRestore(): void {
+    if (this.restoreOffset === null || this.disposed) return;
+    const now = performance.now();
+    this.settle.start(now);
+    this.scheduleSettleCheck(this.settle.poll(now));
+  }
+
+  /** 상태기계의 답을 실행한다 — wait 면 그 시각에 다시 묻고, 아니면 끝낸다. */
+  private scheduleSettleCheck(result: SettlePoll): void {
+    switch (result.kind) {
+      case "wait":
+        this.settleTimer = setTimeout(
+          () => {
+            this.settleTimer = null;
+            if (this.disposed) return;
+            this.scheduleSettleCheck(this.settle.poll(performance.now()));
+          },
+          Math.max(0, result.nextCheckAt - performance.now()),
+        );
+        return;
+      case "restore":
+        this.applyScrollRestore();
+        this.endScrollRestore();
+        return;
+      case "abandon":
+        this.endScrollRestore();
+        return;
+    }
+  }
+
+  /** chunk 가 quiet 창을 밀 때마다 타이머를 다시 잡는다. 없으면 처음 예약한
+   *  상한(2,000 ms) 시각에만 판정해 250 ms quiet 규칙이 영영 발화하지 않는다
+   *  (peer review 2026-09-12). 대기 중일 때만 — 타이머가 없다는 것은 아직 무장
+   *  전이거나 이미 끝났다는 뜻이고, 그때 poll 하면 abandon 이 나와 복원을 조기에
+   *  죽인다. */
+  private rescheduleSettle(now: number): void {
+    if (this.settleTimer === null) return;
+    clearTimeout(this.settleTimer);
+    this.settleTimer = null;
+    this.scheduleSettleCheck(this.settle.poll(now));
+  }
+
+  /** 기억해 둔 위치로 되돌린다 — 끝내지는 않는다 (복원이 끝날 때까지 replay 직후·
+   *  매 chunk·settle 완료가 같은 값으로 되부른다).
+   *
+   *  그 자리가 없으면 래치를 풀어 맨 아래로 보낸다 — 맨 아래 = 이 변경 전의
+   *  동작이므로, 복원이 불가능한 탭은 정확히 종전대로 돌아온다. */
+  private applyScrollRestore(): void {
+    if (this.restoreOffset === null) return;
+    const baseY = this.term.buffer.active.baseY;
+    const line = restoreTargetLine(baseY, this.restoreOffset);
+    if (line === null) {
+      this.releaseScrollLatch();
+      return;
+    }
+    this.term.scrollToLine(line);
+    // 맨 아래보다 위로 보냈으면 xterm 이 isUserScrolling 을 걸었다.
+    if (line < baseY) this.latchedByRestore = true;
+  }
+
+  /** 래치 해제 시도.
+   *
+   *  **브라우저 xterm 5.5 에서는 이동량이 0 이면 해제가 일어나지 않는다**:
+   *  `scrollToBottom()` 은 `scrollLines(ybase - ydisp)` 이고, 소스가 USER 인 이
+   *  경로는 `Viewport.scrollLines(e)` 로 가는데 그 함수가 `0 !== e` 에서 즉시
+   *  돌아와 래치를 지우는 `BufferService.scrollLines`(`e + ydisp >= ybase` 에서
+   *  해제)까지 닿지 못한다. 재인쇄의 `ESC[3J` 직후가 정확히 그 상태(ybase =
+   *  ydisp = 0)라, 거기서 부르면 no-op 이고 래치만 남는다 — headless 빌드에는
+   *  viewport 가 없어 그대로 해제되므로 실측이 이 차이를 가렸다.
+   *  그래서 baseY 0 이면 다음 chunk 로 미룬다 (ybase 가 0 을 벗어나는 첫 순간이
+   *  해제가 먹는 첫 순간이다). */
+  private releaseScrollLatch(): void {
+    if (this.term.buffer.active.baseY === 0) {
+      this.releaseLatchOnNextChunk = true;
+      return;
+    }
+    this.releaseScrollLatchNow();
+  }
+
+  private releaseScrollLatchNow(): void {
+    this.term.scrollToBottom();
+    this.latchedByRestore = false;
+    this.releaseLatchOnNextChunk = false;
+  }
+
+  /** 복원 종료 — 완료·취소·dispose 공용의 단일 정리 지점. 이후 어느 경로가 늦게
+   *  도착해도 restoreOffset 이 null 이라 아무 일도 하지 않는다. */
+  private endScrollRestore(): void {
+    this.restoreOffset = null;
+    // 래치를 건 채 ESC[3J 직후(baseY 0)에 끝나면 지금은 풀 수 없다 — 다음 chunk
+    // 로 미뤄야 pane 이 그 자리에 얼어붙지 않는다.
+    if (this.latchedByRestore && this.term.buffer.active.baseY === 0) {
+      this.releaseLatchOnNextChunk = true;
+    }
+    this.settle.cancel();
+    if (this.settleTimer !== null) {
+      clearTimeout(this.settleTimer);
+      this.settleTimer = null;
+    }
+    if (!this.cancelListeners) return;
+    this.cancelListeners = false;
+    for (const type of RESTORE_CANCEL_EVENTS) {
+      this.root.removeEventListener(type, this.onUserInterrupt, { capture: true });
+    }
+  }
+
+  /** mousedown 은 스크롤바(`.xterm-viewport`) 위에서만 개입으로 본다 — 돌아온
+   *  pane 을 클릭해 focus 를 주는 것은 스크롤 의도가 아니고, 그 클릭은 복원 창
+   *  (2초) 안에 흔히 일어난다. 텍스트 위 mousedown 은 선택이지 스크롤이 아니다. */
+  private readonly onUserInterrupt = (ev: Event): void => {
+    if (ev.type === "mousedown") {
+      const target = ev.target;
+      if (!(target instanceof Element) || target.closest(".xterm-viewport") === null) return;
+    }
+    // 키로 취소한 경우에만 래치를 푼다 — 그 사용자는 "지금 여기서 계속"이 아니라
+    // 입력을 시작한 것이고, 우리가 걸어 둔 래치를 그대로 두면 늦게 오는 재인쇄를
+    // pane 이 따라가지 못한다. 휠·스크롤바 드래그는 반대다: 사용자가 자기 손으로
+    // 만든 스크롤 위치이므로 건드리면 그 조작을 되돌리는 셈이 된다.
+    if (ev.type === "keydown") this.releaseScrollLatch();
+    this.endScrollRestore();
+  };
+
+  private installRestoreCancel(): void {
+    if (this.restoreOffset === null || this.cancelListeners) return;
+    this.cancelListeners = true;
+    for (const type of RESTORE_CANCEL_EVENTS) {
+      // capture: xterm 이 자기 핸들러에서 전파를 멈춰도 개입은 보여야 한다.
+      this.root.addEventListener(type, this.onUserInterrupt, { capture: true, passive: true });
+    }
   }
 
   private fit(): void {

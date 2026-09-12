@@ -1,4 +1,4 @@
-// 사이드바 워크스페이스 카드 모델 계산 (DOM-free — vitest 대상, 13단계 D3).
+// 사이드바 워크스페이스 카드 모델 계산 (DOM-free — vitest 대상).
 //
 // Workspace 배열 + activeWorkspace 를 렌더 가능한 카드 모델 배열로 사영한다.
 // DOM 조립(sidebar.ts)과 판정 로직을 분리해 상태 매핑·경로 축약·null 생략을
@@ -16,11 +16,10 @@
 
 import type { AgentStatus, Workspace, WorkspaceId } from "./types";
 
-/** 워크스페이스 카드 1개의 렌더 모델. */
 export interface WorkspaceCardModel {
   workspace: WorkspaceId;
   name: string;
-  /** activeWorkspace 인지 — 하이라이트 + 클릭 no-op 판정에 쓰인다. */
+  /** 하이라이트 + 클릭 no-op 판정에 쓰인다. */
   active: boolean;
   status: AgentStatus;
   /** 상태 표시 텍스트 — 아이콘 대신 단어로 읽힌다 (계획 v2 6장의 3상태 그대로). */
@@ -36,7 +35,7 @@ export interface WorkspaceCardModel {
   path: string | null;
 }
 
-/** 상태 → 표시 텍스트 (영어 UI 문자열). */
+/** 영어 UI 문자열. */
 const STATUS_LABELS: Record<AgentStatus, string> = {
   running: "running",
   needsInput: "needs input",
@@ -52,7 +51,7 @@ export function abbreviatePath(rootPath: string | null): string | null {
   const home = rootPath.replace(/^\/home\/[^/]+(?=\/|$)/, "~");
   const isHome = home.startsWith("~");
   const rest = isHome ? home.slice(1) : home;
-  // 빈 세그먼트 제거 — 후행 슬래시·중복 슬래시를 흡수한다.
+  // 후행 슬래시·중복 슬래시를 흡수한다.
   const segs = rest.split("/").filter((s) => s.length > 0);
   if (isHome) {
     if (segs.length === 0) return "~";
@@ -71,10 +70,10 @@ function firstLine(message: string | null): string | null {
   return line.length === 0 ? null : line;
 }
 
-/** 닫기 confirm 판정 (계획 D4) — **죽을 세션이** 1개라도 있는가.
+/** 닫기 confirm 판정 — **죽을 세션이** 1개라도 있는가.
  *  CloseWorkspace 는 그 세션들을 죽이는 파괴적 동작이라 confirm 을 거친다.
  *  exited 만 남은 워크스페이스는 죽일 세션이 없으므로 confirm 없이 닫는다
- *  (리뷰 finding — "sessions will be killed" 경고가 거짓이 되는 것 방지).
+ *  ("sessions will be killed" 경고가 거짓이 되는 것 방지).
  *
  *  `notStarted` 도 센다: 그 상태의 정의가 "프로세스는 살아 있는데 시작 표식이 아직
  *  없다"이고 닫기 경로는 status 와 무관하게 세션을 죽이므로, 빼면 살아 있는 셸이
@@ -89,7 +88,7 @@ export function hasRunningTerminals(ws: Workspace): boolean {
   );
 }
 
-/** Workspace 배열 → 카드 모델 배열 (순서 유지). */
+/** 순서 유지. */
 export function sidebarModel(
   workspaces: Workspace[],
   activeWorkspace: WorkspaceId | null,
@@ -108,14 +107,14 @@ export function sidebarModel(
   }));
 }
 
-/** 카드 리스트 렌더 판정 (18단계 B-6).
+/** 카드 리스트 렌더 판정.
  *  - `skip`: 모델이 완전히 동일 — DOM 을 건드리지 않는다.
  *  - `patch`: 카드 id 배열의 멤버십·순서가 같고 필드만 변함 — 기존 카드 노드를
  *    유지한 채 텍스트·클래스만 갱신한다.
  *  - `rebuild`: 카드가 추가·삭제·재정렬됨(또는 첫 렌더) — 리스트를 재조립한다. */
 export type CardReconcile = "skip" | "patch" | "rebuild";
 
-/** 카드 모델 1개의 전 필드 동일성 — 이 카드의 DOM 을 건드릴지 판정한다. */
+/** 이 카드의 DOM 을 건드릴지 판정한다 (전 필드 동일성). */
 export function sameCard(a: WorkspaceCardModel, b: WorkspaceCardModel): boolean {
   return (
     a.workspace === b.workspace &&

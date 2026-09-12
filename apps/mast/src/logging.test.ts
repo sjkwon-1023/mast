@@ -25,9 +25,7 @@ function settings(log: boolean | null): UiSettings {
   return { fontFamily: null, fontSize: null, highlightLanguages: null, log, remote: null };
 }
 
-/** 조합 이벤트 하나를 흘린다.
- *
- *  **happy-dom 에는 `CompositionEvent` 가 없다** — `window.CompositionEvent` 는 그냥
+/** **happy-dom 에는 `CompositionEvent` 가 없다** — `window.CompositionEvent` 는 그냥
  *  `Event` 로 떨어지고 `data` init 은 조용히 버려진다 (확인함). 그래서 여기서 직접
  *  `data` 를 얹는다. 실제 코드가 읽는 것도 그 프로퍼티 하나뿐이라 계약은 같다. */
 function composition(target: EventTarget, type: string, data: string): void {
@@ -73,7 +71,6 @@ describe("logging", () => {
     composition(target, "compositionupdate", "이");
     composition(target, "compositionend", "이전");
 
-    // 첫 줄은 켜졌다는 표시고, 그 뒤가 조합 세 단계다.
     expect(sent[0]).toBe("ui: front end logging on");
     expect(sent.slice(1)).toEqual([
       "ime: compositionstart len=0 target=DIV",

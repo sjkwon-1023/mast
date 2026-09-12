@@ -1,4 +1,4 @@
-// 키보드 판정 — DOM 무의존 순수 모듈 (20단계, 계획 v2 "키보드 모델" 장).
+// 키보드 판정 — DOM 무의존 순수 모듈 (계획 v2 "키보드 모델" 장).
 //
 // 3층 구조(워크스페이스 / pane / 탭)의 이동 키와, 마우스로만 되던 조작
 // (탭 생성·닫기·분할·새 워크스페이스)의 전역 단축키를 한곳에서 판정한다.
@@ -78,7 +78,7 @@ export interface KeySpec {
   ctrl: boolean;
   alt: boolean;
   shift: boolean;
-  /** IME 조합 중 여부 — 조합 중의 키는 조합기 소유라 가로채지 않는다. */
+  /** 조합 중의 키는 조합기 소유라 가로채지 않는다. */
   isComposing: boolean;
 }
 
@@ -212,8 +212,7 @@ export function pathBasename(path: string): string {
 /** keydown → 액션. 가로채기 목록에 없는 조합은 전부 null 이고, 그때 글루는
  *  이벤트에 손대지 않는다 (터미널로 그대로 흘려보낸다). */
 export function keyAction(spec: KeySpec): KeyAction | null {
-  // IME 조합 중의 키는 전부 통과시킨다 — 한글 입력 중의 조합 키가 이동으로
-  // 오판돼 조합을 깨뜨리면 안 된다.
+  // 한글 입력 중의 조합 키가 이동으로 오판돼 조합을 깨뜨리면 안 된다.
   if (spec.isComposing) return null;
   if (spec.ctrl && !spec.alt && spec.key === "Tab") {
     return { type: "cycleTab", delta: spec.shift ? -1 : 1 };

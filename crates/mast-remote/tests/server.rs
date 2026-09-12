@@ -91,8 +91,7 @@ fn harness() -> Harness {
     }
 }
 
-/// 워크스페이스 + 터미널 탭 하나. 돌려주는 세션 id 는 FakeHost 가 발급한 것이라
-/// 레지스트리에는 없다.
+/// 돌려주는 세션 id 는 FakeHost 가 발급한 것이라 레지스트리에는 없다.
 fn terminal_tab(dispatcher: &Mutex<Dispatcher>) -> (u64, SessionId) {
     let out = dispatcher
         .lock()
@@ -218,7 +217,6 @@ fn post(
     exchange(addr, &raw)
 }
 
-/// 같은 IP 에서 잘못된 토큰으로 11번 두드려 차단을 건다.
 fn block_this_ip(h: &Harness) {
     for i in 0..10 {
         assert_eq!(
@@ -370,7 +368,7 @@ fn no_response_carries_a_cors_header() {
         });
 }
 
-/// 여러 종류의 응답 한 벌 — 헤더·본문 규칙을 응답 종류마다 확인하는 테스트가 공유한다.
+/// 헤더·본문 규칙을 응답 종류마다 확인하는 테스트가 공유한다.
 fn block_free_replies(h: &Harness) -> Vec<(&'static str, Reply)> {
     let (tab, _) = terminal_tab(&h.dispatcher);
     vec![
@@ -538,7 +536,7 @@ fn input_with_expect_is_417() {
 fn input_over_the_body_cap_is_413_before_the_body_is_sent() {
     let h = harness();
     let (tab, _) = terminal_tab(&h.dispatcher);
-    // 헤드만 보내고 본문은 한 바이트도 보내지 않는다 — 판정이 헤드만으로 끝나야 한다.
+    // 판정이 헤드만으로 끝나야 한다.
     let mut stream = connect(h.addr());
     let head = format!(
         "POST /api/tabs/{tab}/input?session=1:1 HTTP/1.1\r\nHost: mast\r\n\
@@ -607,8 +605,7 @@ fn input_without_a_session_token_is_409() {
 fn no_response_body_contains_the_token() {
     let h = harness();
     let mut replies = block_free_replies(&h);
-    // 위 한 벌에 401 이 하나 섞여 있어 정확히 몇 번째에 차단되는지는 세지 않는다 —
-    // 429 가 나올 때까지 두드리고 그 응답을 검사 대상에 넣는다.
+    // 위 한 벌에 401 이 하나 섞여 있어 정확히 몇 번째에 차단되는지는 세지 않는다.
     let blocked = (0..12)
         .map(|_| get(h.addr(), "/api/state", Some("wrong")))
         .find(|reply| reply.status == 429)

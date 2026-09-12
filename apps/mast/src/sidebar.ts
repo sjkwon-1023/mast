@@ -1,7 +1,7 @@
-// 워크스페이스 사이드바 (13단계 D3·D4) — 카드 리스트 + 하단 버튼
+// 워크스페이스 사이드바 — 카드 리스트 + 하단 버튼
 // ("+ New workspace", 그리고 원격 표면이 떠 있을 때만 보이는 "Pair phone").
 //
-// 렌더 전략 (18단계 B-6 — 카드 id 키잉 reconcile): reconcilePlan 의 판정대로
+// 렌더 전략 (카드 id 키잉 reconcile): reconcilePlan 의 판정대로
 // skip(무변경, DOM 무접촉) / patch(카드 노드 유지 + 텍스트·클래스만 갱신) /
 // rebuild(멤버십·순서 변화 → 재조립) 셋으로 갈린다.
 //
@@ -13,7 +13,7 @@
 // 무관 알림 하나로도 뚫린다 — 그래서 스킵 가드는 skip 판정으로만 남기고, 값이
 // 변한 경우의 기본 경로를 in-place 패치로 바꾼다.
 //
-// 상호작용 (계획 D4):
+// 상호작용:
 // - 카드 클릭 = SwitchWorkspace (이미 활성이면 no-op 스킵 — 무변경 revision 잡음 방지).
 // - × = CloseWorkspace. 실행 중인 터미널 세션이 1개라도 있으면 confirm() 을
 //   거친다 — 그 세션들을 죽이는 파괴적 동작이다. 판정은 렌더 캐시가 아니라 클릭
@@ -86,15 +86,14 @@ interface CardNodes {
   model: WorkspaceCardModel;
 }
 
-/** 값이 같으면 쓰지 않는 텍스트 대입 — textContent 재대입은 값이 같아도 자식
- *  텍스트 노드를 갈아치우므로, 무변경 렌더가 DOM 을 흔들지 않게 한다. */
+/** textContent 재대입은 값이 같아도 자식 텍스트 노드를 갈아치우므로, 무변경
+ *  렌더가 DOM 을 흔들지 않게 값이 같으면 쓰지 않는다. */
 function setText(el: HTMLElement, text: string): void {
   if (el.textContent !== text) el.textContent = text;
 }
 
-/** 상태 1줄 — 상태 텍스트에 마지막 에이전트 메시지 첫 줄을 이어붙인다 (없으면
- *  상태 텍스트만, 말줄임은 CSS). 메시지에 별도 줄을 주지 않는 이유는 카드를
- *  3줄로 유지하기 위해서다 — 긴 메시지는 어차피 한 줄로 잘린다. */
+/** 메시지에 별도 줄을 주지 않는 이유는 카드를 3줄로 유지하기 위해서다 — 긴
+ *  메시지는 어차피 한 줄로 잘린다 (말줄임은 CSS). */
 function statusText(model: WorkspaceCardModel): string {
   if (model.message === null) return model.statusLabel;
   return `${model.statusLabel} — ${model.message}`;
@@ -108,7 +107,6 @@ export class Sidebar {
   private lastCards: WorkspaceCardModel[] | null = null;
   /** 현재 화면에 붙어 있는 카드 노드 — workspace id 키잉, patch 판정의 대상. */
   private readonly cardNodes = new Map<WorkspaceId, CardNodes>();
-  /** 이름 인라인 편집 중인 워크스페이스 (없으면 null) — 편집 상태 가드의 주체. */
   private editing: WorkspaceId | null = null;
   /** 진행 중인 드래그 재배치 (없으면 null). 이게 켜져 있는 동안 render 는 DOM 을
    *  건드리지 않는다 — 끌고 있는 카드가 재조립으로 사라지면 드래그가 끊긴다. */
@@ -226,8 +224,7 @@ export class Sidebar {
     void this.dispatch({ type: "renameWorkspace", workspace, name });
   }
 
-  /** 편집 종료 — 입력을 접고 이름 표시를 되돌린다. 편집 중이 아니면 no-op 이라
-   *  확정·취소·blur 가 어떤 순서로 겹쳐도 안전하다. */
+  /** 편집 중이 아니면 no-op 이라 확정·취소·blur 가 어떤 순서로 겹쳐도 안전하다. */
   private stopEditing(): void {
     const workspace = this.editing;
     if (workspace === null) return;
@@ -244,7 +241,6 @@ export class Sidebar {
     if (latest !== undefined) this.applyCard(nodes, latest);
   }
 
-  /** 이름 편집 입력 — 카드 head 안에서 이름 span 과 자리를 바꾼다. */
   private renameInput(): HTMLInputElement {
     const input = document.createElement("input");
     input.type = "text";
@@ -305,8 +301,8 @@ export class Sidebar {
 
     head.append(name, rename, dot, close);
 
-    // 상태 줄 — 텍스트 상태 + 메시지 첫 줄. 상태는 항상 있으므로 이 줄은 감추지
-    // 않는다 (경로 줄과 달리 hidden 토글이 없다).
+    // 상태는 항상 있으므로 이 줄은 감추지 않는다 (경로 줄과 달리 hidden 토글이
+    // 없다).
     const status = document.createElement("div");
     status.className = "ws-card-status";
 
@@ -332,8 +328,8 @@ export class Sidebar {
       }
       // 편집 중 카드 안의 클릭은 입력 조작이다 — 전환을 보내지 않는다.
       if (this.editing === nodes.model.workspace) return;
-      // 이미 활성이면 no-op 스킵 (계획 D4). in-place 패치로 카드가 살아남는 동안
-      // 모델은 바뀌므로 클로저가 아니라 nodes.model 에서 최신 값을 읽는다.
+      // in-place 패치로 카드가 살아남는 동안 모델은 바뀌므로 클로저가 아니라
+      // nodes.model 에서 최신 값을 읽는다.
       if (!nodes.model.active) {
         void this.dispatch({ type: "switchWorkspace", workspace: nodes.model.workspace });
       }
@@ -486,7 +482,6 @@ export class Sidebar {
     this.onClose(workspace);
   }
 
-  /** × 클릭 — 터미널 탭이 있으면 confirm 후 CloseWorkspace (계획 D4). */
   private onClose(workspace: WorkspaceId): void {
     const ws =
       this.lastSnapshot?.state.workspaces.find((w) => w.id === workspace) ?? null;

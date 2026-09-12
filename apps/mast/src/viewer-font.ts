@@ -107,7 +107,6 @@ export interface ViewerFontTarget {
  *  떨어진 DOM 을 건드리지 않도록 등록·해제는 반드시 짝으로 부른다. */
 const liveViews = new Set<ViewerFontTarget>();
 
-/** 뷰 생성자가 자신을 등록한다 — 해제는 dispose 의 unregisterViewerFontTarget. */
 export function registerViewerFontTarget(view: ViewerFontTarget): void {
   liveViews.add(view);
 }
@@ -167,8 +166,7 @@ export function applyViewerFontSettings(settings: UiSettings): void {
   pushFontSize(fontSize);
 }
 
-/** 줌 ±1px (`Ctrl+=` / `Ctrl+-`) — 터미널 줌(adjustFontSize)의 뷰어 짝이다.
- *  현재 유효 크기에 delta 를 더해 클램프하고 살아있는 모든 뷰에 적용한다. */
+/** 줌 ±1px (`Ctrl+=` / `Ctrl+-`) — 터미널 줌(adjustFontSize)의 뷰어 짝이다. */
 export function adjustViewerFontSize(delta: number): void {
   applyViewerFontSize(clampFontSize(fontSize + delta));
 }
@@ -194,16 +192,14 @@ function applyViewerFontSize(size: number): void {
   pushFontSize(size);
 }
 
-/** 변수를 갈기 직전, 살아있는 뷰 전체에 화면 위치를 붙들 기회를 준다.
- *
- *  **전량을 먼저** 붙든 뒤에 변수를 간다: 뷰마다 "붙들고 → 앉히고"를 번갈아 하면
+/** **전량을 먼저** 붙든 뒤에 변수를 간다: 뷰마다 "붙들고 → 앉히고"를 번갈아 하면
  *  첫 뷰가 강제한 레이아웃 때문에 뒤의 뷰들은 이미 새 크기를 읽어 앵커가 무의미
  *  해진다. 그래서 이 루프와 pushFontSize 루프가 따로 있다. */
 function captureAnchors(): void {
   for (const view of liveViews) view.beforeViewerFontSize?.();
 }
 
-/** 살아있는 뷰 전체에 새 크기를 민다 (격자 재계산·스크롤 복원은 각 뷰의 몫). */
+/** 격자 재계산·스크롤 복원은 각 뷰의 몫이다. */
 function pushFontSize(size: number): void {
   for (const view of liveViews) view.setViewerFontSize(size);
 }

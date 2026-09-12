@@ -1,8 +1,5 @@
 // @vitest-environment happy-dom
 //
-// 탭 화면의 첫 프레임을 실제 headless xterm 으로 끝까지 돌린다 — 스냅샷 응답 →
-// 텍스트 렌더 → 입력 활성 → Send 의 두 요청(브래킷 텍스트, 그 뒤 CR).
-//
 // 회귀 잠금이다. v0.3.18 은 `@xterm/headless` 가 `buffer` 를 `allowProposedApi` 뒤에
 // 두는 줄 몰랐고, 그 예외는 xterm 의 write 루프 안에서 터져 어디에도 보고되지
 // 않았다 — 폰 화면은 검은 채, 입력은 비활성인 채로 남았다. 순수 판정 테스트는
@@ -60,7 +57,6 @@ describe("TabView first frame", () => {
     vi.unstubAllGlobals();
   });
 
-  /** 주어진 스냅샷 바이트로 뷰를 띄우고 입력이 활성될 때까지 기다린다. */
   async function mount(screen: string): Promise<TabView> {
     window.localStorage.setItem("mast.remoteToken", "test-token");
     vi.stubGlobal(

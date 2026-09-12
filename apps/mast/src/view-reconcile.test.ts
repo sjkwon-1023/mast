@@ -1,6 +1,7 @@
 // view-reconcile 검증 — planViewSync(부트 스윕(D4-b)·탭 닫힘·워크스페이스 밖
-// dispose·keep-alive 유지·세션 없는 active 탭)와 planViewerSync(21단계: 활성
-// 탭만 마운트·나머지 전부 dispose·탭 실존 플래그).
+// dispose·keep-alive 유지·세션 없는 active 탭), planViewerSync(21단계: 활성
+// 탭만 마운트·나머지 전부 dispose·탭 실존 플래그), existingTabIds(두 dispose
+// 원인을 가르는 실존 판정 — ADR-0019).
 //
 // ADR-0018 이후로 두 판정이 exited 터미널 탭에서 맞물린다: 세션을 놓은 탭은
 // planViewSync 의 dispose 로 내려가고 같은 탭이 planViewerSync 의 mount 로
@@ -8,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { planViewSync, planViewerSync } from "./view-reconcile";
+import { existingTabIds, planViewSync, planViewerSync } from "./view-reconcile";
 import type { Pane, StateSnapshot, Tab, Workspace } from "./types";
 
 function terminalTab(id: number, session: number | null, exited = false): Tab {
@@ -338,5 +339,24 @@ describe("planViewerSync", () => {
     expect(plan.mount).toEqual([]);
     // 스냅샷에는 남아 있는 탭이므로 flush 대상이다.
     expect(plan.dispose).toEqual([{ tab: 10, tabExists: true }]);
+  });
+});
+
+describe("existingTabIds", () => {
+  it("collects every tab of every workspace, not just the active one", () => {
+    const snap = snapshot(
+      [
+        workspace(1, [pane(1, [terminalTab(10, 100), folderTab(11)], 10)], 1),
+        workspace(2, [pane(2, [textTab(20)], 20), pane(3, [terminalTab(21, 101)], 21)], 2),
+      ],
+      1,
+    );
+    // 워크스페이스 이탈로 dispose 되는 탭과 닫혀서 사라진 탭을 가르는 판정이라
+    // 비활성 워크스페이스의 탭도 "존재한다" 쪽이어야 한다.
+    expect(existingTabIds(snap)).toEqual(new Set([10, 11, 20, 21]));
+  });
+
+  it("is empty when the snapshot has no workspace", () => {
+    expect(existingTabIds(snapshot([], null))).toEqual(new Set());
   });
 });

@@ -62,12 +62,11 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 static SENDER: OnceLock<SyncSender<String>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
 
-/// 이 프로세스에서 로그가 켜져 있는가. 매크로가 인자 포맷 전에 먼저 본다.
+/// 매크로가 인자 포맷 전에 먼저 본다.
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
-/// 한 줄 적재. 꺼져 있으면 no-op이고, 큐가 차 있으면 버린다.
 pub fn write(line: String) {
     if !enabled() {
         return;
@@ -105,8 +104,7 @@ macro_rules! wintrace {
     }};
 }
 
-/// 부팅 1회 초기화. `settings.json` 의 `"log"` 가 참일 때만 파일을 열고 쓰기 스레드를
-/// 띄운다.
+/// 부팅 1회 초기화.
 ///
 /// 설정 파일을 못 읽거나 파싱이 깨지면 **끈 채로 진행한다** — 그 실패는 프론트가
 /// `get_ui_settings` 로 다시 만나 상태 라인에 사유를 띄우므로(그쪽이 loud-fail 계약의
@@ -169,7 +167,6 @@ fn open_append(path: &Path) -> std::io::Result<File> {
     OpenOptions::new().create(true).append(true).open(path)
 }
 
-/// 쓰기 스레드. 큐에서 받아 타임스탬프를 붙여 쓰고, 상한을 넘으면 회전한다.
 /// 채널이 닫히면(프로세스 종료) 조용히 끝난다.
 fn writer_loop(mut file: File, path: PathBuf, rx: std::sync::mpsc::Receiver<String>) {
     let mut written = file.metadata().map(|m| m.len()).unwrap_or(0);
@@ -203,8 +200,8 @@ fn writer_loop(mut file: File, path: PathBuf, rx: std::sync::mpsc::Receiver<Stri
     }
 }
 
-/// 한 줄 쓰기 — 쓴 바이트 수를 돌려준다 (회전 판정용). 쓰기 실패는 삼킨다:
-/// 실패를 보고할 곳이 이 파일뿐이라 보고할 방법이 없다.
+/// 쓴 바이트 수를 돌려준다 (회전 판정용). 쓰기 실패는 삼킨다: 실패를 보고할 곳이
+/// 이 파일뿐이라 보고할 방법이 없다.
 fn emit(file: &mut File, line: &str) -> u64 {
     let record = format!("{} {line}\n", timestamp());
     match file.write_all(record.as_bytes()) {
@@ -216,7 +213,7 @@ fn emit(file: &mut File, line: &str) -> u64 {
     }
 }
 
-/// 현재 파일을 `.1` 로 밀고 새 파일을 연다. `.1` 은 덮어쓴다 — 보관은 두 세대까지다.
+/// `.1` 은 덮어쓴다 — 보관은 두 세대까지다.
 ///
 /// 핸들을 **먼저 닫는다**: Windows 는 `FILE_SHARE_DELETE` 없이 연 파일의 rename 을
 /// 거부하고, `OpenOptions` 는 그 공유 플래그를 주지 않는다. 그래서 실패했을 때

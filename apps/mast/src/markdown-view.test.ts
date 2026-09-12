@@ -1,4 +1,4 @@
-// markdownViewer 의 위험 지점 검증 (21단계 청크 D + v0.3.8 줌).
+// markdownViewer 의 위험 지점 검증.
 //
 // 1. **raw HTML escape** — 이 WebView 는 dispatch·fs_* IPC 를 쥐고 있어서, 파일
 //    내용발 HTML 이 DOM 에 들어가면 마크다운 파일 하나로 앱 권한이 넘어간다.
@@ -25,8 +25,7 @@ import {
 } from "./markdown-view";
 import type { TimerHost } from "./ack-batcher";
 
-/** 수동 진행 가짜 타이머 — 등록된 콜백을 fire 로 직접 발화시킨다
- *  (text-view.test.ts 와 같은 형태). */
+/** 등록된 콜백을 fire 로 직접 발화시킨다 (text-view.test.ts 와 같은 형태). */
 class FakeTimers implements TimerHost {
   private next = 1;
   private readonly pending = new Map<number, { fn: () => void; ms: number }>();
@@ -45,14 +44,12 @@ class FakeTimers implements TimerHost {
     return this.pending.size;
   }
 
-  /** 등록된 마지막 타이머의 지연(ms). */
   get lastDelay(): number | null {
     let delay: number | null = null;
     for (const entry of this.pending.values()) delay = entry.ms;
     return delay;
   }
 
-  /** 보류 중인 콜백 전부 발화. */
   fire(): void {
     const entries = [...this.pending.values()];
     this.pending.clear();
@@ -66,8 +63,7 @@ function tagNames(html: string): string[] {
   return [...html.matchAll(/<\/?([a-zA-Z][a-zA-Z0-9-]*)/g)].map((m) => m[1].toLowerCase());
 }
 
-/** 태그 안에 이벤트 핸들러 속성(`onclick=` 등)이 있는가 — 이스케이프된 본문의
- *  같은 글자열에는 걸리지 않게 `<...>` 안쪽만 본다. */
+/** 이스케이프된 본문의 같은 글자열에는 걸리지 않게 `<...>` 안쪽만 본다. */
 function hasEventHandlerAttribute(html: string): boolean {
   return /<[^>]*\son[a-z]+\s*=/i.test(html);
 }
@@ -160,7 +156,7 @@ describe("MtimePoller", () => {
     changes: number[];
     setMtime: (value: number) => void;
     setHidden: (value: boolean) => void;
-    /** stat 호출 횟수 — hidden 동안 폴링이 0 인지 확인한다. */
+    /** hidden 동안 폴링이 0 인지 확인한다. */
     stats: () => number;
   }
 
@@ -343,8 +339,8 @@ describe("MtimePoller", () => {
   });
 });
 
-// 줌 앵커 — 산문 리플로우를 건너 화면 위치를 잇는 유일한 좌표다. 이 뷰에는
-// textViewer 의 행 인덱스 같은 안정 좌표가 없어서 상대 위치를 쓴다.
+// 산문 리플로우를 건너 화면 위치를 잇는 유일한 좌표다. 이 뷰에는 textViewer 의
+// 행 인덱스 같은 안정 좌표가 없어서 상대 위치를 쓴다.
 describe("줌 앵커", () => {
   it("문서 안 상대 위치를 붙든다", () => {
     // 스크롤 여지 = 2000 - 500 = 1500, 그 절반 지점.

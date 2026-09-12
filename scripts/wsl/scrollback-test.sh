@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scrollback 상한 확인용 — 기본 scrollback 5000줄을 초과하는 12000줄을 출력한다.
+# scrollback 상한 확인용.
 # (계획 v2 12장 "scrollback 제한: 기본 5,000줄", spike-plan 4.6 "scrollback 5000 고정")
 #
 # 사용법:

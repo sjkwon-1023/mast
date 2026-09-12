@@ -15,7 +15,7 @@ use mast_core::session::{PtySession, SessionId, SessionManager};
 
 use crate::server::{log_line, AssetFn, LogFn, Response};
 
-/// 세션 토큰 `<epoch>:<id>` — 클라이언트에게는 불투명 값이다.
+/// 클라이언트에게는 불투명 값이다.
 pub(crate) fn session_token(epoch: u64, id: SessionId) -> String {
     format!("{epoch}:{id}")
 }
@@ -95,14 +95,13 @@ pub(crate) fn write_input(pty: &PtySession, body: &[u8], log: &LogFn) -> Respons
     match pty.write(body) {
         Ok(()) => Response::ok_empty(),
         Err(e) => {
-            // 사유는 로그로만 — 응답 본문은 고정 문구다.
             log_line(log, format!("remote: input write failed: {e}"));
             Response::error(500, "Internal Server Error", "write failed")
         }
     }
 }
 
-/// 정적 자산. 키 게이트는 라우터가 이미 지났고, 여기서는 콜백이 준 것만 내보낸다.
+/// 키 게이트는 라우터가 이미 지났고, 여기서는 콜백이 준 것만 내보낸다.
 pub(crate) fn static_asset(assets: &AssetFn, key: &str) -> Response {
     match (assets.as_ref())(key) {
         Some(asset) => Response::ok(&asset.mime_type, asset.bytes),
@@ -144,8 +143,8 @@ struct FoundTab {
     status: TerminalStatus,
 }
 
-/// 탭 하나를 찾는다. 뷰어 탭이면 세션 없음(`status` 는 `Exited`)으로 접어 돌려준다 —
-/// 호출자에게는 "터미널이 아니다"와 "세션이 없다"가 같은 응답이다.
+/// 뷰어 탭이면 세션 없음(`status` 는 `Exited`)으로 접어 돌려준다 — 호출자에게는
+/// "터미널이 아니다"와 "세션이 없다"가 같은 응답이다.
 fn find_terminal(dispatcher: &Dispatcher, tab: TabId) -> Option<FoundTab> {
     for workspace in &dispatcher.state().workspaces {
         for pane in workspace.panes.values() {

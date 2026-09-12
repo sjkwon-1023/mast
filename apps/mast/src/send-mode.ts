@@ -6,8 +6,7 @@
 
 import type { PaneId, WorkspaceId } from "./types";
 
-/** 상태 — idle(평시) | armed(대상 선택 중: 캡처된 텍스트·submit 여부·소스 pane·
- *  arm 시점의 활성 워크스페이스 — 이탈 시 자동 취소 판정용, 리뷰 finding). */
+/** armed 의 `workspace` 는 arm 시점의 활성 워크스페이스 — 이탈 시 자동 취소 판정용. */
 export type SendModeState =
   | { type: "idle" }
   | {
@@ -33,30 +32,30 @@ export class SendMode {
     return this.current;
   }
 
-  /** 대상 선택 모드 활성 여부 — pane mousedown 이 resolve 경로로 갈지 판정한다. */
+  /** pane mousedown 이 resolve 경로로 갈지 판정한다. */
   get active(): boolean {
     return this.current.type === "armed";
   }
 
-  /** 대상 선택 모드 진입. 선택 텍스트 캡처·무선택 에러 판정은 호출측(pane-view)
-   *  책임이다 — 여기는 캡처가 성공한 뒤에만 불린다.
+  /** 선택 텍스트 캡처·무선택 에러 판정은 호출측(pane-view) 책임이다 — 여기는
+   *  캡처가 성공한 뒤에만 불린다.
    *
-   *  API 수준에서는 armed 중 재-arm 이 덮어쓰기지만, **UI 에서는 도달 불가**다
-   *  (리뷰 지적): armed 중에는 모든 pane mousedown 이 capture 에서 resolve 로
-   *  빠지므로 다른 pane 의 ⤷ 클릭은 재-arm 이 아니라 그 pane 으로의 전달 확정이
-   *  된다. `workspace` 는 arm 시점의 활성 워크스페이스 — render 가 이탈 시 자동
+   *  API 수준에서는 armed 중 재-arm 이 덮어쓰기지만, **UI 에서는 도달 불가**다:
+   *  armed 중에는 모든 pane mousedown 이 capture 에서 resolve 로 빠지므로 다른
+   *  pane 의 ⤷ 클릭은 재-arm 이 아니라 그 pane 으로의 전달 확정이 된다.
+   *  `workspace` 는 arm 시점의 활성 워크스페이스 — render 가 이탈 시 자동
    *  취소하는 데 쓴다. */
   arm(source: PaneId, text: string, submit: boolean, workspace: WorkspaceId | null): void {
     this.current = { type: "armed", text, submit, source, workspace };
   }
 
-  /** 취소 — Esc·호출측 판단 어느 경로든 idle 로 돌아간다 (idle 에서는 no-op). */
+  /** idle 에서는 no-op. */
   cancel(): void {
     this.current = { type: "idle" };
   }
 
-  /** 대상 확정 — 어떤 결과든 모드는 끝난다(1회성). target === source 는 취소와
-   *  동일 처리다 (자기 전달은 무의미 — 계획 D2). idle 에서의 호출도 no-op 취소. */
+  /** 어떤 결과든 모드는 끝난다(1회성). target === source 는 취소와 동일 처리다
+   *  (자기 전달은 무의미 — 계획 D2). idle 에서의 호출도 no-op 취소. */
   resolve(target: PaneId): SendResolution {
     const s = this.current;
     this.current = { type: "idle" };
@@ -67,8 +66,7 @@ export class SendMode {
   }
 }
 
-/** 상태 라인 프롬프트 — armed 동안 지속 표시할 문자열, idle 은 null(표시 없음).
- *  전달(⤷)과 전달 후 실행(⤷⏎)을 문구에서도 구분한다 — 실수 실행 방지의 연장. */
+/** 전달(⤷)과 전달 후 실행(⤷⏎)을 문구에서도 구분한다 — 실수 실행 방지의 연장. */
 export function sendModePrompt(state: SendModeState): string | null {
   if (state.type === "idle") return null;
   const verb = state.submit ? "send & run" : "send";

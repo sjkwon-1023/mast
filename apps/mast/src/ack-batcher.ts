@@ -1,8 +1,7 @@
 // flow control ack 배칭 (spike-plan.md 4.6) — term.write 완료 콜백에서 소비 바이트를
-// 집계해, 64KB 도달 시 즉시 또는 첫 미배출 바이트로부터 50ms 경과 시 flush 콜백을
-// 호출한다. 타이머를 주입할 수 있게 해 fake timer로 결정적 테스트가 가능하다.
+// 집계한다.
 
-/** 타이머 주입 지점 — 테스트에서 fake 구현으로 대체한다. */
+/** 테스트에서 fake 구현으로 대체할 수 있게 주입한다. */
 export interface TimerHost {
   setTimeout(fn: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
@@ -21,7 +20,7 @@ export interface AckBatcherOptions {
   thresholdBytes?: number;
   /** 첫 미배출 바이트로부터 이 시간이 지나면 flush. 기본 50ms. */
   maxDelayMs?: number;
-  /** 타이머 구현. 기본은 전역 setTimeout/clearTimeout. */
+  /** 기본은 전역 setTimeout/clearTimeout. */
   timers?: TimerHost;
 }
 
@@ -44,7 +43,7 @@ export class AckBatcher {
     if (this.maxDelayMs < 0) throw new Error("maxDelayMs must be non-negative");
   }
 
-  /** 소비 완료 바이트를 집계한다. 0 이하는 무시(빈 write 콜백 대응).
+  /** 0 이하는 무시(빈 write 콜백 대응).
    *  dispose 이후의 호출은 정의된 no-op — 세션 정리 뒤 늦게 도착한 write 콜백을 수용한다. */
   add(bytes: number): void {
     if (this.disposed || bytes <= 0) return;
@@ -63,7 +62,7 @@ export class AckBatcher {
     }
   }
 
-  /** 집계분을 즉시 배출한다. 집계가 0이면 콜백을 호출하지 않는다. */
+  /** 집계가 0이면 콜백을 호출하지 않는다. */
   flush(): void {
     this.cancelTimer();
     if (this.accumulated === 0) return;
@@ -72,14 +71,14 @@ export class AckBatcher {
     this.onFlush(n);
   }
 
-  /** 남은 집계분을 배출하고 타이머를 정리한다. 이후 add는 no-op. */
+  /** 이후 add는 no-op. */
   dispose(): void {
     if (this.disposed) return;
     this.flush();
     this.disposed = true;
   }
 
-  /** 테스트·디버깅용 — 아직 배출되지 않은 집계 바이트. */
+  /** 테스트·디버깅용. */
   get pendingBytes(): number {
     return this.accumulated;
   }

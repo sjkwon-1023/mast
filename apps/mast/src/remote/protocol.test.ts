@@ -136,7 +136,7 @@ describe("encodeInput", () => {
     const at = { col: 60, row: 15, notches: 1 } as const;
     expect(encodeInput({ type: "wheel", direction: "up", ...at }, off)).toBe("\x1b[<64;60;15M");
     expect(encodeInput({ type: "wheel", direction: "down", ...at }, off)).toBe("\x1b[<65;60;15M");
-    // 노치가 여럿이어도 한 문자열이다 — 한 번의 write 로 나가야 한다.
+    // 한 번의 write 로 나가야 한다.
     expect(encodeInput({ type: "wheel", direction: "up", col: 60, row: 15, notches: 3 }, off)).toBe(
       "\x1b[<64;60;15M\x1b[<64;60;15M\x1b[<64;60;15M",
     );

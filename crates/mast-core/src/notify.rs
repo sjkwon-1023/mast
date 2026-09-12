@@ -60,8 +60,8 @@ pub struct OscBatch {
 }
 
 impl OscBatch {
-    /// OSC 이벤트 하나를 해당 세션 슬롯에 병합한다. 슬롯 하나를 갱신할 뿐이라
-    /// 이벤트 수와 무관하게 상수 작업·상수 메모리다 (리더 스레드 핫패스).
+    /// 슬롯 하나를 갱신할 뿐이라 이벤트 수와 무관하게 상수 작업·상수 메모리다
+    /// (리더 스레드 핫패스).
     pub fn merge(&mut self, session: SessionId, ev: &OscEvent) {
         match ev {
             OscEvent::Osc0Title(title) => {
@@ -113,24 +113,23 @@ impl OscBatch {
         }
     }
 
-    /// 적용할 변경분이 하나도 없는가. 글루의 flush 루프가 헛도는 것을 막는 조건이다.
+    /// 글루의 flush 루프가 헛도는 것을 막는 조건이다.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// 누적분을 통째로 꺼내고 배치를 빈 상태로 되돌린다. 호출자는 이 반환값을 락 밖에서
-    /// 적용한다 (pending 락과 dispatcher 락을 동시에 잡지 않기 위한 경계).
+    /// 호출자는 반환값을 락 밖에서 적용한다 (pending 락과 dispatcher 락을 동시에 잡지
+    /// 않기 위한 경계).
     pub fn take(&mut self) -> OscBatch {
         std::mem::take(self)
     }
 
-    /// 세션 슬롯을 가져오거나 만든다.
     fn slot(&mut self, session: SessionId) -> &mut OscDelta {
         self.entries.entry(session).or_default()
     }
 }
 
-/// 알림 본문을 병합한다 — 빈 body 는 무시(last-non-empty), 아니면 절단해 덮어쓴다.
+/// 빈 body 는 무시한다 (last-non-empty).
 fn merge_message(delta: &mut OscDelta, body: &str) {
     if body.is_empty() {
         return;
@@ -138,8 +137,7 @@ fn merge_message(delta: &mut OscDelta, body: &str) {
     delta.message = Some(truncate_chars(body, MAX_MESSAGE_CHARS));
 }
 
-/// 문자 수 기준 절단. 바이트로 자르면 멀티바이트 문자 중간에서 panic 하므로
-/// char 경계에서만 자른다.
+/// 바이트로 자르면 멀티바이트 문자 중간에서 panic 하므로 char 경계에서만 자른다.
 fn truncate_chars(s: &str, max_chars: usize) -> String {
     match s.char_indices().nth(max_chars) {
         Some((idx, _)) => s[..idx].to_string(),
@@ -147,8 +145,7 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// OSC 777 title 의 `mast:` 상태 토큰을 파스한다. 규약 외 문자열은 `None`
-/// (= 상태 중립 알림).
+/// 규약 외 문자열은 `None` (= 상태 중립 알림).
 fn parse_status_token(title: &str) -> Option<AgentStatus> {
     match title {
         "mast:running" => Some(AgentStatus::Running),
@@ -208,7 +205,6 @@ mod tests {
         }
     }
 
-    // 편의 헬퍼 — 세션 1개에 이벤트들을 순서대로 흘리고 그 델타를 돌려준다.
     fn merged(events: &[OscEvent]) -> OscDelta {
         let mut batch = OscBatch::default();
         for ev in events {
@@ -245,7 +241,6 @@ mod tests {
 
     #[test]
     fn unread_is_sticky_across_running() {
-        // needsInput 으로 세운 unread 는 뒤따르는 running 이 내리지 못한다.
         let delta = merged(&[
             notify("mast:needsInput", "approve?"),
             notify("mast:running", ""),

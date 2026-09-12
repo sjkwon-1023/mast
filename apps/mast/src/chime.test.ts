@@ -1,9 +1,7 @@
-// needsInput 알림의 계약 테스트 — (1) 상승 전이 판정(순수), (2) 토스트 대상 선별
-// (순수), (3) **휴면** 차임 재생 경로의 lazy 생성·resume·조용한 실패. WebAudio 는
-// node 환경에 없으므로 가짜 컨텍스트를 주입해 스케줄된 음의 개수·주파수·길이를
-// 그대로 관찰한다.
+// WebAudio 는 node 환경에 없으므로 가짜 컨텍스트를 주입해 스케줄된 음의 개수·주파수·
+// 길이를 그대로 관찰한다.
 //
-// (3) 은 v0.3.7 에서 배선이 빠진 휴면 코드의 테스트다 — 지우지 않고 남겨 되살릴 때
+// 차임 재생 경로는 v0.3.7 에서 배선이 빠진 휴면 코드의 테스트다 — 지우지 않고 남겨 되살릴 때
 // 검증을 다시 짜지 않게 한다 (chime.ts 모듈 머리 주석의 dormant 계약).
 
 import { describe, expect, it, vi } from "vitest";
@@ -90,7 +88,6 @@ describe("detectNeedsInputOnset", () => {
     ]);
     expect(closed.onsets).toEqual([]);
     expect(closed.next).toEqual(statuses([[2, "idle"]]));
-    // 같은 id 가 needsInput 으로 되돌아오면 "아니었다가 됐다" 이므로 onset 이다.
     const reappeared = detectNeedsInputOnset(closed.next, [
       { id: 1, agentStatus: "needsInput" },
       { id: 2, agentStatus: "idle" },
@@ -143,7 +140,6 @@ describe("needsInputToastTargets", () => {
   });
 });
 
-/** 가짜 AudioContext — 스케줄된 음(주파수·시작·정지)만 기록한다. */
 function fakeContext(state: AudioContextState = "running") {
   const tones: { freq: number; start: number; stop: number; peak: number }[] = [];
   const resume = vi.fn(() => Promise.resolve());
@@ -192,20 +188,18 @@ describe("Chime (휴면)", () => {
     const fake = fakeContext();
     const factory = vi.fn(() => fake.ctx);
     const chime = new Chime(factory);
-    expect(factory).not.toHaveBeenCalled(); // 생성자에서는 만들지 않는다
+    expect(factory).not.toHaveBeenCalled();
 
     chime.play();
     expect(factory).toHaveBeenCalledTimes(1);
     expect(fake.tones).toHaveLength(2);
     expect(fake.tones.map((t) => t.freq)).toEqual([880, 1320]);
-    // 시작은 현재 시각 기준, 총 길이는 0.3s (마지막 정지 - 첫 시작).
     expect(fake.tones[0].start).toBeCloseTo(10);
     expect(fake.tones[1].stop - fake.tones[0].start).toBeCloseTo(0.3);
-    // 볼륨은 낮게 — 피크 게인 0.1.
     expect(Math.max(...fake.tones.map((t) => t.peak))).toBeCloseTo(0.1);
 
     chime.play();
-    expect(factory).toHaveBeenCalledTimes(1); // 재사용
+    expect(factory).toHaveBeenCalledTimes(1);
     expect(fake.tones).toHaveLength(4);
   });
 
@@ -260,7 +254,6 @@ describe("installChimeUnlock (휴면)", () => {
 
     target.dispatchEvent(new Event("keydown"));
     expect(fake.resume).toHaveBeenCalledTimes(1);
-    // 이후 제스처는 리스너가 없으므로 unlock 을 다시 부르지 않는다.
     target.dispatchEvent(new Event("keydown"));
     target.dispatchEvent(new Event("mousedown"));
     expect(fake.resume).toHaveBeenCalledTimes(1);

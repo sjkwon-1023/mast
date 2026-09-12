@@ -1,7 +1,4 @@
-// folderBrowser 뷰의 순수 계산 검증 (21단계 청크 C1) — dirs-first 정렬, `..` 행
-// 유무와 부모 경로 계산, 자식 절대 경로 조립, 크기 표기, 파일 클릭의 확장자
-// 라우팅(청크 D), 키보드 탐색의 선택 이동·키 판정(체크포인트 2). DOM·IPC 는 이
-// 파일의 대상이 아니다 (뷰는 이 결과를 그대로 그리는 얇은 층이다).
+// DOM·IPC 는 이 파일의 대상이 아니다 (뷰는 이 결과를 그대로 그리는 얇은 층이다).
 
 import { describe, expect, it } from "vitest";
 
@@ -112,7 +109,6 @@ describe("viewerTabForPath", () => {
       path: "/home/u/README.md",
     });
     expect(viewerTabForPath("/home/u/notes.markdown").type).toBe("markdownViewer");
-    // 확장자 비교는 대소문자를 가리지 않는다.
     expect(viewerTabForPath("/home/u/READ.MD").type).toBe("markdownViewer");
   });
 
@@ -122,7 +118,6 @@ describe("viewerTabForPath", () => {
       path: "/var/log/syslog",
     });
     expect(viewerTabForPath("/home/u/main.rs").type).toBe("textViewer");
-    // `.md` 를 담은 이름이지 확장자가 아닌 경우.
     expect(viewerTabForPath("/home/u/notes.md.bak").type).toBe("textViewer");
     expect(viewerTabForPath("/home/u/mdfile").type).toBe("textViewer");
   });
@@ -157,10 +152,8 @@ describe("moveSelection", () => {
   it("pages by PAGE_ROWS and clamps at the ends", () => {
     expect(moveSelection(0, 100, "pageDown")).toBe(PAGE_ROWS);
     expect(moveSelection(PAGE_ROWS, 100, "pageUp")).toBe(0);
-    // 남은 행이 한 페이지보다 적으면 끝 행까지만 간다.
     expect(moveSelection(95, 100, "pageDown")).toBe(99);
     expect(moveSelection(4, 100, "pageUp")).toBe(0);
-    // 목록이 한 페이지보다 짧아도 범위를 벗어나지 않는다.
     expect(moveSelection(0, 3, "pageDown")).toBe(2);
     expect(moveSelection(2, 3, "pageUp")).toBe(0);
   });

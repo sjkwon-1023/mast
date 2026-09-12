@@ -166,7 +166,7 @@ fn log_firewall_state(port: u16) {
     });
 }
 
-/// [`remote_status`] 의 응답. 프론트 미러는 `backend.ts` 의 같은 이름 타입이다.
+/// 프론트 미러는 `backend.ts` 의 같은 이름 타입이다.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteStatus {
@@ -175,16 +175,16 @@ pub struct RemoteStatus {
     reason: Option<String>,
 }
 
-/// [`remote_pairing`] 의 응답. 토큰이 렌더러로 건너가는 유일한 값이다.
+/// 토큰이 렌더러로 건너가는 유일한 값이다.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pairing {
     url: String,
 }
 
-/// 원격 표면의 부팅 결과. 프론트가 **설정과 무관하게** 부팅당 한 번 부른다 — 설정
-/// 파일은 webview 가 뜰 때마다 다시 읽히지만 서버는 부팅 때 한 번 결정되므로,
-/// 프론트가 설정으로 게이트하면 재시작 전에 편집된 파일이 실제 상태와 어긋난다.
+/// 프론트가 **설정과 무관하게** 부팅당 한 번 부른다 — 설정 파일은 webview 가 뜰
+/// 때마다 다시 읽히지만 서버는 부팅 때 한 번 결정되므로, 프론트가 설정으로 게이트하면
+/// 재시작 전에 편집된 파일이 실제 상태와 어긋난다.
 ///
 /// **토큰을 싣지 않는다.** 이 값은 상태 라인과 사이드바가 늘 들고 있는 것이라,
 /// 여기에 토큰이 있으면 페어링을 열지도 않은 세션의 DOM 에 비밀이 남는다.

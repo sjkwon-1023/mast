@@ -22,7 +22,7 @@ function harness() {
     get calls() {
       return generations.length;
     },
-    /** 미결 폴을 전부 정착시키고 마이크로태스크를 흘린다. */
+    /** 마이크로태스크까지 흘린다 — advanceTimersByTimeAsync(0) 이 프로미스 연속 실행을 비운다. */
     async settle() {
       for (const resolve of pending.splice(0)) resolve();
       await vi.advanceTimersByTimeAsync(0);
@@ -75,7 +75,6 @@ describe("PollSchedule", () => {
     const h = harness();
     h.schedule.start();
     expect(h.calls).toBe(1);
-    // 응답을 붙잡아 둔 채 시간을 흘린다 — 다음 폴은 나가지 않아야 한다.
     await vi.advanceTimersByTimeAsync(INTERVAL * 4);
     expect(h.calls).toBe(1);
     await h.settle();
@@ -109,12 +108,10 @@ describe("PollSchedule", () => {
     const h = harness();
     h.schedule.start();
     expect(h.calls).toBe(1);
-    // 응답을 붙잡은 채로 요청한다 — 겹쳐 쏘지 않는다.
     h.schedule.pollNow();
     h.schedule.pollNow();
     expect(h.calls).toBe(1);
     await h.settle();
-    // 간격을 기다리지 않고, 밀린 요청 하나만 나간다.
     expect(h.calls).toBe(2);
     await h.settle();
     expect(h.calls).toBe(2);
@@ -154,7 +151,7 @@ describe("PollSchedule", () => {
     await vi.advanceTimersByTimeAsync(INTERVAL * 10);
     expect(generations).toHaveLength(1);
     expect(halts).toEqual(["unauthorized"]);
-    // 다시 켜려 해도 살아나지 않는다 — 토큰이 유효하지 않다는 판정은 영구다.
+    // 토큰이 유효하지 않다는 판정은 영구다.
     schedule.start();
     schedule.setVisible(false);
     schedule.setVisible(true);
