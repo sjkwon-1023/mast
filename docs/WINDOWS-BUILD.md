@@ -2121,6 +2121,50 @@ is the only place the firewall lines land. Run the PowerShell commands as admini
    failed — `netsh -f`'s behaviour on a failing line and its exit code are undocumented, and
    this is the only place they get answered.
 
+### v0.3.24 — verification
+
+Front-end only ([ADR-0019](adr/0019-restore-terminal-scroll-across-workspace-round-trip.md)).
+Field-only, because the behaviour needs a real agent tab and a real workspace round-trip. Use
+two workspaces throughout and switch with `Ctrl+1`/`Ctrl+2`.
+
+1. **A Codex tab keeps its place, and does not flash the top on the way.** In a Codex tab,
+   scroll the terminal up so the transcript shows something identifiable well above the bottom.
+   Switch to the other workspace, wait a second, switch back: the same lines are on screen, give
+   or take a few (the pane redraws its history on the way back, so the position is restored to
+   within a line or two, not exactly). **Watch the second it takes to settle** — the pane may
+   show the bottom briefly while the history is redrawn, but it must never show the *top* of the
+   transcript and then jump down; that was the defect this release fixes. Repeat two or three
+   more times — it should hold every time, not only the first.
+2. **A plain shell keeps its place too.** In a bash tab run something with a long scrollback
+   (`seq 1 5000`), scroll up to a known number, round-trip the workspace: that number is still
+   on screen.
+3. **A bottom-pinned tab is untouched.** A tab left at the bottom comes back at the bottom, and
+   an alternate-screen tab (Claude Code, or `vim`/`htop`) round-trips exactly as it did in
+   v0.3.23 — nothing about its screen or scroll behaviour changes.
+4. **Typing and the wheel cancel the restore.** Scroll a Codex tab up, switch away, switch back
+   and press a key (or scroll the wheel) immediately on return: the pane stays where your gesture
+   put it and does not jump back up a moment later. The key only counts while **that** pane has
+   focus (ADR-0019 decision 5), so in a split, typing into the other pane must not disturb this
+   one.
+5. **A scrollbar drag cancels it too.** Same setup, but on return grab the pane's scrollbar and
+   drag it instead of using the wheel: the restore is abandoned and the pane stays where you
+   dragged it. This is the one cancel signal whose DOM target is **unverified on WebView2** — the
+   handler only counts a mouse-down inside `.xterm-viewport`, and whether Chromium's overlay-off
+   scrollbar (v0.3.11) delivers the event with that element as the target has not been checked
+   anywhere but by reading the code. If the drag does *not* cancel, say so: the fix is to widen
+   the target test, not to abandon the narrowing (a plain click to focus a pane must keep not
+   cancelling).
+6. **A reload does not keep the place.** Scroll up, press F5: the tab comes back at the bottom.
+   That is the documented boundary (ADR-0019 decision 3), not a defect.
+7. **A closed tab leaves nothing behind.** Scroll a tab up, close it, open a new terminal tab in
+   the same pane: the new tab starts at the bottom.
+8. **Which screen does Codex actually use here?** (Answers the conflict in ADR-0019's Context.)
+   In a live Codex tab, scroll the wheel: if the *terminal's* scrollback moves, Codex is drawing
+   inline on the normal buffer, as it did on the Linux dev box. If the app scrolls its own
+   transcript and the terminal scrollback does not move, Codex is on the alternate screen here
+   and ADR-0016's record is right about this machine. Report which one it is with the build and
+   `codex --version`; the phone's ▲/▼ button rule (ADR-0016) depends on the answer.
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy
