@@ -1019,6 +1019,209 @@ body {
   background: var(--border);
 }
 
+/* ── 뷰어 탭 — changesViewer ──────────────────────────────────────────
+   상태 목록과 선택한 파일의 plain unified diff 를 좌우로 보여 준다. 두 영역의
+   스크롤은 뷰가 살아 있는 동안만 유지하며, 모델에 기록하지 않는다. */
+
+.changes-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.changes-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.changes-title {
+  flex: 0 0 auto;
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.changes-root {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-filters {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.changes-filter,
+.changes-refresh {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.changes-filter:hover:not(:disabled),
+.changes-refresh:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--border);
+}
+
+.changes-filter.active {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.changes-notice,
+.changes-diff-notice {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-notice.error,
+.changes-diff-notice.error {
+  color: var(--error);
+}
+
+.changes-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
+.changes-list-panel,
+.changes-diff-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.changes-list-panel {
+  flex: 0 0 35%;
+  border-right: 1px solid var(--border);
+}
+
+.changes-diff-panel {
+  flex: 1 1 auto;
+}
+
+.changes-list-header,
+.changes-diff-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.changes-list-count {
+  color: var(--fg-muted);
+}
+
+.changes-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.changes-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 6px;
+  color: var(--fg);
+  background: transparent;
+  border: none;
+  font: inherit;
+  font-family: var(--viewer-font-family, monospace);
+  font-size: var(--viewer-font-size, 12px);
+  text-align: left;
+  cursor: pointer;
+}
+
+.changes-file:hover {
+  background: var(--border);
+}
+
+.changes-file.selected {
+  color: #ffffff;
+  background: var(--accent);
+}
+
+.changes-file-status {
+  flex: 0 0 2ch;
+  color: var(--accent);
+  white-space: pre;
+}
+
+.changes-file.selected .changes-file-status {
+  color: inherit;
+}
+
+.changes-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-list-empty,
+.changes-diff-empty {
+  padding: 8px 6px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.changes-diff-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.changes-diff {
+  min-width: max-content;
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--fg);
+  font-family: var(--viewer-font-family, monospace);
+  font-size: var(--viewer-font-size, 12px);
+  line-height: 1.35;
+  white-space: pre;
+}
+
+.changes-diff[hidden] {
+  display: none;
+}
+
 /* ── send-mode 대상 선택 (17단계) ──────────────────────────────────────
    workspace-view 가 #view 에 .send-mode 를 토글한다. pane 전체가 "클릭 = 대상
    확정"임을 커서(crosshair)와 hover 테두리로 최소 표시한다. 셀렉터에 #view id

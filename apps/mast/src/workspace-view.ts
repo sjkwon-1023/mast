@@ -44,6 +44,7 @@
 // keydown capture 를 걸었다 뗀다 (상시 리스너 금지 — 평시 Esc 는 PTY 소유).
 
 import { detachTerminal } from "./backend";
+import { ChangesView } from "./changes-view";
 import { FolderView } from "./folder-view";
 import type { PaneRect } from "./keys";
 import { MarkdownView } from "./markdown-view";
@@ -516,7 +517,8 @@ export class WorkspaceView {
 
   /** 뷰어 레지스트리 ensure 구현 (21단계) — 없으면 생성해 parent 에 마운트한다.
    *  distro 는 최신 채택 스냅샷의 활성 워크스페이스 값이다 (없으면 null — 글루가
-   *  MAST_DISTRO·기본 배포판 순으로 해석한다). 청크 D 로 뷰어 3종이 모두 착지해
+   *  MAST_DISTRO·기본 배포판 순으로 해석한다). Changes 뷰어까지 네 종류가 모두
+   *  착지해
    *  실제로 null 을 돌리는 경로는 없다 — 반환 타입의 null 은 pane 의 placeholder
    *  안전망(계약)으로 남긴다. */
   private ensureViewerView(target: VisibleViewer, parent: HTMLElement): ViewerView | null {
@@ -554,6 +556,9 @@ export class WorkspaceView {
           target.kind,
           this.dispatch,
         );
+        break;
+      case "changesViewer":
+        created = new ChangesView(parent, target.tab, distro, target.kind);
         break;
     }
     this.viewerViews.set(target.tab, created);

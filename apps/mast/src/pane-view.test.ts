@@ -422,6 +422,22 @@ describe("PaneView viewer seam (21단계)", () => {
       { type: "createTab", pane: 4, tab: { type: "folderBrowser", path: null } },
     ]);
   });
+
+  it("opens the Changes viewer at the workspace root, not the pane shell cwd", () => {
+    const { view, headerButton, dispatched } = mount(4);
+    view.update(
+      pane([terminalTab(10, { cwd: "/home/u/nested" })], 10),
+      true,
+      null,
+      null,
+    );
+
+    headerButton("New changes viewer tab").click();
+
+    expect(dispatched).toEqual([
+      { type: "createTab", pane: 4, tab: { type: "changesViewer", path: null } },
+    ]);
+  });
 });
 
 describe("PaneView header buttons", () => {
@@ -433,17 +449,18 @@ describe("PaneView header buttons", () => {
     );
   }
 
-  it("has exactly the four working buttons — the send pair is retired", () => {
+  it("has the five working buttons — the send pair is retired", () => {
     const { view } = mount();
     view.update(pane(THREE, 10), true, null, null);
 
     const titles = headerButtons(view).map((b) => b.title);
-    expect(titles).toHaveLength(4);
+    expect(titles).toHaveLength(5);
     expect(titles.filter((t) => t.toLowerCase().includes("send"))).toEqual([]);
     // 툴팁의 기능 설명 부분만 본다 — 뒤에 붙는 단축키 표기는 keys.ts 소유.
     expect(titles.map((t) => t.replace(/ \(.*\)$/, ""))).toEqual([
       "New terminal tab",
       "New folder browser tab",
+      "New changes viewer tab",
       "Split left/right",
       "Split top/bottom",
     ]);
@@ -456,7 +473,7 @@ describe("PaneView header buttons", () => {
     const [plus, ...icons] = headerButtons(view);
     // + 는 텍스트 라벨 그대로다 (판단: 기호가 이미 자명하다).
     expect(plus.textContent).toBe("+");
-    expect(icons).toHaveLength(3);
+    expect(icons).toHaveLength(4);
     for (const btn of icons) {
       const svg = btn.querySelector("svg");
       expect(svg).not.toBeNull();
@@ -465,7 +482,7 @@ describe("PaneView header buttons", () => {
       expect(svg?.getAttribute("stroke")).toBe("currentColor");
     }
     // 분할 페어는 같은 사각형에 이등분선 방향만 다르다 — 마크업이 실제로 갈리는지.
-    const [, leftRight, topBottom] = icons;
+    const [, , leftRight, topBottom] = icons;
     expect(leftRight.innerHTML).not.toBe(topBottom.innerHTML);
     expect(leftRight.querySelector("path")?.getAttribute("d")).toContain("v10.5");
     expect(topBottom.querySelector("path")?.getAttribute("d")).toContain("h10.5");

@@ -2639,3 +2639,44 @@ This is also the instrument for the open "`portable-pty`/ConPTY shutdown path ha
 audited" item: run it, then check the handle and process columns against a Process Explorer
 handle listing of the test process for the shutdown paths (normal exit, explicit kill, rapid
 respawn) that the three cycle patterns cover.
+
+## 14. Changes viewer verification (ADR-0021 / ADR-0022)
+
+Status: **Windows + WSL field verification pending**. Automated Linux Git/process tests and
+Windows target compilation are separate evidence; they do not mark this checklist complete.
+Use a disposable repository and a copy of the state directory for downgrade checks.
+
+1. Open the pane-header **New changes viewer tab** button in a normal workspace and in a
+   bare worktree container. The toolbar must show the resolved worktree top level; the
+   persisted tab path must still be the supplied workspace root. A bare default branch
+   with no checkout must show an explicit error instead of choosing another branch.
+2. Prepare staged and unstaged changes to the same file, a rename, a deletion, and an
+   untracked file. Verify Working / Staged / All baselines and source/destination rename
+   names. Verify a repository with no commits and a real unresolved merge conflict.
+3. Include `-oops.txt`, `:(glob)*`, spaces, Korean, quotes and newline characters in file
+   names. Each selection must read only its own patch. A binary file must show Git's
+   binary summary. File contents that contain HTML must display as text.
+4. Hold `.git/index.lock` in the adjacent pane and leave it intact. Refresh and file
+   selection must still work. In the disposable repository, configure external diff,
+   textconv and fsmonitor helpers with visible markers; none should run for the viewer.
+5. Select a diff larger than 512 KiB and prepare more than 5,000 changes. Check the
+   truncation messages. Trigger an inaccessible repository and a failed query; the pane
+   must leave loading state and offer Refresh. Simulate an unresponsive Git command in a
+   disposable test distro: within the query capture deadline the pane must show an error
+   and dispatch must remain responsive. Check the Windows relay is reaped, then separately
+   observe Linux cleanup through its TERM + KILL deadline (at most 10 seconds from the
+   Linux supervisor's start). WSL startup is outside that inner timer; neither timeout nor
+   output-cap responses promise that Linux cleanup has already finished.
+6. Rapidly select different files, change scopes, refresh, switch tabs, close the viewer,
+   and switch workspaces while queries run. Stale patches must not replace the current
+   selection; inactive views must retain no DOM or polling. Returning to the tab must read
+   a fresh list. Test font settings and viewer zoom, narrow panes, copy, and keyboard focus.
+7. Save a state containing Changes and terminal tabs in multiple panes/workspaces. Load a
+   copy with the **compatibility-only** build: only the unknown tabs disappear; workspaces,
+   split layout and terminal cwd survive. Load the original copy with the Changes build:
+   all tabs survive. Confirm per-tab removal diagnostics in the compatibility build.
+8. The phone list must label the tab `changes` without opening it. Existing terminals,
+   Markdown/text/folder viewers, shortcuts, and agent state notifications must still work.
+
+Release the ADR-0021 compatibility build before the Changes build. Releases without that
+repair still discard a state containing a new tab kind; do not use live state to test them.

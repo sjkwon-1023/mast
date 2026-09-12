@@ -1,0 +1,29 @@
+{
+  "newTab": { "type": "changesViewer", "path": null },
+  "kind": { "type": "changesViewer", "path": "/home/user/code/project" },
+  "diffBytes": 524288,
+  "status": {
+    "root": "/home/user/code/project/main",
+    "unborn": false,
+    "entries": [
+      {
+        "path": "new name.rs",
+        "originalPath": "old name.rs",
+        "indexStatus": "R",
+        "worktreeStatus": ".",
+        "untracked": false,
+        "conflicted": false
+      }
+    ],
+    "truncated": false
+  },
+  "request": {
+    "root": "/home/user/code/project/main",
+    "path": "new name.rs",
+    "originalPath": "old name.rs",
+    "scope": "staged",
+    "untracked": false,
+    "unborn": false
+  },
+  "diff": { "text": "rename from old name.rs\nrename to new name.rs\n", "truncated": false }
+}

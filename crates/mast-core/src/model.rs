@@ -439,6 +439,9 @@ pub enum TabKind {
     FolderBrowser {
         path: String,
     },
+    ChangesViewer {
+        path: String,
+    },
     TextViewer {
         path: String,
         /// 최상단 가시 행의 전역 byte offset (enum rustdoc 참조).

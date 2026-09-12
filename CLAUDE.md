@@ -331,13 +331,14 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 
 #### Viewers
 
-- **No Changes view beside the file viewer** (2026-09-11, not started). The wanted shape is a
-  viewer-class surface, not an editor: changed files with `M/A/D/?`, a Working / Staged / All
-  filter, and the selected file's diff fetched lazily instead of materializing a repository-wide
-  diff in the DOM. Unified diff is the default renderer; side-by-side only if it stays cheap on
-  large diffs. The later step is handing selected lines or collected review notes to the active
-  Claude Code/Codex tab as file/line context over the existing send channel — that reuses
-  `mast send` and keeps the surface a viewer.
+- **Changes viewer — implemented 2026-09-13; Windows field verification pending.** The pane
+  header opens a read-only file list and selected unified diff at the workspace root. Working /
+  Staged / All and selection stay frontend-local; inactive views dispose immediately and mount
+  refreshes the list. Git queries have byte/time/concurrency bounds. Bare containers resolve
+  their default branch's worktree. [ADR-0022](docs/adr/0022-read-only-git-changes-viewer.md).
+  **Release ordering:** ship the independent unknown-tab persistence repair (ADR-0021) before
+  shipping this new persisted kind. Sending selected lines to agents, git writes, sidebar
+  indicators and phone diffs remain outside the feature.
 
 - **Reload while minimized** resumes markdown polling until the next minimize/restore
   cycle — accepted narrow window.

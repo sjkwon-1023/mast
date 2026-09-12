@@ -83,7 +83,7 @@ export interface ViewRegistry {
 /** 뷰어 뷰 레지스트리 접근 계약 (21단계) — 소유자는 workspace-view 다.
  *  터미널과 별도 레지스트리인 이유는 수명 시맨틱이 반대이기 때문이다
  *  (viewer-view.ts 참조). ensure 는 없으면 생성해 parent 에 마운트한다. 뷰어
- *  3종이 모두 착지한 지금 null 은 나오지 않지만, 반환 타입에는 남겨 pane 이
+ *  네 종류가 모두 착지한 지금 null 은 나오지 않지만, 반환 타입에는 남겨 pane 이
  *  placeholder 경로로 되돌아가는 안전망을 유지한다. */
 export interface ViewerRegistry {
   get(tab: TabId): ViewerView | undefined;
@@ -142,6 +142,8 @@ const SVG_FOLDER = `<svg ${SVG_ATTRS}><path d="M2 12.5V3.5h4l1.5 2H14v7z"/></svg
 const SVG_SPLIT_LEFT_RIGHT = `<svg ${SVG_ATTRS}><rect x="2" y="2.75" width="12" height="10.5" rx="1"/><path d="M8 2.75v10.5"/></svg>`;
 /** 상하 분할 — 사각형 + 가로 이등분선 (위와 같은 규약의 페어). */
 const SVG_SPLIT_TOP_BOTTOM = `<svg ${SVG_ATTRS}><rect x="2" y="2.75" width="12" height="10.5" rx="1"/><path d="M2.75 8h10.5"/></svg>`;
+/** 변경 목록 — 사각형 안에 추가·삭제를 뜻하는 두 선. */
+const SVG_CHANGES = `<svg ${SVG_ATTRS}><path d="M4 3.25h8M4 6.5h5M4 9.75h8M4 13h5"/><path d="M2 3.25h.01M2 6.5h.01M2 9.75h.01M2 13h.01"/></svg>`;
 
 /** 값이 같으면 쓰지 않는 텍스트 대입 — textContent 재대입은 값이 같아도 자식
  *  텍스트 노드를 갈아치우므로, 무변경 갱신이 DOM 을 흔들지 않게 한다. */
@@ -169,6 +171,8 @@ function placeholderText(tab: Tab | null): string {
     case "markdownViewer":
       // 21단계 D 이후로 markdownViewer 도 항상 마운트된다 (위와 같은 안전망).
       return `markdownViewer: ${kind.path} (no viewer mounted)`;
+    case "changesViewer":
+      return `changesViewer: ${kind.path} (no viewer mounted)`;
   }
 }
 
@@ -389,6 +393,13 @@ export class PaneView {
         type: "createTab",
         pane: this.paneId,
         tab: { type: "folderBrowser", path: null },
+      })),
+      // Changes 는 pane 셸의 cwd 가 아니라 워크스페이스 루트에서 여는 전역
+      // 작업 목록이다. path null 은 코어가 워크스페이스 rootPath 로 해석한다.
+      this.svgButton(SVG_CHANGES, "New changes viewer tab", () => ({
+        type: "createTab",
+        pane: this.paneId,
+        tab: { type: "changesViewer", path: null },
       })),
       // 브라우저 탭 버튼(◎)은 여기 있었다 — 영구 disabled 라 자리만 차지해
       // 뺐다. v2 에서 기능과 함께 돌아온다.
