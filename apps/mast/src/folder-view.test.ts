@@ -199,10 +199,11 @@ describe("folderKeyAction", () => {
   });
 
   it("ignores every modified combination", () => {
-    // Alt+방향키는 전역 pane 이동(keys.ts) 소유다 — 뷰가 가로채면 뷰어 탭에서만
+    // Ctrl+Shift+방향키는 전역 pane 이동(keys.ts) 소유다 — 뷰가 가로채면 뷰어 탭에서만
     // 이동이 죽는다.
     expect(folderKeyAction(key("ArrowDown", { alt: true }))).toBeNull();
     expect(folderKeyAction(key("ArrowUp", { alt: true }))).toBeNull();
+    expect(folderKeyAction(key("ArrowUp", { ctrl: true, shift: true }))).toBeNull();
     expect(folderKeyAction(key("Enter", { ctrl: true }))).toBeNull();
     expect(folderKeyAction(key("ArrowDown", { shift: true }))).toBeNull();
     expect(folderKeyAction(key("Home", { ctrl: true }))).toBeNull();

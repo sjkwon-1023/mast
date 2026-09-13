@@ -11,6 +11,7 @@ import {
   gitDiffSource,
 } from "./changes-view";
 import type { GitChange, GitDiff, GitStatus } from "./backend";
+import { MAX_DIFF_LINES } from "./diff-presentation";
 
 vi.mock("./backend", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./backend")>();
@@ -218,6 +219,7 @@ describe("ChangesView", () => {
 
     button(root, '.changes-filter[data-scope="working"]').click();
     expect(root.querySelectorAll(".changes-file")).toHaveLength(1);
+    expect(root.querySelector(".changes-diff-header")?.textContent).toBe("Diff");
     expect(root.querySelector<HTMLElement>(".changes-diff-empty")?.textContent).toBe(
       "select a changed file to view its diff",
     );
@@ -311,8 +313,8 @@ describe("ChangesView", () => {
 
     pendingDiff.resolve({ text: "stale diff", truncated: false });
     await settle();
-    expect(root.querySelector<HTMLPreElement>(".changes-diff")?.textContent).toBe("");
-    expect(root.querySelector<HTMLPreElement>(".changes-diff")?.hidden).toBe(true);
+    expect(root.querySelector<HTMLDivElement>(".changes-diff")?.textContent).toBe("");
+    expect(root.querySelector<HTMLDivElement>(".changes-diff")?.hidden).toBe(true);
   });
 
   it("refreshes the selected file from the new status and clears a vanished selection", async () => {
@@ -339,7 +341,7 @@ describe("ChangesView", () => {
     expect(gitDiff).toHaveBeenCalledTimes(2);
   });
 
-  it("surfaces status, diff, and truncation errors without interpreting diff text", async () => {
+  it("surfaces status, diff, and truncation errors without interpreting HTML", async () => {
     const entry = change("<script>.txt", { worktreeStatus: "M" });
     const { root, view } = mount("/repo", status([entry], { truncated: true }));
     await settle();
@@ -354,9 +356,9 @@ describe("ChangesView", () => {
     vi.mocked(gitDiff).mockResolvedValueOnce({ text: "<b>plain</b>", truncated: true });
     button(root, '.changes-filter[data-scope="working"]').click();
     await settle();
-    const pre = root.querySelector<HTMLPreElement>(".changes-diff");
-    expect(pre?.textContent).toBe("<b>plain</b>");
-    expect(pre?.querySelector("b")).toBeNull();
+    const diff = root.querySelector<HTMLDivElement>(".changes-diff");
+    expect(diff?.textContent).toBe("<b>plain</b>");
+    expect(diff?.querySelector("b")).toBeNull();
     expect(root.querySelector<HTMLElement>(".changes-diff-notice")?.textContent).toContain("truncated");
 
     view.flushScroll();
@@ -369,5 +371,44 @@ describe("ChangesView", () => {
     view.update({ type: "changesViewer", path: "/repo" });
     await settle();
     expect(gitStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows colored before/after sections and updates their baselines with the scope", async () => {
+    const { root } = mount("/repo", status([
+      change("file.ts", { indexStatus: "M", worktreeStatus: "M" }),
+    ]));
+    vi.mocked(gitDiff).mockResolvedValue({
+      text: "diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new\n",
+      truncated: false,
+    });
+    await settle();
+    button(root, ".changes-file").click();
+    await settle();
+    expect(root.querySelector(".changes-diff-header")?.textContent).toContain("changed sections");
+    expect(root.querySelector(".diff-removed")?.textContent).toContain("-old");
+    expect(root.querySelector(".diff-added")?.textContent).toContain("+new");
+    expect(root.querySelector(".diff-side-heading")?.textContent).toBe("Before · HEAD");
+    button(root, '.changes-filter[data-scope="working"]').click();
+    expect(root.querySelector(".changes-diff-header")?.textContent).toBe("Diff");
+    await settle();
+    expect(root.querySelector(".diff-side-heading")?.textContent).toBe("Before · Index");
+    expect(gitDiff).toHaveBeenCalledTimes(2);
+    window.dispatchEvent(new Event("resize"));
+    await settle();
+    expect(gitDiff).toHaveBeenCalledTimes(2);
+    button(root, ".changes-refresh").click();
+    expect(root.querySelector(".changes-diff-header")?.textContent).toBe("Diff");
+    await settle();
+  });
+
+  it("makes the additional display-line limit visible instead of silently omitting lines", async () => {
+    const { root } = mount("/repo", status([change("large.txt", { worktreeStatus: "M" })]));
+    vi.mocked(gitDiff).mockResolvedValue({ text: "x\n".repeat(MAX_DIFF_LINES + 10), truncated: false });
+    await settle();
+    button(root, ".changes-file").click();
+    await settle();
+    expect(root.querySelector<HTMLElement>(".changes-diff-notice")?.hidden).toBe(false);
+    expect(root.querySelector(".changes-diff-notice")?.textContent).toMatch(/5,?000/);
+    expect(root.querySelector(".changes-diff")?.textContent?.length).toBeLessThanOrEqual(MAX_DIFF_LINES * 2);
   });
 });

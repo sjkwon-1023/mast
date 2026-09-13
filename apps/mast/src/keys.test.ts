@@ -32,23 +32,33 @@ describe("keyAction", () => {
     }
   });
 
-  it("Alt+방향키 4종은 pane 이동 방향으로 매핑된다", () => {
-    expect(keyAction(spec({ key: "ArrowUp", alt: true }))).toEqual({
+  it("Ctrl+Shift+방향키 4종은 pane 이동 방향으로 매핑된다", () => {
+    expect(keyAction(spec({ key: "ArrowUp", ctrl: true, shift: true }))).toEqual({
       type: "focusPane",
       dir: "up",
     });
-    expect(keyAction(spec({ key: "ArrowDown", alt: true }))).toEqual({
+    expect(keyAction(spec({ key: "ArrowDown", ctrl: true, shift: true }))).toEqual({
       type: "focusPane",
       dir: "down",
     });
-    expect(keyAction(spec({ key: "ArrowLeft", alt: true }))).toEqual({
+    expect(keyAction(spec({ key: "ArrowLeft", ctrl: true, shift: true }))).toEqual({
       type: "focusPane",
       dir: "left",
     });
-    expect(keyAction(spec({ key: "ArrowRight", alt: true }))).toEqual({
+    expect(keyAction(spec({ key: "ArrowRight", ctrl: true, shift: true }))).toEqual({
       type: "focusPane",
       dir: "right",
     });
+  });
+
+  it.each(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"])("%s의 Alt·Ctrl 조합은 터미널 소유이며 pane 이동은 IME 중 가로채지 않는다", (key) => {
+    for (const modifiers of [
+      { alt: true }, { ctrl: true }, { shift: true },
+      { ctrl: true, alt: true }, { ctrl: true, shift: true, alt: true },
+      { ctrl: true, shift: true, isComposing: true },
+    ]) {
+      expect(keyAction(spec({ key, ...modifiers }))).toBeNull();
+    }
   });
 
   it("Ctrl+Tab 은 다음 탭, Ctrl+Shift+Tab 은 이전 탭이다", () => {
@@ -65,7 +75,7 @@ describe("keyAction", () => {
     expect(keyAction(spec({ key: "ArrowLeft", alt: true, isComposing: true }))).toBeNull();
   });
 
-  it("shift 변형은 Ctrl+Shift+Tab · Ctrl+Shift+<문자> · 확대의 + 만 허용한다 — 숫자·방향키의 shift 조합은 null", () => {
+  it("목록 밖의 Ctrl+Shift+숫자·Alt+Shift+방향키는 null", () => {
     expect(keyAction(spec({ key: "1", ctrl: true, shift: true }))).toBeNull();
     expect(keyAction(spec({ key: "ArrowRight", alt: true, shift: true }))).toBeNull();
   });

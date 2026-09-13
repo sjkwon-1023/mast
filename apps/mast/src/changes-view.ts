@@ -2,6 +2,7 @@
 // 통합 diff만 별도로 읽는다. 선택·필터·스크롤은 이 마운트의 휘발 상태다.
 
 import { gitDiff, gitStatus } from "./backend";
+import { renderDiff } from "./diff-presentation-view";
 import type { GitChange, GitDiffScope, GitStatus } from "./backend";
 import type { ViewerKind, ViewerView } from "./viewer-view";
 import type { TabId } from "./types";
@@ -57,7 +58,8 @@ export class ChangesView implements ViewerView {
   private readonly listEl: HTMLDivElement;
   private readonly diffNoticeEl: HTMLDivElement;
   private readonly diffEmptyEl: HTMLDivElement;
-  private readonly diffEl: HTMLPreElement;
+  private readonly diffEl: HTMLDivElement;
+  private readonly diffHeaderEl: HTMLDivElement;
   private readonly filterButtons = new Map<ChangesScope, HTMLButtonElement>();
   private readonly refreshButton: HTMLButtonElement;
 
@@ -145,9 +147,9 @@ export class ChangesView implements ViewerView {
 
     const diffPanel = document.createElement("section");
     diffPanel.className = "changes-diff-panel";
-    const diffHeader = document.createElement("div");
-    diffHeader.className = "changes-diff-header";
-    diffHeader.textContent = "Unified diff";
+    this.diffHeaderEl = document.createElement("div");
+    this.diffHeaderEl.className = "changes-diff-header";
+    this.diffHeaderEl.textContent = "Diff";
 
     const diffScroll = document.createElement("div");
     diffScroll.className = "changes-diff-scroll";
@@ -158,11 +160,11 @@ export class ChangesView implements ViewerView {
     this.diffEmptyEl = document.createElement("div");
     this.diffEmptyEl.className = "changes-diff-empty";
     this.diffEmptyEl.textContent = "select a changed file to view its diff";
-    this.diffEl = document.createElement("pre");
+    this.diffEl = document.createElement("div");
     this.diffEl.className = "changes-diff";
     this.diffEl.hidden = true;
     diffScroll.append(this.diffNoticeEl, this.diffEmptyEl, this.diffEl);
-    diffPanel.append(diffHeader, diffScroll);
+    diffPanel.append(this.diffHeaderEl, diffScroll);
 
     body.append(listPanel, diffPanel);
     this.root.append(toolbar, this.statusNoticeEl, body);
@@ -260,6 +262,7 @@ export class ChangesView implements ViewerView {
   }
 
   private clearDiffForStatusRefresh(): void {
+    this.diffHeaderEl.textContent = "Diff";
     this.diffNoticeEl.hidden = this.selectedKey === null;
     this.diffNoticeEl.classList.remove("error");
     this.diffNoticeEl.textContent = this.selectedKey === null ? "" : "refreshing changes…";
@@ -324,6 +327,7 @@ export class ChangesView implements ViewerView {
   }
 
   private clearSelection(): void {
+    this.diffHeaderEl.textContent = "Diff";
     this.selectedKey = null;
     this.selectedChange = null;
     this.diffRequest += 1;
@@ -339,6 +343,7 @@ export class ChangesView implements ViewerView {
     const status = this.status;
     if (status === null) return;
     const request = ++this.diffRequest;
+    this.diffHeaderEl.textContent = "Diff";
     this.diffNoticeEl.hidden = false;
     this.diffNoticeEl.classList.remove("error");
     this.diffNoticeEl.textContent = "loading diff…";
@@ -361,7 +366,15 @@ export class ChangesView implements ViewerView {
         ) {
           return;
         }
-        this.diffEl.textContent = diff.text;
+        const presentation = renderDiff(this.diffEl, diff.text, {
+          scope: this.scope,
+          untracked: change.untracked,
+          unborn: status.unborn,
+          truncated: diff.truncated,
+        });
+        this.diffHeaderEl.textContent = presentation.mode === "comparison"
+          ? "Before / After · changed sections"
+          : "Unified diff";
         this.diffEl.hidden = diff.text.length === 0;
         if (diff.text.length === 0) {
           this.diffEmptyEl.hidden = false;
@@ -369,10 +382,14 @@ export class ChangesView implements ViewerView {
         } else {
           this.diffEmptyEl.hidden = true;
         }
-        if (diff.truncated) {
+        const notices = [
+          diff.truncated ? "diff truncated — showing the first 512 KiB" : null,
+          presentation.notice,
+        ].filter((notice): notice is string => notice !== null);
+        if (notices.length > 0) {
           this.diffNoticeEl.hidden = false;
           this.diffNoticeEl.classList.remove("error");
-          this.diffNoticeEl.textContent = "diff truncated — showing the first 512 KiB";
+          this.diffNoticeEl.textContent = notices.join(" · ");
         } else {
           this.diffNoticeEl.hidden = true;
           this.diffNoticeEl.textContent = "";

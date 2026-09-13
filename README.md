@@ -38,7 +38,7 @@ with Windows 11. mast opens WSL2 shells only — there is no PowerShell or CMD p
 
 ## Features
 
-- **Split panes** — split either way, drag to resize, `Alt`+arrows to move focus. A new pane or tab
+- **Split panes** — split either way, drag to resize, `Ctrl+Shift`+arrows to move focus. A new pane or tab
   opens in the directory the pane's shell is in.
 - **Tabs inside panes** — every pane has its own tab strip; background tabs stay alive.
 - **Agent status and notifications** — Claude Code and Codex report running / needs input / idle to
@@ -105,7 +105,7 @@ not listed goes straight to the PTY.
 | Key | Action |
 |---|---|
 | `Ctrl+1` … `Ctrl+9` | Switch workspace by sidebar position |
-| `Alt+↑ ↓ ← →` | Move focus to the adjacent pane |
+| `Ctrl+Shift+↑ ↓ ← →` | Move focus to the adjacent pane |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Cycle tabs in the active pane |
 | `Ctrl+Shift+T` | New terminal tab |
 | `Ctrl+Shift+B` | New folder browser tab |

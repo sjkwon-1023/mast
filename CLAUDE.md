@@ -332,13 +332,17 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 #### Viewers
 
 - **Changes viewer — implemented 2026-09-13; Windows field verification pending.** The pane
-  header opens a read-only file list and selected unified diff at the workspace root. Working /
+  header opens a read-only file list and selected patch at the workspace root. Working /
   Staged / All and selection stay frontend-local; inactive views dispose immediately and mount
   refreshes the list. Git queries have byte/time/concurrency bounds. Bare containers resolve
   their default branch's worktree. [ADR-0022](docs/adr/0022-read-only-git-changes-viewer.md).
   **Release ordering:** ship the independent unknown-tab persistence repair (ADR-0021) before
   shipping this new persisted kind. Sending selected lines to agents, git writes, sidebar
-  indicators and phone diffs remain outside the feature.
+  indicators and phone diffs remain outside the feature. **Responsive comparison (2026-09-13):**
+  ordinary complete patches show colored Before/After changed sections, side-by-side at a
+  pane width of 960 CSS px and stacked below it. CSS handles resizing; no extra Git query or
+  editor dependency is added. Combined/non-textual/incomplete output stays unified, and a
+  5,000-input-line display cap bounds DOM work. Details and limits: ADR-0022 amendment.
 
 - **Reload while minimized** resumes markdown polling until the next minimize/restore
   cycle — accepted narrow window.

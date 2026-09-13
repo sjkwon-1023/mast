@@ -511,7 +511,7 @@ regression once the model fields are dynamic.
 
 ### Stage 20 — three-tier keyboard navigation (계획 v2 "키보드 모델"; the canonical interception list lives in the [`apps/mast/src/keys.ts`](../apps/mast/src/keys.ts) module doc)
 
-One movement key per tier: `Ctrl+1`…`Ctrl+9` (workspace), `Alt+arrows` (pane focus, by
+One movement key per tier: `Ctrl+1`…`Ctrl+9` (workspace), `Ctrl+Shift+arrows` (pane focus, by
 on-screen adjacency), `Ctrl+Tab` / `Ctrl+Shift+Tab` (tab cycle inside the active pane).
 All three are window-level capture handlers, so they work with the terminal focused. When
 a key has no target (ordinal past the last workspace, already-active workspace, no pane in
@@ -522,11 +522,13 @@ that direction, 0–1 tabs) the app does nothing — silently, with no status-li
    and focus lands in that workspace's active pane (typing goes to its terminal
    immediately). Pressing the ordinal of the **already active** workspace, or an ordinal
    past the last card (e.g. `Ctrl+9` with 3 workspaces), does nothing at all.
-2. **Pane focus move (`Alt+arrows`)** — in a workspace split into 2x2 panes, `Alt+→` /
-   `Alt+↓` / `Alt+←` / `Alt+↑` move the active-pane highlight to the geometrically
+2. **Pane focus move (`Ctrl+Shift+arrows`, since v0.3.30)** — in a workspace split into 2x2 panes, `Ctrl+Shift+→` /
+   `Ctrl+Shift+↓` / `Ctrl+Shift+←` / `Ctrl+Shift+↑` move the active-pane highlight to the geometrically
    adjacent pane each time, and the newly focused pane's terminal receives typing. At an
-   edge (e.g. `Alt+→` from the rightmost pane) and in a single-pane workspace, nothing
-   happens and no error appears.
+   edge (e.g. `Ctrl+Shift+→` from the rightmost pane) and in a single-pane workspace, nothing
+   happens and no error appears. Verify that `Alt+Up` reaches Codex's queued-question UI
+   both with and without an adjacent pane, and plain `Ctrl+arrows` still reach the terminal.
+   These v0.3.30 bindings remain pending field verification.
 3. **Tab cycle (`Ctrl+Tab` / `Ctrl+Shift+Tab`)** — in a pane with 3 tabs, `Ctrl+Tab`
    advances through them in tab-strip order and **wraps** from the last back to the first;
    `Ctrl+Shift+Tab` walks the same cycle backwards. The activated tab's terminal takes
@@ -686,7 +688,7 @@ keyboard-first UX batch need one focused re-verification round. Pull, run
 6. **Folder browser keyboard navigation** — with the folder list focused: arrows move the
    selection highlight, `Home`/`End` jump, `PgUp`/`PgDn` move by 10, `Enter` opens the
    selected row (directory navigates, file opens a viewer), `Backspace` goes to the
-   parent. `Alt+arrows` must still move pane focus (the view only consumes unmodified
+   parent. `Ctrl+Shift+arrows` must still move pane focus (the view only consumes unmodified
    keys). Verify a mouse click moves the selection too, and that keyboard navigation
    still works right after opening a directory by mouse.
 7. **Text viewer windows by keyboard** — with the text view focused: `Ctrl+PgUp`/
@@ -2697,6 +2699,17 @@ Use a disposable repository and a copy of the state directory for downgrade chec
    all tabs survive. Confirm per-tab removal diagnostics in the compatibility build.
 8. The phone list must label the tab `changes` without opening it. Existing terminals,
    Markdown/text/folder viewers, shortcuts, and agent state notifications must still work.
+9. Select a text patch with unequal replacement blocks and multiple hunks. Deleted code is
+   red in Before; added code is green in After; following context aligns. Check Working,
+   Staged, All, and an unborn/untracked file against the displayed baseline labels.
+10. Keep the window wide and resize only this pane across 959/960 CSS px: Before/After must
+    switch from stacked to side-by-side. Long lines scroll within each side, not the entire
+    workspace. The changed-file list stays usable, viewer font/zoom still works, and no new
+    Git query starts merely because the pane was resized.
+11. Combined merge output and binary/rename-only changes retain their original metadata;
+    they must not present a made-up two-sided merge result. A byte-truncated or more-than-
+    5,000-line patch must show the relevant notice and remain bounded. HTML-looking code
+    must never become HTML elements in either layout.
 
 Release the ADR-0021 compatibility build before the Changes build. Releases without that
 repair still discard a state containing a new tab kind; do not use live state to test them.
