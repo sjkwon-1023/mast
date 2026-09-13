@@ -33,7 +33,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 12;
+const SETUP_VERSION: u32 = 13;
 
 /// 프로세스 수명 캐시 — **해석된** distro 이름 기준으로 앱 실행당 1회만 스폰한다.
 /// 기본 distro(None)는 claim 전에 실제 이름으로 해석된다:
@@ -129,6 +129,7 @@ fn run(distro: Option<&str>) -> Result<(), String> {
     // 커버하는 건 *.sh 뿐이다). 스트림에 싣기 전에 LF 로 정규화한다.
     let script = SETUP_SCRIPT
         .replace("@SETUP_VERSION@", &SETUP_VERSION.to_string())
+        .replace("@CONFIG_HELPER@", include_str!("../../../../scripts/wsl/mast-config.py"))
         .replace("\r\n", "\n");
     {
         let mut stdin = child
@@ -222,6 +223,7 @@ LOG="$MAST_HOME/setup.log"
 NOTIFY="$MAST_HOME/bin/mast-notify.sh"
 CODEX_NOTIFY="$MAST_HOME/bin/mast-codex-notify.sh"
 CLI="$MAST_HOME/bin/mast"
+CONFIG="$MAST_HOME/bin/mast-config.py"
 SEND="$MAST_HOME/bin/mast-send.sh"
 OPEN="$MAST_HOME/bin/mast-open"
 XDG_OPEN="$MAST_HOME/bin/xdg-open"
@@ -468,9 +470,8 @@ cat > "$CLI.tmp" <<'MAST_CLI_EOF'
 #   mast send [-l] <target> <text...>  put text into another pane's terminal
 #   mast id                            print this tab's id ($MAST_TAB)
 #
-# Both channels are OSC 777 sequences written to the real terminal device — there is no
-# daemon and no socket. The contract is scripts/wsl/claude-hook-example.md in the mast
-# repository.
+# send/query는 실제 터미널에 OSC 777을 쓴다. config는 Windows 설정 파일을 직접
+# 수정하며 이 출력 채널에 설정 변경 권한을 추가하지 않는다. 데몬·소켓은 없다.
 set -euo pipefail
 
 # The reply to a query arrives as a file the app renames into place; 0.05s * 40 = 2s.
@@ -483,6 +484,7 @@ usage:
   mast ls                            list tabs in this workspace: TAB, TITLE, WORKSPACE, STATUS, COMMAND
   mast send [-l] <target> <text...>  type text into another pane (-l: pre-fill, do not submit)
   mast id                            print this tab's id ($MAST_TAB)
+  mast config                        show saved app settings and configuration commands
 
 Address a target as '#<id>' taken from the TAB column, and quote it — '#' starts a comment in
 most shells: mast send '#176' 'cargo test'. A bare word is matched case-insensitively
@@ -808,6 +810,11 @@ MAST_LS_PY_EOF
 }
 
 case "${1:-}" in
+  config)
+    shift
+    command -v python3 >/dev/null 2>&1 || { echo 'mast config: python3 is required in WSL' >&2; exit 1; }
+    exec python3 "$HOME/.mast/bin/mast-config.py" "$@"
+    ;;
   ls) shift; cmd_ls "$@" ;;
   send) shift; cmd_send "$@" ;;
   id) shift; cmd_id "$@" ;;
@@ -824,6 +831,17 @@ if [ "$status" -ne 0 ] || ! chmod +x "$CLI.tmp" || ! mv -f "$CLI.tmp" "$CLI"; th
   exit 1
 fi
 log "cli installed: $CLI"
+
+cat > "$CONFIG.tmp" <<'MAST_CONFIG_EOF'
+@CONFIG_HELPER@
+MAST_CONFIG_EOF
+status=$?
+if [ "$status" -ne 0 ] || ! mv -f "$CONFIG.tmp" "$CONFIG"; then
+  rm -f "$CONFIG.tmp"
+  echo "[mast] setup: cannot install $CONFIG" >&2
+  exit 1
+fi
+log "config helper installed: $CONFIG"
 
 # --- 3. mast-send.sh compatibility wrapper ---------------------------------------------
 # The v3 helper became `mast send`. Anything already pointing at the old path — a user's

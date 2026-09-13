@@ -663,6 +663,15 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 
 #### Settings and first-run setup
 
+- **CLI settings — implemented 2026-09-13.** `mast config` reads saved Windows settings;
+  `set`/`reset` validate and atomically replace the file, then ask for a full restart. Setup
+  v13 ships a standard-library Python helper, invoked directly rather than through an OSC
+  mutation channel. Windows interop and drive access are required only when using config.
+  `set remote [true] [--port N]` enables on 7331 when omitted; `set remote false` removes the
+  key. This is an explicit-command default, **not** first-run enablement: the JSON schema and
+  off-by-default listener contract remain unchanged. CLI writers share a directory lock;
+  external editors do not participate. Reference: `docs/SETTINGS.md`, ADR-0023.
+
 - **A first-run `settings.json`, with the remote surface on and `log` off by default —
   requested 2026-09-12, not started.** The file was lost with the rename that day:
   `%APPDATA%\app.winmux.desktop` was deleted once the migration looked done, it held the only
