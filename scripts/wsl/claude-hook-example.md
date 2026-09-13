@@ -17,7 +17,7 @@ named pipe, or Windows helper CLI.
 
 ## Automatic provisioning
 
-**mast auto-provisions this on first run per distro (`~/.mast/.setup-v7`); this
+**mast auto-provisions this on first run per distro (`~/.mast/.setup-v12`); this
 document remains the contract and the manual path.**
 
 On launch the app streams a setup script into `wsl.exe [-d <distro>] -- bash -s` for every
@@ -524,15 +524,15 @@ places and run by neither of them.
 | Path | `~/.mast/resume/tab-<id>`, where `<id>` is the writer's `MAST_TAB` — the tab's stable id, which survives a restart, so the file and the tab that gets the hint are the same tab. |
 | Line 1 | The resume command: `claude --resume 11111111-2222-3333-4444-555555555555` or `codex resume 019ff5e6-d08e-7013-9cec-105030994d8d`. The reader takes **only this line**. |
 | Line 2 | Epoch seconds at the time of writing. Recorded for diagnosis; **nothing reads it** — see freshness below. |
-| Written when | Every invocation that has both a non-empty `MAST_TAB` and an id matching `^[A-Za-z0-9_-]+$` — Claude Code's `.session_id`, Codex's `thread-id` (`thread_id` is accepted too; the payload has been serialized both ways). The tab's most recent session therefore wins. |
-| Not written when | The tab has no `MAST_TAB` (a tab without per-tab history), `jq` is missing, the payload does not parse or carries no id, or the id is not a plain token. For Claude Code, also when stdin is a TTY (the script run by hand, so no JSON is read at all). |
+| Written when | An invocation has both a non-empty `MAST_TAB` and an id matching `^[A-Za-z0-9_-]+$` — Claude Code's `.session_id`, Codex's `thread-id` (`thread_id` is accepted too). Codex additionally requires matching saved top-level session metadata, as described below. |
+| Not written when | The tab has no `MAST_TAB` (a tab without per-tab history), `jq` is missing, the payload does not parse or carries no id, or the id is not a plain token. For Codex, also when saved top-level metadata cannot be confirmed, including temporary threads and subagents. For Claude Code, also when stdin is a TTY (the script run by hand, so no JSON is read at all). |
 | Atomicity | Written to `<path>.tmp.<pid>` and `mv`d into place, so a concurrent reader sees either the old file or the new one, never a half-written line. The pid suffix keeps two writers firing at once in the same tab from sharing a temp name. |
 | Failure | Swallowed. Every step is guarded and the writer still exits 0 — a resume hint must never cost a notification, let alone the session. |
 
-**Both agents write the same file, and the last one to finish a turn in that tab wins.** That
+**Both agents write the same file, and the last eligible session to finish a turn in that tab wins.** That
 is the intended behavior, not a collision to be designed away: a tab where you switched from
 Claude Code to Codex should offer the Codex thread back, and the same in reverse. There is one
-hint per tab, and it names whichever agent spoke last.
+hint per tab; Codex's internal temporary turns and subagents must not replace it.
 
 The reader is `apps/mast/src-tauri/src/host.rs::bash_argv`, the same wrapper that sets
 `MAST_TAB` and `HISTFILE`. Before it execs the login shell it reads line 1 and, if it is
@@ -578,8 +578,8 @@ is the `provision.rs` heredoc, and this section is its contract. Given `$1`:
    to `thread_id` / `last_assistant_message` (the payload has been serialized both kebab- and
    snake-cased across releases; `codex-cli 0.147` is kebab). Neither is required.
 2. **Records the resume hint** — `codex resume <thread-id>` in the file described above, when
-   `MAST_TAB` is set and the id is a plain token. `codex resume <id>` is the same form Codex
-   prints as its own post-exit hint.
+   `MAST_TAB` is set, the id is a plain token, and saved metadata confirms a top-level session.
+   `codex resume <id>` is the same form Codex prints as its own post-exit hint.
 3. **Emits `mast:idle`** by running `mast-notify.sh` as a child with stdin closed, so the
    tty resolution and the `;` substitution have exactly one implementation. The body is the
    **first line** of the agent's closing message, control characters replaced with spaces and
@@ -588,6 +588,29 @@ is the `provision.rs` heredoc, and this section is its contract. Given `$1`:
 Steps 1 and 2 are best-effort and step 3 is not: a missing `jq`, an unparseable payload, or a
 payload with neither field still produces the notification, just a generic one and no hint.
 The program exits 0 whatever happens — Codex should never report a failing `notify`.
+
+**Saved-session check (setup v12).** Codex 0.154.0 also invokes legacy `notify` for temporary
+catch-up summaries, whose ids cannot be resumed. The notification's documented fields do not
+distinguish these threads. The writer therefore checks
+`${CODEX_HOME:-$HOME/.codex}/sessions/*/*/*/rollout-*-<id>.jsonl`: its first record must have
+`type: "session_meta"`, the exact `payload.id`, and `payload.source: "cli"` or `"exec"`.
+Object-valued subagent sources, including guardian and `thread_spawn`, are not eligible.
+Only the first record is read, capped at 1 MiB; the entire check has a two-second deadline
+with a one-second forced-kill grace period (`timeout` from Ubuntu's coreutils).
+
+This is a compatibility check against observed local transcripts, **not a stable Codex API**.
+Missing, malformed, oversized, unreadable, archived, or differently stored metadata leaves
+the existing hint untouched, as does a missing `timeout`. It never guesses another thread
+from cwd, queries a private SQLite schema, or starts Codex to resolve an id. The idle
+notification still goes out. Custom `CODEX_HOME` is used to locate metadata; the offered
+command retains the existing contract and assumes the same Codex environment at restart.
+See [OpenAI's notify contract](https://learn.chatgpt.com/docs/config-file/config-advanced#notifications)
+and [its transcript-format caveat](https://learn.chatgpt.com/docs/hooks#common-input-fields).
+
+The change prevents future overwrites; it does not repair a hint already poisoned before
+installation. Complete one turn in the intended session after setup v12, then restart.
+The Linux regression `apps/mast/src/codex-resume.test.ts` executes the installed-script
+heredoc and the actual spawn-wrapper history path with isolated fixture homes.
 
 The control-character scrub in step 3 is load-bearing, not hygiene: unlike Claude Code's
 `.message`, which is a canned string, `last-assistant-message` is **model output**, and it is

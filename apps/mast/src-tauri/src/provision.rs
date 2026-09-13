@@ -33,7 +33,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 11;
+const SETUP_VERSION: u32 = 12;
 
 /// 프로세스 수명 캐시 — **해석된** distro 이름 기준으로 앱 실행당 1회만 스폰한다.
 /// 기본 distro(None)는 claim 전에 실제 이름으로 해석된다:
@@ -205,8 +205,7 @@ fn run(_distro: Option<&str>) -> Result<(), String> {
 /// 이라 한쪽을 고치면 다른 쪽도 같이 고친다. Codex 쪽 스크립트는 그 복제를 늘리지
 /// 않으려고 `mast-notify.sh` 를 자식으로 불러 방출을 위임한다.
 ///
-/// 스크립트 자체는 사용자 머신에 남는 산출물이라 주석·출력이 전부 영어다
-/// (레포 컨벤션: 사용자 대면 문자열은 영어).
+/// 스크립트의 사용자 대면 출력은 레포 컨벤션에 따라 영어다.
 const SETUP_SCRIPT: &str = r###"
 # mast provisioning — streamed into `wsl.exe [-d <distro>] -- bash -s` by the app on
 # first launch, once per distro. It installs the agent notification script and the mast
@@ -401,15 +400,33 @@ if [[ -z "$BODY" ]]; then
   BODY="codex turn complete"
 fi
 
-# Resume hint, in the same file and the same format mast-notify.sh writes for Claude
-# Code: line 1 the resume command, line 2 the epoch seconds it was recorded at, replaced
-# atomically through a pid-suffixed temp file. Both agents write the same per-tab path on
-# purpose — the last agent to finish a turn in a tab is the one that tab offers back, which
-# is what a user alternating between them expects. The id must be a plain token because the
-# spawn wrapper echoes line 1 into the terminal and into shell history; a Codex thread id is
-# a uuid, so the check rejects nothing real. Every failure here is swallowed: a resume hint
-# must never cost the notification, let alone the turn.
-if [[ -n "${MAST_TAB:-}" && "$THREAD_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
+# Codex 0.154의 임시 catch-up 턴도 같은 MAST_TAB으로 notify를 호출한다.
+# payload에는 임시 세션 여부가 없으므로, 저장된 최상위 CLI/exec 세션만 인정한다.
+# source가 객체인 서브에이전트도 제외한다. transcript 형식은 Codex의 내부 계약이라
+# 확인하지 못하면 기존 힌트를 보존한다. DB 스키마나 cwd로 다른 세션을 추측하지 않는다.
+resumable_codex_thread() {
+  LC_ALL=C timeout --kill-after=1s 2s bash -s -- "${CODEX_HOME:-$HOME/.codex}" "$THREAD_ID" <<'MAST_CODEX_RESUME_CHECK_EOF'
+shopt -s nullglob
+for transcript in "$1"/sessions/*/*/*/rollout-*-"$2".jsonl; do
+  [[ -f "$transcript" && -r "$transcript" ]] || continue
+  metadata=
+  # 대화 본문은 읽지 않는다. 첫 레코드가 비정상적으로 커도 1 MiB에서 멈춘다.
+  IFS= read -r -n 1048576 metadata < "$transcript" || continue
+  if printf '%s\n' "$metadata" | jq -e --arg id "$2" '
+    .type == "session_meta" and .payload.id == $id
+    and (.payload.source == "cli" or .payload.source == "exec")
+  ' > /dev/null 2>&1; then
+    exit 0
+  fi
+done
+exit 1
+MAST_CODEX_RESUME_CHECK_EOF
+}
+
+# Claude와 같은 형식으로 원자 교체한다. 마지막 사용자 세션이 이기며 내부 턴은
+# 힌트를 바꾸지 않는다. 실패하더라도 아래의 기존 idle 알림은 계속 보낸다.
+if [[ -n "${MAST_TAB:-}" && "$THREAD_ID" =~ ^[A-Za-z0-9_-]+$ ]] \
+    && resumable_codex_thread 2>/dev/null; then
   RESUME_FILE="$HOME/.mast/resume/tab-$MAST_TAB"
   if mkdir -p "$HOME/.mast/resume" 2>/dev/null; then
     if printf 'codex resume %s\n%s\n' "$THREAD_ID" "$(date +%s 2>/dev/null || echo 0)" \

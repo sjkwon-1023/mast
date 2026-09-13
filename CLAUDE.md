@@ -462,7 +462,14 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   keys are kebab-case (`thread-id`, `last-assistant-message`) as of `codex-cli 0.147`, with
   the snake-cased spellings accepted as a fallback; no version probe — a payload we cannot
   read notifies without a hint. Contract: `scripts/wsl/claude-hook-example.md`. Verification:
-  WINDOWS-BUILD §10 v0.3.5.
+  WINDOWS-BUILD §10 v0.3.5. **Follow-up 2026-09-13 (setup v12):** Codex 0.154.0's temporary
+  catch-up summary also fires `notify` with the pane's `MAST_TAB`, overwriting the hint with
+  an unsaved thread id. The writer now requires matching saved top-level `session_meta`
+  (`source: cli/exec`), rejecting temporary threads and persisted subagents. The bounded
+  transcript check preserves the old hint if it cannot confirm a session; this is an
+  observed-format compatibility check, not a stable Codex API. The contract above records
+  the storage assumptions and upgrade limits. `codex-resume.test.ts` runs the real Bash
+  writer and restart history path on Linux; Windows verification remains in §10.
 
 - **Codex composer pill: closed as out-of-app (2026-08-12)** — the field probe showed
   conhost consuming OSC 11 queries without answering anyone, so no app-side lever

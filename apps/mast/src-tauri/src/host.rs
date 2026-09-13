@@ -139,7 +139,8 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
 /// 호출마다 `~/.mast/resume/tab-<id>` 에 1행 = resume 명령, 2행 = 기록 시각(epoch)을
 /// 남기므로 (`provision.rs` 의 `mast-notify.sh`·`mast-codex-notify.sh` — 계약은
 /// `scripts/wsl/claude-hook-example.md`; 두 에이전트가 같은 파일을 쓰므로 그 탭에서
-/// **마지막으로 턴을 끝낸 쪽**이 이긴다),
+/// **마지막으로 턴을 끝낸 사용자 세션**이 이긴다. Codex 내부 임시 턴과 서브에이전트는
+/// 쓰는 쪽에서 제외한다),
 /// exec 직전에 그 1행을 읽어 ① 탭의 HISTFILE 끝에 덧붙이고(↑ 한 번에 나온다)
 /// ② 흐린 안내 한 줄을 찍는다. **자동 실행은 하지 않는다** — 재개할지는 사용자가 정한다.
 /// 파일이 없으면 아무 출력도 없다. 기록 시각으로 신선도를 판단하지 않는 것은 의도된
