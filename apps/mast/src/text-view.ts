@@ -17,7 +17,7 @@
 // 창 이동은 상단 바 버튼과 **뷰 내부 keydown** 둘 다로 한다 (체크포인트 2 UX):
 // Ctrl+PageUp/PageDown 이 이전/다음 창, Ctrl+Home/End 가 처음/마지막 창이다.
 // 이 keydown 은 전역 가로채기(keys.ts 의 window capture)와 층이 다르고, 전역
-// 목록에 없는 조합만 소비하므로 Ctrl+Tab·Ctrl+1~9·Alt+방향키와 겹치지 않는다.
+// 목록에 없는 조합만 소비하므로 Ctrl+Tab·Ctrl+1~9·Ctrl+Shift+방향키와 겹치지 않는다.
 // 수식키 없는 PageUp/PageDown 은 창을 옮기지 않고 **행높이 배수로 정렬된 페이지
 // 스크롤**이다 — 브라우저 기본 페이지 스텝(Blink 는 viewport-40px 류)은 행
 // 격자와 어긋나 최상단 행이 반쯤 잘린 채 멈춘다. Home/End·방향키·휠은 손대지

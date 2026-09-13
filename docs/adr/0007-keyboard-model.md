@@ -18,7 +18,7 @@ trade — that is why the list is a contract and not an implementation detail.
 ## Decisions
 
 1. **One movement key per tier**: `Ctrl+1`…`Ctrl+9` (workspace by sidebar ordinal, 1-based),
-   `Alt+arrows` (pane focus by on-screen geometry — nearest centre in the direction's
+   `Ctrl+Shift+arrows` (pane focus by on-screen geometry — nearest centre in the direction's
    half-plane), `Ctrl+Tab` / `Ctrl+Shift+Tab` (tab cycle inside the active pane, wrapping).
    The plan's alternative `Ctrl+↑↓` was rejected: TUI apps use `Ctrl+arrow`, and
    `Ctrl+1`–`9` already covers the tier.
@@ -85,6 +85,16 @@ canonical regardless of which module enforces a row. Verification is item 1 of �
 post-re-verification subsection.
 
 ## Follow-ups
+
+### v0.3.30: return Alt+arrows to the terminal
+
+The original pane binding intercepted Codex's `Alt+Up` queued-question shortcut, even
+when no adjacent pane existed. Pane focus now uses `Ctrl+Shift+arrows`; `Alt+arrows`
+and plain `Ctrl+arrows` pass through to the terminal. This applies regardless of the
+running application or pane geometry. The cost is that terminal applications no longer
+receive `Ctrl+Shift+arrows`. IME composition still bypasses interception. Automated
+tests cover all four directions and modifier combinations; live WebView2 delivery and
+Codex's question UI require field verification with v0.3.30.
 
 - Splitter resize is mouse-drag only; there is no keyboard equivalent for the drag handle.
 - The `ev.key` layout assumption (decision 7) is checked only on the layouts this developer
