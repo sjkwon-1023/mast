@@ -18,7 +18,8 @@ them on return; it supplies the desired idle behavior without another renderer p
    The title is `Changes`. Selection, Working/Staged/All scope, and both scroll positions
    belong only to the mounted frontend instance. There is no selection command or
    `scrollTop` field. The content commands never dispatch or broadcast snapshots.
-2. Show a changed-file column and a plain unified-diff column. Mount reads status once;
+2. Show a changed-file column and a read-only patch surface (initially plain unified diff;
+   the amendment below adds colored responsive comparison). Mount reads status once;
    selecting a file reads its diff. Refresh explicitly reloads the list and the current
    selection. Same-kind snapshot updates do nothing. Switching tabs/workspaces disposes
    the view immediately; late responses cannot mutate the replacement view. No polling,
@@ -77,6 +78,45 @@ them on return; it supplies the desired idle behavior without another renderer p
    mirrors. The phone's existing static tab list labels the kind `changes`; it has no Git
    endpoint or diff view. Sidebar `gitBranch`/`gitDirty` and selected-line sending remain
    outside this feature.
+
+## Amendment: colored, responsive comparison (2026-09-13)
+
+The user requested readable addition/deletion colors and a Before/After view, provided it
+remained lightweight. Interpret the already-bounded unified patch in the frontend; do not
+fetch full files, run another Git command, introduce an editor/highlighter dependency, or
+recompute a text diff.
+
+- Complete ordinary hunks show **changed sections**, not full file contents. Context appears
+  on both sides; consecutive deletions/additions are paired in order, with blank alignment
+  space on the shorter side. File and hunk metadata remain visible. No word-level matching
+  or LCS is performed. Baseline labels follow Working (Index → working tree), Staged (HEAD
+  → Index), All (HEAD → working tree), and the empty baseline for untracked/unborn files.
+- The Changes root is a named inline-size CSS container. At **960 CSS px** and above,
+  Before/After are side by side; below it the complete Before section precedes After.
+  This follows the pane rather than the window. Resizing performs no parsing, IPC, or DOM
+  reconstruction. A shared vertical viewport keeps the wide comparison aligned; each
+  side can scroll long lines horizontally without widening the pane.
+- Additions are green and deletions red, with contrasting backgrounds. Labels and +/-
+  prefixes carry the same information without relying on color. File-header `---`/`+++`
+  lines are metadata, not changed code. All content still uses `textContent`.
+- Combined merge diffs, non-textual changes, and incomplete/unrecognized patches retain a
+  unified representation rather than inventing an incorrect pair of versions. Notices
+  identify fallback reasons where applicable; binary and rename-only metadata stay visible.
+- Independently of the 512 KiB capture limit, display at most **5,000 input lines**, with a
+  visible limit notice. Consecutive same-tone lines share a span. A clipped patch stays
+  unified. This bounds parsing and DOM work even for hundreds of thousands of tiny lines.
+  There is no timer, observer, persisted preference, or retained inactive renderer.
+
+The parser, DOM renderer, ChangesView integration, and font-selector tests cover the new
+surface. Real WebView2/WSL verification remains separate from automated DOM tests.
+
+Local production builds measured about a 7.5 kB JavaScript increase (2.3 kB gzip) and a
+0.8 kB CSS increase (0.2 kB gzip) over `d01d0c8`, with no dependency change. A Node-only
+parser probe, after ten warm-ups and thirty measured iterations, took a median 1.44 ms
+for 4,999 ordinary patch lines and 2.29 ms for a 512 KiB short-line input clipped to the
+display limit. These are parsing measurements, not browser rendering or WebView2 latency.
+Chromium layout verification was blocked locally by missing system libraries; the pane
+breakpoint, overflow, and zoom checks in WINDOWS-BUILD section 14 remain pending.
 
 ## Verification and limits
 

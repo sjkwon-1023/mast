@@ -1019,15 +1019,16 @@ body {
   background: var(--border);
 }
 
-/* ── 뷰어 탭 — changesViewer ──────────────────────────────────────────
-   상태 목록과 선택한 파일의 plain unified diff 를 좌우로 보여 준다. 두 영역의
-   스크롤은 뷰가 살아 있는 동안만 유지하며, 모델에 기록하지 않는다. */
+/* 창이 아니라 pane 폭으로 비교 방향을 정한다. 리사이즈 때 Git 재호출이나
+   DOM 재생성 없이 CSS 배치만 바뀌며 숨겨진 뷰는 기존대로 dispose된다. */
 
 .changes-view {
+  container: changes / inline-size;
   height: 100%;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 .changes-toolbar {
@@ -1118,7 +1119,7 @@ body {
 }
 
 .changes-list-panel {
-  flex: 0 0 35%;
+  flex: 0 0 min(24%, 240px);
   border-right: 1px solid var(--border);
 }
 
@@ -1207,19 +1208,82 @@ body {
   outline: none;
 }
 
+.changes-diff-notice {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .changes-diff {
-  min-width: max-content;
+  min-width: 0;
   margin: 0;
-  padding: 6px 8px;
   color: var(--fg);
   font-family: var(--viewer-font-family, monospace);
   font-size: var(--viewer-font-size, 12px);
   line-height: 1.35;
-  white-space: pre;
 }
 
 .changes-diff[hidden] {
   display: none;
+}
+
+.diff-comparison {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.diff-side {
+  min-width: 0;
+}
+
+.diff-side + .diff-side {
+  border-top: 1px solid var(--border);
+}
+
+.diff-side-heading {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  background: var(--bg-panel);
+  font: 11px system-ui, sans-serif;
+}
+
+.diff-code {
+  margin: 0;
+  padding: 6px 8px;
+  overflow-x: auto;
+  font: inherit;
+  line-height: inherit;
+  white-space: pre;
+  tab-size: 4;
+}
+
+.diff-added {
+  color: #a8ddb5;
+  background: #244032;
+}
+
+.diff-removed {
+  color: #f2b0ad;
+  background: #482b2d;
+}
+
+.diff-meta {
+  color: #9cbdda;
+}
+
+.diff-gap {
+  color: transparent;
+}
+
+@container changes (min-width: 960px) {
+  .diff-comparison {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .diff-side + .diff-side {
+    border-top: 0;
+    border-left: 1px solid var(--border);
+  }
 }
 
 /* ── send-mode 대상 선택 (17단계) ──────────────────────────────────────

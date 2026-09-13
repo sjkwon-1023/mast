@@ -2697,6 +2697,17 @@ Use a disposable repository and a copy of the state directory for downgrade chec
    all tabs survive. Confirm per-tab removal diagnostics in the compatibility build.
 8. The phone list must label the tab `changes` without opening it. Existing terminals,
    Markdown/text/folder viewers, shortcuts, and agent state notifications must still work.
+9. Select a text patch with unequal replacement blocks and multiple hunks. Deleted code is
+   red in Before; added code is green in After; following context aligns. Check Working,
+   Staged, All, and an unborn/untracked file against the displayed baseline labels.
+10. Keep the window wide and resize only this pane across 959/960 CSS px: Before/After must
+    switch from stacked to side-by-side. Long lines scroll within each side, not the entire
+    workspace. The changed-file list stays usable, viewer font/zoom still works, and no new
+    Git query starts merely because the pane was resized.
+11. Combined merge output and binary/rename-only changes retain their original metadata;
+    they must not present a made-up two-sided merge result. A byte-truncated or more-than-
+    5,000-line patch must show the relevant notice and remain bounded. HTML-looking code
+    must never become HTML elements in either layout.
 
 Release the ADR-0021 compatibility build before the Changes build. Releases without that
 repair still discard a state containing a new tab kind; do not use live state to test them.
