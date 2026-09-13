@@ -160,6 +160,8 @@ function tabDetail(kind: TabKind): string {
       return "folder";
     case "textViewer":
       return "text";
+    case "changesViewer":
+      return "changes";
     default:
       return "markdown";
   }

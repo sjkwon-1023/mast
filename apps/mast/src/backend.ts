@@ -315,6 +315,53 @@ export function fsReadChunk(
   return invoke<ArrayBuffer>("fs_read_chunk", { distro, path, offset, len });
 }
 
+// Changes 뷰어의 읽기 전용 Git 명령이다. 저장소 탐색·상태 파싱·프로세스 제한·diff
+// 생성은 백엔드가 소유하고, 뷰어는 여기서 받은 제한된 DTO만 그린다.
+export interface GitChange {
+  path: string;
+  originalPath: string | null;
+  indexStatus: string;
+  worktreeStatus: string;
+  untracked: boolean;
+  conflicted: boolean;
+}
+
+export interface GitStatus {
+  root: string;
+  unborn: boolean;
+  entries: GitChange[];
+  truncated: boolean;
+}
+
+export type GitDiffScope = "working" | "staged" | "all";
+
+export interface GitDiffRequest {
+  root: string;
+  path: string;
+  originalPath: string | null;
+  scope: GitDiffScope;
+  untracked: boolean;
+  unborn: boolean;
+}
+
+export interface GitDiff {
+  text: string;
+  truncated: boolean;
+}
+
+/** Changes 뷰어에 보여 줄 저장소 상태 스냅샷을 읽는다. */
+export function gitStatus(distro: string | null, path: string): Promise<GitStatus> {
+  return invoke<GitStatus>("git_status", { distro, path });
+}
+
+/** 상태 항목 하나의 제한된 unified diff를 읽는다. */
+export function gitDiff(
+  distro: string | null,
+  request: GitDiffRequest,
+): Promise<GitDiff> {
+  return invoke<GitDiff>("git_diff", { distro, request });
+}
+
 // --- 워크스페이스 폴더 선택 --------------------------------------------------
 
 /** pick_workspace_folder 응답 — DTO 필드명은 글루 관례(snake_case) 그대로다. */

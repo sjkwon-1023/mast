@@ -87,8 +87,9 @@ export interface Tab {
 /** 탭 종류별 상태 — internal tag "type".
  *
  *  scrollTop 시맨틱은 종류마다 다르다: textViewer 는 최상단 가시 행의 전역 byte
- *  offset, markdownViewer 는 렌더된 픽셀 offset. folderBrowser 는 스크롤 위치를
- *  기억하지 않아 필드 자체가 없다 (setViewerScroll 대상이 되면 kindMismatch). */
+ *  offset, markdownViewer 는 렌더된 픽셀 offset. folderBrowser·changesViewer 는
+ *  스크롤 위치를 기억하지 않아 필드 자체가 없다 (setViewerScroll 대상이 되면
+ *  kindMismatch). */
 export type TabKind =
   | {
       type: "terminal";
@@ -100,7 +101,8 @@ export type TabKind =
     }
   | { type: "folderBrowser"; path: string }
   | { type: "textViewer"; path: string; scrollTop: number }
-  | { type: "markdownViewer"; path: string; scrollTop: number };
+  | { type: "markdownViewer"; path: string; scrollTop: number }
+  | { type: "changesViewer"; path: string };
 
 export type TerminalStatus =
   | { type: "running" }
@@ -112,14 +114,15 @@ export type TerminalStatus =
   | { type: "notStarted" };
 
 /** 탭 생성 명세 (command.rs NewTab) — createTab·splitPane·createWorkspace 공유.
- *  21단계 뷰어 3종이 모두 착지해 TabKind 와 종류가 일대일이다. */
+ *  21단계 뷰어 4종이 모두 착지해 TabKind 와 종류가 일대일이다. */
 export type NewTab =
   | { type: "terminal"; cwd: string | null }
   /** path 가 null 이면 워크스페이스 rootPath, 그것도 null 이면 "/" (terminal
    *  cwd 와 대칭). */
   | { type: "folderBrowser"; path: string | null }
   | { type: "textViewer"; path: string }
-  | { type: "markdownViewer"; path: string };
+  | { type: "markdownViewer"; path: string }
+  | { type: "changesViewer"; path: string | null };
 
 /** 직렬화 가능한 command bus 명령 집합 (command.rs Command).
  *  JSON 은 internal tag: {"type": "createWorkspace", "name": ...}. */

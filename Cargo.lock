@@ -1726,7 +1726,7 @@ dependencies = [
 
 [[package]]
 name = "mast-app"
-version = "0.3.27"
+version = "0.3.28"
 dependencies = [
  "anyhow",
  "mast-core",
@@ -1746,6 +1746,7 @@ name = "mast-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "libc",
  "portable-pty",
  "serde",
  "serde_json",

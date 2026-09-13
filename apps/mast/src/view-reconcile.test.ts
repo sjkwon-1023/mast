@@ -47,6 +47,16 @@ function textTab(id: number, path = "/home/u/log.txt", scrollTop = 0): Tab {
   };
 }
 
+function changesTab(id: number, path = "/home/u/project"): Tab {
+  return {
+    id,
+    title: `changes ${id}`,
+    kind: { type: "changesViewer", path },
+    notification: "none",
+    lastActivityMs: null,
+  };
+}
+
 function pane(id: number, tabs: Tab[], activeTab: number | null): Pane {
   return { id, tabs, activeTab };
 }
@@ -233,6 +243,17 @@ describe("planViewerSync", () => {
       { pane: 2, tab: 12, kind: { type: "textViewer", path: "/var/log/syslog", scrollTop: 42 } },
     ]);
     expect(plan.dispose).toEqual([]);
+  });
+
+  it("mounts an active Changes viewer and keeps it out of terminal planning", () => {
+    const snap = snapshot(
+      [workspace(1, [pane(1, [changesTab(10)], 10)], 1)],
+      1,
+    );
+    expect(planViewSync([], snap).visible).toEqual([]);
+    expect(planViewerSync([], snap).mount).toEqual([
+      { pane: 1, tab: 10, kind: { type: "changesViewer", path: "/home/u/project" } },
+    ]);
   });
 
   it("never mounts a live terminal tab", () => {

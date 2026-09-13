@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import commandsFixtureJson from "../../../fixtures/stage10-commands.json";
+import changesViewerFixtureJson from "../../../fixtures/changes-viewer.json";
 import outputsFixtureJson from "../../../fixtures/stage10-outputs.json";
 import emptyFixtureJson from "../../../fixtures/stage10-snapshot-empty.json";
 import snapshotFixtureJson from "../../../fixtures/stage10-snapshot.json";
@@ -21,10 +22,20 @@ import type {
   TabKind,
   Workspace,
 } from "./types";
+import { WINDOW_BYTES } from "./text-view";
+import type { GitChange, GitDiff, GitDiffRequest, GitStatus } from "./backend";
 
 const snapshotFixture = snapshotFixtureJson as unknown as StateSnapshot;
 const emptyFixture = emptyFixtureJson as unknown as StateSnapshot;
 const commandsFixture = commandsFixtureJson as unknown as Command[];
+const changesViewerFixture = changesViewerFixtureJson as unknown as {
+  newTab: NewTab;
+  kind: TabKind;
+  diffBytes: number;
+  status: GitStatus;
+  request: GitDiffRequest;
+  diff: GitDiff;
+};
 
 /** 미러에 없는 태그가 fixture 에 나타나면 여기로 떨어져 런타임에 잡힌다. */
 function assertNever(x: never): never {
@@ -64,13 +75,15 @@ function tabKindLabel(kind: TabKind): string {
       return `textViewer:${kind.scrollTop}`;
     case "markdownViewer":
       return `markdownViewer:${kind.scrollTop}`;
+    case "changesViewer":
+      return `changesViewer:${kind.path}`;
     default:
       return assertNever(kind);
   }
 }
 
 /** NewTab 전 variant 를 narrowing 으로 통과시키며 태그를 돌려준다 (21단계 —
- *  청크 D 로 뷰어 3종이 모두 union 에 있다). */
+ *  Changes 뷰어까지 union 에 있다). */
 function newTabTag(spec: NewTab): string {
   switch (spec.type) {
     case "terminal":
@@ -85,6 +98,9 @@ function newTabTag(spec: NewTab): string {
       return spec.type;
     case "markdownViewer":
       expect(typeof spec.path).toBe("string");
+      return spec.type;
+    case "changesViewer":
+      expect(spec.path === null || typeof spec.path === "string").toBe(true);
       return spec.type;
     default:
       return assertNever(spec);
@@ -325,6 +341,44 @@ describe("stage10-snapshot-empty.json", () => {
     expect(emptyFixture.state.workspaces).toEqual([]);
     expect(emptyFixture.state.activeWorkspace).toBeNull();
     expect(emptyFixture.state.nextId).toBe(5);
+  });
+});
+
+describe("changes-viewer.json", () => {
+  it("keeps the Changes tab and git DTO mirrors aligned", () => {
+    expect(newTabTag(changesViewerFixture.newTab)).toBe("changesViewer");
+    expect(tabKindLabel(changesViewerFixture.kind)).toBe(
+      "changesViewer:/home/user/code/project",
+    );
+    expect(changesViewerFixture.newTab).toEqual({ type: "changesViewer", path: null });
+    expect(changesViewerFixture.kind).toEqual({
+      type: "changesViewer",
+      path: "/home/user/code/project",
+    });
+    expect(changesViewerFixture.diffBytes).toBe(WINDOW_BYTES);
+
+    const [entry] = changesViewerFixture.status.entries;
+    expect(entry).toEqual<GitChange>({
+      path: "new name.rs",
+      originalPath: "old name.rs",
+      indexStatus: "R",
+      worktreeStatus: ".",
+      untracked: false,
+      conflicted: false,
+    });
+    expect(changesViewerFixture.status.root).toBe("/home/user/code/project/main");
+    expect(changesViewerFixture.request).toEqual<GitDiffRequest>({
+      root: "/home/user/code/project/main",
+      path: "new name.rs",
+      originalPath: "old name.rs",
+      scope: "staged",
+      untracked: false,
+      unborn: false,
+    });
+    expect(changesViewerFixture.diff).toEqual<GitDiff>({
+      text: "rename from old name.rs\nrename to new name.rs\n",
+      truncated: false,
+    });
   });
 });
 

@@ -25,6 +25,7 @@ mod commands;
 mod diagnostics;
 // Windows 방화벽 규칙 감지(COM)·적용(승격 netsh) — 원격 표면의 페어링 대화상자용.
 mod firewall;
+mod git;
 mod host;
 mod logfile;
 mod provision;
@@ -345,6 +346,8 @@ fn main() {
             commands::fs_list_dir,
             commands::fs_stat,
             commands::fs_read_chunk,
+            git::git_status,
+            git::git_diff,
             // 끝난 터미널 탭의 기록 바이트 (ADR-0018) — 기록 뷰가 마운트 때 1회.
             commands::read_tab_record,
             // 원격 표면의 부팅 결과와 페어링 URL (ADR-0016 결정 9). 상태는 부팅당 1회,

@@ -46,6 +46,9 @@ with Windows 11. mast opens WSL2 shells only — there is no PowerShell or CMD p
 - **Pane-to-pane text passing** — send text to another pane, where it runs on arrival unless you ask
   to pre-fill the prompt instead.
 - **Viewer tabs** — folder browser, text viewer and Markdown viewer for files inside WSL.
+  The pane-header Changes button opens changed files and a selected unified diff, with
+  Working / Staged / All scopes. It is read-only, refreshes when reopened or with Refresh,
+  and limits each diff to 512 KiB. Git and GNU `timeout` must be installed in that WSL distro.
 - **Phone remote (opt-in)** — pair by QR, then read a tab, scroll a full-screen TUI, or send input.
   Off by default; plain HTTP on your own LAN — see [`docs/SETTINGS.md`](./docs/SETTINGS.md). If
   the phone cannot connect, the pairing dialog says whether Windows Firewall allows the app and

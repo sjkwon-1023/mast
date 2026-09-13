@@ -184,6 +184,9 @@ pub enum NewTab {
         /// cwd 와 대칭 — 계획 21단계 core 계약).
         path: Option<String>,
     },
+    ChangesViewer {
+        path: Option<String>,
+    },
     /// 텍스트 파일 뷰어 탭 (에디터가 아니다 — 읽기 전용). 경로는 필수다.
     TextViewer {
         path: String,
@@ -875,6 +878,7 @@ impl Dispatcher {
                     ),
                     // 뷰어 탭에는 프로세스가 없다 — 세 번째 상태로 구분한다.
                     TabKind::FolderBrowser { .. } => ("folderBrowser", "viewer"),
+                    TabKind::ChangesViewer { .. } => ("changesViewer", "viewer"),
                     TabKind::TextViewer { .. } => ("textViewer", "viewer"),
                     TabKind::MarkdownViewer { .. } => ("markdownViewer", "viewer"),
                 };
@@ -1404,6 +1408,16 @@ impl Dispatcher {
                 Ok(PreparedTab::Viewer {
                     title: path_title(&path),
                     kind: TabKind::FolderBrowser { path },
+                })
+            }
+            NewTab::ChangesViewer { path } => {
+                let path = path
+                    .or_else(|| root_path.clone())
+                    .unwrap_or_else(|| "/".to_owned());
+                validate_viewer_path(&path)?;
+                Ok(PreparedTab::Viewer {
+                    title: "Changes".to_owned(),
+                    kind: TabKind::ChangesViewer { path },
                 })
             }
             NewTab::TextViewer { path } => {
