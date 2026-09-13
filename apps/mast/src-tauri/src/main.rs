@@ -34,6 +34,7 @@ mod reset_supervisor;
 mod router;
 mod sink;
 mod state;
+mod update;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -259,6 +260,7 @@ fn main() {
                 Arc::clone(&dispatcher),
                 sessions_for_remote,
             ));
+            update::init(&handle);
             Ok(())
         })
         // 창 이벤트 두 갈래 — 포커스 전이는 리셋 정책 + 프론트 토스트 억제 신호,
@@ -333,6 +335,7 @@ fn main() {
             commands::reset_ui,
             // settings.json 의 UI 설정 (터미널 폰트) — 부팅당 1회, 설정 UI 는 없다.
             commands::get_ui_settings,
+            update::get_update_info,
             // 프론트엔드 → 런타임 로그 파일 (로그가 켜져 있을 때만).
             commands::log_line,
             // 워크스페이스 폴더 선택 (Windows 네이티브 대화상자).

@@ -392,6 +392,24 @@ export function openUrl(url: string): Promise<void> {
   return invoke<void>("open_url", { url });
 }
 
+/** 업데이트 확인 결과 — 네이티브 부팅 확인의 캐시를 읽는 프론트 계약이다.
+ *  checked 가 false 여도 currentVersion 은 즉시 표시할 수 있다. */
+export interface UpdateInfo {
+  currentVersion: string;
+  newerVersion: string | null;
+  checked: boolean;
+}
+
+/** 네이티브가 한 번 확인해 둔 업데이트 결과를 읽는다. 네트워크를 시작하지 않는다. */
+export function getUpdateInfo(): Promise<UpdateInfo> {
+  return invoke<UpdateInfo>("get_update_info");
+}
+
+/** 업데이트 확인이 끝났을 때 네이티브가 보내는 이벤트를 구독한다. */
+export function onUpdateChecked(handler: (info: UpdateInfo) => void): Promise<UnlistenFn> {
+  return listen<UpdateInfo>("update-checked", (event) => handler(event.payload));
+}
+
 /** state-changed 구독 헬퍼 — 변이마다 전체 스냅샷(revision 포함)이 온다.
  *  stale 판정(revision 가드)은 store 몫이다. */
 export function onStateChanged(

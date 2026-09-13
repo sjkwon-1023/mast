@@ -50,6 +50,7 @@ import {
   sidebarModel,
 } from "./sidebar-model";
 import type { CardBox, WorkspaceCardModel } from "./sidebar-model";
+import type { UpdateInfo } from "./backend";
 import type { Command, CommandOutput, StateSnapshot, WorkspaceId } from "./types";
 
 /** UI 발 dispatch — main.ts dispatchUI 래퍼 (실패는 null, reject 없음). */
@@ -59,6 +60,13 @@ type DispatchFn = (cmd: Command) => Promise<CommandOutput | null>;
  *  전환이라, 손이 조금 흔들린 클릭이 순서를 바꿔 버리면 안 된다 (splitter 의
  *  드래그 판정과 같은 규율). */
 const DRAG_THRESHOLD_PX = 4;
+
+/** 업데이트 버튼은 네이티브가 내려준 URL을 사용하지 않고 이 릴리스 페이지로만 간다. */
+export const LATEST_RELEASE_URL = "https://github.com/sjkwon-1023/mast/releases/latest";
+
+function displayVersion(version: string): string {
+  return version.startsWith("v") ? version : `v${version}`;
+}
 
 /** 진행 중인 드래그. `moving` 이 false 인 동안은 아직 문턱을 못 넘은 눌림이라
  *  클릭으로 끝날 수 있고, 그때는 DOM 도 커맨드도 건드리지 않는다. */
@@ -102,6 +110,8 @@ function statusText(model: WorkspaceCardModel): string {
 export class Sidebar {
   private readonly cardsEl: HTMLDivElement;
   private readonly pairBtn: HTMLButtonElement;
+  private readonly versionEl: HTMLSpanElement;
+  private readonly updateBtn: HTMLButtonElement;
   private lastSnapshot: StateSnapshot | null = null;
   /** 직전 렌더의 카드 모델 (첫 렌더 전 null) — reconcilePlan 의 좌변 (파일 상단). */
   private lastCards: WorkspaceCardModel[] | null = null;
@@ -124,6 +134,8 @@ export class Sidebar {
     /** "Pair phone" 버튼 — 페어링 다이얼로그를 여는 것은 main.ts 글루다.
      *  버튼은 **원격 표면이 실제로 떠 있을 때만** 보인다 (setRemoteEnabled). */
     private readonly onPairing: () => void,
+    /** 업데이트 릴리스 페이지를 여는 main.ts 글루. */
+    private readonly onOpenUpdate: (url: string) => void,
   ) {
     this.cardsEl = document.createElement("div");
     this.cardsEl.className = "sidebar-cards";
@@ -147,8 +159,34 @@ export class Sidebar {
     this.pairBtn.hidden = true;
     this.pairBtn.addEventListener("click", () => this.onPairing());
 
-    footer.append(newBtn, this.pairBtn);
+    this.versionEl = document.createElement("span");
+    this.versionEl.className = "sidebar-version";
+    this.versionEl.hidden = true;
+
+    this.updateBtn = document.createElement("button");
+    this.updateBtn.type = "button";
+    this.updateBtn.className = "sidebar-update";
+    this.updateBtn.textContent = "Update available";
+    this.updateBtn.hidden = true;
+    this.updateBtn.addEventListener("click", () => this.onOpenUpdate(LATEST_RELEASE_URL));
+
+    footer.append(newBtn, this.pairBtn, this.versionEl, this.updateBtn);
     rootEl.append(this.cardsEl, footer);
+  }
+
+  /** 캐시 조회·update-checked 이벤트의 결과를 정적 푸터에 반영한다. */
+  setUpdateInfo(info: UpdateInfo): void {
+    this.versionEl.textContent = displayVersion(info.currentVersion);
+    this.versionEl.title = `Installed version ${this.versionEl.textContent}`;
+    this.versionEl.hidden = false;
+
+    if (info.newerVersion === null) {
+      this.updateBtn.hidden = true;
+      this.updateBtn.title = "";
+      return;
+    }
+    this.updateBtn.hidden = false;
+    this.updateBtn.title = `Update available: ${displayVersion(info.newerVersion)}`;
   }
 
   /** 원격 표면이 떠 있나 — main.ts 가 부팅 시 remote_status 로 판정해 넘긴다.

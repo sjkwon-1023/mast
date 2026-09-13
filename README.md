@@ -83,6 +83,10 @@ and WebView2 (normally included with Windows 11).
 mast opens your default WSL distribution and automatically sets up agent integration on first
 launch. [Integration details and manual setup](./scripts/wsl/claude-hook-example.md).
 
+The sidebar shows your installed version. Once per app launch, mast checks GitHub for a newer
+stable release in the background. **Update available** opens the release page; downloading,
+replacing the executable and restarting are up to you. Failed checks stay quiet.
+
 ## Settings
 
 Run these commands in a mast Bash pane:
