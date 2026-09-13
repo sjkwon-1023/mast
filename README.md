@@ -66,50 +66,22 @@ and WSL2.
 
 ## Install
 
-You need **Windows 11 (x64 or ARM64), WSL2 with an initialized Linux distribution, and WebView2**
-(normally included with Windows 11). mast does not install WSL, Linux, or coding agents for you.
-It opens WSL Bash shells only — there is no PowerShell or CMD terminal profile.
+**Requirements:** Windows 11 (x64 or ARM64), WSL2 with a Linux distribution such as Ubuntu,
+and WebView2 (normally included with Windows 11).
 
-If WSL is not installed, run `wsl --install` in an administrator PowerShell, restart Windows,
-then open the Linux distribution and finish creating its user account. Check `wsl --list --verbose`
-shows version `2`. See [Microsoft's WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install).
+1. **Prepare WSL2.** If needed, run `wsl --install` in administrator PowerShell, restart Windows,
+   then open Ubuntu and create your Linux user account.
+   [WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install).
+2. **Prepare your agents.** Install Claude Code or Codex inside WSL before first launching mast.
+   On Ubuntu, install the integration helpers with `sudo apt install python3 jq coreutils`.
+   Agents are optional if you only want Bash terminals.
+3. **Download and run.** Get `mast-x64.exe` or `mast-arm64.exe` from the
+   [latest release](https://github.com/sjkwon-1023/mast/releases/latest) and run it — no installer.
+   If SmartScreen warns, verify the download came from this repository, then choose
+   **More info** → **Run anyway**.
 
-Install the agent CLIs you want to use inside that distribution before first launching mast.
-For automatic hook setup, install `python3`; the notification/resume helpers also use `jq`,
-and the Codex resume check uses GNU `timeout`. Python 3.11+ allows safe parsing of existing Codex
-TOML configuration. On Ubuntu, these helpers are available with
-`sudo apt install python3 jq coreutils`. Git is needed for the Changes viewer, not for Bash terminals.
-
-Download the build for your CPU from the
-[latest release](https://github.com/sjkwon-1023/mast/releases/latest): `mast-x64.exe` or
-`mast-arm64.exe`. Run it directly; there is no installer. Releases are unsigned, so Windows
-may show a SmartScreen warning on first launch. After verifying the download is from this
-repository, **More info** → **Run anyway** allows you to proceed.
-
-mast spawns into the WSL default distribution. To point it elsewhere — useful if you keep a
-locked-down distribution for agent work:
-
-```powershell
-$env:MAST_DISTRO = "Ubuntu-24.04"      # current shell
-setx MAST_DISTRO "Ubuntu-24.04"        # persist for your user account
-```
-
-On first launch in each distribution, mast automatically installs its CLI and notification helpers
-under `~/.mast/bin`, merges Claude Code hooks into `~/.claude/settings.json`, and installs the
-Claude skill at `~/.claude/skills/mast-send/SKILL.md`. **It does not edit `~/.claude/CLAUDE.md`.**
-For an existing Codex installation, it adds its notification integration to `~/.codex/config.toml`
-and a managed usage block to `~/.codex/AGENTS.md`. Existing custom Codex `notify` commands are
-preserved, so those may need manual integration. There is no separate setup command for a normal
-first launch; downloading the executable alone does not perform these steps.
-
-Setup is versioned and runs in the background. Failures are recorded in `~/.mast/setup.log` and
-reported to the app's diagnostic log when enabled; they do not prevent a plain terminal from opening.
-Missing Python or failed writes are retried on the next launch. If you install Codex after mast's
-setup has already completed, follow the manual integration instructions — a normal restart does
-not rerun a completed setup version. The contract and manual fallback are in
-[`scripts/wsl/claude-hook-example.md`](./scripts/wsl/claude-hook-example.md).
-
-To build from source, see [`docs/WINDOWS-BUILD.md`](./docs/WINDOWS-BUILD.md).
+mast opens your default WSL distribution and automatically sets up agent integration on first
+launch. [Integration details and manual setup](./scripts/wsl/claude-hook-example.md).
 
 ## Settings
 
