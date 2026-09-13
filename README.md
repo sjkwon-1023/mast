@@ -6,8 +6,7 @@
 **Run several coding agents on Windows + WSL2 and see which one is waiting for you — from your
 desk or from your phone.**
 
-<!-- TODO: screenshot — docs/images/overview.png: the sidebar with three workspaces
-     (running / needs input / idle), a split pane with a Markdown viewer open, the Pair-phone QR. -->
+![mast desktop with Claude Code, Codex, a folder viewer, and the phone remote alongside](docs/image/mast-desktop-mobile.png)
 
 ## What it's for
 
@@ -30,6 +29,13 @@ notifies you when one starts waiting, and lets you answer from your phone if you
 
 Most agent multiplexers are built for macOS and Linux terminals. mast is the one built for Windows
 and WSL2.
+
+## From your phone
+
+Send a command from your phone to a terminal running on your PC, then follow its output.
+Both devices must be on the same trusted local network; the PC can use Ethernet and the phone Wi-Fi.
+
+![Demo of sending a command from the phone remote to a desktop terminal](docs/image/mast-mobile-command-demo.gif)
 
 ## Requirements
 
