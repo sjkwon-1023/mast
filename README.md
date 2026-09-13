@@ -6,8 +6,9 @@
 **Run several coding agents on Windows + WSL2 and see which one is waiting for you — from your
 desk or from your phone.**
 
-<!-- TODO: screenshot — docs/images/overview.png: the sidebar with three workspaces
-     (running / needs input / idle), a split pane with a Markdown viewer open, the Pair-phone QR. -->
+![Demo of sending a command from the phone remote to a desktop terminal](docs/image/mast-mobile-command-demo.gif)
+
+Check terminal output and send input from your phone on the same trusted local network as your PC.
 
 ## What it's for
 
@@ -23,8 +24,8 @@ notifies you when one starts waiting, and lets you answer from your phone if you
 - **See who needs you at a glance** — a waiting agent does not disappear behind another terminal.
 - **Stay in one tool** — split panes and tabs, plus folder, text and Markdown viewers, without
   opening an IDE.
-- **Answer from the couch** — pair a phone over your Wi-Fi, read a tab, scroll a full-screen TUI,
-  send input.
+- **Answer from the couch** — pair a phone on the same local network as your PC, read a tab,
+  scroll a full-screen TUI, and send input.
 - **Portable** — a single executable. No installer, no setup wizard.
 - **Reload any time** — `Ctrl+Shift+R` rebuilds the window; the shells and agents keep running.
 
@@ -50,7 +51,12 @@ with Windows 11. mast opens WSL2 shells only — there is no PowerShell or CMD p
   Working / Staged / All scopes. It is read-only, refreshes when reopened or with Refresh,
   and limits each diff to 512 KiB. Git and GNU `timeout` must be installed in that WSL distro.
 - **Phone remote (opt-in)** — pair by QR, then read a tab, scroll a full-screen TUI, or send input.
-  Off by default; plain HTTP on your own LAN — see [`docs/SETTINGS.md`](./docs/SETTINGS.md). If
+  **Local-network use only:** your PC and phone must be on the same trusted LAN, typically
+  the same home router. The PC can use Ethernet while the phone uses Wi-Fi. Mobile data
+  (4G/5G) or an unrelated Wi-Fi network does not connect through mast; there is no cloud relay.
+  Guest Wi-Fi or client isolation can block access even on the same router.
+  Off by default; plain HTTP, not for public internet exposure or port forwarding — see
+  [`docs/SETTINGS.md`](./docs/SETTINGS.md). If
   the phone cannot connect, the pairing dialog says whether Windows Firewall allows the app and
   writes the rule for you behind one UAC prompt.
 - **Layout persistence** — workspaces, splits and tabs come back, each shell respawned where it was,
