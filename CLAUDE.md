@@ -462,7 +462,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   keys are kebab-case (`thread-id`, `last-assistant-message`) as of `codex-cli 0.147`, with
   the snake-cased spellings accepted as a fallback; no version probe — a payload we cannot
   read notifies without a hint. Contract: `scripts/wsl/claude-hook-example.md`. Verification:
-  WINDOWS-BUILD §10 v0.3.5. **Follow-up 2026-09-13 (setup v12):** Codex 0.154.0's temporary
+  WINDOWS-BUILD §10 v0.3.5. **Follow-up 2026-09-13 (v0.3.29, setup v12):** Codex 0.154.0's temporary
   catch-up summary also fires `notify` with the pane's `MAST_TAB`, overwriting the hint with
   an unsaved thread id. The writer now requires matching saved top-level `session_meta`
   (`source: cli/exec`), rejecting temporary threads and persisted subagents. The bounded

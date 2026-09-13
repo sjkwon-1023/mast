@@ -2313,7 +2313,7 @@ restore apart from bytes that never arrived. Item 9 turns the log **off** again 
 14. On an iPhone with a home indicator, confirm the bottom dock (composer + key bar) sits above
    it and is not obscured.
 
-### Codex resume ownership — setup v12 verification
+### v0.3.29 — Codex resume ownership verification (setup v12)
 
 This is pending Windows field verification. The Linux regression runs the production Bash
 notify script and restart-history wrapper; it cannot exercise ConPTY or readline key delivery.
