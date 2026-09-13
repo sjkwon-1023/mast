@@ -2313,6 +2313,26 @@ restore apart from bytes that never arrived. Item 9 turns the log **off** again 
 14. On an iPhone with a home indicator, confirm the bottom dock (composer + key bar) sits above
    it and is not obscured.
 
+### v0.3.29 — Codex resume ownership verification (setup v12)
+
+This is pending Windows field verification. The Linux regression runs the production Bash
+notify script and restart-history wrapper; it cannot exercise ConPTY or readline key delivery.
+
+1. After installing the build, confirm `~/.mast/.setup-v12` exists. In the intended pane,
+   complete a Codex turn and compare `~/.mast/resume/tab-<id>` with that conversation's id.
+   An already-poisoned hint needs this new turn; upgrading does not guess a replacement id.
+2. Let Codex produce a catch-up summary and finish a delegated subagent. Neither may change
+   the resume file to an internal thread id. A different pane must retain its own hint.
+3. Quit and relaunch mast. Press ↑ once: the command must be `codex resume <original-id>`.
+   Press Enter and confirm that the original conversation, not a new thread, reopens.
+4. In the same pane, start a different real Codex conversation and finish a turn. Restart
+   again: ↑ must now offer that new conversation. Repeat Claude → Codex and Codex → Claude
+   to verify that switching real agents still replaces the hint.
+
+Local automated reproduction: `cd apps/mast && npx vitest run src/codex-resume.test.ts`.
+No real sessions or user history are modified by that test. Storage-format assumptions and
+the bounded-check fallback are recorded in `scripts/wsl/claude-hook-example.md`.
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy
