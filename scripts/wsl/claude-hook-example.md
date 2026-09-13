@@ -17,7 +17,7 @@ named pipe, or Windows helper CLI.
 
 ## Automatic provisioning
 
-**mast auto-provisions this on first run per distro (`~/.mast/.setup-v12`); this
+**mast auto-provisions this on first run per distro (`~/.mast/.setup-v13`); this
 document remains the contract and the manual path.**
 
 On launch the app streams a setup script into `wsl.exe [-d <distro>] -- bash -s` for every
@@ -35,6 +35,10 @@ Once per distro it:
   nothing has to assemble an escape sequence or repeat the tty resolution by hand. Every
   mast terminal has `~/.mast/bin` prepended to `PATH`
   (`apps/mast/src-tauri/src/host.rs::bash_argv`), so inside a tab it is just `mast`,
+- installs `~/.mast/bin/mast-config.py`, the standard-library Python helper for `mast config`.
+  Unlike send/query, config does **not** emit OSC: it resolves and edits the Windows settings
+  file directly, requiring Windows interop and drive access when invoked (not when installed).
+  Commands, validation and restart semantics are in [`docs/SETTINGS.md`](../../docs/SETTINGS.md),
 - replaces the old `~/.mast/bin/mast-send.sh` (setup v3) with a two-line wrapper that
   execs `mast send "$@"`, so anything still pointing at that path keeps working,
 - installs the `mast-send` skill at `~/.claude/skills/mast-send/SKILL.md` (the agent

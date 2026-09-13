@@ -17,25 +17,26 @@ something at a moment you cannot predict. A plain terminal hides that — the ag
 answer looks exactly like the one still working, and you find out by cycling through windows.
 
 mast keeps a status card per workspace (running, needs input, done) with the agent's last message,
-notifies you when one starts waiting, and lets you answer from your phone if you have walked away.
+notifies you when one starts waiting, and lets you answer from your phone even while lying in bed.
 
 ## Why mast
 
-- **See who needs you at a glance** — a waiting agent does not disappear behind another terminal.
+- **A lightweight agent terminal** — run several coding agents in one Windows + WSL2 workspace
+  and see who needs you at a glance, without an IDE runtime.
 - **Stay in one tool** — split panes and tabs, plus folder, text and Markdown viewers, without
   opening an IDE.
-- **Answer from the couch** — pair a phone on the same local network as your PC, read a tab,
-  scroll a full-screen TUI, and send input.
+- **Control your terminals from bed** — pair a phone on the same local network as your PC,
+  read output and send input to agent CLIs or ordinary Bash shells.
+- **Let agents talk to each other** — agents can use `mast ls` and `mast send` inside their
+  terminals to hand work to another pane in the same workspace.
+- **Resume with Up** — after restarting mast, press `Up` in a restored Bash pane to recall
+  its saved Claude Code or Codex resume command, then `Enter` to continue the conversation.
+  This resumes the agent's saved session; the old process does not stay running after exit.
 - **Portable** — a single executable. No installer, no setup wizard.
 - **Reload any time** — `Ctrl+Shift+R` rebuilds the window; the shells and agents keep running.
 
 Most agent multiplexers are built for macOS and Linux terminals. mast is the one built for Windows
 and WSL2.
-
-## Requirements
-
-Windows 11 (x64 or ARM64), WSL2 with at least one distribution, and the WebView2 runtime that ships
-with Windows 11. mast opens WSL2 shells only — there is no PowerShell or CMD profile.
 
 ## Features
 
@@ -44,13 +45,14 @@ with Windows 11. mast opens WSL2 shells only — there is no PowerShell or CMD p
 - **Tabs inside panes** — every pane has its own tab strip; background tabs stay alive.
 - **Agent status and notifications** — Claude Code and Codex report running / needs input / idle to
   the sidebar, and a Windows toast fires when one starts waiting.
-- **Pane-to-pane text passing** — send text to another pane, where it runs on arrival unless you ask
-  to pre-fill the prompt instead.
+- **Agent-to-agent communication** — `mast ls` discovers tabs and `mast send '#<id>' 'text'`
+  sends input to another agent or shell in the same workspace (`-l` pre-fills without submitting).
 - **Viewer tabs** — folder browser, text viewer and Markdown viewer for files inside WSL.
   The pane-header Changes button opens changed files and a selected unified diff, with
   Working / Staged / All scopes. It is read-only, refreshes when reopened or with Refresh,
   and limits each diff to 512 KiB. Git and GNU `timeout` must be installed in that WSL distro.
-- **Phone remote (opt-in)** — pair by QR, then read a tab, scroll a full-screen TUI, or send input.
+- **Phone terminal control (opt-in)** — pair by QR, then read output, scroll a full-screen TUI,
+  or send input to an agent CLI or a regular Bash shell. It is not limited to agent prompts.
   **Local-network use only:** your PC and phone must be on the same trusted LAN, typically
   the same home router. The PC can use Ethernet while the phone uses Wi-Fi. Mobile data
   (4G/5G) or an unrelated Wi-Fi network does not connect through mast; there is no cloud relay.
@@ -62,17 +64,27 @@ with Windows 11. mast opens WSL2 shells only — there is no PowerShell or CMD p
 - **Layout persistence** — workspaces, splits and tabs come back, each shell respawned where it was,
   and a tab that was running an agent returns with its resume command one `Up` away.
 
-## Installing
+## Install
+
+You need **Windows 11 (x64 or ARM64), WSL2 with an initialized Linux distribution, and WebView2**
+(normally included with Windows 11). mast does not install WSL, Linux, or coding agents for you.
+It opens WSL Bash shells only — there is no PowerShell or CMD terminal profile.
+
+If WSL is not installed, run `wsl --install` in an administrator PowerShell, restart Windows,
+then open the Linux distribution and finish creating its user account. Check `wsl --list --verbose`
+shows version `2`. See [Microsoft's WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install).
+
+Install the agent CLIs you want to use inside that distribution before first launching mast.
+For automatic hook setup, install `python3`; the notification/resume helpers also use `jq`,
+and the Codex resume check uses GNU `timeout`. Python 3.11+ allows safe parsing of existing Codex
+TOML configuration. On Ubuntu, these helpers are available with
+`sudo apt install python3 jq coreutils`. Git is needed for the Changes viewer, not for Bash terminals.
 
 Download the build for your CPU from the
-[latest release](https://github.com/sjkwon-1023/mast/releases/latest) and run it. Releases up to
-and including v0.3.20 predate the rename and are named `winmux-x64.exe` / `winmux-arm64.exe`; from
-the next one on they are `mast-x64.exe` / `mast-arm64.exe`. It is unsigned either way, so
-SmartScreen warns on first launch: **More info** → **Run anyway**.
-
-To build from source, see [`docs/WINDOWS-BUILD.md`](./docs/WINDOWS-BUILD.md).
-
-## Setup
+[latest release](https://github.com/sjkwon-1023/mast/releases/latest): `mast-x64.exe` or
+`mast-arm64.exe`. Run it directly; there is no installer. Releases are unsigned, so Windows
+may show a SmartScreen warning on first launch. After verifying the download is from this
+repository, **More info** → **Run anyway** allows you to proceed.
 
 mast spawns into the WSL default distribution. To point it elsewhere — useful if you keep a
 locked-down distribution for agent work:
@@ -82,26 +94,43 @@ $env:MAST_DISTRO = "Ubuntu-24.04"      # current shell
 setx MAST_DISTRO "Ubuntu-24.04"        # persist for your user account
 ```
 
-Agent status wiring is automatic: mast provisions its Claude Code and Codex notification helpers in
-each distribution it uses, and a failure is logged rather than silently changing your shell. The
-contract and the manual fallback are in
+On first launch in each distribution, mast automatically installs its CLI and notification helpers
+under `~/.mast/bin`, merges Claude Code hooks into `~/.claude/settings.json`, and installs the
+Claude skill at `~/.claude/skills/mast-send/SKILL.md`. **It does not edit `~/.claude/CLAUDE.md`.**
+For an existing Codex installation, it adds its notification integration to `~/.codex/config.toml`
+and a managed usage block to `~/.codex/AGENTS.md`. Existing custom Codex `notify` commands are
+preserved, so those may need manual integration. There is no separate setup command for a normal
+first launch; downloading the executable alone does not perform these steps.
+
+Setup is versioned and runs in the background. Failures are recorded in `~/.mast/setup.log` and
+reported to the app's diagnostic log when enabled; they do not prevent a plain terminal from opening.
+Missing Python or failed writes are retried on the next launch. If you install Codex after mast's
+setup has already completed, follow the manual integration instructions — a normal restart does
+not rerun a completed setup version. The contract and manual fallback are in
 [`scripts/wsl/claude-hook-example.md`](./scripts/wsl/claude-hook-example.md).
+
+To build from source, see [`docs/WINDOWS-BUILD.md`](./docs/WINDOWS-BUILD.md).
 
 ## Settings
 
-There is no settings screen. Write `%AppData%\app.mast.desktop\settings.json` and restart:
+Run these commands in a mast Bash pane:
 
-```json
-{
-  "fontFamily": "Cascadia Code, monospace",
-  "fontSize": 15,
-  "log": false,
-  "remote": { "port": 7331 }
-}
+```sh
+mast config
+mast config set fontSize 15
+mast config set remote                  # enable phone access on port 7331
+mast config set remote --port 7441      # enable it on a different port
+mast config set remote false            # disable phone access
+mast config reset fontSize              # restore the built-in font sizes
 ```
 
-Every key is optional, and a bad file reports itself in the status line instead of being silently
-ignored. Full reference: [`docs/SETTINGS.md`](./docs/SETTINGS.md).
+Changes are saved to `%AppData%\app.mast.desktop\settings.json` and require a **full mast restart**;
+`Ctrl+Shift+R` is not enough. Finish or save your work first: restarting ends running terminal
+processes. No command restarts the app automatically. The CLI needs Python 3, WSL Windows interop,
+PowerShell and access to the Windows drive. You can still edit the JSON file manually.
+
+Phone access stays off until you enable it. Every key is optional, invalid settings are rejected,
+and unknown existing keys are preserved. Full reference: [`docs/SETTINGS.md`](./docs/SETTINGS.md).
 
 ## Keyboard shortcuts
 

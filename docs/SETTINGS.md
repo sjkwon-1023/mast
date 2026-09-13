@@ -1,7 +1,9 @@
 # settings.json reference
 
-mast has no settings screen. Write `%AppData%\app.mast.desktop\settings.json` by hand and
-restart the app.
+Use `mast config` in a mast Bash pane, or edit
+`%AppData%\app.mast.desktop\settings.json` by hand. There is no settings screen.
+After saving, fully quit and relaunch mast; `Ctrl+Shift+R` is only a window reload.
+Restarting ends running terminal processes, so finish or save work first.
 
 Three rules hold for every key below:
 
@@ -14,7 +16,46 @@ Three rules hold for every key below:
   recognise are ignored rather than rejected, so a file written for a newer version still
   works on an older one.
 
-## Full example
+## CLI
+
+```sh
+mast config                              # saved overrides, defaults and help
+mast config get fontSize                 # inspect a saved override or its default
+mast config set fontFamily "Cascadia Code, monospace"
+mast config set fontSize 15
+mast config set highlightLanguages '["python","rust"]'
+mast config set log true
+mast config set remote                    # enable on 7331
+mast config set remote true --port 7441   # enable on 7441
+mast config set remote --port 7441        # same, true is optional
+mast config set remote false              # remove remote, disabling it after restart
+mast config reset fontSize                # remove this override
+mast config reset remote                  # disable phone access
+```
+
+The CLI displays **saved settings**, not a query of the running app. Commands never restart
+mast or open a firewall rule. `set remote` always chooses 7331 when `--port` is omitted,
+even if an older saved override used another port. `set remote.port N` also enables remote
+access on that port. `false` cannot be combined with a port. Unknown setting names are errors.
+
+The helper uses Python 3's standard library, Windows PowerShell and `wslpath`; Windows interop
+and access to the Windows drive must be enabled. No daemon, socket or settings-write OSC command
+is installed. Once provisioned, `~/.mast/bin/mast config` can also run from an ordinary WSL shell.
+If Windows access is disabled in your distribution, edit the file from Windows instead.
+
+Mutations validate the existing file and the proposed result, preserving unknown keys (also
+inside `remote` when enabling or changing its port). Disabling/resetting a field intentionally
+removes that entire field. An invalid existing file, duplicate JSON keys, a non-object root,
+a symbolic-link target, or a file larger than 1 MiB is refused without replacement. Repair an
+invalid file manually; `reset` is not a corruption-recovery command.
+
+Writes use a temporary file in the same directory and replace the target only after a successful
+write. A `settings.json.lock` directory serializes CLI writers across distributions; a second
+writer fails as busy rather than overwriting the first. If a killed command leaves this directory
+behind, confirm no `mast config` writer is running before removing that **empty lock directory**
+and retrying. External editors do not participate in this lock: do not edit the file concurrently.
+
+## Full JSON example
 
 ```json
 {
@@ -87,10 +128,11 @@ Lets a phone on the same Wi-Fi read a tab and send it input.
 ```
 
 **The key's presence is the switch.** Leave it out and no listener, no thread and no token
-file exist. `port` is required — there is no default, because a default would open a port on
-your LAN that you never asked for. A missing `port` fails the whole file on purpose, so you
-find out from the status line rather than from an open socket. The range is **1024 to 65535**;
-below 1024 is the well-known range that needs administrator rights on Windows too.
+file exist. In JSON, `port` is still required; a missing `port` fails the whole file.
+The CLI's explicit `set remote` action writes `{"port": 7331}` when no port is supplied.
+This is a command default, not automatic first-run enablement. JSON `remote: true` or
+`remote: false` is not supported; the CLI removes the key to turn it off. The accepted range
+is **1024 to 65535**.
 
 Changing this takes a restart, like `log`.
 
