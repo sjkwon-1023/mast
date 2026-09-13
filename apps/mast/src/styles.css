@@ -323,6 +323,36 @@ body {
   border-color: var(--accent);
 }
 
+.sidebar-version {
+  display: block;
+  margin-top: 5px;
+  color: var(--fg-muted);
+  font-family: monospace;
+  font-size: 11px;
+  text-align: center;
+}
+
+.sidebar-version[hidden] {
+  display: none;
+}
+
+.sidebar-update {
+  width: 100%;
+  margin-top: 4px;
+  padding: 3px 6px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sidebar-update:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
 /* 페어링 다이얼로그 — 네이티브 <dialog>.showModal() (포커스 트랩·Esc·백드롭은
    브라우저 몫이다). */
 .pairing-dialog {

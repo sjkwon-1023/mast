@@ -2713,3 +2713,17 @@ Use a disposable repository and a copy of the state directory for downgrade chec
 
 Release the ADR-0021 compatibility build before the Changes build. Releases without that
 repair still discard a state containing a new tab kind; do not use live state to test them.
+
+## 15. Startup update notice (v0.3.31 / ADR-0024)
+
+The native WinHTTP GitHub probe passed on Windows on 2026-09-13. The following GUI
+checks remain pending; compilation and automated tests do not replace field verification.
+
+1. Start mast online. The sidebar footer must show the installed version without delaying
+   terminal startup. A strictly newer stable release adds **Update available**; clicking
+   it opens the GitHub release page in the default browser without downloading or restarting.
+2. Start offline or with GitHub blocked. Terminals must remain usable, the installed version
+   must stay visible, and no update popup or claim of being up to date may appear.
+3. Switch workspaces and reload the WebView. The footer must survive card reconciliation
+   and read the process cache without issuing another network check. A full app restart
+   permits one new check.

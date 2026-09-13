@@ -16,8 +16,11 @@ import {
   dispatch,
   getDiagnostics,
   getState,
+  getUpdateInfo,
   getUiSettings,
   notifyToast,
+  onUpdateChecked,
+  openUrl,
   pickWorkspaceFolder,
   remoteStatus,
   resetUi,
@@ -52,6 +55,7 @@ import {
 import { initWindowVisibility } from "./window-visibility";
 import { WorkspaceView, activeWorkspace } from "./workspace-view";
 import type { AgentStatus, Command, CommandOutput, StateSnapshot, WorkspaceId } from "./types";
+import { initUpdateNotice as startUpdateNotice } from "./update-notice";
 
 declare global {
   interface Window {
@@ -164,6 +168,11 @@ class App {
     // 여는 비일관 제거) — 픽커는 createWorkspaceHere 의 무워크스페이스 폴백뿐이다.
     () => this.createWorkspaceHere(),
     () => openPairingDialog(),
+    (url) => {
+      void openUrl(url).catch((err: unknown) => {
+        console.debug("[mast] update link failed", err);
+      });
+    },
   );
   /** 직전 스냅샷의 워크스페이스별 agentStatus — needsInput 상승 전이 판정 기준선.
    *  부팅 첫 렌더 전까지 null 이고, 그 첫 스냅샷은 알림 없이 기준선으로만
@@ -200,6 +209,9 @@ class App {
       diagnostics: getDiagnostics,
       lastSwitch: null,
     };
+    // 네이티브가 시작한 업데이트 확인은 기다리지 않는다. 구독을 먼저 등록하고
+    // 캐시 조회를 이어 가므로, 부팅 중 도착한 update-checked 이벤트도 보존된다.
+    this.initUpdateNotice();
     installReloadKey();
     installActivityPing();
     this.installWindowFocus();
@@ -236,6 +248,10 @@ class App {
     await this.initRemote();
     this.store.subscribe((snapshot) => this.render(snapshot));
     await this.store.init();
+  }
+
+  private initUpdateNotice(): void {
+    startUpdateNotice(onUpdateChecked, getUpdateInfo, (info) => this.sidebar.setUpdateInfo(info));
   }
 
   /** LAN 원격 표면 배선 (ADR-0016 결정 9).

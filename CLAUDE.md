@@ -866,6 +866,13 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 
 #### Build, release and adoption
 
+- **Startup update notice — v0.3.31.** Native setup checks GitHub once on a short-lived
+  background thread and caches the result for the process lifetime. WebView resets read the
+  cache and receive a completion event, never request again. The sidebar shows the installed
+  version and, only for a newer stable release, a fixed release-page link. WinHTTP has stage
+  timeouts and header/body caps; failure is log-only. No updater, popup, polling or restart.
+  [ADR-0024](docs/adr/0024-startup-update-notice.md).
+
 - **CI takes whatever stable Rust the runner ships, so a new lint can turn a clean tree red**
   — 2026-08-22 the runner moved to 1.98 and `clippy::chunks_exact_to_as_chunks` failed two
   untouched UTF-16 decoders on a push that changed neither (fixed with the suggested

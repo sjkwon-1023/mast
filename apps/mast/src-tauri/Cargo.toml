@@ -3,7 +3,7 @@
 
 [package]
 name = "mast-app"
-version = "0.3.30"
+version = "0.3.31"
 edition = "2021"
 
 [build-dependencies]
@@ -28,6 +28,7 @@ mast-remote = { path = "../../../crates/mast-remote" }
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Networking_WinHttp",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_ProcessStatus",
     # 로그 타임스탬프의 로컬 시각 (GetLocalTime) — 시간 크레이트를 들이지 않기 위해.

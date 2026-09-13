@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { shortcutLabel } from "./keys";
-import { Sidebar } from "./sidebar";
+import { LATEST_RELEASE_URL, Sidebar } from "./sidebar";
 import type {
   AgentStatus,
   Command,
@@ -93,12 +93,16 @@ function mount(): {
   /** "Pair phone" 버튼 — 원격 표면이 떠 있을 때만 보인다. */
   pairBtn: () => HTMLButtonElement;
   pairingCalls: () => number;
+  version: () => HTMLSpanElement;
+  updateBtn: () => HTMLButtonElement;
+  openedUrls: string[];
 } {
   const root = document.createElement("div");
   document.body.replaceChildren(root);
   const dispatched: Command[] = [];
   let newWorkspaceCalls = 0;
   let pairingCalls = 0;
+  const openedUrls: string[] = [];
   const sidebar = new Sidebar(
     root,
     async (cmd) => {
@@ -111,11 +115,18 @@ function mount(): {
     () => {
       pairingCalls += 1;
     },
+    (url) => {
+      openedUrls.push(url);
+    },
   );
   const cardsEl = root.querySelector<HTMLElement>(".sidebar-cards");
   if (cardsEl === null) throw new Error("sidebar-cards not mounted");
   const pairEl = root.querySelector<HTMLButtonElement>(".sidebar-pair");
   if (pairEl === null) throw new Error("sidebar-pair not mounted");
+  const versionEl = root.querySelector<HTMLSpanElement>(".sidebar-version");
+  if (versionEl === null) throw new Error("sidebar-version not mounted");
+  const updateEl = root.querySelector<HTMLButtonElement>(".sidebar-update");
+  if (updateEl === null) throw new Error("sidebar-update not mounted");
   return {
     sidebar,
     cards: () => Array.from(cardsEl.querySelectorAll<HTMLElement>(".ws-card")),
@@ -123,6 +134,9 @@ function mount(): {
     newWorkspaceCalls: () => newWorkspaceCalls,
     pairBtn: () => pairEl,
     pairingCalls: () => pairingCalls,
+    version: () => versionEl,
+    updateBtn: () => updateEl,
+    openedUrls,
   };
 }
 
@@ -546,5 +560,44 @@ describe("Sidebar pairing button", () => {
     expect(pairingCalls()).toBe(1);
     sidebar.setRemoteEnabled(false);
     expect(pairBtn().hidden).toBe(true);
+  });
+});
+
+describe("Sidebar update notice", () => {
+  it("shows the installed version from cached update info", () => {
+    const { sidebar, version, updateBtn } = mount();
+
+    sidebar.setUpdateInfo({ currentVersion: "0.3.31", newerVersion: null, checked: false });
+
+    expect(version().hidden).toBe(false);
+    expect(version().textContent).toBe("v0.3.31");
+    expect(updateBtn().hidden).toBe(true);
+  });
+
+  it("shows a newer-version button and opens the fixed release page", () => {
+    const { sidebar, version, updateBtn, openedUrls } = mount();
+
+    sidebar.setUpdateInfo({ currentVersion: "0.3.31", newerVersion: "0.3.32", checked: true });
+
+    expect(version().textContent).toBe("v0.3.31");
+    expect(updateBtn().hidden).toBe(false);
+    expect(updateBtn().textContent).toBe("Update available");
+    expect(updateBtn().title).toContain("0.3.32");
+    updateBtn().click();
+    expect(openedUrls).toEqual([LATEST_RELEASE_URL]);
+  });
+
+  it("keeps the static footer while cards render", () => {
+    const { sidebar, version, updateBtn } = mount();
+    sidebar.setUpdateInfo({ currentVersion: "0.3.31", newerVersion: "0.3.32", checked: true });
+    const footer = document.querySelector(".sidebar-footer");
+    if (footer === null) throw new Error("missing sidebar footer");
+
+    sidebar.render(snapshot(1, THREE, 1));
+    sidebar.render(snapshot(2, [ws(1), ws(2)], 1));
+
+    expect(document.querySelector(".sidebar-footer")).toBe(footer);
+    expect(version().textContent).toBe("v0.3.31");
+    expect(updateBtn().hidden).toBe(false);
   });
 });

@@ -18,4 +18,5 @@ pub mod replay;
 pub mod reset;
 pub mod send;
 pub mod session;
+pub mod update;
 pub mod wslpath;
