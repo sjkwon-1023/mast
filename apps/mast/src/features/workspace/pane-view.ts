@@ -47,7 +47,13 @@
 import { respawnTab } from "../../infrastructure/backend";
 import { paneTerminalCwd, shortcutLabel } from "../../shared/keys";
 import type { ShortcutId } from "../../shared/keys";
-import { paneUnread, sameTabButton, tabStripModel, tabStripPlan } from "./tab-strip-model";
+import {
+  paneNeedsInput,
+  paneUnread,
+  sameTabButton,
+  tabStripModel,
+  tabStripPlan,
+} from "./tab-strip-model";
 import type { TabButtonModel } from "./tab-strip-model";
 import type { TerminalView } from "../terminal/view";
 import type { ViewerView } from "../viewers/viewer-view";
@@ -113,6 +119,7 @@ export interface SendController {
 interface TabNodes {
   root: HTMLElement;
   title: HTMLSpanElement;
+  needsInput: HTMLSpanElement;
   dot: HTMLSpanElement;
   exited: HTMLSpanElement;
   notStarted: HTMLSpanElement;
@@ -562,8 +569,13 @@ export class PaneView {
       });
     }
     this.lastStrip = model;
-    // skip 이면 unread 도 불변이라 여기까지 오지 않는다 — 배지도 무접촉.
-    this.unreadEl.hidden = !paneUnread(model);
+    // skip 이면 unread·needsInput 도 불변이라 여기까지 오지 않는다 — 배지도 무접촉.
+    const needsInput = paneNeedsInput(model);
+    this.unreadEl.hidden = !(paneUnread(model) || needsInput);
+    this.unreadEl.classList.toggle("needs-input", needsInput);
+    this.unreadEl.title = needsInput
+      ? "Agent needs input in this pane"
+      : "Unread notification in this pane";
   }
 
   private tabButton(model: TabButtonModel): TabNodes {
@@ -574,8 +586,13 @@ export class PaneView {
     const title = document.createElement("span");
     title.className = "tab-title";
 
-    // dot·exited 배지는 값에 따라 있다 없다 하지만 노드는 항상 만들고 hidden
-    // 으로만 토글한다 — 자식이 들락날락하면 in-place 패치의 의미가 없어진다.
+    // needsInput·dot·exited 배지는 값에 따라 있다 없다 하지만 노드는 항상 만들고
+    // hidden 으로만 토글한다 — 자식이 들락날락하면 in-place 패치의 의미가 없어진다.
+    const needsInput = document.createElement("span");
+    needsInput.className = "tab-needs-input";
+    needsInput.textContent = "!";
+    needsInput.title = "Needs input";
+
     const dot = document.createElement("span");
     dot.className = "tab-dot";
     dot.textContent = "●";
@@ -607,9 +624,9 @@ export class PaneView {
       void this.dispatch({ type: "closeTab", tab: model.tab });
     });
 
-    el.append(title, dot, exited, notStarted, close);
+    el.append(title, needsInput, dot, exited, notStarted, close);
 
-    const nodes: TabNodes = { root: el, title, dot, exited, notStarted, model };
+    const nodes: TabNodes = { root: el, title, needsInput, dot, exited, notStarted, model };
     this.applyTab(nodes, model);
 
     el.addEventListener("click", () => this.onTabClick(nodes.model));
@@ -625,6 +642,7 @@ export class PaneView {
     nodes.root.title = model.title; // 잘린 제목의 툴팁
 
     setText(nodes.title, model.title);
+    nodes.needsInput.hidden = !model.needsInput;
     nodes.dot.hidden = !model.notification;
     nodes.exited.hidden = !model.exited;
     nodes.notStarted.hidden = !model.notStarted;

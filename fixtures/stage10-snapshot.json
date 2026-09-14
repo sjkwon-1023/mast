@@ -38,7 +38,9 @@
                   "cwd": "/home/dev/code/mast"
                 },
                 "notification": "none",
-                "lastActivityMs": 1723100000000
+                "lastActivityMs": 1723100000000,
+                "agentStatus": "idle",
+                "lastAgentMessage": null
               },
               {
                 "id": 5,
@@ -49,7 +51,9 @@
                   "scrollTop": 120.5
                 },
                 "notification": "unread",
-                "lastActivityMs": null
+                "lastActivityMs": null,
+                "agentStatus": "idle",
+                "lastAgentMessage": null
               }
             ],
             "activeTab": 4
@@ -67,7 +71,9 @@
                   "cwd": null
                 },
                 "notification": "none",
-                "lastActivityMs": null
+                "lastActivityMs": null,
+                "agentStatus": "idle",
+                "lastAgentMessage": null
               },
               {
                 "id": 7,
@@ -77,7 +83,9 @@
                   "path": "/home/dev/code/mast/src"
                 },
                 "notification": "none",
-                "lastActivityMs": null
+                "lastActivityMs": null,
+                "agentStatus": "idle",
+                "lastAgentMessage": null
               },
               {
                 "id": 8,
@@ -88,7 +96,9 @@
                   "scrollTop": 0.0
                 },
                 "notification": "none",
-                "lastActivityMs": null
+                "lastActivityMs": null,
+                "agentStatus": "idle",
+                "lastAgentMessage": null
               }
             ],
             "activeTab": 6
@@ -123,7 +133,23 @@
                   "path": "/"
                 },
                 "notification": "none",
-                "lastActivityMs": null
+                "lastActivityMs": null,
+                "agentStatus": "idle",
+                "lastAgentMessage": null
+              },
+              {
+                "id": 15,
+                "title": "Terminal",
+                "kind": {
+                  "type": "terminal",
+                  "ptySession": 12,
+                  "status": { "type": "running" },
+                  "cwd": null
+                },
+                "notification": "unread",
+                "lastActivityMs": 1723100600000,
+                "agentStatus": "needsInput",
+                "lastAgentMessage": "권한 승인이 필요합니다: rm -rf build/"
               }
             ],
             "activeTab": 14
@@ -135,7 +161,7 @@
       }
     ],
     "activeWorkspace": 1,
-    "nextId": 15,
+    "nextId": 16,
     "revision": 6
   }
 }
