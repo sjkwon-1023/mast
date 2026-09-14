@@ -5,7 +5,7 @@
 // **내용을 남기지 않는다**(글자 수·이름 있는 키만).
 //
 // 백엔드 IPC 는 vi.mock 으로 고정한다 — vi.mock 은 hoist 되므로 팩토리가 참조하는
-// 것은 vi.hoisted 로 만든다 (text-view.test.ts 와 같은 관례).
+// 것은 vi.hoisted 로 만든다 (text/view.test.ts 와 같은 관례).
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

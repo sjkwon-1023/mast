@@ -25,7 +25,7 @@ import {
 } from "./markdown-view";
 import type { TimerHost } from "./ack-batcher";
 
-/** 등록된 콜백을 fire 로 직접 발화시킨다 (text-view.test.ts 와 같은 형태). */
+/** 등록된 콜백을 fire 로 직접 발화시킨다 (text/view.test.ts 와 같은 형태). */
 class FakeTimers implements TimerHost {
   private next = 1;
   private readonly pending = new Map<number, { fn: () => void; ms: number }>();

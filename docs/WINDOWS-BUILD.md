@@ -1059,7 +1059,7 @@ launch**; the wrapper half reaches only tabs opened after this build, so item 6 
 
    The responder's reply values live in `sink.rs` (`COLOR_REPLY_FOREGROUND` /
    `COLOR_REPLY_BACKGROUND`) and are one leg of a three-way contract with `host.rs`'s
-   `THEME_SYNC` and `terminal-view.ts`'s `TERMINAL_THEME` — if you retheme, all three move
+   `THEME_SYNC` and `terminal/view.ts`'s `TERMINAL_THEME` — if you retheme, all three move
    together.
 
 2. **Workspace isolation of the agent channel** — with tabs open in **two** workspaces, run
@@ -2516,7 +2516,7 @@ in the repository exercised them at volume on the platform where they actually e
 > position query (`ESC[6n`) and it **holds the child process until a CPR reply arrives** —
 > even `cmd.exe /c exit` never runs to completion, and `child.wait()` never returns. The app
 > is unaffected because xterm answers the query (the checkpoint-1 "blank screen, bytes_out=4"
-> incident in `terminal-view.ts` was this same handshake seen from the other side); the soak
+> incident in `terminal/view.ts` was this same handshake seen from the other side); the soak
 > has no xterm, so its sink now answers `ESC[1;1R` itself. `ClosePseudoConsole` never blocked
 > in any probe (≤1 ms with a reader mid-`read()` and with none), so the waiter's order in
 > `session.rs` is not implicated. One side finding from the same probe: dropping the PTY

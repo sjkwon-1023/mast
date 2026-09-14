@@ -16,9 +16,9 @@ The modes a program sets with DECSET/DECRST (`CSI ? Pm h` / `CSI ? Pm l`) live i
 place in this app: the front end's `xterm.js` instance. Nothing on the Rust side knew they
 existed. A re-attach throws that instance away and builds a new one:
 `view-reconcile.ts` disposes the views of a workspace being left (ADR-0004 decision 1),
-`terminal-view.ts` constructs a brand-new `Terminal` on return, and the only thing that
+`terminal/view.ts` constructs a brand-new `Terminal` on return, and the only thing that
 ever tells that terminal what state it is in is the replay it writes
-(`terminal-view.ts:427-446` ← `PtySession::reattach` ← `ReplayBuffer::snapshot`). The webview
+(`terminal/view.ts:427-446` ← `PtySession::reattach` ← `ReplayBuffer::snapshot`). The webview
 reload from the idle reset policy (ADR-0004 decision 4) and a plain F5 take the same path.
 
 The replay is a 1 MiB window with whole-chunk eviction and a head trim. A long-running TUI

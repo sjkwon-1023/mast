@@ -22,7 +22,7 @@ import type {
   TabKind,
   Workspace,
 } from "./types";
-import { WINDOW_BYTES } from "./text-view";
+import { WINDOW_BYTES } from "./text/window";
 import type { GitChange, GitDiff, GitDiffRequest, GitStatus } from "./backend";
 
 const snapshotFixture = snapshotFixtureJson as unknown as StateSnapshot;

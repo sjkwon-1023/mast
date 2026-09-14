@@ -9,13 +9,13 @@
 // 마운트되고 배경 탭이 되면 내려간다. 다시 보일 때 파일을 한 번 더 읽는 비용이
 // 죽은 xterm 을 계속 들고 있는 비용보다 싸다.
 //
-// 글꼴·테마·줌은 **터미널 표면의 것을 그대로 쓴다** (terminal-view 의 모듈 상태와
+// 글꼴·테마·줌은 **터미널 표면의 것을 그대로 쓴다** (terminal/settings의 모듈 상태와
 // 줌 레지스트리) — 기록은 터미널 화면의 연장이라 같은 `Ctrl+=`/`Ctrl+-`/`Ctrl+0`
 // 한 스텝에 같이 움직여야 한다. 뷰어 글꼴(viewer-font.ts) 쪽이 아닌 이유가 그것
 // 이다: 같은 pane 에서 살아 있는 셸과 그 셸의 마지막 화면이 다른 크기로 보이면
 // 안 된다.
 //
-// 리사이즈는 **자체 ResizeObserver** 로 받는다 (뷰어 관례 — text-view.ts 와 같다).
+// 리사이즈는 **자체 ResizeObserver** 로 받는다 (뷰어 관례 — text/view.ts 와 같다).
 // pane 의 observer 는 표시 중인 터미널 뷰의 fit 만 부른다.
 
 import { Terminal } from "@xterm/xterm";
@@ -23,14 +23,9 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
 import { readTabRecord } from "./backend";
-import {
-  copyTerminalSelection,
-  isCopySelectionKey,
-  registerTerminalFontTarget,
-  terminalViewOptions,
-  unregisterTerminalFontTarget,
-} from "./terminal-view";
-import type { TerminalFontTarget } from "./terminal-view";
+import { copyTerminalSelection, isCopySelectionKey } from "./terminal/interaction";
+import { registerTerminalFontTarget, terminalViewOptions, unregisterTerminalFontTarget } from "./terminal/settings";
+import type { TerminalFontTarget } from "./terminal/settings";
 import type { ViewerKind, ViewerView } from "./viewer-view";
 import type { TabId } from "./types";
 
@@ -108,7 +103,7 @@ export class RecordView implements ViewerView, TerminalFontTarget {
 
     // 마운트당 1회 읽기. 실패해도 탭은 유지한다 — 배너(pane-view)가 code·시각으로
     // "셸이 끝났다"는 사실을 이미 말하고 있고, 화면만 비게 된다.
-    // text-view 의 loadToken 같은 세대 가드는 없다: 여기서 읽기를 시작하는 곳은
+    // text/view의 loadToken 같은 세대 가드는 없다: 여기서 읽기를 시작하는 곳은
     // 생성자 하나뿐이고(`update()` 는 영구 no-op) 기록은 마운트된 동안 바뀌지
     // 않으므로 경합할 둘째 로드가 존재하지 않는다. disposed 하나면 충분하다.
     void readTabRecord(tab).then(
@@ -125,7 +120,7 @@ export class RecordView implements ViewerView, TerminalFontTarget {
     );
   }
 
-  /** 줌 적용 (terminal-view 의 adjustFontSize/resetFontSize 가 부른다) — 셀 치수가
+  /** 줌 적용 (terminal/settings의 adjustFontSize/resetFontSize 가 부른다) — 셀 치수가
    *  바뀌므로 곧바로 refit 해 격자를 다시 잡는다. PTY 가 없어 resize 가 나갈 곳은
    *  없다. */
   setFontSize(size: number): void {

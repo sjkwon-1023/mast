@@ -14,36 +14,36 @@
 //
 // | 키 | 동작 | 가로채는 곳 |
 // |---|---|---|
-// | `Ctrl+1`~`Ctrl+9` | 워크스페이스 전환 (사이드바 순서 1-based) | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+Shift+↑` `Ctrl+Shift+↓` `Ctrl+Shift+←` `Ctrl+Shift+→` | pane 포커스 이동 (기하학적 인접) | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 활성 pane 의 탭 순환 (다음/이전, 끝에서 순환) | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+Shift+W` | 활성 pane 의 활성 탭 닫기 (뷰어 탭 포함) | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+Shift+T` | 활성 pane 에 새 터미널 탭 | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+Shift+B` | 활성 pane 에 새 폴더 탐색 탭 | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+Shift+D` | 활성 pane 상하 분할 + 터미널 탭 | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+Shift+E` | 활성 pane 좌우 분할 + 터미널 탭 | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+Shift+N` | 새 워크스페이스 — 활성 터미널의 현재 경로로 즉시 생성 (임의 폴더는 사이드바 + 버튼의 픽커) | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+Shift+[` / `Ctrl+Shift+]` | 이전/다음 워크스페이스 (사이드바 순서, 끝에서 순환) | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+Shift+Q` | 활성 워크스페이스 닫기 (실행 중인 터미널 세션이 있으면 confirm — 사이드바 × 버튼과 같은 경로) | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+=` / `Ctrl++` | 터미널 **+ 뷰어** 글꼴 확대 (세션 한정 — settings.json 은 그대로) | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+-` | 터미널 **+ 뷰어** 글꼴 축소 (세션 한정) | keys.ts 판정 + main.ts window keydown capture |
-// | `Ctrl+0` | 터미널·뷰어 글꼴 크기를 각자의 settings.json 기준값으로 리셋 | keys.ts 판정 + main.ts window keydown capture |
-// | `F2` | 활성 워크스페이스 이름 변경 (사이드바 카드 인라인 편집) | keys.ts 판정 + main.ts window keydown capture |
+// | `Ctrl+1`~`Ctrl+9` | 워크스페이스 전환 (사이드바 순서 1-based) | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+↑` `Ctrl+Shift+↓` `Ctrl+Shift+←` `Ctrl+Shift+→` | pane 포커스 이동 (기하학적 인접) | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 활성 pane 의 탭 순환 (다음/이전, 끝에서 순환) | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+W` | 활성 pane 의 활성 탭 닫기 (뷰어 탭 포함) | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+T` | 활성 pane 에 새 터미널 탭 | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+B` | 활성 pane 에 새 폴더 탐색 탭 | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+D` | 활성 pane 상하 분할 + 터미널 탭 | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+E` | 활성 pane 좌우 분할 + 터미널 탭 | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+N` | 새 워크스페이스 — 활성 터미널의 현재 경로로 즉시 생성 (임의 폴더는 사이드바 + 버튼의 픽커) | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+[` / `Ctrl+Shift+]` | 이전/다음 워크스페이스 (사이드바 순서, 끝에서 순환) | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+Q` | 활성 워크스페이스 닫기 (실행 중인 터미널 세션이 있으면 confirm — 사이드바 × 버튼과 같은 경로) | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+=` / `Ctrl++` | 터미널 **+ 뷰어** 글꼴 확대 (세션 한정 — settings.json 은 그대로) | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+-` | 터미널 **+ 뷰어** 글꼴 축소 (세션 한정) | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `Ctrl+0` | 터미널·뷰어 글꼴 크기를 각자의 settings.json 기준값으로 리셋 | keys.ts 판정 + navigation/actions.ts window keydown capture |
+// | `F2` | 활성 워크스페이스 이름 변경 (사이드바 카드 인라인 편집) | keys.ts 판정 + navigation/actions.ts window keydown capture |
 // | `Ctrl+Shift+R` | WebView 리로드 (F5 는 쓰지 않는다 — main.ts 주석 참조) | main.ts installReloadKey |
-// | `Ctrl+V` / `Ctrl+Shift+V` / `Shift+Insert` | 붙여넣기 (클립보드 → xterm paste) | terminal-view.ts customKeyEventHandler |
-// | `Ctrl+C` / `Ctrl+Shift+C` / `Ctrl+Insert` (선택 있을 때만) | 복사 — 선택 없는 `Ctrl+C` 는 SIGINT 로 통과 | terminal-view.ts `isCopySelectionKey` (기록 뷰도 같은 판정 — record-view.ts) |
-// | `Shift+Enter` (터미널 내) | ESC CR 재작성 — Claude Code 줄바꿈 관례 | terminal-view.ts customKeyEventHandler |
+// | `Ctrl+V` / `Ctrl+Shift+V` / `Shift+Insert` | 붙여넣기 (클립보드 → xterm paste) | terminal/view.ts customKeyEventHandler |
+// | `Ctrl+C` / `Ctrl+Shift+C` / `Ctrl+Insert` (선택 있을 때만) | 복사 — 선택 없는 `Ctrl+C` 는 SIGINT 로 통과 | terminal/interaction.ts `isCopySelectionKey` (기록 뷰도 같은 판정 — record-view.ts) |
+// | `Shift+Enter` (터미널 내) | ESC CR 재작성 — Claude Code 줄바꿈 관례 | terminal/view.ts customKeyEventHandler |
 // | `Esc` (send-mode 활성 중에만 — **현재 UI 진입점 없음: 휴면**) | 전달 대상 선택 취소 — 평시 Esc 는 PTY 소유 | workspace-view.ts (모드 활성 중에만 설치) |
-// | `Ctrl+PgUp` / `Ctrl+PgDn` (textViewer 포커스 중에만) | 이전/다음 512KiB 윈도우 | text-view.ts 뷰 내부 keydown |
-// | `Ctrl+Home` / `Ctrl+End` (textViewer 포커스 중에만) | 처음/마지막 윈도우 | text-view.ts 뷰 내부 keydown |
-// | `PgUp` / `PgDn` (textViewer 포커스 중에만) | 행높이 배수 페이지 스크롤 | text-view.ts 뷰 내부 keydown |
+// | `Ctrl+PgUp` / `Ctrl+PgDn` (textViewer 포커스 중에만) | 이전/다음 512KiB 윈도우 | text/view.ts 뷰 내부 keydown |
+// | `Ctrl+Home` / `Ctrl+End` (textViewer 포커스 중에만) | 처음/마지막 윈도우 | text/view.ts 뷰 내부 keydown |
+// | `PgUp` / `PgDn` (textViewer 포커스 중에만) | 행높이 배수 페이지 스크롤 | text/view.ts 뷰 내부 keydown |
 // | `↑↓ Home End PgUp PgDn Enter Backspace` (folderBrowser 포커스 중에만) | 목록 선택 이동·열기·상위 이동 | folder-view.ts 뷰 내부 keydown |
 //
 // modifier 규약: 앱 전역 단축키는 **`F2` 하나를 제외하고 전부 `Ctrl+Shift`
 // 계열**이다. plain `Ctrl` 조합은 셸 소유로 남긴다 — `Ctrl+W` 는 bash 의 단어
 // 삭제, `Ctrl+D` 는 EOF, `Ctrl+E` 는 행 끝 이동이라 뺏으면 터미널을 망가뜨린다.
 // `Ctrl+Shift+C` · `Ctrl+Shift+V` 는 복사·붙여넣기 관례라 절대 배정하지 않고
-// (terminal-view 소유), `Ctrl+Shift+R` 은 리로드(main.ts 소유)라 여기서 판정하지
+// (terminal/view.ts 소유), `Ctrl+Shift+R` 은 리로드(main.ts 소유)라 여기서 판정하지
 // 않는다.
 //
 // **줌 3키의 예외 (명시)**: `Ctrl+=` · `Ctrl+-` · `Ctrl+0` 은 위 규약을 깨고 plain
@@ -68,7 +68,7 @@
 // 조합만 가로챈다. `[`·`]` 는 그 예외를 정면으로 만나는 자리라 표기 문자와
 // **shift 결과 문자**(`{`·`}`)를 둘 다 매칭한다 (아래 CTRL_SHIFT_KEYS 참조).
 
-import type { Pane, PaneId, SplitDirection, TabId, Workspace, WorkspaceId } from "./types";
+import type { Pane, PaneId, SplitDirection, StateSnapshot, TabId, Workspace, WorkspaceId } from "./types";
 
 /** keydown 판정 입력 — KeyboardEvent 의 구조적 부분집합 (DOM 없이 테스트하기
  *  위한 최소 형태). 실코드에서는 이벤트의 key/ctrlKey/altKey/shiftKey/isComposing
@@ -112,7 +112,7 @@ export type KeyAction =
    *  (편집 확정 시점에 글루가 renameWorkspace 를 보낸다). */
   | { type: "renameWorkspace" }
   /** 글꼴 크기 ±1px (`Ctrl+=`/`Ctrl++` · `Ctrl+-`) — **터미널과 뷰어 둘 다**를
-   *  같은 스텝으로 움직인다 (표면별 독립 줌은 없다). 클램프·적용은 terminal-view
+   *  같은 스텝으로 움직인다 (표면별 독립 줌은 없다). 클램프·적용은 terminal/settings
    *  ·viewer-font 의 모듈 상태 소관이고, 상태 스냅샷과 무관한 UI 액션이다. */
   | { type: "zoom"; delta: 1 | -1 }
   /** 터미널·뷰어 글꼴 크기를 각자의 settings.json 기준값으로 되돌린다 (`Ctrl+0`).
@@ -194,6 +194,11 @@ export function paneTerminalCwd(pane: Pane | undefined): string | null {
   const active = pane?.activeTab ?? null;
   const tab = active === null ? undefined : pane?.tabs.find((t) => t.id === active);
   return tab !== undefined && tab.kind.type === "terminal" ? tab.kind.cwd : null;
+}
+
+/** 활성 워크스페이스 해석 — 없으면 null (main.ts 상태 라인과 공유). */
+export function activeWorkspace(snapshot: StateSnapshot): Workspace | null {
+  return snapshot.state.workspaces.find((w) => w.id === snapshot.state.activeWorkspace) ?? null;
 }
 
 /** `Ctrl+Shift+N` 의 경로 해석 (순수) — 활성 pane 의 터미널 cwd, 아니면 워크스페이스

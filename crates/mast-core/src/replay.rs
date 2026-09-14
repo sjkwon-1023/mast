@@ -142,6 +142,7 @@ impl ReplayBuffer {
         self.total
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.total == 0
     }

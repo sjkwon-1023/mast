@@ -1,5 +1,5 @@
 // 뷰어 탭 뷰의 공통 계약 (21단계 청크 C1) — folder-view.ts 가 구현하고,
-// text-view.ts(C2)·markdown-view.ts(D)가 뒤따른다.
+// text/view.ts(C2)·markdown-view.ts(D)가 뒤따른다.
 //
 // TerminalView 와 수명 시맨틱이 정반대다: 터미널 뷰는 keep-alive(배경 탭도 살아
 // 있음)지만, 뷰어 뷰는 **활성 탭일 때만 마운트**된다 (계획 v2 "탭 타입별 동작" —

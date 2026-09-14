@@ -40,7 +40,7 @@ import { Marked } from "marked";
 
 import type { TimerHost } from "./ack-batcher";
 import { fsReadChunk, fsStat } from "./backend";
-import { ScrollSettle, SCROLL_SETTLE_MS, shouldAdoptScroll } from "./text-view";
+import { ScrollSettle, SCROLL_SETTLE_MS, shouldAdoptScroll } from "./viewer-scroll";
 import { registerViewerFontTarget, unregisterViewerFontTarget } from "./viewer-font";
 import type { ViewerFontTarget } from "./viewer-font";
 import { isWindowHidden, onWindowHiddenChange } from "./window-visibility";

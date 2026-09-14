@@ -49,7 +49,7 @@ import { paneTerminalCwd, shortcutLabel } from "./keys";
 import type { ShortcutId } from "./keys";
 import { paneUnread, sameTabButton, tabStripModel, tabStripPlan } from "./tab-strip-model";
 import type { TabButtonModel } from "./tab-strip-model";
-import type { TerminalView } from "./terminal-view";
+import type { TerminalView } from "./terminal/view";
 import type { ViewerView } from "./viewer-view";
 import type { VisibleView, VisibleViewer } from "./view-reconcile";
 import type {

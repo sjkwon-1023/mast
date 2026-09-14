@@ -43,6 +43,7 @@
 // main 의 SendStatus 계약으로 위임한다. Esc 취소는 모드 활성 중에만 window
 // keydown capture 를 걸었다 뗀다 (상시 리스너 금지 — 평시 Esc 는 PTY 소유).
 
+import { activeWorkspace } from "./keys";
 import { detachTerminal } from "./backend";
 import { ChangesView } from "./changes-view";
 import { FolderView } from "./folder-view";
@@ -57,8 +58,8 @@ import { Splitter } from "./splitter";
 import type { DragGuard } from "./splitter";
 import { flexPair, structureKey } from "./split-layout";
 import type { SwitchTracer } from "./switch-trace";
-import { TerminalView } from "./terminal-view";
-import { TextView } from "./text-view";
+import { TerminalView } from "./terminal/view";
+import { TextView } from "./text/view";
 import type { ViewerView } from "./viewer-view";
 import { existingTabIds, planViewSync, planViewerSync } from "./view-reconcile";
 import type { VisibleView, VisibleViewer } from "./view-reconcile";
@@ -91,11 +92,6 @@ export type FocusRequest =
 export interface SendStatus {
   setPrompt(text: string | null): void;
   flashError(text: string): void;
-}
-
-/** 활성 워크스페이스 해석 — 없으면 null (main.ts 상태 라인과 공유). */
-export function activeWorkspace(snapshot: StateSnapshot): Workspace | null {
-  return snapshot.state.workspaces.find((w) => w.id === snapshot.state.activeWorkspace) ?? null;
 }
 
 function collectLeaves(tree: SplitTree, out: Set<PaneId>): void {

@@ -87,10 +87,10 @@ describe("applyViewerFontSettings", () => {
 
 // 뷰어 줌 (v0.3.8) — 종전의 "부팅 뒤에 다시 부르지 말 것" 지뢰를 해체한 경로다.
 // 여기서 잠그는 것은 모듈 상태의 규칙(클램프·기준값·라이브 밀어내기)이고, 그
-// 결과로 행 격자가 실제로 다시 앉는지는 뷰가 필요하므로 text-view.test.ts 몫이다.
+// 결과로 행 격자가 실제로 다시 앉는지는 뷰가 필요하므로 text/view.test.ts 몫이다.
 describe("뷰어 줌", () => {
   /** 레지스트리 계약만 보면 되므로 DOM 이 필요 없다 (실제 격자 재계산은
-   *  text-view.test.ts 가 본다). */
+   *  text/view.test.ts 가 본다). */
   function target(): ViewerFontTarget & { sizes: number[] } {
     const sizes: number[] = [];
     return { sizes, setViewerFontSize: (size) => sizes.push(size) };
@@ -101,7 +101,7 @@ describe("뷰어 줌", () => {
   });
 
   // 모듈 상태는 이 describe 를 벗어나서도 남는다 — 나갈 때 되돌려 파일 안 실행
-  // 순서에 무관하게 만든다 (text-view.test.ts 의 같은 관례).
+  // 순서에 무관하게 만든다 (text/view.test.ts 의 같은 관례).
   afterEach(() => {
     applyViewerFontSettings(settings(null, null));
   });

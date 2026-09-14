@@ -161,7 +161,7 @@ export interface UiSettings {
   /** 텍스트 뷰어에서 구문 하이라이팅을 켤 언어 이름 목록. 지원 목록 밖의 이름은
    *  백엔드가 reject 한다 (fontFamily·fontSize 와 같은 loud-fail). **빈 배열은
    *  "하이라이팅 끄기"** 라는 유효한 설정이고, null 은 미설정이라 프론트의 기본
-   *  목록(text-view.ts DEFAULT_HIGHLIGHT_LANGUAGES)을 쓴다. */
+   *  목록(text/settings.ts DEFAULT_HIGHLIGHT_LANGUAGES)을 쓴다. */
   highlightLanguages: string[] | null;
   /** 런타임 로그 파일을 켤지. null·false 는 꺼진 것이고, 그때 프론트는 로그를
    *  **부르지 않을 뿐 아니라 진단 리스너를 설치조차 하지 않는다** (logging.ts). */

@@ -9,7 +9,7 @@
 //    루프 안에서 삼켜져 검은 화면만 남았다): 순수 판정만으로는 잡히지 않는다.
 //
 // happy-dom 환경인 이유는 record-view 를 import 하면 @xterm/addon-fit 의 UMD
-// 래퍼가 로드 시점에 `self` 를 읽기 때문이다 (terminal-view.test.ts 와 같다).
+// 래퍼가 로드 시점에 `self` 를 읽기 때문이다 (terminal/terminal.test.ts 와 같다).
 
 import { Terminal } from "@xterm/headless";
 import { describe, expect, it } from "vitest";

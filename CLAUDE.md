@@ -288,7 +288,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
     separate baselines (terminal 13px, viewers 12px) and clamp independently, so at 6/72 one
     can stop while the other still moves. What made this more than a CSS-variable write is that
     two viewers hold coordinates the resize invalidates, so `viewer-font.ts` now owns a live-view
-    registry (the counterpart of `terminal-view.ts`'s `liveViews`) driven in **two phases** —
+    registry (the counterpart of `terminal/view.ts`'s `liveViews`) driven in **two phases** —
     every view anchors its position *before* the variable changes, then re-seats itself after.
     `TextView` re-lays row height, spacer height and `scrollTop` around the **topmost visible
     line** (model coordinates are byte offsets, so holding the line holds the position and

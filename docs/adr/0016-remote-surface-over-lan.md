@@ -181,8 +181,8 @@ the new exe had no rule, and on a PC whose firewall profiles have `NotifyOnListe
 one — Windows never asked. The server logged `remote: listening on 0.0.0.0:7331`, the phone
 timed out, and nothing in between said why.
 
-1. **Detection is unprivileged COM, not a shell-out.** `firewall.rs` enumerates
-   `INetFwPolicy2.Rules` in-process and judges whether an enabled inbound Allow rule reaches
+1. **Detection is unprivileged COM, not a shell-out.** The app glue’s `firewall.rs` enumerates
+   `INetFwPolicy2.Rules` in-process; `mast_core::firewall` judges whether an enabled inbound Allow rule reaches
    *this* exe on *this* port for the *current* profile from *this* LAN — a rule that names no
    program counts, a `Protocol=Any` rule is exempt from the port check because that is exactly
    the rule Windows's own "allow this app" prompt writes, and a rule whose remote scope
@@ -232,3 +232,11 @@ boundary and the window is milliseconds; detection is a snapshot at dialog-open 
 `#[cfg(not(windows))]` stubs are compiled by no gate; and the module's unit tests run only on
 the Windows CI job, since the glue does not build on the Linux dev host. Verification is
 WINDOWS-BUILD §10 v0.3.23, all of it field-only.
+
+## Amendment (2026-09-14) — host-testable firewall policy
+
+`mast_core::firewall` owns the rule records, target, verdict, matching functions and
+netsh script generation. Its unit tests run in the existing host-side `cargo test -p
+mast-core` gate. The app retains COM collection, current-executable discovery, temporary
+script lifetime, UAC/netsh execution and the serialized IPC status. Rule interpretation,
+script content and UI outcomes are unchanged; no Windows API is needed to test the policy.

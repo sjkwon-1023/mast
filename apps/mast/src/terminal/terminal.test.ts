@@ -1,14 +1,3 @@
-// @vitest-environment happy-dom
-//
-// 터미널 줌의 순수 판정 검증 — 글꼴 크기 클램프(백엔드 FONT_SIZE_RANGE 6..=72 와
-// 같은 범위)와 스크롤 위치 복원의 판정(ADR-0019)만 대상이다. xterm 인스턴스 적용·
-// refit·레지스트리 수명은 DOM/IPC 경로라 여기서 다루지 않는다 (Windows 수동 검증
-// WINDOWS-BUILD §10 v0.3.4·v0.3.24).
-//
-// 판정 자체는 DOM 무의존인데도 happy-dom 환경인 이유: 이 모듈을 import 하면
-// @xterm/addon-fit 의 UMD 래퍼가 로드 시점에 `self` 를 읽어 node 환경에서는
-// import 가 곧바로 터진다 (pane-view.test.ts 와 같은 파일 전용 환경 지정).
-
 import { Terminal as HeadlessTerminal } from "@xterm/headless";
 import { describe, expect, it } from "vitest";
 
@@ -16,13 +5,12 @@ import {
   OutputSettle,
   SETTLE_CAP_MS,
   SETTLE_QUIET_MS,
-  clampFontSize,
-  isCopySelectionKey,
   restoreTargetLine,
   scrollOffsetToRemember,
   scrollbackWipeRestoreOffset,
-  shouldOpenLink,
-} from "./terminal-view";
+} from "./scroll";
+import { clampFontSize } from "../font-size";
+import { isCopySelectionKey, shouldOpenLink } from "./interaction";
 
 describe("clampFontSize", () => {
   it("범위 안의 값은 그대로 통과한다", () => {
@@ -83,7 +71,13 @@ describe("isCopySelectionKey", () => {
   // 판정이 터미널 뷰와 기록 뷰에 공유되므로(keys.ts 정본 표) 여기서 잠근다 —
   // 갈라지면 한쪽 표면의 복사가 조용히 죽는다.
   const key = (init: Partial<KeyboardEvent>): KeyboardEvent =>
-    ({ ctrlKey: false, shiftKey: false, altKey: false, key: "c", ...init }) as KeyboardEvent;
+    ({
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      key: "c",
+      ...init,
+    }) as KeyboardEvent;
 
   it("복사는 선택이 있을 때만이다 — 선택 없는 Ctrl+C 는 SIGINT 로 통과한다", () => {
     expect(isCopySelectionKey(key({ ctrlKey: true }), true)).toBe(true);
@@ -97,9 +91,9 @@ describe("isCopySelectionKey", () => {
 
   it("Shift+Insert 는 붙여넣기라 복사로 잡지 않는다", () => {
     expect(isCopySelectionKey(key({ shiftKey: true, key: "Insert" }), true)).toBe(false);
-    expect(isCopySelectionKey(key({ ctrlKey: true, shiftKey: true, key: "Insert" }), true)).toBe(
-      false,
-    );
+    expect(
+      isCopySelectionKey(key({ ctrlKey: true, shiftKey: true, key: "Insert" }), true),
+    ).toBe(false);
   });
 
   it("Alt 가 끼거나 Ctrl 이 없으면 터미널의 것이다", () => {
@@ -174,7 +168,10 @@ describe("OutputSettle", () => {
     const settle = new OutputSettle();
     settle.start(1000);
     settle.noteChunk(1100);
-    expect(settle.poll(1100)).toEqual({ kind: "wait", nextCheckAt: 1100 + SETTLE_QUIET_MS });
+    expect(settle.poll(1100)).toEqual({
+      kind: "wait",
+      nextCheckAt: 1100 + SETTLE_QUIET_MS,
+    });
     expect(settle.poll(1100 + SETTLE_QUIET_MS - 1)).toEqual({
       kind: "wait",
       nextCheckAt: 1100 + SETTLE_QUIET_MS,
@@ -196,7 +193,10 @@ describe("OutputSettle", () => {
     settle.start(0);
     settle.noteChunk(SETTLE_CAP_MS - 10);
     // quiet 창(=1990+250)이 아니라 상한이 이긴다.
-    expect(settle.poll(SETTLE_CAP_MS - 10)).toEqual({ kind: "wait", nextCheckAt: SETTLE_CAP_MS });
+    expect(settle.poll(SETTLE_CAP_MS - 10)).toEqual({
+      kind: "wait",
+      nextCheckAt: SETTLE_CAP_MS,
+    });
     expect(settle.poll(SETTLE_CAP_MS)).toEqual({ kind: "restore" });
   });
 
@@ -263,7 +263,9 @@ describe("scrollbackWipeRestoreOffset", () => {
   });
 
   it("대체 버퍼는 무시한다 — 그 스크롤은 앱 상태다", () => {
-    expect(scrollbackWipeRestoreOffset(null, false, true, "alternate", 1008, 993)).toBeNull();
+    expect(
+      scrollbackWipeRestoreOffset(null, false, true, "alternate", 1008, 993),
+    ).toBeNull();
   });
 
   it("맨 아래를 보고 있었으면 아무 것도 하지 않는다 — 이미 출력을 따라간다", () => {

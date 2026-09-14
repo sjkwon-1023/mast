@@ -7,14 +7,15 @@
 pub mod capture;
 pub mod command;
 pub mod deadline;
-pub mod flow;
+pub mod firewall;
+pub(crate) mod flow;
 pub mod git;
 pub mod model;
 pub mod notify;
 pub mod osc;
 pub mod persist;
 pub mod record;
-pub mod replay;
+pub(crate) mod replay;
 pub mod reset;
 pub mod send;
 pub mod session;

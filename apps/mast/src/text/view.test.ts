@@ -12,42 +12,44 @@
 // @vitest-environment — pane-view.test.ts 와 같은 관례). 백엔드 IPC 와
 // highlight.js 의 dynamic import 는 vi.mock 으로 고정해 결정적으로 돌린다.
 
+import { highlightLanguages } from "./settings";
+
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_HIGHLIGHT_LANGUAGES, applyHighlightSettings } from "./settings";
 import {
-  DEFAULT_HIGHLIGHT_LANGUAGES,
   HIGHLIGHT_MAX_BYTES,
-  LINE_HEIGHT_PX,
-  ScrollSettle,
-  TextView,
-  applyHighlightSettings,
-  decodeWindow,
-  formatByteRange,
   highlightLines,
   languageForPath,
+  splitHighlightedLines,
+} from "./highlight";
+import {
+  LINE_HEIGHT_PX,
+  decodeWindow,
+  formatByteRange,
   lineHeightForFontSize,
   lineIndexForOffset,
   nextWindowStart,
   pageScrollTop,
   scrollTopForLineHeight,
-  shouldAdoptScroll,
-  splitHighlightedLines,
   textKeyAction,
   topLineIndex,
   visibleSlice,
   windowButtonsDisabled,
   windowStartForRestore,
-} from "./text-view";
-import type { HighlightApi } from "./text-view";
+} from "./window";
+import { ScrollSettle, shouldAdoptScroll } from "../viewer-scroll";
+import { TextView } from "./view";
+import type { HighlightApi } from "./highlight";
 import {
   DEFAULT_VIEWER_FONT_SIZE,
   adjustViewerFontSize,
   applyViewerFontSettings,
   resetViewerFontSize,
-} from "./viewer-font";
-import type { TimerHost } from "./ack-batcher";
-import type { KeySpec } from "./keys";
-import type { UiSettings } from "./backend";
+} from "../viewer-font";
+import type { TimerHost } from "../ack-batcher";
+import type { KeySpec } from "../keys";
+import type { UiSettings } from "../backend";
 
 const encoder = new TextEncoder();
 
@@ -90,7 +92,7 @@ const fakeHljs = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("./backend", () => ({
+vi.mock("../backend", () => ({
   fsStat: () => Promise.resolve({ size: file.bytes.length, mtime_ms: 0, is_dir: false }),
   fsReadChunk: (_distro: string | null, _path: string, offset: number, len: number) =>
     Promise.resolve(file.bytes.slice(offset, offset + len).buffer),
@@ -419,7 +421,11 @@ describe("windowStartForRestore", () => {
 
     // 뷰와 같은 읽기: 창 시작 직전 1바이트부터 windowBytes 만큼.
     const readOffset = start - 1;
-    const win = decodeWindow(file.subarray(readOffset, readOffset + 200), readOffset, false);
+    const win = decodeWindow(
+      file.subarray(readOffset, readOffset + 200),
+      readOffset,
+      false,
+    );
     const index = lineIndexForOffset(win.lineStarts, target);
     // 최상단 가시 행은 저장된 위치의 행 그대로다.
     expect(win.lineStarts[index]).toBe(target);
@@ -452,12 +458,14 @@ describe("windowButtonsDisabled", () => {
   });
 
   it("locks the tail buttons on the last window", () => {
-    expect(windowButtonsDisabled({ start: 9_000, end: 10_000 }, size, windowBytes)).toEqual({
-      first: false,
-      prev: false,
-      next: true,
-      last: true,
-    });
+    expect(windowButtonsDisabled({ start: 9_000, end: 10_000 }, size, windowBytes)).toEqual(
+      {
+        first: false,
+        prev: false,
+        next: true,
+        last: true,
+      },
+    );
   });
 
   it("locks the tail buttons on a leading-trimmed last window (start past size−W)", () => {
@@ -465,12 +473,14 @@ describe("windowButtonsDisabled", () => {
     // win.start 가 size−W 보다 커진다. "창이 움직이는가" 판정은 이 창에서
     // next/last 를 영영 못 잠갔다 (누르면 같은 창 재로드 + 스크롤
     // 덮어쓰기). 커버 범위 판정(end >= size)은 정확히 잠근다.
-    expect(windowButtonsDisabled({ start: 9_003, end: 10_000 }, size, windowBytes)).toEqual({
-      first: false,
-      prev: false,
-      next: true,
-      last: true,
-    });
+    expect(windowButtonsDisabled({ start: 9_003, end: 10_000 }, size, windowBytes)).toEqual(
+      {
+        first: false,
+        prev: false,
+        next: true,
+        last: true,
+      },
+    );
   });
 
   it("locks all four when the file fits in one window", () => {
@@ -492,13 +502,22 @@ describe("windowButtonsDisabled", () => {
 
 describe("textKeyAction", () => {
   it("moves the window with the Ctrl combinations", () => {
-    expect(textKeyAction(key("PageUp", { ctrl: true }))).toEqual({ type: "window", action: "prev" });
+    expect(textKeyAction(key("PageUp", { ctrl: true }))).toEqual({
+      type: "window",
+      action: "prev",
+    });
     expect(textKeyAction(key("PageDown", { ctrl: true }))).toEqual({
       type: "window",
       action: "next",
     });
-    expect(textKeyAction(key("Home", { ctrl: true }))).toEqual({ type: "window", action: "first" });
-    expect(textKeyAction(key("End", { ctrl: true }))).toEqual({ type: "window", action: "last" });
+    expect(textKeyAction(key("Home", { ctrl: true }))).toEqual({
+      type: "window",
+      action: "first",
+    });
+    expect(textKeyAction(key("End", { ctrl: true }))).toEqual({
+      type: "window",
+      action: "last",
+    });
   });
 
   it("pages the viewport with bare PageUp/PageDown", () => {
@@ -777,7 +796,9 @@ describe("highlightLines", () => {
     el.innerHTML = html;
     expect(el.querySelector("script")).toBeNull();
     expect(el.querySelector("img")).toBeNull();
-    expect([...el.querySelectorAll("*")].every((node) => node.tagName === "SPAN")).toBe(true);
+    expect([...el.querySelectorAll("*")].every((node) => node.tagName === "SPAN")).toBe(
+      true,
+    );
     // ESC·BEL 은 HTML 특수문자가 아니라 문자 그대로 남는다 (터미널이 아니므로
     // 해석되지 않는다) — 사라지지 않는다는 사실만 확인한다.
     expect(el.textContent).toContain("]0;pwned");
@@ -814,12 +835,8 @@ describe("TextView 하이라이트 적용", () => {
     file.bytes = encoder.encode(text);
     const parent = document.createElement("div");
     document.body.append(parent);
-    return new TextView(
-      parent,
-      1,
-      null,
-      { type: "textViewer", path, scrollTop: 0 },
-      () => Promise.resolve(null),
+    return new TextView(parent, 1, null, { type: "textViewer", path, scrollTop: 0 }, () =>
+      Promise.resolve(null),
     );
   }
 
@@ -840,7 +857,13 @@ describe("TextView 하이라이트 적용", () => {
   });
 
   function settings(highlightLanguages: string[] | null): UiSettings {
-    return { fontFamily: null, fontSize: null, highlightLanguages, log: null, remote: null };
+    return {
+      fontFamily: null,
+      fontSize: null,
+      highlightLanguages,
+      log: null,
+      remote: null,
+    };
   }
 
   it("플레인으로 먼저 뜨고, 모듈이 도착한 뒤에 색이 덧입혀진다", async () => {
@@ -1013,7 +1036,9 @@ describe("TextView 행 격자와 설정 글꼴", () => {
 
   it("미설정이면 격자가 종전과 같다", async () => {
     const view = await mounted("one\ntwo\n", 2);
-    expect(view.root.style.getPropertyValue("--text-line-height")).toBe(`${LINE_HEIGHT_PX}px`);
+    expect(view.root.style.getPropertyValue("--text-line-height")).toBe(
+      `${LINE_HEIGHT_PX}px`,
+    );
     expect(spacerHeight(view)).toBe(`${2 * LINE_HEIGHT_PX}px`);
     view.dispose();
   });
@@ -1062,7 +1087,9 @@ describe("TextView 행 격자와 설정 글꼴", () => {
     expect(scrollEl(view).scrollTop).toBe(10 * lineHeight);
 
     resetViewerFontSize();
-    expect(view.root.style.getPropertyValue("--text-line-height")).toBe(`${LINE_HEIGHT_PX}px`);
+    expect(view.root.style.getPropertyValue("--text-line-height")).toBe(
+      `${LINE_HEIGHT_PX}px`,
+    );
     expect(spacerHeight(view)).toBe(`${ZOOM_LINES * LINE_HEIGHT_PX}px`);
     expect(scrollEl(view).scrollTop).toBe(10 * LINE_HEIGHT_PX);
     view.dispose();
@@ -1083,7 +1110,9 @@ describe("TextView 행 격자와 설정 글꼴", () => {
     view.dispose();
     adjustViewerFontSize(6);
     // 레지스트리에서 빠졌으므로 격자는 dispose 시점 그대로다.
-    expect(view.root.style.getPropertyValue("--text-line-height")).toBe(`${LINE_HEIGHT_PX}px`);
+    expect(view.root.style.getPropertyValue("--text-line-height")).toBe(
+      `${LINE_HEIGHT_PX}px`,
+    );
     expect(spacerHeight(view)).toBe(`${2 * LINE_HEIGHT_PX}px`);
   });
 });
