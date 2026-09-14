@@ -1,6 +1,11 @@
 //! mast — Tauri v2 부팅부. 상태 배선(setup)과 커맨드 핸들러 등록만 하고,
 //! 로직은 mast-core 와 commands/host/sink/state 모듈에 있다.
 //!
+//! 모듈 지도: `commands`는 IPC, `host`·`sink`·`router`는 세션과 출력·알림 연결,
+//! `state`·`boot`·`reset_supervisor`는 상태 공유와 기동·리셋 수명을 맡는다.
+//! `remote`는 HTTP 서버 조립, `firewall`·`git`·`update`·`app_identity`·`provision`은
+//! OS와 외부 환경 연동, `audit`·`diagnostics`·`logfile`은 진단을 담당한다.
+//!
 //! # 부팅 순서 (계획 15단계 B-2 · 0장 manage-first)
 //!
 //! load(state.json) → Restored 면 `Dispatcher::adopt`(스폰 없음) / Fresh 면 빈
@@ -53,11 +58,11 @@ use mast_core::session::SessionManager;
 /// 이후 ≤500ms 의 변이 유실은 MVP 수용 (계획 B-1).
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 
-/// 창 최소화 신호 이벤트 이름 — 프론트 `window-visibility.ts` 의
+/// 창 최소화 신호 이벤트 이름 — 프론트 `infrastructure/window-visibility.ts` 의
 /// `WINDOW_HIDDEN_EVENT` 와 짝이다 (payload: bool, true = 최소화됨).
 const WINDOW_HIDDEN_EVENT: &str = "window-hidden";
 
-/// 창 포커스 신호 이벤트 이름 — 프론트 `main.ts` 의 `WINDOW_FOCUS_EVENT` 와 짝이다
+/// 창 포커스 신호 이벤트 이름 — 프론트 `app/main.ts` 의 `WINDOW_FOCUS_EVENT` 와 짝이다
 /// (payload: bool, true = 포커스 획득). needsInput 토스트의 억제 판정 근거다:
 /// WebView2 의 `document.hasFocus()` 는 창이 비포커스여도 true 로 남는 경우가 있어
 /// (v0.3.6 필드 진단의 용의자 중 하나) 프론트가 자기 힘으로 포커스를 알 수 없다.
@@ -288,7 +293,7 @@ fn main() {
                 // **다음 전이까지** 틀린 채로 남는다 (그 사이 토스트가 잘못 억제되거나
                 // 잘못 뜬다). 그래서 실패를 가리지 않고 기록하고, 프론트는 부팅 때
                 // 현재 포커스를 한 번 조회해 신호 유실에서 스스로 복구한다
-                // (main.ts installWindowFocus).
+                // (app/main.ts installWindowFocus).
                 if let Err(err) = window.emit(WINDOW_FOCUS_EVENT, *focused) {
                     winlog!("window-focus emit failed (focused={focused}): {err}");
                 }

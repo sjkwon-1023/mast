@@ -38,7 +38,7 @@ import {
   trimTrailingBlank,
 } from "./screen-text";
 import type { ScreenRow } from "./screen-text";
-import type { TabId } from "../types";
+import type { TabId } from "../shared/types";
 
 const POLL_INTERVAL_MS = 2000;
 const FONT_KEY = "mast.remoteFontPx";

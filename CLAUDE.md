@@ -149,11 +149,11 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   every three keys turns the sentence into `테트문장`. Upstream fixed the expression three days
   after 5.5.0 shipped (`52e8a75e9f`, xterm.js #5023) but only 6.0.0 carries it, and 6.0 rewrote
   the viewport that ADR-0019's latch analysis depends on. Fixed by patching that one expression in
-  the shipped bundle at build time (`src/xterm-composition-patch.ts`, on both the Rollup and the
-  esbuild pre-bundle path), throwing unless it occurs exactly once, with `ime-composition.test.ts`
+  the shipped bundle at build time (`tooling/xterm-composition-patch.ts`, on both the Rollup and the
+  esbuild pre-bundle path), throwing unless it occurs exactly once, with `tooling/ime-composition.test.ts`
   driving the stock and the patched bundle through the event sequence. **Still open**: whether
   the 2026-08-22 "stuck composition, every shortcut dead" report was this fault plus a blur (a
-  syllable repeating verbatim needs `start` to stop advancing) — the `keys.ts:216` `isComposing`
+  syllable repeating verbatim needs `start` to stop advancing) — the `shared/keys.ts:216` `isComposing`
   guard and the composition log lines stay until a reproduction says. The eventual answer is the
   xterm 6 upgrade as its own change.
   [ADR-0020](docs/adr/0020-patch-xterm-composition-at-build-time.md). Verification:
@@ -190,7 +190,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   workspace `root_path` — ADR-0011 made a tab's `cwd` *track* its shell, but nothing ever read
   the value back when creating the next shell. The "follows the pane" behaviour the report
   remembered is `Ctrl+Shift+N`, which reuses the cwd as a **new workspace's** root. Fixed in
-  the front end (user choice, the lighter of the two): `keys.ts::paneTerminalCwd` reads the
+  the front end (user choice, the lighter of the two): `shared/keys.ts::paneTerminalCwd` reads the
   source pane's shown tab, and the five creating sites — header `+`, both split icons,
   `Ctrl+Shift+T`, `Ctrl+Shift+D`/`E` — pass it as the tab `cwd`; a shown viewer tab yields
   `null`, i.e. the old root behaviour. A shell that never reports (a `.bashrc` that execs
@@ -287,8 +287,8 @@ it carries, so read it before reopening the same question. Nothing here blocks t
     Ctrl+0 stops having one meaning. The two surfaces keep separate effective sizes and
     separate baselines (terminal 13px, viewers 12px) and clamp independently, so at 6/72 one
     can stop while the other still moves. What made this more than a CSS-variable write is that
-    two viewers hold coordinates the resize invalidates, so `viewer-font.ts` now owns a live-view
-    registry (the counterpart of `terminal-view.ts`'s `liveViews`) driven in **two phases** —
+    two viewers hold coordinates the resize invalidates, so `features/viewers/viewer-font.ts` now owns a live-view
+    registry (the counterpart of `features/terminal/settings.ts`'s `liveViews`) driven in **two phases** —
     every view anchors its position *before* the variable changes, then re-seats itself after.
     `TextView` re-lays row height, spacer height and `scrollTop` around the **topmost visible
     line** (model coordinates are byte offsets, so holding the line holds the position and
@@ -296,7 +296,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
     scroll coordinate is px and the prose reflows — and deliberately does not write the post-zoom
     px back, since a relaunch renders at the `settings.json` size where that px means a different
     place. The folder listing needs neither. The "never call this again after boot" warning on
-    `viewer-font.ts` is gone with the hazard. Markdown prose now follows the **size** too (its
+    `features/viewers/viewer-font.ts` is gone with the hazard. Markdown prose now follows the **size** too (its
     face is still not the code font) — otherwise zooming a document left the prose behind, which
     partly supersedes a v0.3.7 decision. Verification: WINDOWS-BUILD §10 v0.3.8.
 
@@ -367,7 +367,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 - **Agent coverage beyond Claude Code and Codex — Antigravity CLI and opencode** (user
   request 2026-08-15, not started). Both would reuse the `mast:running` /
   `mast:needsInput` / `mast:idle` tokens and `mast-notify.sh` **unchanged**: nothing in
-  `mast-core` (`osc.rs`, `notify.rs`) or the front-end (`chime.ts`, `main.ts`) is
+  `mast-core` (`osc.rs`, `notify.rs`) or the front-end (`features/notifications/chime.ts`, `app/main.ts`) is
   agent-specific. The work is `provision.rs` — the single source of truth for every notify
   script and every auto-wiring block — plus a `SETUP_VERSION` bump, a resume-command entry in
   `host.rs::bash_argv`'s whitelist (today `claude --resume` and `codex resume` only), and a
@@ -472,7 +472,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   (`source: cli/exec`), rejecting temporary threads and persisted subagents. The bounded
   transcript check preserves the old hint if it cannot confirm a session; this is an
   observed-format compatibility check, not a stable Codex API. The contract above records
-  the storage assumptions and upgrade limits. `codex-resume.test.ts` runs the real Bash
+  the storage assumptions and upgrade limits. `tests/codex-resume.test.ts` runs the real Bash
   writer and restart history path on Linux; Windows verification remains in §10.
 
 - **Codex composer pill: closed as out-of-app (2026-08-12)** — the field probe showed
@@ -548,15 +548,15 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   - The rule also widened, since the old one leaned on the chime: a toast is suppressed **only**
     when the window is focused *and* the workspace is the active one (it is already on screen).
     Unfocused, or focused-but-another-workspace, both toast. The judgment is the pure
-    `chime.ts::needsInputToastTargets`, locked by vitest.
+    `features/notifications/chime.ts::needsInputToastTargets`, locked by vitest.
   Verification: WINDOWS-BUILD §10 v0.3.7 item 2 (field-only, as before).
 
 - **needs-input chime removed — decided 2026-08-13** (user decision): the signal is the toast
   alone. The chime could not say *which* workspace was waiting, and its existence was the
   argument for suppressing toasts whenever the window had focus — the rule that hid a second
-  project going quiet. `Chime`/`installChimeUnlock` and their tests stay in `chime.ts` as
+  project going quiet. `Chime`/`installChimeUnlock` and their tests stay in `features/notifications/chime.ts` as
   **dormant** code (the send-mode precedent: entry point unwired, contract still tested, reason
-  recorded in the module header); only the wiring in `main.ts` was cut. `detectNeedsInputOnset`
+  recorded in the module header); only the wiring in `app/main.ts` was cut. `detectNeedsInputOnset`
   stays as the onset engine, minus its now-meaningless `chime` derived field — a **contract
   change**: `NeedsInputOnset` is `{ onsets, next }`.
 
@@ -904,24 +904,26 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 - **OSC scanner C0 handling** — CAN/SUB abort is implemented; the remaining C0 cases were
   never reviewed against real terminal behavior (carried from ADR-0001).
 
-- **The chime is gone but its class is not** — `chime.ts` still exports `Chime`,
+- **The chime is gone but its class is not** — `features/notifications/chime.ts` still exports `Chime`,
   `installChimeUnlock` and `AudioContextFactory`, and nothing outside its own tests imports
-  them (v0.3.7 removed the chime itself; `main.ts` takes only `detectNeedsInputOnset` /
+  them (v0.3.7 removed the chime itself; `app/main.ts` takes only `detectNeedsInputOnset` /
   `needsInputToastTargets` from that module). Dead code with a live test surface, so deleting it
   is its own small change — noticed during the 2026-08-22 log cleanup, which is why three of the
   surviving `console.debug` lines sit in code that never runs.
 
 ## Layout
 
-- `crates/mast-core` — pure Rust core (PTY session, flow control, OSC scanner, replay
-  buffer, and the `model`/`command` state + dispatcher). No Tauri dependency; this is
-  where unit/integration tests live.
+- `crates/mast-core` — framework-independent state model, command dispatcher and PTY
+  execution core, including filesystem/process I/O. No Tauri dependency; `src/lib.rs`
+  maps its modules. Unit/integration tests run without the desktop framework.
 - `crates/mast-remote` — the LAN remote surface's HTTP server: head parser on `httparse`,
   route table, pairing token, per-IP limiter, handlers. Pure Rust, no Tauri; its integration
   tests run against a real listener on Linux (`tests/server.rs`, unix-only `tests/server_pty.rs`).
 - `apps/mast` — the MVP app (계획 v2 section 17, stage 10 onward): Tauri v2 + vanilla TS
   frontend driving the `mast-core` `Dispatcher` over a single serializable `Command` bus.
   Architecture: ADR-0002 (state/bus/attach), ADR-0003 (split/tab UI).
+  Frontend navigation: [source code map](apps/mast/src/README.md); Rust adapter navigation:
+  the module map in `src-tauri/src/main.rs`.
 - `apps/spike` — **frozen as the measurement harness** (ADR-0001 reproduction rig):
   feature work stops here, only compiling is maintained going forward. Its checklist and
   scripts keep serving as the MVP-era regression check (`docs/plans/spike-plan.md`

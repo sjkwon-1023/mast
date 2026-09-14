@@ -74,7 +74,7 @@ cost that did not pay.
 Removed: only the two header icons — the arm entry points. With nothing arming the mode,
 the `Esc` capture never installs, so in practice `Esc` always belongs to the terminal.
 
-Kept deliberately (dormant, by explicit user decision): `send-mode.ts` and its tests, the
+Kept deliberately (dormant, by explicit user decision): `features/workspace/send-mode.ts` and its tests, the
 target-resolve/delivery path in `workspace-view` with all five delivery guards,
 `TerminalView`'s delivery methods (`getSelection` / `paste` / `submit` / `canAcceptSend` /
 `bracketedPaste`), and the status-line delegation contract (`SendStatus`). The v2

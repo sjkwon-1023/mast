@@ -613,7 +613,7 @@ and [its transcript-format caveat](https://learn.chatgpt.com/docs/hooks#common-i
 
 The change prevents future overwrites; it does not repair a hint already poisoned before
 installation. Complete one turn in the intended session after setup v12, then restart.
-The Linux regression `apps/mast/src/codex-resume.test.ts` executes the installed-script
+The Linux regression `apps/mast/tests/codex-resume.test.ts` executes the installed-script
 heredoc and the actual spawn-wrapper history path with isolated fixture homes.
 
 The control-character scrub in step 3 is load-bearing, not hygiene: unlike Claude Code's

@@ -409,7 +409,7 @@ const FONT_SIZE_RANGE: std::ops::RangeInclusive<u16> = 6..=72;
 const REMOTE_PORT_RANGE: std::ops::RangeInclusive<u16> = 1024..=65535;
 
 /// 구문 하이라이팅을 지원하는 언어 이름. 프론트가 언어당 하나씩 lazy-load 하는
-/// hljs 모듈 목록(`apps/mast/src/text-view.ts` 의 `LANGUAGE_LOADERS`)과 **같은
+/// hljs 모듈 목록(`apps/mast/src/features/viewers/text/highlight.ts` 의 `LANGUAGE_LOADERS`)과 **같은
 /// 목록이어야 한다** — 여기만 넓히면 로드할 모듈이 없는 이름이 통과한다.
 const HIGHLIGHT_LANGUAGES: [&str; 8] = [
     "css",

@@ -22,10 +22,10 @@ trade — that is why the list is a contract and not an implementation detail.
    half-plane), `Ctrl+Tab` / `Ctrl+Shift+Tab` (tab cycle inside the active pane, wrapping).
    The plan's alternative `Ctrl+↑↓` was rejected: TUI apps use `Ctrl+arrow`, and
    `Ctrl+1`–`9` already covers the tier.
-2. **`keys.ts` is a pure decision module, and its module doc is the canonical interception
+2. **`shared/keys.ts` is a pure decision module, and its module doc is the canonical interception
    list.** `keyAction` / `paneInDirection` / `workspaceAtOrdinal` / `nextTab` decide what a
    keydown *means* and what its target is; snapshot interpretation, dispatch and
-   `preventDefault` stay in `main.ts`, and pane geometry is measured by `workspace-view`'s
+   `preventDefault` stay in `app/main.ts`, and pane geometry is measured by `workspace-view`'s
    `paneRects()`. Keeping the table in the same file as the matcher is the whole point —
    the list and the code cannot drift apart. `shortcutLabel(id)` is the single source every
    tooltip reads, with a label→key round-trip test enforcing it.
@@ -67,7 +67,7 @@ needed.
 The re-verification round on 2026-08-10 closed the second precondition: the six
 `Ctrl+Shift` globals are Chromium accelerator combos (incognito, reopen tab, bookmarks) and
 **WebView2 does not consume them**, so `AreBrowserAcceleratorKeysEnabled(false)` was not
-needed either. Automated: the `keys.ts` suite covers the full mapping, the IME guard, the
+needed either. Automated: the `shared/keys.ts` suite covers the full mapping, the IME guard, the
 boundaries and the label round-trip.
 
 ## Follow-up landed after re-verification: `Shift+Enter`
@@ -80,7 +80,7 @@ default CR), so the flow works in mast **without** running `/terminal-setup`. Pl
 `Enter` is untouched, so shells and `vim` behave exactly as before, and effectively no
 terminal program assigns `Shift+Enter` its own meaning. The interception happens in
 `terminal-view`'s `customKeyEventHandler` (next to copy/paste, which is where xterm-level
-rewrites belong) but is listed in the `keys.ts` table like everything else — the table is
+rewrites belong) but is listed in the `shared/keys.ts` table like everything else — the table is
 canonical regardless of which module enforces a row. Verification is item 1 of §10's
 post-re-verification subsection.
 

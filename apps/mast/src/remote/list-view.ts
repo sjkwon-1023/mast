@@ -12,7 +12,7 @@ import type {
   TabId,
   TabKind,
   Workspace,
-} from "../types";
+} from "../shared/types";
 
 const AGENT_STATUS_LABELS: Record<AgentStatus, string> = {
   running: "running",

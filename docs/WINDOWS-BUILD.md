@@ -509,7 +509,7 @@ regression once the model fields are dynamic.
    `lastAgentMessage`, and every tab's `notification` is cleared — same guarantee as the
    existing `pty_session` reset, extended to the new notification fields.
 
-### Stage 20 — three-tier keyboard navigation (계획 v2 "키보드 모델"; the canonical interception list lives in the [`apps/mast/src/keys.ts`](../apps/mast/src/keys.ts) module doc)
+### Stage 20 — three-tier keyboard navigation (계획 v2 "키보드 모델"; the canonical interception list lives in the [`apps/mast/src/shared/keys.ts`](../apps/mast/src/shared/keys.ts) module doc)
 
 One movement key per tier: `Ctrl+1`…`Ctrl+9` (workspace), `Ctrl+Shift+arrows` (pane focus, by
 on-screen adjacency), `Ctrl+Tab` / `Ctrl+Shift+Tab` (tab cycle inside the active pane).
@@ -546,7 +546,7 @@ that direction, 0–1 tabs) the app does nothing — silently, with no status-li
    change *and* leaves nothing in the terminal, the interception itself is fine but the
    key never arrives: this is **not a stage blocker** — items 1, 2 and 4 stand on their
    own, and the follow-up is to pick a replacement binding (e.g. `Ctrl+PgUp`/`Ctrl+PgDn`)
-   in `keys.ts` and re-run item 3. Record which behavior you observed.
+   in `shared/keys.ts` and re-run item 3. Record which behavior you observed.
 
 ### Stage 21 — viewer tabs (folderBrowser / textViewer / markdownViewer; 계획 v2 "탭 타입별 동작"; contract in [ADR-0008](adr/0008-viewer-tabs.md))
 
@@ -684,7 +684,7 @@ keyboard-first UX batch need one focused re-verification round. Pull, run
    `AreBrowserAcceleratorKeysEnabled(false)` or a rebinding.
 5. **Tooltips show shortcuts** — hovering the pane-header buttons (`+`, `▤`, split pair),
    the tab `×`, and the sidebar's new-workspace button shows the function plus its
-   shortcut (single source: `keys.ts shortcutLabel`).
+   shortcut (single source: `shared/keys.ts shortcutLabel`).
 6. **Folder browser keyboard navigation** — with the folder list focused: arrows move the
    selection highlight, `Home`/`End` jump, `PgUp`/`PgDn` move by 10, `Enter` opens the
    selected row (directory navigates, file opens a viewer), `Backspace` goes to the
@@ -1059,7 +1059,7 @@ launch**; the wrapper half reaches only tabs opened after this build, so item 6 
 
    The responder's reply values live in `sink.rs` (`COLOR_REPLY_FOREGROUND` /
    `COLOR_REPLY_BACKGROUND`) and are one leg of a three-way contract with `host.rs`'s
-   `THEME_SYNC` and `terminal-view.ts`'s `TERMINAL_THEME` — if you retheme, all three move
+   `THEME_SYNC` and `features/terminal/settings.ts`'s `TERMINAL_THEME` — if you retheme, all three move
    together.
 
 2. **Workspace isolation of the agent channel** — with tabs open in **two** workspaces, run
@@ -1134,7 +1134,7 @@ batch, from a console (`npm run tauri dev`) unless an item says otherwise.
 
 1. **Terminal zoom — `Ctrl+=` / `Ctrl++` / `Ctrl+-` / `Ctrl+0`** (session-only by decision;
    the interception rows and the trade-off note live in the
-   [`apps/mast/src/keys.ts`](../apps/mast/src/keys.ts) module doc).
+   [`apps/mast/src/shared/keys.ts`](../apps/mast/src/shared/keys.ts) module doc).
    - **All tabs move together** — with at least two panes and two tabs per pane, press
      `Ctrl+=` a few times: the visible terminals grow in step, and switching to the hidden
      tabs shows them at the same size (they refit on becoming visible, not before). A tab
@@ -1165,7 +1165,7 @@ batch, from a console (`npm run tauri dev`) unless an item says otherwise.
      `Ctrl+_` used to be undo on the command line. Type a few words, press `Ctrl+-`, and
      confirm the font shrinks **and the undo does not happen**. This is intended (same class
      as `Ctrl+1`-`Ctrl+9`); if it proves too costly in the field, the fix is to drop the row
-     from the keys.ts table, not to special-case it. `Ctrl+Shift+-` is *not* intercepted, so
+     from the shared/keys.ts table, not to special-case it. `Ctrl+Shift+-` is *not* intercepted, so
      whatever that sends still reaches the shell.
    - **`Ctrl+0` is not a workspace switch** — with several workspaces open, `Ctrl+0` only
      resets the font (workspace ordinals stay `Ctrl+1`-`Ctrl+9`).
@@ -1176,7 +1176,7 @@ batch, from a console (`npm run tauri dev`) unless an item says otherwise.
    The chime already covers
    the focused case; the toast exists for the moment mast is *not* the window you are
    looking at. It rides the same onset rule as the chime
-   ([`apps/mast/src/chime.ts`](../apps/mast/src/chime.ts), `detectNeedsInputOnset`), so
+   ([`apps/mast/src/features/notifications/chime.ts`](../apps/mast/src/features/notifications/chime.ts), `detectNeedsInputOnset`), so
    drive it the same way: let an agent (Claude Code) reach a state where it waits for you —
    a permission prompt is the easiest.
    - **Unfocused → toast** — click another window (an editor, Explorer) so mast loses
@@ -1268,7 +1268,7 @@ updating shows no Codex hint yet — run one turn through Codex first, then rest
 The v0.3.6 batch. Items are independent — run them in any order on a build of this batch.
 
 1. **Close the active workspace — `Ctrl+Shift+Q`** (the interception row lives in the
-   [`apps/mast/src/keys.ts`](../apps/mast/src/keys.ts) module doc; the key runs the
+   [`apps/mast/src/shared/keys.ts`](../apps/mast/src/shared/keys.ts) module doc; the key runs the
    sidebar `×` button's implementation, so the two can never disagree).
    - **Confirm appears while sessions are running** — in a workspace with at least one live
      terminal (a shell prompt counts), press `Ctrl+Shift+Q`: the same dialog the `×` button
@@ -1386,7 +1386,7 @@ Every `settings.json` edit needs the app closed and relaunched (there is no sett
    while the text viewer, the folder listing and markdown code stayed on their hard-coded
    `monospace` 12px (field report). The boot path now also plants the pair as `:root` custom
    properties those surfaces read; the scope argument and the deliberate exclusions live in the
-   [`apps/mast/src/viewer-font.ts`](../apps/mast/src/viewer-font.ts) module doc.
+   [`apps/mast/src/features/viewers/viewer-font.ts`](../apps/mast/src/features/viewers/viewer-font.ts) module doc.
 
    - **All three viewer surfaces follow the setting** — write
      `%AppData%\app.mast.desktop\settings.json` as
@@ -1437,7 +1437,7 @@ Every `settings.json` edit needs the app closed and relaunched (there is no sett
    `tauri-plugin-notification` throws the send into
    `tauri::async_runtime::spawn(async move { let _ = notification.show(); })` (2.3.3
    `desktop.rs:216`), swallowing any error. **Both layers are gone.** Focus is now decided by the
-   OS window event the glue forwards (`main.rs` `window-focus` → `main.ts`), and the toast is
+   OS window event the glue forwards (`main.rs` `window-focus` → `app/main.ts`), and the toast is
    raised directly through `tauri-winrt-notification` under the AUMID we register
    ([`app_identity.rs`](../apps/mast/src-tauri/src/app_identity.rs)), with the result written to
    a log file. The chime was removed with it (user decision 2026-08-13) — the sound could never
@@ -1470,7 +1470,7 @@ Every `settings.json` edit needs the app closed and relaunched (there is no sett
      notifies, so staying in `needs input` (later redraws, tab activity) produces nothing.
    - **No mast chime, ever** — the app's own two-tone chime is gone, including in the focused
      case that used to be sound-only: if you hear it, this build is not the one you think it is.
-     (The synthesiser is kept dormant in [`chime.ts`](../apps/mast/src/chime.ts), unwired.)
+     (The synthesiser is kept dormant in [`features/notifications/chime.ts`](../apps/mast/src/features/notifications/chime.ts), unwired.)
      What you *may* still hear is **Windows' own notification sound** when a toast appears — we
      do not set an `<audio>` element, so the OS plays its default. That is Windows, not mast,
      and it is silenced in Windows' notification settings, not here.
@@ -1480,7 +1480,7 @@ Every `settings.json` edit needs the app closed and relaunched (there is no sett
      minute so the reset fires — the console prints `reset: reloading webview` — and then, still
      without touching mast, trigger needs-input in the **active** workspace. The toast must
      appear. It relies on the front-end asking Windows for the current focus after each reload
-     (`main.ts` `installWindowFocus`): the focus *event* only fires on a change, and that change
+     (`app/main.ts` `installWindowFocus`): the focus *event* only fires on a change, and that change
      happened long before the reload, so without the query the reloaded page would assume it is
      focused and swallow exactly the notification you are away from the machine to receive.
    - **When a toast does not show, read the log** — every attempt appends one line to
@@ -1890,7 +1890,7 @@ the pointer behaviour and the fact that reordering survives a restart.
 ### v0.3.14 — verification
 
 A new terminal opens where the pane's shell is. The resolution is front-end only and unit-tested
-(`keys.test.ts`, `pane-view.test.ts`); what needs a real window is that the OSC 7 value the pane
+(`shared/keys.test.ts`, `features/workspace/pane-view.test.ts`); what needs a real window is that the OSC 7 value the pane
 holds is the one the new shell actually lands in.
 
 1. **Split follows the shell.** In a tab, `cd` a few levels below the workspace root, wait for
@@ -2516,7 +2516,7 @@ in the repository exercised them at volume on the platform where they actually e
 > position query (`ESC[6n`) and it **holds the child process until a CPR reply arrives** —
 > even `cmd.exe /c exit` never runs to completion, and `child.wait()` never returns. The app
 > is unaffected because xterm answers the query (the checkpoint-1 "blank screen, bytes_out=4"
-> incident in `terminal-view.ts` was this same handshake seen from the other side); the soak
+> incident in `features/terminal/view.ts` was this same handshake seen from the other side); the soak
 > has no xterm, so its sink now answers `ESC[1;1R` itself. `ClosePseudoConsole` never blocked
 > in any probe (≤1 ms with a reader mid-`read()` and with none), so the waiter's order in
 > `session.rs` is not implicated. One side finding from the same probe: dropping the PTY
