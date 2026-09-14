@@ -15,10 +15,10 @@ program's back is a re-attach.
 The modes a program sets with DECSET/DECRST (`CSI ? Pm h` / `CSI ? Pm l`) live in exactly one
 place in this app: the front end's `xterm.js` instance. Nothing on the Rust side knew they
 existed. A re-attach throws that instance away and builds a new one:
-`view-reconcile.ts` disposes the views of a workspace being left (ADR-0004 decision 1),
-`terminal/view.ts` constructs a brand-new `Terminal` on return, and the only thing that
+`features/workspace/view-reconcile.ts` disposes the views of a workspace being left (ADR-0004 decision 1),
+`features/terminal/view.ts` constructs a brand-new `Terminal` on return, and the only thing that
 ever tells that terminal what state it is in is the replay it writes
-(`terminal/view.ts:427-446` ← `PtySession::reattach` ← `ReplayBuffer::snapshot`). The webview
+(`features/terminal/view.ts` ← `PtySession::reattach` ← `ReplayBuffer::snapshot`). The webview
 reload from the idle reset policy (ADR-0004 decision 4) and a plain F5 take the same path.
 
 The replay is a 1 MiB window with whole-chunk eviction and a head trim. A long-running TUI
@@ -153,7 +153,7 @@ it got reported first.
   "the stream interval `[end_offset - len, end_offset)`" — the preamble sits in front of them
   and belongs to no offset at all. The dedup rule callers actually run, `offset < end_offset`,
   is unaffected. A grep over `apps/mast/src` confirmed that rule is the *only* offset
-  arithmetic on the front end (`attach-gate.ts`); nothing derives a start offset from the
+  arithmetic on the front end (`features/terminal/attach-gate.ts`); nothing derives a start offset from the
   snapshot length. The comments that stated the old interval were corrected where they appear.
 - **Other TUIs recover most of a round-trip.** A `vim` or `htop` pane comes back with mouse
   reporting alive, arrow keys in application mode, and the cursor hidden if it was hidden.

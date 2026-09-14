@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TabView } from "./tab-view";
-import type { TabId } from "../types";
+import type { TabId } from "../shared/types";
 
 // 브래킷 붙여넣기를 켜는 시퀀스가 앞에 있어야 Send 가 텍스트를 감싼다.
 const PROMPT = "kwon1@pc:~$ ls\r\napps  crates  docs\r\nkwon1@pc:~$ ";

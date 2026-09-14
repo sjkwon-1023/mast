@@ -177,7 +177,7 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
 /// 질의해 입력창 배경을 만드는 앱이 검정 기준으로 색을 골라 우리 배경(#1e1e1e)과 겹친다
 /// — 실기 스크린샷의 "입력칸 구분 없음"의 실원인. set 은 conhost 가 handled 로 소비해
 /// 자기 테이블을 갱신하므로 이후 질의가 올바른 값으로 답한다 (xterm 까지는 오지 않아
-/// 프론트 무영향). **값의 정본은 `apps/mast/src/terminal-view.ts` 의 `TERMINAL_THEME`
+/// 프론트 무영향). **값의 정본은 `apps/mast/src/features/terminal/settings.ts` 의 `TERMINAL_THEME`
 /// foreground/background 다 — 테마를 바꾸면 여기도 같이 바꾼다** (갈라지면 재발).
 /// `COLORTERM=truecolor` 는 그 짝: Codex 의 색 선택이 truecolor 분기를 타게 한다.
 ///

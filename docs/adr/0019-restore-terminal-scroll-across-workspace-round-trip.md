@@ -205,7 +205,7 @@ from a different build; field confirmation is requested as part of the verificat
   six round-trips fill it with them. The cheaper half of the fix — one resize instead of two —
   is a separate change and is in the backlog, not here.
 - **Nothing in the core, the model or the IPC surface changed.** The whole change is
-  `apps/mast/src`: two pure functions and a settle state machine in `terminal/view.ts`, the
+  `apps/mast/src`: pure scroll helpers and a settle state machine in `features/terminal/scroll.ts`, the
   `ScrollMemory` policy in its own module, and one shared helper (`existingTabIds`) lifted out of
   `planViewerSync` so the terminal reconcile can ask the same question the viewer reconcile
   already asked. `planViewSync`'s shape is untouched.

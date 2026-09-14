@@ -8,7 +8,7 @@
 
 import { parseScreenMeta } from "./protocol";
 import type { ScreenMeta, ScreenQuery } from "./protocol";
-import type { StateSnapshot, TabId } from "../types";
+import type { StateSnapshot, TabId } from "../shared/types";
 
 const TOKEN_KEY = "mast.remoteToken";
 

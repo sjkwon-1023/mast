@@ -9,7 +9,7 @@ import { fetchState, HttpError, loadToken, saveToken } from "./api";
 import { ListView } from "./list-view";
 import { PollSchedule } from "./poller";
 import { TabView } from "./tab-view";
-import type { TabId } from "../types";
+import type { TabId } from "../shared/types";
 
 const STATE_POLL_INTERVAL_MS = 2000;
 

@@ -542,7 +542,7 @@ fn requester_tab_and_distro(
 
 /// OSC 10/11 색상 질의에 대한 응답 시퀀스 — **테마 3자 동기화 계약**.
 ///
-/// 값은 xterm 프론트의 `TERMINAL_THEME`(`apps/mast/src/terminal-view.ts`)의
+/// 값은 xterm 프론트의 `TERMINAL_THEME`(`apps/mast/src/features/terminal/settings.ts`)의
 /// foreground `#cccccc` / background `#1e1e1e` 를, ConPTY 색 테이블에 내보내는
 /// `host.rs` 의 `THEME_SYNC` 와 같은 색으로 적은 것이다. **셋 중 하나를 바꾸면
 /// 나머지 둘도 같이 바꾼다** — 갈라지면 질의한 TUI 앱이 실제 배경과 다른 색을

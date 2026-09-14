@@ -12,7 +12,7 @@ chased and discarded before the process tree settled it.
 
 The 2026-08-22 Korean IME report made the gap sharper. Typing produced a previously typed
 syllable, repeating; every keyboard shortcut was dead; clicking another pane and coming back
-cleared it. Reading the code established exactly one thing — `keys.ts` drops every shortcut while
+cleared it. Reading the code established exactly one thing — `shared/keys.ts` drops every shortcut while
 `ev.isComposing` is true, so a dead Alt+Arrow *is* the browser reporting an unfinished
 composition — and could not establish the next thing: whether `compositionend` never arrived, or
 arrived without clearing. That distinction lives entirely inside the WebView, where a backend log

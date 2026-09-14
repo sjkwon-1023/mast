@@ -129,7 +129,7 @@ not listed goes straight to the PTY.
 | `Ctrl+C` / `Ctrl+Shift+C` | Copy when there is a selection — a bare `Ctrl+C` with no selection still sends SIGINT |
 
 Drag workspace cards to reorder them; `Ctrl+1`–`Ctrl+9` follow that order. The full list, including
-viewer-local keys, is in [`apps/mast/src/keys.ts`](./apps/mast/src/keys.ts).
+viewer-local keys, is in [`apps/mast/src/shared/keys.ts`](./apps/mast/src/shared/keys.ts).
 
 ## Troubleshooting
 

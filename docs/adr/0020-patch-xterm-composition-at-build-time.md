@@ -31,7 +31,7 @@ is busy enough that **two or more keys are processed before that zero-delay time
    reason: with the next composition already open the code takes the `[start, end)` branch
    instead of the open-ended `substring(start)` that would have picked the space up.
 
-Reproduced on the real 5.5.0 browser bundle under happy-dom (`ime-composition.test.ts`): with
+Reproduced on the real 5.5.0 browser bundle under happy-dom (`tooling/ime-composition.test.ts`): with
 the timer flushed after every key the output is correct; after every two keys the space is lost;
 after every three `스` and the space are lost (`테트문장`, the shape the test locks); after every four `테`, `트` and the space are lost. The DOM
 update order made no difference — the only variable is when the timer runs. That is why the
@@ -49,7 +49,7 @@ major upgrade is not a one-line change.
 
 ## Decision
 
-1. **Patch the shipped bundle at build time.** `src/xterm-composition-patch.ts` exports a Vite
+1. **Patch the shipped bundle at build time.** `tooling/xterm-composition-patch.ts` exports a Vite
    plugin that replaces the one expression in `node_modules/@xterm/xterm/lib/xterm.js` with the
    upstream form, on both paths the desktop bundle is built through (`vite.config.ts`): Rollup's
    `transform` for `vite build` (which does run over `node_modules`) and an esbuild `onLoad` for
@@ -59,7 +59,7 @@ major upgrade is not a one-line change.
 2. **The patch fails loudly.** The expression must occur exactly once; anything else throws and
    stops the build. A dependency bump that changes the bundle therefore forces a decision — drop
    the patch (6.x has the fix) or re-target it — rather than silently bringing the fault back.
-3. **The regression test runs the real bundle.** `ime-composition.test.ts` loads the stock and
+3. **The regression test runs the real bundle.** `tooling/ime-composition.test.ts` loads the stock and
    the patched bundle, drives both through the 두벌식 event sequence with different flush
    intervals, and asserts the stock bundle *fails* at three keys per flush (documenting why the
    patch exists) while the patched one is correct at every interval.
@@ -84,7 +84,7 @@ major upgrade is not a one-line change.
   advancing, which a mid-sentence blur (`_handleTextAreaBlur` empties the textarea) would cause
   — consistent with "clicking another pane fixed it", unverified.
 - The composition lines in the opt-in log stay. One inference to keep in mind when reading
-  them: `logging.ts` sends an IPC call per composition event, so **enabling the log makes the
+  them: `infrastructure/logging.ts` sends an IPC call per composition event, so **enabling the log makes the
   main thread busier and this fault more likely** — a diagnosis that is easier to reproduce with
   the log on than off is consistent with this cause, not evidence against it.
 - Field verification is a byte-level test, not a TUI observation: `cat > /tmp/ime.txt`, type the
