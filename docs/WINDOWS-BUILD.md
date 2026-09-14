@@ -476,12 +476,16 @@ regression once the model fields are dynamic.
    submitting a prompt shows `running` (no dot), a permission prompt shows `needsInput`
    with the sidebar preview populated from the hook's message (dot set), and finishing a
    turn shows `idle` (dot set, preview persists — an empty body never clears the previous
-   message). Activating the tab clears its dot immediately.
+   message). Activating the tab clears its dot immediately. (Since setup v14 the `Notification`
+   hook fires for prompt types only, and dispatcher hooks sit next to these three; §10 v0.3.32
+   covers them.)
 3. **needsInput priority across tabs** — with one tab's session at `needsInput`, trigger
    `mast:running` on a **different** tab (`osc-test.sh` case 10, or another hook run): the
-   workspace's sidebar status stays `needsInput` — only the same tab that raised it
-   (`agentStatusSource`) can demote it, which happens naturally once its own
-   `UserPromptSubmit` fires `running`.
+   workspace's sidebar status stays `needsInput`. Each tab keeps its own status and the card
+   shows the most urgent one, so only the waiting tab leaving `needsInput` — its own `running`
+   or `idle`, or the tab closing or exiting — lowers the card, and only the waiting tab shows
+   the `!` badge. (Before v0.3.32 the workspace held a single status slot that only the tab
+   which set it could lower; that rule is gone.)
 4. **Click during a live title update (d7 regression guard)** — with a tab emitting OSC
    0/2 titles on a fast loop (or repeated `osc-test.sh` case 1/2 runs) so the tab strip is
    patching in place, click that tab repeatedly: activation must land every time, never
@@ -499,15 +503,16 @@ regression once the model fields are dynamic.
    stays responsive throughout (coalescing keeps model updates at the 100ms flush cadence
    regardless of OSC volume — `MAST_OSC_FLUSH_MS`), the persistence Saver's debounce cadence
    is undisturbed, and RAM stays stable (no unbounded growth from the flood).
-7. **Closing a needsInput tab returns the sidebar to idle** — with a tab at `needsInput`,
-   close it via **CloseTab**, then repeat and close via **ClosePane** instead: in both
-   cases, if that tab was the workspace's `agentStatusSource`, the sidebar reverts to
-   `idle` with no lingering dot.
+7. **Closing a needsInput tab drops it from the sidebar summary** — with one tab at
+   `needsInput` and another at `running` in the same workspace, close the waiting tab via
+   **CloseTab**, then repeat and close via **ClosePane** instead: in both cases the sidebar
+   falls to `running` (the remaining tab's status), with no lingering dot or badge. With no
+   other agent tab left it falls to `idle`. The preview is recomputed from the remaining tabs.
 8. **Restart clears notifications and status (sanitize)** — with a tab left at
    `needsInput`/`idle` with an unread dot and a sidebar preview message, restart the app:
-   every workspace's `agentStatus` is `idle` with no `agentStatusSource` or
-   `lastAgentMessage`, and every tab's `notification` is cleared — same guarantee as the
-   existing `pty_session` reset, extended to the new notification fields.
+   every tab's `agentStatus` is `idle` with no `lastAgentMessage`, so every workspace derives
+   `idle` with no preview, and every tab's `notification` is cleared — same guarantee as the
+   existing `pty_session` reset, extended to the notification fields.
 
 ### Stage 20 — three-tier keyboard navigation (계획 v2 "키보드 모델"; the canonical interception list lives in the [`apps/mast/src/shared/keys.ts`](../apps/mast/src/shared/keys.ts) module doc)
 
@@ -641,7 +646,11 @@ keyboard-first UX batch need one focused re-verification round. Pull, run
 `scripts/wsl/*.sh` and `git checkout -- scripts` once so the new `.gitattributes`
 (`*.sh text eol=lf`) re-materializes them with LF endings, then rebuild.
 
-1. **Hook auto-provisioning + tty fallback** — the hooks are no longer wired by hand: on
+1. **Hook auto-provisioning + tty fallback** *(historical — this round ran against setup v2;
+   setup v14 adds dispatcher hooks, narrows the `Notification` matcher and wires Codex and
+   Antigravity CLI hooks, so on a current build run §10 v0.3.32 items 1–2 instead, which cover
+   the fresh distro, the second distro on demand and the idempotent relaunch below)* — the hooks
+   are no longer wired by hand: on
    launch the app streams a setup script into `wsl.exe [-d <distro>] -- bash -s` once per
    distro (contract and manual fallback:
    [`scripts/wsl/claude-hook-example.md`](../scripts/wsl/claude-hook-example.md)). Start
@@ -886,7 +895,10 @@ three, and the last two items below cover the front-end half of the same batch.
 The v3 marker differs from v2, so **an already-provisioned distro re-provisions on the next
 launch** — no manual cleanup. Run the app from a console so its stderr is visible.
 
-1. **Hooks are migrated onto the provisioned script** — before launching, note what
+1. **Hooks are migrated onto the provisioned script** *(on setup v14 and later the migration
+   still applies, but the log reads `migrated <Event>` / `added <Event> role=status` /
+   `wired <Event> role=status`, and `mast-claude-hook.sh` dispatcher hooks are added next to
+   the three below)* — before launching, note what
    `~/.claude/settings.json` has (a hand-wired setup points at `~/.claude/hooks/…`). Launch
    the app once, then check:
    - all three of `UserPromptSubmit` / `Notification` / `Stop` now run
@@ -1181,10 +1193,10 @@ batch, from a console (`npm run tauri dev`) unless an item says otherwise.
    a permission prompt is the easiest.
    - **Unfocused → toast** — click another window (an editor, Explorer) so mast loses
      focus, then let the agent hit needsInput. A Windows toast appears bottom-right with the
-     title `mast — <workspace name>` and, as the body, the **first line** of the agent's
-     last message; with no message recorded the body reads `agent needs your input`. The
-     workspace name is the point of the notification — it is how you know which project is
-     waiting.
+     title `mast — <workspace name>` (since v0.3.32 `mast — <workspace name> · <tab title>`)
+     and, as the body, the **first line** of the agent's last message; with no message recorded
+     the body reads `agent needs your input`. The workspace name is the point of the
+     notification — it is how you know which project is waiting.
    - **Focused → no toast, chime only** — repeat with mast focused (click into a terminal
      first): the chime plays and the sidebar highlights, but **no toast appears**. A toast
      on top of the window you are already reading is noise, so this half is as much of a
@@ -1455,10 +1467,11 @@ Every `settings.json` edit needs the app closed and relaunched (there is no sett
    timing yours.
 
    - **Unfocused → toast** — click another window (an editor, Explorer) before the five seconds
-     are up. A Windows toast appears bottom-right, titled `mast — <workspace name>`, with the
-     first line of the agent's last message as the body (`toast test` here); with no message
-     recorded it reads `agent needs your input`. The workspace name is the point — it is how you
-     know which project is waiting.
+     are up. A Windows toast appears bottom-right, titled `mast — <workspace name> · <tab title>`,
+     with the first line of that tab's last message as the body (`toast test` here); with no
+     message recorded it reads `agent needs your input`. The workspace name is the point — it is
+     how you know which project is waiting — and since v0.3.32 the tab title says which agent in
+     it. (Up to v0.3.31 the title was `mast — <workspace name>`.)
    - **Focused, but a workspace you are not viewing → toast** — this is the case v0.3.6 got
      wrong. Keep mast focused (click into a terminal of the *other* workspace) and let the
      five seconds run out: **the toast still appears**, because that workspace is not on screen.
@@ -1467,7 +1480,9 @@ Every `settings.json` edit needs the app closed and relaunched (there is no sett
      workspace you are actually looking at, with mast focused. **No toast.** The sidebar card
      highlights and that is all — a toast on top of the window you are already reading is noise.
      Switching workspaces after the fact does not retro-fire it; only the rising transition
-     notifies, so staying in `needs input` (later redraws, tab activity) produces nothing.
+     notifies, so staying in `needs input` (later redraws, tab activity) produces nothing. Since
+     v0.3.32 the transition is judged per tab: a second tab that starts waiting in a workspace
+     already at `needs input` gets a toast of its own.
    - **No mast chime, ever** — the app's own two-tone chime is gone, including in the focused
      case that used to be sound-only: if you hear it, this build is not the one you think it is.
      (The synthesiser is kept dormant in [`features/notifications/chime.ts`](../apps/mast/src/features/notifications/chime.ts), unwired.)
@@ -1487,15 +1502,18 @@ Every `settings.json` edit needs the app closed and relaunched (there is no sett
      `%AppData%\app.mast.desktop\toast.log` (same folder as `settings.json`), local time first:
 
      ```text
-     2026-08-13 21:04:11 ok title="mast — mast"
-     2026-08-13 21:07:02 err title="mast — mast": cannot show the toast: <reason>
+     2026-08-13 21:04:11 ok label="mast #7"
+     2026-08-13 21:07:02 err label="mast #7": cannot show the toast: <reason>
      ```
 
-     That splits the failure three ways without a dev console: **no line** means the front-end
-     never called (focus/onset judgment — check which case you were in), `ok` means Windows
-     accepted it and the toast was suppressed downstream (notifications turned off for the app,
-     Focus Assist, or the shell not having indexed the Start-menu shortcut yet), and `err` names
-     the WinRT refusal. The message body is deliberately not logged. The file is capped at 64 KiB
+     The label is `<workspace name> #<tab id>` (up to v0.3.31 the line carried
+     `title="mast — <workspace name>"`). That splits the failure three ways without a dev
+     console: **no line** means the front-end never called (focus/onset judgment — check which
+     case you were in), `ok` means Windows accepted it and the toast was suppressed downstream
+     (notifications turned off for the app, Focus Assist, or the shell not having indexed the
+     Start-menu shortcut yet), and `err` names the WinRT refusal. The message body is
+     deliberately not logged, and neither is the toast title: it now carries the tab title, which
+     an agent or prompt sets through OSC 0/2 to task text and paths. The file is capped at 64 KiB
      and starts over past that, so it cannot grow without bound.
    - **Failure still may not break anything else** — with notifications turned off for the app,
      the UI must keep working normally; the only traces are the `err`/`ok` line above and a
@@ -2331,9 +2349,309 @@ notify script and restart-history wrapper; it cannot exercise ConPTY or readline
    again: ↑ must now offer that new conversation. Repeat Claude → Codex and Codex → Claude
    to verify that switching real agents still replaces the hint.
 
-Local automated reproduction: `cd apps/mast && npx vitest run src/codex-resume.test.ts`.
+Local automated reproduction: `cd apps/mast && npx vitest run tests/codex-resume.test.ts`.
 No real sessions or user history are modified by that test. Storage-format assumptions and
 the bounded-check fallback are recorded in `scripts/wsl/claude-hook-example.md`.
+
+### v0.3.32 — Agent state signals verification (setup v14)
+
+**Not yet run — no item below has passed.** v0.3.32 keeps agent status per tab and derives the
+workspace card from its tabs, and setup v14 adds the Claude Code dispatcher hooks, the Codex
+hooks and the Antigravity CLI hooks. Rules, limits and notices are in
+[`scripts/wsl/claude-hook-example.md`](../scripts/wsl/claude-hook-example.md). The Linux suites
+(`apps/mast/tests/agent-hooks.test.ts`, `provision-hooks.test.ts`, `provision-setup.test.ts`,
+`codex-resume.test.ts`) cannot reach ConPTY, the `wsl.exe` relay, a real agent's TUI or Codex's
+trust prompt, which is what this list is for.
+
+Boot with `"log": true`. For every item record the Windows build, the distro, the Claude Code,
+Codex and `agy` versions, the Codex trust state, PASS / FAIL / not run, and the trace: the
+relevant `~/.mast/setup.log` lines, `~/.mast/agent-hooks/tab-<id>.diag` (`mast id` prints the
+id) and `toast.log` lines. Known limits are marked *record*: note what the tab shows — its tab
+button's `!` badge and the sidebar card's status — rather than judging it.
+
+**Synthetic tests reset first.** When you drive a status by hand, send `mast:idle` and then, at
+least 100 ms later, `mast:needsInput` from the same tab. Use the leading `sleep` to click another
+window or switch to another workspace: while mast has focus on this tab's workspace the toast is
+suppressed by design and only the `!` badge appears.
+
+```bash
+sleep 5; ~/.mast/bin/mast-notify.sh mast:idle reset; sleep 0.2; ~/.mast/bin/mast-notify.sh mast:needsInput "toast test"
+```
+
+The onset fires only on a transition, and two tokens inside one 100 ms flush window collapse into
+the last. A repeated status, a mistyped token or a focused window that produces no toast is a test
+artifact, not an app defect — two earlier rounds were lost to exactly that.
+
+**Rerunning a setup step on a distro that finished item 1.** Setup runs when mast starts and
+skips every step whose marker exists. An agent step reruns once its sub-marker is gone:
+`rm ~/.mast/.setup-v14-codex` (Codex) or `rm ~/.mast/.setup-v14-agy` (Antigravity CLI), then
+restart mast; that run logs `setup v14 exists; running only the missing agent steps`. The rest —
+the Claude Code merge and its version guard, the dispatcher Python, the Codex `notify` line and
+the AGENTS.md block — runs only in a full run, which reruns both agent steps too:
+`rm ~/.mast/.setup-v14`, then restart mast; that run logs `setup v14 starting`. A bullet that
+edits a file names its backup; copy the backup back when the bullet is done.
+
+**Which terminal a hook writes to** (items 12 and 15). A hook process that has a controlling
+terminal writes to `/dev/tty`; one without it takes the ancestor-pts fallback. To see which, add
+one line to the agent's installed entry point — `mast-claude-hook.sh`, `mast-codex-hook.sh` or
+`mast-agy-hook.sh` — and run one turn:
+
+```bash
+f=~/.mast/bin/mast-agy-hook.sh; cp -p "$f" /tmp/mast-entry.orig
+sed -i '1a echo "$(date +%T) $0 ctty=$(ps -o tty= -p $$)" >> /tmp/mast-hook-tty.txt 2>&1' "$f"
+```
+
+`ctty=pts/<n>` in `/tmp/mast-hook-tty.txt` means `/dev/tty`, `ctty=?` the ancestor pts. The
+command in the agent's configuration does not change, so Codex asks for no new trust. Put the
+original back with `cp -p /tmp/mast-entry.orig "$f"` before timing anything in item 15.
+
+1. **Upgrade from setup v13, and a fresh distro.**
+   - On a distro last provisioned by v0.3.31, launch once. `~/.mast/.setup-v14` exists, and so
+     do `~/.mast/.setup-v14-codex` and `~/.mast/.setup-v14-agy` wherever `~/.codex` and
+     `~/.gemini/antigravity-cli` exist.
+   - `setup.log` shows `claude: added <Event> role=dispatcher` for `SessionStart`,
+     `UserPromptSubmit`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
+     `PostToolBatch`, `SubagentStop` and `Stop`, and `claude: narrowed Notification`. A machine
+     that ran an intermediate build of this release needs `rm ~/.mast/.setup-v14*` first, and
+     since its `settings.json` already holds those rows, the expected lines there are
+     `claude: wired <Event> role=dispatcher` and `claude: already-narrowed Notification`.
+   - Every hook and key of your own in `settings.json` is unchanged, and a symlinked
+     `settings.json` is still a link.
+   - `rm ~/.mast/.setup-v14` and relaunch: every row logs `wired` (the Notification group
+     `already-narrowed`), every merged file logs `result=unchanged`, there is no `added` or
+     `narrowed` line and no Codex trust notice (it is printed only when `hooks.json` is
+     written), and every group in `~/.codex/hooks.json` keeps its position. Notices about a
+     condition that still holds are printed again: an agent version limit, Python below 3.8,
+     `features.hooks = false`, `approvals_reviewer`, inline hooks, a `respected` event, a
+     `Notification` matcher that also matches `idle_prompt`, an agy `"mast"` hook that differs.
+   - A fresh distro (no `~/.mast`) with `python3` 3.8 or later and either no Claude Code or
+     2.1.118 or later: one launch logs `claude: added <Event> role=status` for
+     `UserPromptSubmit`, `Notification` and `Stop`, `claude: added <Event> role=dispatcher` for
+     the eight events above, no `narrowed` line, and `setup v14 complete`. Relaunch: `setup.log`
+     gains no line.
+   - A second distro on demand: create a workspace pinned to a distro that has never run mast
+     (section 4). Its `~/.mast/.setup-v14` appears without restarting mast.
+2. **Setup notices and reruns.**
+   - Every notice is in `setup.log` — as `notice: …`, or as the `[mast] setup: …` text the merge
+     helper printed — and in `mast.log` as a `provisioning notice`.
+   - Relaunch with all markers present: `mast.log` has no
+     `provisioning failed … cannot stream the setup script`, and `setup.log` gains no line.
+   - `~/.mast/bin/mast-python` holds an absolute path to Python 3.8 or later.
+   - **Claude Code version guard.** With no Claude Code session running,
+     `mv ~/.claude/settings.json /tmp/mast-claude-settings.json`, and put a stub on a candidate
+     path that holds no real install (use `~/.volta/bin` if `~/.bun/bin/claude` exists):
+     `mkdir -p ~/.bun/bin && printf '#!/bin/sh\necho 2.1.117\n' > ~/.bun/bin/claude && chmod +x ~/.bun/bin/claude`.
+     `rm ~/.mast/.setup-v14` and relaunch: `setup.log` shows
+     `claude: /home/<you>/.bun/bin/claude --version reports 2.1.117`, a
+     `notice: Claude Code 2.1.117 at /home/<you>/.bun/bin/claude has no PostToolBatch hook …`
+     line and `claude: added <Event> role=status` for the three status events, with no
+     `role=dispatcher` line; the new `settings.json` holds only the three `mast-notify.sh` groups.
+     Repeat with a stub that fails — `printf '#!/bin/sh\nexit 1\n' > ~/.bun/bin/claude`, then
+     `rm ~/.mast/.setup-v14` again and relaunch: `claude: … --version is unreadable`,
+     `notice: cannot read the version of Claude Code at …`, and still no `role=dispatcher` line.
+     Then delete the stub (and `~/.bun` if you created it) and
+     `mv /tmp/mast-claude-settings.json ~/.claude/settings.json`; no rerun is needed.
+   - **An agent installed after v14.** Install Codex or `agy` on a distro whose v14 run happened
+     without it, or simulate one with `rm ~/.mast/.setup-v14-codex` (`-agy`), and relaunch.
+     `setup.log` shows `setup v14 exists; running only the missing agent steps`,
+     `codex: added <Event>` for the seven events (`codex: wired <Event>` when simulated) or
+     `agy: added mast` (`agy: wired mast`), then `codex hooks: step done` or
+     `agy hooks: step done`, and no `claude:`, `codex: notify` or `codex agents:` line. A Codex
+     first installed this way has no `notify` line and no AGENTS.md block, so it shows no idle
+     before its hooks are trusted and records no resume hint: before running items 3, 10 and 13 on
+     it, `rm ~/.mast/.setup-v14` and relaunch, which adds both.
+   - **Exit 3.** `cp -L ~/.codex/hooks.json /tmp/mast-codex-hooks.json`,
+     `printf '{"$schema": "x"}\n' > ~/.codex/hooks.json`, `rm ~/.mast/.setup-v14-codex` and
+     relaunch. `setup.log` shows `codex: result=failed` with `unknown top-level key` in its
+     reason, `codex hooks: refused (exit 3)` and
+     `notice: Codex hooks were not installed, and mast will not retry until you edit ~/.codex/hooks.json and run rm ~/.mast/.setup-v14-codex; …`;
+     the file still reads `{"$schema": "x"}`, and `~/.mast/.setup-v14-codex` exists again.
+     Relaunch: `setup.log` gains no line. `cp /tmp/mast-codex-hooks.json ~/.codex/hooks.json`,
+     `rm ~/.mast/.setup-v14-codex` and relaunch: `codex: wired <Event>` for the seven events and
+     `codex hooks: step done`. For Antigravity CLI the same with
+     `cp -L ~/.gemini/config/hooks.json /tmp/mast-agy-hooks.json`, `{"other": 5}` and
+     `.setup-v14-agy`: `agy: result=failed` naming the `other` hook, `agy hooks: refused (exit 3)`,
+     and `agy: wired mast` after the restore.
+   - **Opt-out markers.** `touch ~/.mast/no-codex-hooks`, `rm ~/.mast/.setup-v14-codex` and
+     relaunch: `setup.log` shows `codex hooks: ~/.mast/no-codex-hooks exists; skipped`, and the
+     sub-marker exists again. The same with `no-agy-hooks` and `.setup-v14-agy`:
+     `agy hooks: ~/.mast/no-agy-hooks exists; skipped`. Delete the opt-out marker afterwards.
+3. **Codex trust.**
+   - The next Codex launch shows **Hooks need review**. Choose *Continue without trusting*: no
+     hook runs (a prompt shows no `running`). Quit and start Codex twice more, and *record*
+     whether the prompt returns each time.
+   - *Trust all and continue*: the hooks keep running after restarting Codex and mast.
+   - Before trusting, Codex's `notify` still reports idle at the end of a turn (a Codex first
+     installed after v14 needs the full run first — item 2, *An agent installed after v14*).
+   - **`features.hooks = false`** (needs Python 3.11 or later for `tomllib`; with an older
+     `python3` no notice is expected). `cp -L ~/.codex/config.toml /tmp/mast-codex-config.toml`,
+     set `hooks = false` under `[features]`, note `stat -L -c %Y ~/.codex/config.toml`,
+     `rm ~/.mast/.setup-v14-codex` and relaunch: `setup.log` shows
+     `codex: hooks-feature=disabled key=hooks` and
+     `[mast] setup: hooks disabled in config; mast hooks will not run (… sets features.hooks = false)`,
+     and `stat` prints the same value. Copy the backup back.
+   - **Inline `[hooks]` tables.** `cp -L ~/.codex/config.toml /tmp/mast-codex-config.toml` and
+     `mv ~/.codex/hooks.json /tmp/mast-codex-hooks.json` — with item 1's `hooks.json` in place,
+     Codex warns about hooks in both places whatever mast does. Append
+
+     ```toml
+     [[hooks.Stop]]
+     [[hooks.Stop.hooks]]
+     type = "command"
+     command = "true"
+     ```
+
+     to `config.toml`, `rm ~/.mast/.setup-v14-codex` and relaunch: `setup.log` shows
+     `codex: inline-hooks events=Stop`, the `[mast] setup: Codex hooks are configured inline in …`
+     notice and `codex: result=skipped-inline-hooks`; `~/.codex/hooks.json` does not exist, and
+     the sub-marker exists again. Start Codex: it prints no warning about hooks in both places
+     (choose *Continue without trusting* if it asks about the inline hook). Then
+     `mv /tmp/mast-codex-hooks.json ~/.codex/hooks.json` and copy `config.toml` back; no rerun is
+     needed.
+   - `grep app-server-control-socket ~/.mast/setup.log`: *record* the value. If you use a shared
+     app-server, submit a prompt in the attached Codex TUI and *record* which tab, if any, shows
+     running.
+4. **Two tabs, two panes.**
+   - A `running`, B `idle`: the workspace card shows running.
+   - A and B each at needs input, with the window unfocused or another workspace active: each
+     tab shows its own `!` badge and gets its own toast, titled
+     `mast — <workspace> · <tab title>`, with that tab's message as the body.
+   - With mast focused and that workspace active: no toast for either.
+   - `toast.log` has one `ok label="<workspace> #<tab id>"` line per toast and no tab title.
+   - The sidebar preview is the newest message — the waiting tab's while the card shows
+     needs input.
+   - A tab reporting running, closing or exiting leaves the other tab's status and badge as
+     they were.
+5. **Claude Code: approve, deny, interrupt.**
+   - Leave a permission prompt for about 6 s so the `Notification` fires, then approve: the tab
+     returns to running when that tool finishes, before `Stop`. The same for an approved tool
+     that fails.
+   - An approved long command: *record* that needs input stays while it runs.
+   - Deny with No or Esc after the `Notification` (*record*: needs input stays) and within 6 s
+     (*record*: running stays).
+   - Deny **with feedback** and let Claude use another tool: running at the end of that batch.
+   - Esc while a tool runs, and Esc while Claude is streaming: *record* what the tab shows
+     (expected running until the next prompt — no hook reports either).
+6. **Claude Code: subagents and sessions.**
+   - While the main agent waits for approval, a background subagent calling tools does not
+     clear the badge.
+   - Parallel `WebFetch` calls with a single prompt: the sibling finishing does not clear it.
+   - *Record* the tab when the main agent stops while a subagent's prompt is open (expected
+     idle, a known limit), and after a background subagent finishes following the main `Stop`.
+   - Kill a Claude Code process from another tab (`kill -KILL <pid>`; `pgrep -af claude` lists
+     it) while one of its subagents waits for approval. In the same tab run the resume command
+     (`cat ~/.mast/resume/tab-$MAST_TAB` shows it), ask for a root tool call that needs approval,
+     leave the prompt about 6 s until the tab shows needs input, and approve: the tab returns to
+     running when that tool finishes, before `Stop`. Had the resume not dropped the killed
+     subagent's wait, the tab would stay at needs input until `Stop`.
+   - `/clear` with a subagent prompt open: *record* whether the badge survives.
+   - With `~/.mast/claude-pairing-off`: tool results report running without pairing.
+7. **Claude Code: side notifications.**
+   - About a minute after a finished turn, `idle_prompt` causes no needs input and no toast.
+   - An elicitation dialog, `agent_needs_input`, `quota_auto_resume_stale` or
+     `worker_permission_prompt`, where you can reach one, still shows needs input.
+8. **Codex transitions.**
+   - Submit a prompt: running. A single approval dialog: needs input after about 2 s; approve:
+     running when the command completes.
+   - The turn ends: idle with the first line of the last answer (`codex turn complete` when
+     there is none). Esc: idle with `interrupted`.
+   - A turn continued by a blocking Stop hook: running resumes, and an approval inside it still
+     shows needs input.
+   - No needs input comes back after `Stop`, `Interrupt` or a new prompt from an approval that
+     was already settled.
+   - A response with parallel tool calls: needs input stays while the dialog is open.
+9. **Codex automatic approvals, long commands, denials.**
+   - Short commands repeated after "don't ask again": no toast.
+   - For each of these, *record* when the `!` badge appears and the event it clears at (the
+     command finishing, `Stop`, `Interrupt`, the next prompt): a repeated long command; a long
+     command approved after its dialog was open for more than 2 s (expected: needs input until
+     it completes); a long command approved within 2 s; a dialog **denied** within 2 s and one
+     denied after more than 2 s, the turn going on (expected: needs input until `Stop`,
+     `Interrupt` or the next prompt); `sleep 40`, a dev server, and a command the model runs with
+     a short yield.
+   - **`auto_review`.** `cp -L ~/.codex/config.toml /tmp/mast-codex-config.toml`, then put
+     `approvals_reviewer = "auto_review"` in the root table — above the first `[table]` header;
+     a line below any header, a profile's included, is seen by neither check. Runtime, with no
+     rerun: restart Codex and let it request approvals; none raises needs input, and right after
+     a request `tab-<id>.diag` reads
+     `approvals_reviewer is auto_review in ~/.codex/config.toml; needsInput disabled`. Notice:
+     `rm ~/.mast/.setup-v14-codex` and relaunch mast: `setup.log` shows
+     `codex: approvals-reviewer=auto_review` and the
+     `[mast] setup: approvals_reviewer is auto_review in …` notice. Copy the backup back.
+   - `touch ~/.mast/codex-needs-input-off`: no needs input either, running and idle intact, and
+     right after an approval request `tab-<id>.diag` reads
+     `needsInput disabled by ~/.mast/codex-needs-input-off`. Delete the marker afterwards.
+10. **Codex subagents, nesting, late notify.**
+    - An unrelated `PostToolUse` does not clear an open approval.
+    - Esc at the root, then a subagent approval: needs input, and idle again once approved.
+    - Queued input or a steer submitted while a subagent dialog is open: needs input stays.
+    - *Record* the tab after aborting a subagent's dialog (a known limit), and check that an
+      approved subagent call which then fails is cleared when the subagent stops.
+    - No status change from a nested `codex`, a temporary thread, or a `codex exec` started by
+      Claude Code's Bash tool in the same tab.
+    - For `request_user_input`, `/review` and a turn that ends in an error, *record* what the tab
+      shows afterwards, `tab-<id>.diag`, and `jq .codex.records ~/.mast/agent-hooks/tab-<id>.json`
+      — a record whose `state` is `emitted` is what holds needs input.
+    - A catch-up summary's or a subagent's `notify`, followed at once by a queued prompt's
+      turn: the late idle never replaces running.
+    - A new session whose hooks are not trusted: its `notify` idle arrives normally.
+11. **Versions.** The Codex and `agy` version notices in `setup.log` match the lowest installed
+    versions and name their paths. If a Codex older than 0.148.0 is at hand, *record* the
+    warning it prints at launch about skipped asynchronous hooks.
+12. **Antigravity CLI.**
+    - An `agy` conversation in a tab: running during model calls; idle with the first line of
+      the final output when the turn ends.
+    - *Record* the tab while `agy` waits for a tool confirmation (expected running) and after
+      Esc cancels a turn.
+    - `agy` outside mast emits nothing, and `agy` never reports a hook output error.
+    - *Record* the `ctty=` value the tty probe (top of this section) logs for
+      `mast-agy-hook.sh` during one turn.
+    - With an `agy` older than 1.1.10 at hand: its notice appears.
+13. **Resume hints.**
+    - `~/.mast/resume/tab-<id>` stays exactly `codex resume <id>` or `claude --resume <id>` for
+      the session you ran; an `agy` session leaves it unchanged. The Codex hint needs the
+      `notify` line (item 2, *An agent installed after v14*).
+    - A Codex temporary thread still leaves the previous hint in place (§10 v0.3.29).
+14. **Lifecycle.**
+    - Closing a needs-input tab, closing its pane, and a failed respawn each leave the other
+      tabs' status intact.
+    - The first snapshot after `Ctrl+Shift+R` raises no toast.
+    - After an app restart every tab and card is idle.
+    - A phone page opened before the update still shows the workspace badge.
+    - After closing a tab, `~/.mast/agent-hooks/tab-<id>.*` is gone.
+15. **Cost, tty, screen.**
+    - *Record* the `ctty=` value the tty probe (top of this section) logs for
+      `mast-claude-hook.sh` and `mast-codex-hook.sh`, one turn each.
+    - **Hook timings.** Remove the tty probe line first, and type these into the shell of a
+      spare tab with no agent in it — not through an agent's shell tool, whose `CLAUDECODE` or
+      `CODEX_THREAD_ID` silences the dispatcher. The events replace that tab's Codex hook state
+      with a made-up session and leave it running (`~/.mast/bin/mast-notify.sh mast:idle reset`
+      afterwards).
+
+      ```bash
+      ev() { printf '{"hook_event_name":"%s","session_id":"probe","turn_id":"t1","transcript_path":"/tmp/probe","tool_name":"Bash","tool_use_id":"c%s","tool_input":{"command":"sleep %s"}}' "$1" "$2" "$2"; }
+      hook() { ~/.mast/bin/mast-codex-hook.sh <<< "$1"; }
+      TIMEFORMAT=%R; rm -f /tmp/mast-hook-s.txt
+      for i in $(seq 40); do for e in PreToolUse PostToolUse; do p=$(ev $e $i); { time hook "$p"; } 2>> /tmp/mast-hook-s.txt; done; done
+      sort -n /tmp/mast-hook-s.txt | sed -n 76p
+      awk 'NR % 2 { p = $1; next } { print p + $1 }' /tmp/mast-hook-s.txt | sort -n | sed -n 38p
+      ```
+
+      The two numbers are the warm p95, in seconds, of one synchronous hook (target: under
+      0.050) and of the `PreToolUse` + `PostToolUse` pair a Codex tool call pays (target: under
+      0.100). *Record* both, and as the cold figure one pair timed right after
+      `sync; echo 3 | sudo tee /proc/sys/vm/drop_caches`.
+    - A large `tool_response`:
+      `python3 -c 'import json; print(json.dumps({"hook_event_name": "PostToolUse", "session_id": "probe", "turn_id": "t1", "transcript_path": "/tmp/probe", "tool_name": "Bash", "tool_use_id": "big", "tool_input": {"command": "true"}, "tool_response": "x" * 4194304}))' > /tmp/mast-post-large.json`,
+      then `time (cat /tmp/mast-post-large.json | ~/.mast/bin/mast-codex-hook.sh)`. *Record* it
+      next to the warm single-hook p95.
+    - Eight asynchronous approvals at once, with `ev` and `hook` from above:
+      `rm -f ~/.mast/agent-hooks/tab-$MAST_TAB.diag; for i in $(seq 8); do hook "$(ev PreToolUse $i)"; done; for i in $(seq 8); do hook "$(ev PermissionRequest $i)" & done; wait`.
+      The tab shows needs input about 2 s in, and `~/.mast/agent-hooks/tab-$MAST_TAB.diag` does
+      not exist — a lock timeout or an unpaired request would have written it. Then
+      `for i in $(seq 8); do hook "$(ev PostToolUse $i)"; done` returns the tab to running.
+    - A tool-heavy turn in Claude Code and in Codex leaves no screen artifacts or cursor drift.
+    - While idle, no extra resident process or wakeup exists, and hook stdout stays empty.
 
 ## 11. ARM64 cross-build notes
 
@@ -2473,11 +2791,15 @@ away from being undone.
    rule, so delete it by hand: `Remove-NetFirewallRule -DisplayName "winmux remote (LAN)"`.
 
 9. **Verify, then delete.** Launch `mast`, then check:
-   - `~/.mast/setup.log` ends with `setup v11 complete`, and `~/.mast/bin` holds `mast`,
-     `mast-notify.sh`, `mast-codex-notify.sh`, `mast-send.sh`, `mast-open`.
-   - `~/.claude/settings.json` has exactly **three** `mast-notify.sh` hooks and no
-     `winmux-notify.sh`; `~/.codex/config.toml` has one `mast-codex-notify.sh` notify line;
-     `~/.codex/AGENTS.md` has exactly one managed block.
+   - `~/.mast/setup.log` ends with `setup v11 complete` (`setup v14 complete` from setup v14), and
+     `~/.mast/bin` holds `mast`, `mast-notify.sh`, `mast-codex-notify.sh`, `mast-send.sh`,
+     `mast-open`.
+   - `~/.claude/settings.json` has exactly the **three** `mast-notify.sh` hooks mast writes and no
+     `winmux-notify.sh` (from setup v14 it also has eight `mast-claude-hook.sh` dispatcher hooks,
+     unless `setup.log` has a notice that approval tracking was not wired — a Claude Code version,
+     or Python below 3.8 — which leaves none, or a `claude: respected <Event>` line, which leaves
+     none for that event); `~/.codex/config.toml` has one
+     `mast-codex-notify.sh` notify line; `~/.codex/AGENTS.md` has exactly one managed block.
    - In a tab: `printenv MAST MAST_TAB`, `command -v mast`, `mast ls`, and `mast send` to
      another tab with a short and a long line — both must submit, not just pre-fill.
    - Status and toast: drive `mast:running` → `mast:idle` → `mast:needsInput` (the onset only
