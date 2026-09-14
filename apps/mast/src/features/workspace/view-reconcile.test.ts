@@ -24,6 +24,8 @@ function terminalTab(id: number, session: number | null, exited = false): Tab {
     },
     notification: "none",
     lastActivityMs: null,
+    agentStatus: "idle",
+    lastAgentMessage: null,
   };
 }
 
@@ -34,6 +36,8 @@ function folderTab(id: number, path = "/home/u"): Tab {
     kind: { type: "folderBrowser", path },
     notification: "none",
     lastActivityMs: null,
+    agentStatus: "idle",
+    lastAgentMessage: null,
   };
 }
 
@@ -44,6 +48,8 @@ function textTab(id: number, path = "/home/u/log.txt", scrollTop = 0): Tab {
     kind: { type: "textViewer", path, scrollTop },
     notification: "none",
     lastActivityMs: null,
+    agentStatus: "idle",
+    lastAgentMessage: null,
   };
 }
 
@@ -54,6 +60,8 @@ function changesTab(id: number, path = "/home/u/project"): Tab {
     kind: { type: "changesViewer", path },
     notification: "none",
     lastActivityMs: null,
+    agentStatus: "idle",
+    lastAgentMessage: null,
   };
 }
 

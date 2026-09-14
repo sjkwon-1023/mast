@@ -17,7 +17,11 @@ import {
   resetUi,
   userActivity,
 } from "../infrastructure/backend";
-import { detectNeedsInputOnset, needsInputToastTargets } from "../features/notifications/chime";
+import {
+  detectNeedsInputOnset,
+  needsInputToasts,
+  needsInputToastTargets,
+} from "../features/notifications/chime";
 import { formatCommandError } from "../shared/command-error";
 import { activeTerminalCwd, activeWorkspace, pathBasename } from "../shared/keys";
 import { openPairingDialog } from "../features/pairing/dialog";
@@ -36,7 +40,7 @@ import type {
   Command,
   CommandOutput,
   StateSnapshot,
-  WorkspaceId,
+  TabId,
 } from "../shared/types";
 import { initUpdateNotice as startUpdateNotice } from "./update-notice";
 
@@ -88,13 +92,6 @@ const ERROR_TTL_MS = 5000;
 
 const WINDOW_FOCUS_EVENT = "window-focus";
 
-const TOAST_FALLBACK_BODY = "agent needs your input";
-
-function toastBody(lastAgentMessage: string | null): string {
-  const firstLine = (lastAgentMessage ?? "").split("\n", 1)[0].trim();
-  return firstLine === "" ? TOAST_FALLBACK_BODY : firstLine;
-}
-
 function requireElement(id: string): HTMLElement {
   const el = document.getElementById(id);
   if (el === null) throw new Error(`missing #${id} element`);
@@ -132,7 +129,7 @@ class App {
     },
   );
 
-  private agentStatuses: Map<WorkspaceId, AgentStatus> | null = null;
+  private agentStatuses: Map<TabId, AgentStatus> | null = null;
 
   private windowFocused = true;
 
@@ -374,12 +371,8 @@ class App {
       snapshot.state.activeWorkspace,
       this.windowFocused,
     );
-    if (targets.length === 0) return;
-    const pending = new Set(targets);
-    for (const ws of snapshot.state.workspaces) {
-      if (!pending.has(ws.id)) continue;
-
-      notifyToast(`mast — ${ws.name}`, toastBody(ws.lastAgentMessage)).catch((err) => {
+    for (const toast of needsInputToasts(targets, snapshot.state.workspaces)) {
+      notifyToast(toast.title, toast.body, toast.logLabel).catch((err) => {
         console.debug("[mast] needsInput toast failed", err);
       });
     }

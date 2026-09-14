@@ -245,10 +245,13 @@ function checkWorkspaceShape(ws: Workspace): void {
   const leaves = collectLeaves(ws.layout).map(String).sort();
   expect(leaves).toEqual(Object.keys(ws.panes).sort());
   expect(AGENT_STATUSES).toContain(ws.agentStatus);
+  expect(ws).not.toHaveProperty("agentStatusSource");
   for (const pane of Object.values(ws.panes)) {
     for (const tab of pane.tabs) {
       expect(NOTIFICATIONS).toContain(tab.notification);
       expect(typeof tabKindLabel(tab.kind)).toBe("string");
+      expect(AGENT_STATUSES).toContain(tab.agentStatus);
+      expect(tab.lastAgentMessage === null || typeof tab.lastAgentMessage === "string").toBe(true);
     }
   }
 }
@@ -258,7 +261,7 @@ describe("stage10-snapshot.json", () => {
     expect(snapshotFixture.revision).toBe(6);
     expect(snapshotFixture.state.revision).toBe(6);
     expect(snapshotFixture.state.activeWorkspace).toBe(1);
-    expect(snapshotFixture.state.nextId).toBe(15);
+    expect(snapshotFixture.state.nextId).toBe(16);
     expect(snapshotFixture.state.workspaces).toHaveLength(2);
   });
 
@@ -329,6 +332,11 @@ describe("stage10-snapshot.json", () => {
     expect(ws2.gitDirty).toBe(true);
     expect(ws2.agentStatus).toBe("needsInput");
     expect(ws2.lastAgentMessage).not.toBeNull();
+    // 워크스페이스 값은 탭에서 파생된다 — 기다리는 것은 pane 11 끝의 터미널 탭 15 다.
+    const waiting = ws2.panes["11"].tabs[1];
+    expect(waiting.id).toBe(15);
+    expect(waiting.agentStatus).toBe("needsInput");
+    expect(waiting.lastAgentMessage).toBe(ws2.lastAgentMessage);
     // 빈 pane (탭 0개, activeTab null) — SplitPane{tab: null} 등으로 도달한다.
     expect(ws1.panes["9"].tabs).toEqual([]);
     expect(ws1.panes["9"].activeTab).toBeNull();

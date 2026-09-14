@@ -1,8 +1,10 @@
 //! 세션 종료·시작과 OSC 배치를 모델에 반영한다.
 
+use std::cmp::Reverse;
+
 use super::{Dispatcher, SessionEvent};
 use crate::model::{
-    AgentStatus, NotificationState, PaneId, TabId, TabKind, TerminalStatus, Workspace,
+    AgentStatus, NotificationState, PaneId, Tab, TabId, TabKind, TerminalStatus, Workspace,
 };
 use crate::notify::{OscBatch, OscDelta};
 
@@ -42,10 +44,10 @@ impl Dispatcher {
                             }
                         }
                     }
-                    // 죽은 세션의 탭이 워크스페이스 상태의 출처였으면 되돌린다 —
-                    // 탭 소멸 3경로(CloseTab·ClosePane·SessionExited)가 공유하는 규칙.
+                    // 죽은 셸의 에이전트는 더 이상 입력을 기다리지 않는다 — 비우지 않으면
+                    // 그 needsInput 과 문구가 워크스페이스 파생값에 계속 남는다.
                     for tab in exited {
-                        changed |= reset_agent_source(ws, tab);
+                        changed |= clear_tab_agent(ws, tab);
                     }
                 }
                 // 미지 session 이면 changed == false — 무해한 no-op (모듈 doc 참조).
@@ -81,7 +83,7 @@ impl Dispatcher {
                         }
                     }
                 }
-                // agent_status 출처는 건드리지 않는다 — 세션이 살아 있고 표식이 늦게
+                // 에이전트 상태는 건드리지 않는다 — 세션이 살아 있고 표식이 늦게
                 // 오면 되돌아가므로, 죽은 탭 정리(SessionExited)와 규칙이 다르다.
                 if changed {
                     self.state.revision += 1;
@@ -93,6 +95,7 @@ impl Dispatcher {
     /// OSC 배치를 반영하고 실제 변경 여부를 반환한다. 변경 시 revision은 배치당 한 번 증가한다.
     /// 미지·종료 세션은 무시하며 now_ms는 호출자가 주입한다.
     pub fn apply_osc(&mut self, batch: OscBatch, now_ms: u64) -> bool {
+        self.osc_batch_seq += 1;
         let mut changed = false;
         for (session, delta) in &batch.entries {
             if delta.started {
@@ -125,6 +128,7 @@ impl Dispatcher {
         let tab_id = ws_ref.panes[&pane].tabs[ti].id;
         let visible = self.state.active_workspace == Some(ws_ref.id)
             && ws_ref.panes[&pane].active_tab == Some(tab_id);
+        let message_seq = self.osc_batch_seq;
 
         let ws = &mut self.state.workspaces[wi];
         let tab = &mut ws
@@ -172,45 +176,72 @@ impl Dispatcher {
         }
 
         if let Some(status) = delta.status {
-            // needsInput 우선: 입력 대기 중인 워크스페이스는 **다른 탭**의 상태
-            // 알림으로 덮이지 않는다 (사이드바만 훑어도 입력 대기가 보여야 한다 —
-            // 계획 v2 9장). 사용자가 응답하면 같은 출처 탭의 running 이 강등한다.
-            let allowed = ws.agent_status != AgentStatus::NeedsInput
-                || status == AgentStatus::NeedsInput
-                || ws.agent_status_source == Some(tab_id);
-            if allowed {
-                if ws.agent_status != status {
-                    ws.agent_status = status;
-                    changed = true;
-                }
-                if ws.agent_status_source != Some(tab_id) {
-                    ws.agent_status_source = Some(tab_id);
-                    changed = true;
-                }
-            }
-        }
-        // 미리보기 메시지는 상태 우선 규칙과 독립이다 — 우선 규칙의 대상은
-        // agent_status 뿐이고, 메시지는 마지막으로 도착한 알림 본문을 보여준다.
-        if let Some(message) = &delta.message {
-            if ws.last_agent_message.as_deref() != Some(message.as_str()) {
-                ws.last_agent_message = Some(message.clone());
+            if tab.agent_status != status {
+                tab.agent_status = status;
                 changed = true;
             }
         }
+        if let Some(message) = &delta.message {
+            if tab.last_agent_message.as_deref() != Some(message.as_str()) {
+                tab.last_agent_message = Some(message.clone());
+                changed = true;
+            }
+            tab.last_agent_message_seq = Some(message_seq);
+        }
+        changed |= recompute_agent_summary(ws);
         changed
     }
 }
 
-/// 사라지는 탭이 워크스페이스 `agent_status` 의 출처였으면 상태를 Idle 로 되돌린다
-/// (18단계 계획 core 계약). 죽은 탭의 needsInput 이 사이드바에 남아 영원히 입력
-/// 대기로 보이는 것을 막는 규칙이라, 탭이 사라지는 세 경로(`CloseTab`·`ClosePane`
-/// 의 제거 탭 각각·`SessionExited`)가 전부 이 헬퍼를 거친다.
-/// 반환값은 상태가 바뀌었는가 (revision 판정용).
-pub(super) fn reset_agent_source(ws: &mut Workspace, tab: TabId) -> bool {
-    if ws.agent_status_source != Some(tab) {
-        return false;
+/// 워크스페이스의 저장 파생값(`agent_status`·`last_agent_message`)을 탭들에서 다시
+/// 계산한다. 반환값은 파생값이 바뀌었는가 (revision 판정용).
+///
+/// - 상태: 모든 탭 중 [`AgentStatus::urgency`] 최대.
+/// - 메시지(NeedsInput): NeedsInput 탭 중 메시지가 있는 탭의 가장 최근 것, 그런 탭이
+///   없으면 `None`. 기다리는 카드에 다른 탭의 문구("done" 등)를 빌려 싣지 않는다.
+/// - 메시지(Running·Idle): 전체 탭 중 가장 최근 것. Running 훅은 본문이 없어 탭의
+///   이전 문구를 지우지 못하므로, Running 탭으로 좁히면 그 탭이 전에 받은 문구가
+///   다른 탭의 더 새 알림을 가린다.
+/// - 최근 = `last_agent_message_seq`, 동률(같은 배치)은 작은 TabId. `last_activity_ms`
+///   는 제목·cwd 델타에도 갱신돼 "마지막으로 알린 탭"의 기준이 되지 못한다.
+pub(super) fn recompute_agent_summary(ws: &mut Workspace) -> bool {
+    let tabs = || ws.panes.values().flat_map(|pane| pane.tabs.iter());
+    let status = tabs()
+        .map(|tab| tab.agent_status)
+        .max_by_key(|status| status.urgency())
+        .unwrap_or_default();
+    let message = if status == AgentStatus::NeedsInput {
+        latest_message(tabs().filter(|tab| tab.agent_status == AgentStatus::NeedsInput))
+    } else {
+        latest_message(tabs())
+    };
+
+    let changed = ws.agent_status != status || ws.last_agent_message != message;
+    ws.agent_status = status;
+    ws.last_agent_message = message;
+    changed
+}
+
+fn latest_message<'a>(tabs: impl Iterator<Item = &'a Tab>) -> Option<String> {
+    tabs.filter(|tab| tab.last_agent_message.is_some())
+        .max_by_key(|tab| (tab.last_agent_message_seq, Reverse(tab.id)))
+        .and_then(|tab| tab.last_agent_message.clone())
+}
+
+/// 탭의 에이전트 상태를 비우고 워크스페이스를 재계산한다. 반환값은 탭이나 파생값이
+/// 바뀌었는가.
+pub(super) fn clear_tab_agent(ws: &mut Workspace, tab: TabId) -> bool {
+    let mut changed = false;
+    if let Some(target) = ws
+        .panes
+        .values_mut()
+        .flat_map(|pane| pane.tabs.iter_mut())
+        .find(|t| t.id == tab)
+    {
+        changed = target.agent_status != AgentStatus::Idle || target.last_agent_message.is_some();
+        target.agent_status = AgentStatus::Idle;
+        target.last_agent_message = None;
+        target.last_agent_message_seq = None;
     }
-    ws.agent_status_source = None;
-    ws.agent_status = AgentStatus::Idle;
-    true
+    recompute_agent_summary(ws) || changed
 }

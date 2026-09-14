@@ -16,6 +16,8 @@ function terminalTab(id: number, notification: NotificationState = "none"): Tab 
     kind: { type: "terminal", ptySession: id * 100, status: { type: "running" }, cwd: null },
     notification,
     lastActivityMs: null,
+    agentStatus: "idle",
+    lastAgentMessage: null,
   };
 }
 
@@ -26,6 +28,8 @@ function viewerTab(id: number): Tab {
     kind: { type: "textViewer", path: "/tmp/a.txt", scrollTop: 0 },
     notification: "none",
     lastActivityMs: null,
+    agentStatus: "idle",
+    lastAgentMessage: null,
   };
 }
 

@@ -10,133 +10,247 @@ import {
   Chime,
   detectNeedsInputOnset,
   installChimeUnlock,
+  needsInputToasts,
   needsInputToastTargets,
 } from "./chime";
-import type { AgentStatus, WorkspaceId } from "../../shared/types";
+import type { OnsetTab, OnsetWorkspace, TabOnset } from "./chime";
+import snapshotFixtureJson from "../../../../../fixtures/stage10-snapshot.json";
+import type { AgentStatus, StateSnapshot, TabId, WorkspaceId } from "../../shared/types";
 
-function statuses(entries: [WorkspaceId, AgentStatus][]): Map<WorkspaceId, AgentStatus> {
+function statuses(entries: [TabId, AgentStatus][]): Map<TabId, AgentStatus> {
   return new Map(entries);
+}
+
+function tab(
+  id: TabId,
+  agentStatus: AgentStatus,
+  lastAgentMessage: string | null = null,
+): OnsetTab {
+  return { id, title: `tab ${id}`, agentStatus, lastAgentMessage };
+}
+
+function ws(id: WorkspaceId, ...panes: OnsetTab[][]): OnsetWorkspace {
+  const record: Record<string, { tabs: OnsetTab[] }> = {};
+  panes.forEach((tabs, i) => {
+    record[String(id * 10 + i)] = { tabs };
+  });
+  return { id, name: `ws ${id}`, panes: record };
+}
+
+function onset(workspaceId: WorkspaceId, tabId: TabId): TabOnset {
+  return { workspaceId, tabId };
 }
 
 describe("detectNeedsInputOnset", () => {
   it("부팅 첫 스냅샷(prev=null)은 기준선으로만 쓰고 알리지 않는다", () => {
     // WebView 리로드 직후처럼 살아 있는 needsInput 이 첫 스냅샷에 실려 와도 조용하다.
     const out = detectNeedsInputOnset(null, [
-      { id: 1, agentStatus: "needsInput" },
-      { id: 2, agentStatus: "running" },
+      ws(1, [tab(11, "needsInput"), tab(12, "running")]),
+      ws(2, [tab(21, "idle")]),
     ]);
     expect(out.onsets).toEqual([]);
-    expect(out.next).toEqual(statuses([[1, "needsInput"], [2, "running"]]));
+    expect(out.next).toEqual(statuses([[11, "needsInput"], [12, "running"], [21, "idle"]]));
+  });
+
+  it("리로드 기준선 뒤에도 이미 기다리던 탭은 조용하고, 새로 기다리기 시작한 탭만 알린다", () => {
+    const baseline = detectNeedsInputOnset(null, [
+      ws(1, [tab(11, "needsInput"), tab(12, "running")]),
+    ]);
+    const same = detectNeedsInputOnset(baseline.next, [
+      ws(1, [tab(11, "needsInput"), tab(12, "running")]),
+    ]);
+    expect(same.onsets).toEqual([]);
+    const second = detectNeedsInputOnset(same.next, [
+      ws(1, [tab(11, "needsInput"), tab(12, "needsInput")]),
+    ]);
+    expect(second.onsets).toEqual([onset(1, 12)]);
   });
 
   it("idle·running → needsInput 은 onset 이다", () => {
-    const fromIdle = detectNeedsInputOnset(statuses([[1, "idle"]]), [
-      { id: 1, agentStatus: "needsInput" },
+    const fromIdle = detectNeedsInputOnset(statuses([[11, "idle"]]), [
+      ws(1, [tab(11, "needsInput")]),
     ]);
-    expect(fromIdle.onsets).toEqual([1]);
-    const fromRunning = detectNeedsInputOnset(statuses([[1, "running"]]), [
-      { id: 1, agentStatus: "needsInput" },
+    expect(fromIdle.onsets).toEqual([onset(1, 11)]);
+    const fromRunning = detectNeedsInputOnset(statuses([[11, "running"]]), [
+      ws(1, [tab(11, "needsInput")]),
     ]);
-    expect(fromRunning.onsets).toEqual([1]);
+    expect(fromRunning.onsets).toEqual([onset(1, 11)]);
   });
 
   it("같은 needsInput 이 유지되는 재렌더는 onset 이 아니다", () => {
-    const out = detectNeedsInputOnset(statuses([[1, "needsInput"]]), [
-      { id: 1, agentStatus: "needsInput" },
+    const out = detectNeedsInputOnset(statuses([[11, "needsInput"]]), [
+      ws(1, [tab(11, "needsInput")]),
     ]);
     expect(out.onsets).toEqual([]);
   });
 
   it("needsInput 이 아닌 쪽으로 가는 전환은 전부 onset 이 아니다", () => {
-    const toIdle = detectNeedsInputOnset(statuses([[1, "needsInput"]]), [
-      { id: 1, agentStatus: "idle" },
-    ]);
-    const toRunning = detectNeedsInputOnset(statuses([[1, "idle"]]), [
-      { id: 1, agentStatus: "running" },
-    ]);
+    const toIdle = detectNeedsInputOnset(statuses([[11, "needsInput"]]), [ws(1, [tab(11, "idle")])]);
+    const toRunning = detectNeedsInputOnset(statuses([[11, "idle"]]), [ws(1, [tab(11, "running")])]);
     expect(toIdle.onsets).toEqual([]);
     expect(toRunning.onsets).toEqual([]);
   });
 
-  it("신규 워크스페이스의 첫 상태가 needsInput 이면 onset 이다 (다른 첫 상태는 아니다)", () => {
-    const prev = statuses([[1, "idle"]]);
-    const added = detectNeedsInputOnset(prev, [
-      { id: 1, agentStatus: "idle" },
-      { id: 2, agentStatus: "needsInput" },
+  // 워크스페이스 파생 상태는 이미 needsInput 이라 변하지 않는다 — 탭 단위로 봐야 보이는 전이다.
+  it("이미 needsInput 인 워크스페이스의 두 번째 탭이 기다리기 시작하면 그 탭이 onset 이다", () => {
+    const prev = statuses([[11, "needsInput"], [12, "running"]]);
+    const out = detectNeedsInputOnset(prev, [
+      ws(1, [tab(11, "needsInput")], [tab(12, "needsInput")]),
     ]);
-    expect(added.onsets).toEqual([2]);
-    const addedRunning = detectNeedsInputOnset(prev, [
-      { id: 1, agentStatus: "idle" },
-      { id: 2, agentStatus: "running" },
+    expect(out.onsets).toEqual([onset(1, 12)]);
+  });
+
+  it("같은 워크스페이스의 두 탭이 함께 전이하면 둘 다 담긴다", () => {
+    const prev = statuses([[11, "running"], [12, "idle"]]);
+    const out = detectNeedsInputOnset(prev, [ws(1, [tab(11, "needsInput"), tab(12, "needsInput")])]);
+    expect(out.onsets).toEqual([onset(1, 11), onset(1, 12)]);
+  });
+
+  it("여러 워크스페이스가 함께 전이하면 워크스페이스·pane·탭 순서대로 담긴다", () => {
+    const prev = statuses([[11, "running"], [12, "idle"], [21, "idle"], [31, "idle"]]);
+    const out = detectNeedsInputOnset(prev, [
+      ws(2, [tab(21, "needsInput")]),
+      ws(1, [tab(11, "needsInput")], [tab(12, "needsInput")]),
+      ws(3, [tab(31, "running")]),
     ]);
+    expect(out.onsets).toEqual([onset(2, 21), onset(1, 11), onset(1, 12)]);
+  });
+
+  it("신규 탭의 첫 상태가 needsInput 이면 onset 이다 (다른 첫 상태는 아니다)", () => {
+    const prev = statuses([[11, "idle"]]);
+    const added = detectNeedsInputOnset(prev, [ws(1, [tab(11, "idle"), tab(12, "needsInput")])]);
+    expect(added.onsets).toEqual([onset(1, 12)]);
+    const addedRunning = detectNeedsInputOnset(prev, [ws(1, [tab(11, "idle"), tab(12, "running")])]);
     expect(addedRunning.onsets).toEqual([]);
   });
 
-  it("동시에 여러 워크스페이스가 전이하면 전부 입력 순서대로 담긴다", () => {
-    const out = detectNeedsInputOnset(statuses([[1, "running"], [2, "idle"]]), [
-      { id: 1, agentStatus: "needsInput" },
-      { id: 2, agentStatus: "needsInput" },
-    ]);
-    // 토스트는 "어느 워크스페이스가 기다리는가"가 내용이라 합칠 수 없다 — 전이한
-    // 워크스페이스가 하나도 빠지지 않고 순서 그대로 온다.
-    expect(out.onsets).toEqual([1, 2]);
-  });
-
-  it("사라진 워크스페이스는 기준선에서 빠지고, 다시 나타나면 신규로 취급된다", () => {
-    const closed = detectNeedsInputOnset(statuses([[1, "needsInput"], [2, "idle"]]), [
-      { id: 2, agentStatus: "idle" },
+  it("사라진 탭은 기준선에서 빠지고, 같은 id 가 다시 나타나면 신규로 취급된다", () => {
+    const closed = detectNeedsInputOnset(statuses([[11, "needsInput"], [12, "idle"]]), [
+      ws(1, [tab(12, "idle")]),
     ]);
     expect(closed.onsets).toEqual([]);
-    expect(closed.next).toEqual(statuses([[2, "idle"]]));
+    expect(closed.next).toEqual(statuses([[12, "idle"]]));
     const reappeared = detectNeedsInputOnset(closed.next, [
-      { id: 1, agentStatus: "needsInput" },
-      { id: 2, agentStatus: "idle" },
+      ws(1, [tab(11, "needsInput"), tab(12, "idle")]),
     ]);
-    expect(reappeared.onsets).toEqual([1]);
+    expect(reappeared.onsets).toEqual([onset(1, 11)]);
+  });
+
+  it("needsInput 에서 벗어났다가 다시 들어오면 다시 onset 이다", () => {
+    const left = detectNeedsInputOnset(statuses([[11, "needsInput"]]), [
+      ws(1, [tab(11, "running")]),
+    ]);
+    expect(left.onsets).toEqual([]);
+    const reentered = detectNeedsInputOnset(left.next, [ws(1, [tab(11, "needsInput")])]);
+    expect(reentered.onsets).toEqual([onset(1, 11)]);
   });
 
   it("워크스페이스가 하나도 없으면 onset 이 없고 기준선은 빈 맵이다", () => {
-    const out = detectNeedsInputOnset(statuses([[1, "needsInput"]]), []);
+    const out = detectNeedsInputOnset(statuses([[11, "needsInput"]]), []);
     expect(out.onsets).toEqual([]);
     expect(out.next.size).toBe(0);
   });
 
   it("결과에는 onsets·next 만 있다 (v0.3.7 계약 변경 — chime 파생 필드 제거)", () => {
-    const out = detectNeedsInputOnset(statuses([[1, "idle"]]), [
-      { id: 1, agentStatus: "needsInput" },
-    ]);
+    const out = detectNeedsInputOnset(statuses([[11, "idle"]]), [ws(1, [tab(11, "needsInput")])]);
     expect(Object.keys(out).sort()).toEqual(["next", "onsets"]);
+  });
+
+  it("실제 스냅샷 fixture 의 모든 pane·탭을 훑는다", () => {
+    const snapshot = snapshotFixtureJson as unknown as StateSnapshot;
+    const allIdle = new Map<TabId, AgentStatus>();
+    for (const w of snapshot.state.workspaces) {
+      for (const p of Object.values(w.panes)) for (const t of p.tabs) allIdle.set(t.id, "idle");
+    }
+    const out = detectNeedsInputOnset(allIdle, snapshot.state.workspaces);
+    expect(out.onsets).toEqual([onset(10, 15)]);
+    const byId = (a: TabId, b: TabId): number => a - b;
+    expect([...out.next.keys()].sort(byId)).toEqual([...allIdle.keys()].sort(byId));
   });
 });
 
 describe("needsInputToastTargets", () => {
-  it("포커스 중인 창의 활성 워크스페이스만 조용하다", () => {
-    // 사용자가 지금 그 화면을 보고 있다 — 사이드바 강조로 충분하다.
-    expect(needsInputToastTargets([7], 7, true)).toEqual([]);
+  it("포커스 중인 창의 활성 워크스페이스는 어느 탭이든 조용하다", () => {
+    // 사용자가 지금 그 화면을 보고 있다 — 가려진 탭은 탭·pane 배지가 말한다.
+    expect(needsInputToastTargets([onset(7, 71), onset(7, 72)], 7, true)).toEqual([]);
   });
 
   it("포커스 중이라도 비활성 워크스페이스는 알린다", () => {
     // v0.3.6 까지 놓치던 경우: 창은 보고 있지만 그 워크스페이스는 화면에 없다.
-    expect(needsInputToastTargets([8], 7, true)).toEqual([8]);
+    expect(needsInputToastTargets([onset(8, 81)], 7, true)).toEqual([onset(8, 81)]);
   });
 
   it("비포커스면 활성 워크스페이스라도 알린다", () => {
-    expect(needsInputToastTargets([7], 7, false)).toEqual([7]);
-    expect(needsInputToastTargets([8], 7, false)).toEqual([8]);
+    expect(needsInputToastTargets([onset(7, 71)], 7, false)).toEqual([onset(7, 71)]);
+    expect(needsInputToastTargets([onset(8, 81)], 7, false)).toEqual([onset(8, 81)]);
   });
 
-  it("여러 전이 중 활성 워크스페이스 하나만 빠지고 순서는 유지된다", () => {
-    expect(needsInputToastTargets([5, 7, 9], 7, true)).toEqual([5, 9]);
-    expect(needsInputToastTargets([5, 7, 9], 7, false)).toEqual([5, 7, 9]);
+  it("여러 전이 중 활성 워크스페이스의 것만 빠지고 순서는 유지된다", () => {
+    const onsets = [onset(5, 51), onset(7, 71), onset(9, 91), onset(7, 72)];
+    expect(needsInputToastTargets(onsets, 7, true)).toEqual([onset(5, 51), onset(9, 91)]);
+    expect(needsInputToastTargets(onsets, 7, false)).toEqual(onsets);
   });
 
-  it("활성 워크스페이스가 없으면(null) 억제 조건이 성립하지 않는다", () => {
-    expect(needsInputToastTargets([5], null, true)).toEqual([5]);
+  it("활성 워크스페이스가 없으면(null) 포커스와 무관하게 억제 조건이 성립하지 않는다", () => {
+    expect(needsInputToastTargets([onset(5, 51)], null, true)).toEqual([onset(5, 51)]);
+    expect(needsInputToastTargets([onset(5, 51)], null, false)).toEqual([onset(5, 51)]);
   });
 
   it("전이가 없으면 대상도 없다", () => {
     expect(needsInputToastTargets([], 7, true)).toEqual([]);
     expect(needsInputToastTargets([], 7, false)).toEqual([]);
+  });
+});
+
+describe("needsInputToasts", () => {
+  it("같은 워크스페이스 두 탭의 동시 전이는 토스트 2개이고 본문은 각 탭의 메시지다", () => {
+    const workspaces = [
+      ws(1, [
+        tab(11, "needsInput", "approve rm -rf build?"),
+        tab(12, "needsInput", "pick a branch"),
+      ]),
+    ];
+    const prev = statuses([[11, "running"], [12, "running"]]);
+    const { onsets } = detectNeedsInputOnset(prev, workspaces);
+    const targets = needsInputToastTargets(onsets, 2, true);
+
+    expect(needsInputToasts(targets, workspaces)).toEqual([
+      { title: "mast — ws 1 · tab 11", body: "approve rm -rf build?", logLabel: "ws 1 #11" },
+      { title: "mast — ws 1 · tab 12", body: "pick a branch", logLabel: "ws 1 #12" },
+    ]);
+  });
+
+  it("본문은 메시지 첫 줄이고, 없거나 비면 기본 문구다 — 워크스페이스 메시지로 대신하지 않는다", () => {
+    const withWorkspaceMessage = {
+      ...ws(1, [
+        tab(11, "needsInput", "  first line  \nsecond"),
+        tab(12, "needsInput"),
+        tab(13, "needsInput", " \n"),
+      ]),
+      lastAgentMessage: "a question from another tab",
+    };
+    const toasts = needsInputToasts(
+      [onset(1, 11), onset(1, 12), onset(1, 13)],
+      [withWorkspaceMessage],
+    );
+    expect(toasts.map((t) => t.body)).toEqual([
+      "first line",
+      "agent needs your input",
+      "agent needs your input",
+    ]);
+  });
+
+  it("로그 라벨에는 탭 제목이 실리지 않는다", () => {
+    const titled = { ...tab(31, "needsInput"), title: "fix /secret/path" };
+    const workspaces = [{ id: 3, name: "backend", panes: { "30": { tabs: [titled] } } }];
+    const [toast] = needsInputToasts([onset(3, 31)], workspaces);
+    expect(toast.title).toBe("mast — backend · fix /secret/path");
+    expect(toast.logLabel).toBe("backend #31");
+  });
+
+  it("스냅샷에서 찾을 수 없는 대상은 건너뛴다", () => {
+    const workspaces = [ws(1, [tab(11, "needsInput")])];
+    expect(needsInputToasts([onset(1, 99), onset(9, 11)], workspaces)).toEqual([]);
   });
 });
 
