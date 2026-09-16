@@ -32,7 +32,7 @@ afterEach(() => {
   else process.env.HOME = originalHome;
 });
 
-function runSetup(root: string, source = setup) {
+function runSetup(root: string, source = setup, xdgConfigHome = join(root, "home", ".config")) {
   const home = join(root, "home");
   mkdirSync(join(home, ".mast", "bin"), { recursive: true });
   const binary = join(home, ".opencode", "bin", "opencode");
@@ -41,7 +41,7 @@ function runSetup(root: string, source = setup) {
   chmodSync(binary, 0o700);
   const start = source.indexOf("# OpenCode 설치기의 PATH 줄이");
   if (start < 0) throw new Error("OpenCode setup block missing");
-  const env = { ...process.env, HOME: home, MAST_HOME: join(home, ".mast"), LOG: join(home, ".mast", "setup.log"), MARKER: join(home, ".mast", ".setup-v14") };
+  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: xdgConfigHome, MAST_HOME: join(home, ".mast"), LOG: join(home, ".mast", "setup.log"), MARKER: join(home, ".mast", ".setup-v14") };
   const result = spawnSync("bash", ["--noprofile", "--norc", "-s"], {
     input: `set -u\nlog() { printf '%s\\n' \"$*\" >> \"$LOG\"; }\n${source.slice(start)}`, env, encoding: "utf8", timeout: 5000,
   });
@@ -134,41 +134,27 @@ describe("OpenCode plugin and setup", () => {
   it("upgrades matching mast-owned bytes and respects XDG_CONFIG_HOME", () => {
     const root = fixture();
     const xdg = join(root, "custom config");
-    const prior = process.env.XDG_CONFIG_HOME;
-    process.env.XDG_CONFIG_HOME = xdg;
-    try {
-      const first = runSetup(root);
-      expect(first.status, first.stderr).toBe(0);
-      const target = join(xdg, "opencode/plugins/mast.js");
-      const upgraded = setup.replace("opencode idle", "opencode complete");
-      const second = runSetup(root, upgraded);
-      expect(second.status, second.stderr).toBe(0);
-      expect(readFileSync(target, "utf8")).toContain("opencode complete");
-      writeFileSync(target, "// user's edited plugin\n");
-      const third = runSetup(root);
-      expect(third.status, third.stderr).toBe(0);
-      expect(readFileSync(target, "utf8")).toBe("// user's edited plugin\n");
-    } finally {
-      if (prior === undefined) delete process.env.XDG_CONFIG_HOME;
-      else process.env.XDG_CONFIG_HOME = prior;
-    }
+    const first = runSetup(root, setup, xdg);
+    expect(first.status, first.stderr).toBe(0);
+    const target = join(xdg, "opencode/plugins/mast.js");
+    const upgraded = setup.replace("opencode idle", "opencode complete");
+    const second = runSetup(root, upgraded, xdg);
+    expect(second.status, second.stderr).toBe(0);
+    expect(readFileSync(target, "utf8")).toContain("opencode complete");
+    writeFileSync(target, "// user's edited plugin\n");
+    const third = runSetup(root, setup, xdg);
+    expect(third.status, third.stderr).toBe(0);
+    expect(readFileSync(target, "utf8")).toBe("// user's edited plugin\n");
   });
 
   it("leaves the setup marker absent when plugin installation fails", () => {
     const root = fixture();
     const blocked = join(root, "not a directory");
     writeFileSync(blocked, "occupied");
-    const prior = process.env.XDG_CONFIG_HOME;
-    process.env.XDG_CONFIG_HOME = blocked;
-    try {
-      const result = runSetup(root);
-      expect(result.status).toBe(1);
-      expect(existsSync(join(result.home, ".mast/.setup-v14"))).toBe(false);
-      expect(result.stderr).toContain("OpenCode plugin installation failed");
-    } finally {
-      if (prior === undefined) delete process.env.XDG_CONFIG_HOME;
-      else process.env.XDG_CONFIG_HOME = prior;
-    }
+    const result = runSetup(root, setup, blocked);
+    expect(result.status).toBe(1);
+    expect(existsSync(join(result.home, ".mast/.setup-v14"))).toBe(false);
+    expect(result.stderr).toContain("OpenCode plugin installation failed");
   });
 
   it("records a root before idle and ignores child and unknown sessions", async () => {
