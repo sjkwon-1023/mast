@@ -33,7 +33,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 13;
+const SETUP_VERSION: u32 = 14;
 
 /// 프로세스 수명 캐시 — **해석된** distro 이름 기준으로 앱 실행당 1회만 스폰한다.
 /// 기본 distro(None)는 claim 전에 실제 이름으로 해석된다:
@@ -130,6 +130,7 @@ fn run(distro: Option<&str>) -> Result<(), String> {
     let script = SETUP_SCRIPT
         .replace("@SETUP_VERSION@", &SETUP_VERSION.to_string())
         .replace("@CONFIG_HELPER@", include_str!("../../../../scripts/wsl/mast-config.py"))
+        .replace("@OPENCODE_PLUGIN@", include_str!("../../../../scripts/wsl/mast-opencode-plugin.js").trim_end_matches('\n'))
         .replace("\r\n", "\n");
     {
         let mut stdin = child
@@ -1394,6 +1395,73 @@ else
       || { rm -f "$tmp_agents"; echo "[mast] setup: cannot write $AGENTS_FILE" >&2; exit 1; }
     log "codex agents: managed block added to $AGENTS_FILE"
   fi
+fi
+
+# OpenCode 설치기의 PATH 줄이 ~/.bashrc의 비대화형 가드 뒤에 있으므로
+# 비대화형 setup에서 command -v만 보면 설치된 CLI도 놓친다.
+if [ -x "$HOME/.opencode/bin/opencode" ] || command -v opencode > /dev/null 2>&1; then
+  cat > "$MAST_HOME/bin/mast-opencode-plugin.js" <<'MAST_OPENCODE_PLUGIN_EOF'
+@OPENCODE_PLUGIN@
+MAST_OPENCODE_PLUGIN_EOF
+  if python3 - "$MAST_HOME/bin/mast-opencode-plugin.js" "$MAST_HOME/opencode-plugin-owner.json" <<'MAST_OPENCODE_INSTALL_EOF' >> "$LOG" 2>&1
+import hashlib
+import json
+import os
+import sys
+
+source, owner_file = sys.argv[1:]
+config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.environ["HOME"], ".config")
+target = os.path.join(config_home, "opencode", "plugins", "mast.js")
+data = open(source, "rb").read()
+digest = hashlib.sha256(data).hexdigest()
+
+owner = {}
+try:
+    with open(owner_file, encoding="utf-8") as handle:
+        owner = json.load(handle)
+except FileNotFoundError:
+    pass
+
+if os.path.lexists(target):
+    if os.path.islink(target) or not os.path.isfile(target):
+        print("opencode: existing plugin is not a regular file; left untouched: %s" % target)
+        raise SystemExit(0)
+    current = hashlib.sha256(open(target, "rb").read()).hexdigest()
+    if owner.get("path") != target or current not in owner.get("hashes", []):
+        print("opencode: existing plugin is not mast-owned; left untouched: %s" % target)
+        raise SystemExit(0)
+    if current == digest:
+        print("opencode: managed plugin already current: %s" % target)
+        raise SystemExit(0)
+
+os.makedirs(os.path.dirname(target), exist_ok=True)
+# 두 파일의 교체 사이에 종료돼도 재시도할 수 있도록 이전/새 내용의 해시를 먼저 기록한다.
+hashes = [digest]
+if os.path.isfile(target):
+    hashes.append(hashlib.sha256(open(target, "rb").read()).hexdigest())
+owner_tmp = owner_file + ".tmp"
+with open(owner_tmp, "w", encoding="utf-8") as handle:
+    json.dump({"path": target, "hashes": hashes}, handle)
+os.replace(owner_tmp, owner_file)
+
+plugin_tmp = target + ".mast-tmp"
+with open(plugin_tmp, "wb") as handle:
+    handle.write(data)
+if os.path.lexists(target):
+    os.replace(plugin_tmp, target)
+else:
+    os.link(plugin_tmp, target)
+    os.unlink(plugin_tmp)
+print("opencode: managed plugin installed: %s" % target)
+MAST_OPENCODE_INSTALL_EOF
+  then
+    log "opencode: plugin step done"
+  else
+    echo "[mast] setup: OpenCode plugin installation failed; see ~/.mast/setup.log" >&2
+    exit 1
+  fi
+else
+  log "opencode: binary not found; skipped"
 fi
 
 # --- 7. marker --------------------------------------------------------------------------

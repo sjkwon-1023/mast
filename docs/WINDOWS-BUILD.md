@@ -2727,3 +2727,31 @@ checks remain pending; compilation and automated tests do not replace field veri
 3. Switch workspaces and reload the WebView. The footer must survive card reconciliation
    and read the process cache without issuing another network check. A full app restart
    permits one new check.
+
+## 16. OpenCode default TUI integration (setup v14 / ADR-0027)
+
+These field checks are pending. Linux automated gates test the generated plugin and
+shell wrapper, but do not verify a live Windows mast tab or a PC restart.
+
+1. Launch mast after the setup v14 change in a distro with OpenCode 1.18.31. Confirm
+   `~/.mast/.setup-v14`, exactly one global `mast.js` under the effective
+   `$XDG_CONFIG_HOME/opencode/plugins/` (default `~/.config/opencode/plugins/`), and a
+   new OpenCode process started after provisioning. Check `~/.mast/setup.log` for
+   conflicts. A pre-existing `mast.js` must remain byte-for-byte unchanged.
+2. In two mast tabs, start the default OpenCode TUI in one. Ask it to work, request a
+   permission, use a question prompt, answer both, and let the root session finish.
+   Confirm the owning tab moves through running, needs input with a toast, and idle;
+   the other tab must not receive these statuses. Check for damaged TUI frames.
+3. Start a fresh root session and, before its first turn finishes, confirm
+   `~/.mast/resume/tab-$MAST_TAB` contains `opencode --session <root-id>` and an epoch
+   line. Run a task subagent and confirm its child id never replaces the root id.
+4. Restart mast while the root turn is still running, then repeat after a PC reboot.
+   The restored tab must offer a dim resume line. One Up arrow must recall the exact
+   `opencode --session <root-id>` command without running it; Enter must resume the
+   session. A tab that never ran an agent must have no new hint.
+5. Change the tab's cwd after the OpenCode session was created, restart, and try the
+   same command. Record whether OpenCode finds the session across cwd boundaries;
+   failure here is an unresolved R2 limitation and must not be called a pass.
+6. Edit the managed plugin, rerun provisioning with a new setup marker, and confirm
+   the edited bytes remain untouched with a conflict in the setup log. Restore a
+   matching managed version and confirm a later setup update can replace it.

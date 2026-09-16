@@ -515,10 +515,10 @@ fi
 ## Resume hint — `~/.mast/resume/tab-<id>`
 
 A restart respawns every terminal tab as a **fresh login shell**: the layout comes back, but
-the agent session that was running in the tab does not, and its id is nowhere on screen. Both
-agents hand mast an id when they report a turn — Claude Code's hook stdin JSON carries
-`.session_id`, Codex's notify payload carries `thread-id` — so each records it per tab and the
-next shell in that tab offers it back.
+the agent session that was running in the tab does not, and its id is nowhere on screen.
+Claude Code's hook stdin JSON carries `.session_id`, Codex's notify payload carries
+`thread-id`, and the OpenCode plugin sees session events. Each records a confirmed session
+id per tab so the next shell in that tab offers it back.
 
 **This is a hint, never an action.** The recorded command is put in front of the user in two
 places and run by neither of them.
@@ -526,10 +526,10 @@ places and run by neither of them.
 | Field | Contract |
 |---|---|
 | Path | `~/.mast/resume/tab-<id>`, where `<id>` is the writer's `MAST_TAB` — the tab's stable id, which survives a restart, so the file and the tab that gets the hint are the same tab. |
-| Line 1 | The resume command: `claude --resume 11111111-2222-3333-4444-555555555555` or `codex resume 019ff5e6-d08e-7013-9cec-105030994d8d`. The reader takes **only this line**. |
+| Line 1 | The resume command: `claude --resume <id>`, `codex resume <id>`, or `opencode --session <id>`. The reader takes **only this line**. |
 | Line 2 | Epoch seconds at the time of writing. Recorded for diagnosis; **nothing reads it** — see freshness below. |
-| Written when | An invocation has both a non-empty `MAST_TAB` and an id matching `^[A-Za-z0-9_-]+$` — Claude Code's `.session_id`, Codex's `thread-id` (`thread_id` is accepted too). Codex additionally requires matching saved top-level session metadata, as described below. |
-| Not written when | The tab has no `MAST_TAB` (a tab without per-tab history), `jq` is missing, the payload does not parse or carries no id, or the id is not a plain token. For Codex, also when saved top-level metadata cannot be confirmed, including temporary threads and subagents. For Claude Code, also when stdin is a TTY (the script run by hand, so no JSON is read at all). |
+| Written when | An invocation has both a non-empty `MAST_TAB` and an id matching `^[A-Za-z0-9_-]+$` — Claude Code's `.session_id`, Codex's `thread-id` (`thread_id` is accepted too), or OpenCode's confirmed root session id. Codex additionally requires matching saved top-level session metadata. OpenCode records a root at creation or its first observed activity, before idle. |
+| Not written when | The tab has no `MAST_TAB`, the id is not a plain token, or root status cannot be confirmed. Claude Code additionally needs parsable hook JSON and `jq`; Codex also rejects temporary threads and subagents; OpenCode rejects sessions with `parentID` and preserves the prior hint when the session lookup fails. |
 | Atomicity | Written to `<path>.tmp.<pid>` and `mv`d into place, so a concurrent reader sees either the old file or the new one, never a half-written line. The pid suffix keeps two writers firing at once in the same tab from sharing a temp name. |
 | Failure | Swallowed. Every step is guarded and the writer still exits 0 — a resume hint must never cost a notification, let alone the session. |
 
@@ -553,7 +553,8 @@ cannot swallow is the hint `printf` failing to write to the pane's own tty, whic
 state a usable tab is in.)
 
 **Both sides check the shape.** The writer guards the id's charset, and the reader accepts
-only two exact forms — `claude --resume <token>` and `codex resume <token>`, where `<token>`
+only three exact forms — `claude --resume <token>`, `codex resume <token>`, and
+`opencode --session <token>`, where `<token>`
 is `[A-Za-z0-9_-]+` — dropping the hint silently otherwise, so a substituted file cannot
 become a surface for luring an ↑+Enter into running something else. That reader list is a
 **whitelist**: wiring a third agent means adding its form there as well, or its hint is
@@ -615,6 +616,34 @@ The change prevents future overwrites; it does not repair a hint already poisone
 installation. Complete one turn in the intended session after setup v12, then restart.
 The Linux regression `apps/mast/tests/codex-resume.test.ts` executes the installed-script
 heredoc and the actual spawn-wrapper history path with isolated fixture homes.
+
+### The OpenCode half — global `mast.js` plugin
+
+Setup v14 installs one global plugin at `$XDG_CONFIG_HOME/opencode/plugins/mast.js` (or
+`~/.config/opencode/plugins/mast.js` when `XDG_CONFIG_HOME` is unset). It detects the
+standard curl installation at `~/.opencode/bin/opencode` even when the non-interactive
+setup shell cannot see the installer's interactive PATH export. It does not install a
+second copy in a project or `~/.opencode`. The canonical plugin source is
+`scripts/wsl/mast-opencode-plugin.js`; provisioning embeds that source. A pre-existing
+`mast.js` without mast's matching ownership digest is left untouched. An edited managed
+file is likewise preserved. Setup logs the conflict in `~/.mast/setup.log`.
+
+For the default OpenCode 1.18.31 TUI, `session.status` busy/retry maps to
+`mast:running`, `permission.asked` and `question.asked` map to `mast:needsInput`,
+replies map back to `mast:running`, and root `session.idle` maps to `mast:idle`.
+Repeated busy events are coalesced. Child idle does not idle the tab or replace the
+resume hint. The plugin delegates OSC emission to the existing `mast-notify.sh` with
+stdin closed and Bun shell echo disabled, so it neither waits for TUI input nor prints
+shell output into the TUI. The plugin event callback does not throw into OpenCode's bus.
+
+The hint is written at the first confirmed root event, so a restart during the first
+turn can offer `opencode --session <id>`. The plugin checks `parentID` on session
+metadata; when it first sees an existing session through a status event, it queries
+that session through OpenCode's client before writing. The reader's whitelist accepts
+only the exact `opencode --session <token>` form. Reopening an OpenCode session from a
+different cwd and notification delivery through a real Windows mast tab remain field
+checks in `docs/WINDOWS-BUILD.md`. `--pure`, server modes (`serve`, `web`, `attach`),
+`opencode2`, and CLI guidance for OpenCode agents are outside this integration.
 
 The control-character scrub in step 3 is load-bearing, not hygiene: unlike Claude Code's
 `.message`, which is a canned string, `last-assistant-message` is **model output**, and it is
