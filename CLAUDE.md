@@ -364,14 +364,11 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 
 #### Agent integration — hooks, notify, resume, the `mast` CLI
 
-- **Agent coverage beyond Claude Code and Codex — Antigravity CLI and opencode** (user
-  request 2026-08-15, not started). Both would reuse the `mast:running` /
-  `mast:needsInput` / `mast:idle` tokens and `mast-notify.sh` **unchanged**: nothing in
-  `mast-core` (`osc.rs`, `notify.rs`) or the front-end (`features/notifications/chime.ts`, `app/main.ts`) is
-  agent-specific. The work is `provision.rs` — the single source of truth for every notify
-  script and every auto-wiring block — plus a `SETUP_VERSION` bump, a resume-command entry in
-  `host.rs::bash_argv`'s whitelist (today `claude --resume` and `codex resume` only), and a
-  matching section in `scripts/wsl/claude-hook-example.md`. What is *not* settled, per agent:
+- **Agent coverage beyond Claude Code and Codex** (user request 2026-08-15).
+  OpenCode's default TUI integration is recorded below; Antigravity CLI remains open.
+  All agents reuse the `mast:running` / `mast:needsInput` / `mast:idle` tokens and
+  `mast-notify.sh` unchanged. Neither `mast-core` nor the frontend contains
+  agent-specific routing.
   - **Antigravity**: only the **CLI** is in scope. The IDE's agents do not run in a mast
     tab, so there is no pts to emit into and no tab to attribute a toast to. The CLI's hooks
     are near-isomorphic to Claude Code's — `hooks.json` under `.agents/` per workspace or
@@ -387,20 +384,16 @@ it carries, so read it before reopening the same question. Nothing here blocks t
     (a field report of `Stop`/`PostToolUse` never firing on IDE 1.107.0, later addressed by
     running hooks.json hooks ahead of the built-in termination checks), so a field check must
     name the CLI version it passed on.
-  - **opencode**: it has **no shell-command hook at all** — extension is TypeScript/JS
-    plugins under `.opencode/plugins/` (project) or `~/.config/opencode/plugins/` (global), a
-    default-exported async function returning an event-hook object. The mapping is the better
-    of the two (`session.idle → mast:idle`, `permission.asked → mast:needsInput`,
-    `permission.replied → mast:running` covers all three states where Antigravity covers
-    one), and the plugin context hands over Bun's `$` shell, so it can call
-    `~/.mast/bin/mast-notify.sh` verbatim — no third notify script. The blocker is **tty
-    attribution**: opencode plugins run in the server process with no controlling terminal,
-    so `mast_emit` would always fall through to its ancestor-pts walk, and it is unverified
-    whether that server sits in the tab's ancestor chain at all — or whether one server is
-    shared across tabs, in which case a needsInput toast lands on the wrong tab or nowhere.
-    Answer that before writing any provisioning. Writing a plugin file is also a different
-    discipline from the "never rewrite an existing key" rule the Claude/Codex halves follow:
-    a plugin file we create is ours to upgrade, one that already exists is not.
+  - **OpenCode default TUI status and resume hints — landed in this branch** (setup v14;
+    [ADR-0027](docs/adr/0027-opencode-plugin-status-and-resume.md)). OpenCode 1.18.31
+    runs its default TUI server and plugin as a Worker in the tab process, with the tab's
+    pts and `MAST_TAB` inherited. A single global plugin emits the existing three mast
+    statuses through `mast-notify.sh` and records confirmed root session IDs for the
+    restart shell's `opencode --session <id>` hint. The installer owns only plugin bytes
+    matching its recorded digest; an existing user file is left untouched. The Windows
+    TUI, toast, and restart checks remain pending in `docs/WINDOWS-BUILD.md`. `--pure`,
+    server modes, the beta `opencode2` binary, and an agent-facing mast CLI guide remain
+    outside this integration.
 
 - **Agent-facing pane-send channel** — **landed 2026-08-11 as a shell CLI**, not MCP (user
   decision: MCP is heavy, and it is a v2 browser-surface question instead). `mast send`

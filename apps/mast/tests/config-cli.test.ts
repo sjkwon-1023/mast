@@ -343,8 +343,9 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
     const source = readFileSync(resolve(dirname(HELPER), "../../apps/mast/src-tauri/src/provision.rs"), "utf8");
     const raw = source.split('const SETUP_SCRIPT: &str = r###"')[1]?.split('"###;')[0];
     expect(raw).toBeDefined();
-    const expanded = raw!.replaceAll("@SETUP_VERSION@", "13")
-      .replace("@CONFIG_HELPER@", () => readFileSync(HELPER, "utf8"));
+    const expanded = raw!.replaceAll("@SETUP_VERSION@", "14")
+      .replace("@CONFIG_HELPER@", () => readFileSync(HELPER, "utf8"))
+      .replace("@OPENCODE_PLUGIN@", () => readFileSync(resolve(dirname(HELPER), "mast-opencode-plugin.js"), "utf8").trimEnd());
     expect(spawnSync("bash", ["-n", "-c", expanded], { encoding: "utf8", timeout: 5_000 }).status).toBe(0);
     const install = expanded.slice(expanded.indexOf('cat > "$CLI.tmp"'), expanded.indexOf("# --- 3. mast-send.sh"));
     const home = dirname(fixture());
