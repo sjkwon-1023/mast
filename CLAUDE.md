@@ -573,6 +573,16 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   **Still open**: a fixed-grid mode with horizontal scroll/pinch zoom, if reading turns out
   not to be the main use.
 
+- **needsInput dot on the phone list — landed 2026-09-17** (user request). The phone has no
+  alarm, so the workspace list's tab rows now carry a warn `●` on the tab waiting for input
+  (the workspace card's `needs input` badge stays as the workspace-level signal). It derives
+  the target from the current workspace summary — `agentStatus` + `agentStatusSource` — so it
+  is the one-tab approximation: two waiting tabs in one workspace show only the latest one.
+  When tab-level `agentStatus` lands (agent-state-signals) the derivation becomes that field.
+  `signatureOf` includes the source id, or a stale dot would stay on the old row when the
+  waiting tab changes without a status change. Verification: WINDOWS-BUILD §10 "Phone
+  needsInput dot" — field-only (a real waiting agent on a real phone).
+
 - **Image attach from the phone — backlog (user decision 2026-09-08)**. The phone composer is a
   plain textarea, so a pasted image goes nowhere, and no channel exists to hand one to the agent in
   a tab. Both agents take an image *file path* in the prompt (Claude Code's drag-and-drop path

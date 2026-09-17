@@ -96,13 +96,19 @@ export class ListView {
       card.append(message);
     }
 
+    // 응답 대기 점은 이 워크스페이스가 needsInput 일 때 **출처 탭 하나**에만 붙는다.
+    // 상태가 needsInput 이 아니면 출처가 남아 있어도 그리지 않는다 — 탭 단위 상태가
+    // 없는 현 모델의 근사라, 한 워크스페이스에서 둘이 기다리면 마지막 탭만 표시된다.
+    // 탭별 agentStatus 가 모델에 들어오면(agent-state-signals 계획) 그 필드로 바꾼다.
+    // OSC 는 PTY 세션에서만 오므로 출처는 항상 터미널 탭이다.
+    const waitingTab = ws.agentStatus === "needsInput" ? ws.agentStatusSource ?? null : null;
     for (const pane of panesInLayoutOrder(ws)) {
-      card.append(this.paneEl(pane));
+      card.append(this.paneEl(pane, waitingTab));
     }
     return card;
   }
 
-  private paneEl(pane: Pane): HTMLElement {
+  private paneEl(pane: Pane, waitingTab: TabId | null): HTMLElement {
     const block = document.createElement("div");
     block.className = "pane";
     for (const tab of pane.tabs) {
@@ -117,6 +123,7 @@ export class ListView {
       const row = document.createElement("button");
       row.type = "button";
       row.className = "tab";
+      if (tab.id === waitingTab) row.append(needsInputEl());
       row.append(tabTitleEl(tab.title), tabDetailEl(label));
       row.addEventListener("click", () => this.options.onOpenTab(tab.id, tab.title));
       block.append(row);
@@ -129,6 +136,16 @@ export class ListView {
     }
     return block;
   }
+}
+
+/** 응답 대기 점 — 데스크톱 탭 배지와 같은 클래스 이름·색 계열이라 두 표면이 같은
+ *  뜻으로 읽힌다 (데스크톱은 같은 자리에 "!" 배지, 폰은 폭이 좁아 점). */
+function needsInputEl(): HTMLElement {
+  const el = document.createElement("span");
+  el.className = "tab-needs-input";
+  el.textContent = "●";
+  el.title = "Needs input";
+  return el;
 }
 
 function tabTitleEl(text: string): HTMLElement {
@@ -190,6 +207,9 @@ function signatureOf(snapshot: StateSnapshot): string {
       ws.id,
       ws.name,
       ws.agentStatus,
+      // 출처 탭이 바뀌면 점이 옮겨간다 — 상태가 needsInput 인 채로 두 번째 탭이
+      // 기다리기 시작하는 경우가 있으므로 서명에 반드시 포함한다.
+      ws.agentStatusSource ?? null,
       ws.lastAgentMessage,
       panesInLayoutOrder(ws).map((pane) =>
         pane.tabs.map((tab) => [tab.id, tab.title, tabDetail(tab.kind)]),

@@ -2368,6 +2368,21 @@ src/remote`). Contract: [ADR-0016](adr/0016-remote-surface-over-lan.md) amendmen
    phone flips to the *Desktop* chip after its next poll (or shows "The shell restarted"), and
    a *Mobile* press claims the new session.
 
+### Phone needsInput dot — verification
+
+Phone page only; the state JSON is unchanged. The dev host locks the judgment and the DOM
+handling (`npx vitest run src/remote/list-view.test.ts`); what only the field can answer is
+whether a real waiting agent shows up on the right row.
+
+1. **Dot appears.** In a tab run `~/.mast/bin/mast-notify.sh mast:idle done` then
+   `~/.mast/bin/mast-notify.sh mast:needsInput "approve?"` (reset first — the same transition
+   rule as the toast checks). Open the phone's workspace list: that tab's row carries a warn
+   `●` next to its title, and the workspace card still shows the `needs input` badge. A
+   sibling tab in the same workspace has no dot.
+2. **Dot clears and moves.** Run `~/.mast/bin/mast-notify.sh mast:running` in that tab: the dot
+   is gone at the next poll. Drive a *second* tab of the same workspace to needsInput: the dot
+   sits on that tab's row (the one-tab approximation — the workspace badge is unchanged).
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy
