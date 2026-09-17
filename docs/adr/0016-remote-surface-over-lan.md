@@ -288,3 +288,64 @@ Last press wins when two phones disagree, and both see the loser's result on the
 A restarted tab is a new session owned by the desktop — the phone's stale token gets 409 from
 `/resize` and a reset from `/screen`. Verification: WINDOWS-BUILD §10 "Phone-controlled PTY
 size" — field-only, since the layout question needs a real phone and a real TUI.
+
+## Amendment (2026-09-17) — a secure pairing path over Tailscale, behind a Secure/Normal choice
+
+The plain-HTTP limit above is not hypothetical on a shared network, and it hard-blocks the two
+features that were rejected partly because of it — home-screen install and web push ("push in
+particular cannot work over plain HTTP on a LAN"). Building TLS into mast was the costly half
+of every fix: a self-signed certificate has to be trusted on the phone (profile install on
+iOS), a stable hostname has to exist anyway or origin-bound state (localStorage, the home-screen
+icon, later a push subscription) dies with a DHCP lease, and TLS would pull a certificate stack
+into a crate whose whole point is a small dependency surface.
+
+1. **The *Pair phone* dialog offers two modes: Secure (Tailscale) and Normal (trusted LAN).**
+   Normal is the existing surface, unchanged: LAN HTTP, the QR carries `http://<ip>:<port>/#t=…`,
+   and the warning that anyone with the Wi-Fi password can read the token and the typed text
+   stays in the dialog. Secure is the path below. The choice is presented at pairing time
+   because that is the moment the user is deciding how their phone will reach their PC.
+
+2. **Secure means Tailscale, and mast terminates no TLS.** Tailscale's `serve` runs inside the
+   installed client: `tailscale serve --bg --https=443 http://127.0.0.1:<remote port>` maps
+   HTTPS on the tailnet to the local listener, terminating TLS in the daemon with an
+   automatically provisioned certificate for `<machine>.<tailnet>.ts.net`. mast keeps binding
+   `0.0.0.0:<port>` and speaks plain HTTP on the loopback hop; nothing in `crates/mast-remote`
+   changes for this. The pairing QR then carries `https://<machine>.<tailnet>.ts.net/#t=…`.
+
+3. **The dialog guides; what mast automates stays behind a button and is verified after.** If
+   Tailscale is not installed on the PC, Secure shows the download link and a retry (the shape
+   the firewall dialog already uses). If it is installed, mast reads the node's DNS name
+   (`tailscale status --json`) and the serve state (`tailscale serve status`), and offers to run
+   the `serve` mapping — the firewall amendment's precedent: one explicit user act, a narrow
+   write, and success judged by re-reading state rather than by the command's exit code. Port
+   forwarding through `serve` needs no elevation per Tailscale's docs; that is to be confirmed
+   on the field machine before the button is wired. The tailnet's HTTPS certificates must be
+   enabled in the Tailscale admin console by the user — mast cannot do it, so the dialog names
+   that as the next step when certificate provisioning fails.
+
+4. **Both modes can be live at once, and they are different origins.** The listener serves the
+   LAN and the loopback hop at the same time, so the modes are not exclusive; a phone paired
+   over the ts.net name has a different origin and its own token copy in storage (the token
+   file is the same secret). Switching modes therefore means re-pairing — accepted, and the
+   reason the choice lives in the pairing dialog.
+
+5. **What the secure origin buys.** Traffic on the phone's leg is WireGuard-encrypted and the
+   bearer token is no longer readable by a LAN peer; the origin is stable across DHCP changes
+   and works away from home; and it is the prerequisite for the home-screen *install* on
+   Android and for web push on both platforms. Push itself is still not started — this
+   amendment removes its blocker, not the work.
+
+Accepted costs and limits. A third-party client and a tailnet account join the setup (the cost
+ADR-0016 already named for this upgrade path), and the phone keeps a VPN profile (always-on
+cost, battery). The tailnet name and machine names are published in the public certificate
+ledger when HTTPS is enabled — a privacy step the dialog should say out loud. Tailnet clients
+reach the server from `127.0.0.1` through the proxy, so the per-IP limiter degenerates to one
+bucket shared by the user's own devices; the token remains the gate. The surface becomes
+reachable from any device in the tailnet — device identity, not the LAN, is the perimeter — and
+Funnel (public internet exposure) is not part of this. The `serve` mapping is Tailscale-side
+state that survives mast restarts, but its absence must surface as a pairing-dialog failure,
+not a silent timeout.
+
+Not implemented. This amendment records the direction and the contract sketch; no code changed
+with it. The field checklist (both phone platforms, the admin-console step, the away-from-home
+case) belongs in WINDOWS-BUILD §10 with the implementation.

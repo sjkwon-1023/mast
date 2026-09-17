@@ -555,6 +555,21 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 
 #### Phone remote surface
 
+- **Secure pairing over Tailscale — decided 2026-09-17, not started.** The *Pair phone* dialog
+  will offer **Secure (Tailscale)** and **Normal (trusted LAN)**. Normal stays as it is (plain
+  LAN HTTP, warning included); Secure guides the Tailscale install on PC and phone and pairs
+  against `https://<machine>.<tailnet>.ts.net/`, where Tailscale's `serve` terminates TLS with
+  a provisioned certificate — no TLS code and no CA install in mast, and the listener keeps
+  serving the LAN at the same time. The payoff is a stable, secure origin: origin-bound state
+  (token, home-screen icon, later a push subscription) survives DHCP and works away from home,
+  and it is the prerequisite for the Android home-screen install and web push that plain HTTP
+  can never have — push itself remains unstarted. Open questions: Tailscale detection (CLI
+  path, `status --json`), whether mast runs `tailscale serve` behind a button (firewall-rule
+  precedent) or only guides, the admin-console HTTPS-certificates step mast cannot do, and the
+  elevation question for port forwarding. Decision and accepted costs (public certificate
+  ledger, VPN profile, per-IP limiter collapsing to one bucket through the proxy):
+  [ADR-0016](docs/adr/0016-remote-surface-over-lan.md) amendment (2026-09-17).
+
 - **PTY follows the latest viewer — landed 2026-09-17** (user request), reversing "the phone
   never resizes" for one reversible path. The phone's tab view gained a *Mobile*/*Desktop* pair
   in the dock: *Mobile* measures the visible output area's character grid once and shrinks the
