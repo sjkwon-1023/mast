@@ -240,3 +240,51 @@ netsh script generation. Its unit tests run in the existing host-side `cargo tes
 mast-core` gate. The app retains COM collection, current-executable discovery, temporary
 script lifetime, UAC/netsh execution and the serialized IPC status. Rule interpretation,
 script content and UI outcomes are unchanged; no Windows API is needed to test the policy.
+
+## Amendment (2026-09-17) — the phone can own the PTY size, as a lease
+
+Decision 5's "the phone never resizes" is what made the phone readable at all, and it has one
+known cost: the phone renders the PTY's own grid as text, so a TUI drawing at the desktop's
+width fragments at the phone's (v0.3.22 amendment). The only correct narrow layout comes from
+the TUI itself — a PTY that follows the phone, tmux's `window-size latest`. This amendment adds
+that, deliberately reversible from the phone.
+
+1. **Ownership lives in the session, not in the remote crate.** `PtySession` keeps a
+   `SizeOwner` (`Desktop`/`Mobile`) plus the desktop pane's last reported size, and every
+   transition and the PTY call it makes happen **under the existing `master` guard** — a
+   desktop `resize` racing a phone claim cannot end as "owner mobile, PTY desktop".
+   `PtySession::resize` — the path the desktop's fit and attach nudge already used — records
+   the pane size **even while suppressed** and applies it only when the phone is not owning.
+   That is what makes *Desktop* restore the *current* pane size: a window, zoom or workspace
+   resize during mobile mode updates the record without touching the PTY.
+2. **The wire is one authenticated mutation**: `POST /api/tabs/{id}/resize?session=<token>`
+   with `mode=mobile&cols=&rows=` or `mode=desktop`. Session-token rules are the input path's
+   (a mismatch is 409 and changes nothing); the response carries the applied
+   `X-Mast-Size-Owner`/`Cols`/`Rows`, and mobile sizes are clamped to 20–400 columns and 5–150
+   rows. Every `/screen` reply carries `X-Mast-Size-Owner` too, so the phone's two buttons are
+   painted from server truth — lease lapse, another phone's press and a tab restart all happen
+   server-side.
+3. **Ownership is a lease, and polls keep it alive.** A token-matched `/screen` poll refreshes
+   an active claim (any phone watching the tab keeps the layout it is looking at); the lease is
+   **30 s**, so a phone that is locked, killed or off Wi-Fi does not hold the desktop hostage.
+   A lapsed lease is restored by whichever comes first: the next token-matched poll — which is
+   also how a returning phone gets a desktop-sized first frame — or the next desktop resize.
+   A poll without a matching token neither renews nor releases (it cannot speak for the
+   session it is looking at).
+4. **The phone decides once, on a button press.** The size is a snapshot of the visible output
+   area (measured character grid minus one column of slack, `mobile-size.ts`); the keyboard
+   opening or closing afterwards changes nothing — no viewport listener feeds this path, which
+   is the point (a PTY that resizes with the keyboard redraws the TUI under the user's hands).
+5. **Disposal returns the size early; the lease is the net.** Leaving the tab, or the page
+   itself going away (`pagehide`), sends a `keepalive` `mode=desktop`; the lease covers the
+   paths that never run (crash, battery, network loss).
+
+Accepted costs and limits. The desktop pane shows the phone's narrow layout while the phone
+owns the size — its terminal keeps its own geometry, so the TUI's redraw is drawn at phone
+width until the size is released (the cost the backlog named). If the phone vanishes *and* the
+desktop is not touched, the narrow PTY outlives the lease: nothing polls and nothing resizes,
+and the next window resize, zoom, splitter drag or workspace switch (attach nudge) restores it.
+Last press wins when two phones disagree, and both see the loser's result on their next poll.
+A restarted tab is a new session owned by the desktop — the phone's stale token gets 409 from
+`/resize` and a reset from `/screen`. Verification: WINDOWS-BUILD §10 "Phone-controlled PTY
+size" — field-only, since the layout question needs a real phone and a real TUI.

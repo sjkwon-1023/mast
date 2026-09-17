@@ -8,11 +8,13 @@
 //! 이미 poisoned 인 경우 500 으로 답한다 (ADR-0016 결정 4).
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use mast_core::command::Dispatcher;
 use mast_core::model::{TabId, TabKind, TerminalStatus};
-use mast_core::session::{PtySession, SessionId, SessionManager};
+use mast_core::session::{LeaseRenewal, PtySession, SessionId, SessionManager};
 
+use crate::routes::ResizeMode;
 use crate::server::{log_line, AssetFn, LogFn, Response};
 
 /// 클라이언트에게는 불투명 값이다.
@@ -38,6 +40,13 @@ pub(crate) fn state(dispatcher: &Mutex<Dispatcher>) -> Response {
 ///
 /// `since` 를 그대로 믿지 않는다: 세션 토큰이 없거나 지금 세션의 것이 아니면 그 오프셋은
 /// **다른 세션의 좌표**라 reset 으로 되돌린다 (탭 Restart·앱 재시작 — ADR-0016 결정 6).
+///
+/// 토큰이 맞은 폴은 모바일 크기 리스의 **하트비트**이기도 하다 (`lease`) — 이 탭을
+/// 지금 보고 있는 클라이언트가 있다는 뜻이므로, 폰이 소유한 크기는 폴이 이어지는 동안
+/// 유지된다. 리스가 이미 지났으면 여기서 데스크톱 크기로 복원되고, 이어지는
+/// `screen_since` 가 복원된 크기·소유자를 그대로 보고한다 (폰이 끊긴 뒤 돌아온 폴이
+/// 곧바로 데스크톱 화면을 받는 경로). 토큰이 맞지 않는 폴은 하트비트가 아니다 —
+/// 어느 세션을 보고 있는지 모르는 요청으로 소유권을 연장할 수는 없다.
 pub(crate) fn screen(
     dispatcher: &Mutex<Dispatcher>,
     sessions: &SessionManager,
@@ -45,6 +54,8 @@ pub(crate) fn screen(
     tab: u64,
     since: Option<u64>,
     session: Option<&str>,
+    lease: Duration,
+    log: &LogFn,
 ) -> Response {
     let (id, pty) = match live_session(dispatcher, sessions, tab) {
         Ok(found) => found,
@@ -52,7 +63,13 @@ pub(crate) fn screen(
     };
     let token = session_token(epoch, id);
     let since = match since {
-        Some(since) if session == Some(token.as_str()) => Some(since),
+        Some(since) if session == Some(token.as_str()) => {
+            renew_lease(&pty, lease, log);
+            Some(since)
+        }
+        // 토큰 없는 폴(첫 요청·↻)과 다른 세션의 토큰을 든 폴은 하트비트가 아니다 —
+        // 이 탭의 지금 세션을 보고 있다는 근거가 없어 소유권을 연장하지 않는다.
+        // (offset 도 예전처럼 reset 으로 되돌린다: 어느 세션의 좌표인지 모른다.)
         _ => None,
     };
 
@@ -65,14 +82,63 @@ pub(crate) fn screen(
         )
         .with_header("X-Mast-Cols", screen.cols.to_string())
         .with_header("X-Mast-Rows", screen.rows.to_string())
+        .with_header("X-Mast-Size-Owner", screen.size_owner.as_str().to_string())
         .with_header("X-Mast-Session", token)
 }
 
-/// `POST /api/tabs/{id}/input` 의 대상 세션을 찾는다 — **본문을 읽기 전에** 부른다.
+/// 만료된 모바일 리스는 복원한다. 리스 연장 실패는 폴을 실패로 만들지 않는다 —
+/// worst case 는 리스가 지나 데스크톱 크기로 돌아가는 것뿐이다 (복원 경로와 같은 결말).
+fn renew_lease(pty: &PtySession, lease: Duration, log: &LogFn) {
+    if let LeaseRenewal::Lapsed { cols, rows } = pty.renew_mobile_lease(lease) {
+        log_line(
+            log,
+            format!("remote: mobile size lease lapsed; restored {cols}x{rows}"),
+        );
+    }
+}
+
+/// `POST /api/tabs/{id}/resize` — 폰의 Mobile/Desktop 버튼.
+///
+/// 모바일 크기는 상한·하한으로 자른다: 폰이 글자 크기로 계산한 값은 기기·폰트에 따라
+/// 넓게 흔들리고, TUI 가 성립하지 않는 극단(1열·3행)은 잘라야 한다. 적용값을
+/// 헤더로 돌려주므로 클라이언트는 잘렸다는 사실을 알고 버튼 상태를 맞출 수 있다.
+pub(crate) fn resize(pty: &PtySession, mode: ResizeMode, lease: Duration, log: &LogFn) -> Response {
+    let outcome = match mode {
+        ResizeMode::Mobile { cols, rows } => pty.resize_mobile(
+            cols.clamp(MIN_MOBILE_COLS, MAX_MOBILE_COLS),
+            rows.clamp(MIN_MOBILE_ROWS, MAX_MOBILE_ROWS),
+            lease,
+        ),
+        ResizeMode::Desktop => pty.release_mobile_size(),
+    };
+    match outcome {
+        Ok(()) => {
+            let (cols, rows) = pty.size();
+            Response::ok_empty()
+                .with_header("X-Mast-Size-Owner", pty.size_owner().as_str().to_string())
+                .with_header("X-Mast-Cols", cols.to_string())
+                .with_header("X-Mast-Rows", rows.to_string())
+        }
+        Err(e) => {
+            log_line(log, format!("remote: resize failed: {e}"));
+            Response::error(500, "Internal Server Error", "resize failed")
+        }
+    }
+}
+
+/// 모바일 크기 요청의 하한·상한. 하한은 TUI 가 성립하는 최소치, 상한은 폰에서
+/// 계산될 수 있는 값보다 넉넉하되 PTY 자체가 비정상이 될 만한 크기를 막는 선이다.
+const MIN_MOBILE_COLS: u16 = 20;
+const MAX_MOBILE_COLS: u16 = 400;
+const MIN_MOBILE_ROWS: u16 = 5;
+const MAX_MOBILE_ROWS: u16 = 150;
+
+/// 입력·크기 변경처럼 **이 탭의 지금 세션에 작용하는** 요청의 대상 세션을 찾는다 —
+/// 본문을 읽기 전에 부른다 (input 의 프레이밍 검사 순서).
 ///
 /// 세션 토큰이 없는 것과 다른 세션의 것은 같은 결론이다: 폰이 보고 있던 셸이 지금 이
-/// 탭의 셸이라는 근거가 없으므로 쓰지 않는다.
-pub(crate) fn resolve_input_session(
+/// 탭의 셸이라는 근거가 없으므로 건드리지 않는다.
+pub(crate) fn resolve_session(
     dispatcher: &Mutex<Dispatcher>,
     sessions: &SessionManager,
     epoch: u64,

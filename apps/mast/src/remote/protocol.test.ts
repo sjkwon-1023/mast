@@ -19,11 +19,20 @@ const FULL_HEADERS = {
   "X-Mast-Reset": "1",
   "X-Mast-Cols": "120",
   "X-Mast-Rows": "30",
+  "X-Mast-Size-Owner": "desktop",
   "X-Mast-Session": "77:3",
 };
 
 function meta(over: Partial<ScreenMeta> = {}): ScreenMeta {
-  return { endOffset: 4096, reset: false, cols: 120, rows: 30, session: "77:3", ...over };
+  return {
+    endOffset: 4096,
+    reset: false,
+    cols: 120,
+    rows: 30,
+    sizeOwner: "desktop" as const,
+    session: "77:3",
+    ...over,
+  };
 }
 
 const READY: ViewState = {
@@ -32,6 +41,7 @@ const READY: ViewState = {
   session: "77:3",
   cols: 120,
   rows: 30,
+  sizeOwner: "desktop",
 };
 
 describe("parseScreenMeta", () => {
@@ -41,6 +51,7 @@ describe("parseScreenMeta", () => {
       reset: true,
       cols: 120,
       rows: 30,
+      sizeOwner: "desktop",
       session: "77:3",
     });
     const broken: Record<string, string>[] = [
@@ -50,6 +61,8 @@ describe("parseScreenMeta", () => {
       { ...FULL_HEADERS, "X-Mast-Reset": "true" },
       { ...FULL_HEADERS, "X-Mast-Reset": "" },
       { ...FULL_HEADERS, "X-Mast-Cols": "0x10" },
+      { ...FULL_HEADERS, "X-Mast-Size-Owner": "phone" },
+      { ...FULL_HEADERS, "X-Mast-Size-Owner": "" },
       { ...FULL_HEADERS, "X-Mast-Session": "" },
     ];
     for (const map of broken) expect(parseScreenMeta(headers(map))).toBeNull();
@@ -64,7 +77,14 @@ describe("parseScreenMeta", () => {
 describe("nextRequest", () => {
   it("a reset reply to a full request is applied", () => {
     const next = nextRequest(INITIAL_VIEW_STATE, meta({ reset: true }));
-    expect(next).toEqual({ phase: "ready", since: 4096, session: "77:3", cols: 120, rows: 30 });
+    expect(next).toEqual({
+      phase: "ready",
+      since: 4096,
+      session: "77:3",
+      cols: 120,
+      rows: 30,
+      sizeOwner: "desktop",
+    });
     expect(screenQuery(next)).toEqual({ since: 4096, session: "77:3" });
     expect(screenQuery(INITIAL_VIEW_STATE)).toBeNull();
   });
@@ -80,6 +100,14 @@ describe("nextRequest", () => {
     expect(nextRequest(READY, meta({ endOffset: 4096 }))).toEqual(READY);
   });
 
+  it("an owner change alone is carried without rebuilding the screen", () => {
+    // 리스가 만료돼 소유자만 데스크톱으로 돌아온 경우 — 크기가 같으면 화면은 그대로
+    // 두고 버튼만 바뀌어야 한다 (불필요한 재생성은 스크롤 위치를 잃는다).
+    const got = meta({ sizeOwner: "mobile", endOffset: 5000 });
+    expect(needsRecreate(READY, got)).toBe(false);
+    expect(nextRequest(READY, got)).toEqual({ ...READY, since: 5000, sizeOwner: "mobile" });
+  });
+
   it("a reset reply to a delta request goes back to full", () => {
     const got = meta({ reset: true, endOffset: 9000 });
     expect(needsRecreate(READY, got)).toBe(true);
@@ -92,6 +120,16 @@ describe("nextRequest", () => {
     expect(nextRequest(READY, wider)).toEqual(INITIAL_VIEW_STATE);
     const shorter = meta({ rows: 24, endOffset: 5000 });
     expect(nextRequest(READY, shorter)).toEqual(INITIAL_VIEW_STATE);
+  });
+
+  it("a size change keeps the owner the server just reported", () => {
+    // Mobile 을 누른 직후처럼 크기가 바뀌며 재생성이 일어나는 순간에도 버튼은
+    // 서버가 말한 소유자를 유지해야 한다 — 초기값으로 되돌리면 잠깐 거짓말을 한다.
+    const resized = meta({ cols: 48, rows: 18, sizeOwner: "mobile", endOffset: 5000 });
+    expect(nextRequest(READY, resized)).toEqual({
+      ...INITIAL_VIEW_STATE,
+      sizeOwner: "mobile",
+    });
   });
 
   it("a session change goes back to full", () => {

@@ -26,6 +26,8 @@ use mast_remote::{serve, RemoteConfig, RemoteDeps, RemoteServer};
 
 const TOKEN: &str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// 만료 경로 테스트 전용 리스 — 운영값(30초)을 기다릴 수는 없다.
+const TEST_LEASE: Duration = Duration::from_millis(300);
 /// 대화형 `sh` 가 띄우는 프롬프트의 공통 꼬리 — dash 는 `$ `, bash-as-sh 는 `sh-5.2$ `.
 const PROMPT: &[u8] = b"$ ";
 
@@ -71,6 +73,8 @@ struct Harness {
     log: Arc<Mutex<Vec<String>>>,
     tab: u64,
     session: SessionId,
+    /// 이 서버가 쓰는 모바일 크기 리스 — `serve_again` 이 같은 값으로 서버를 하나 더 띄운다.
+    lease: Duration,
 }
 
 impl Harness {
@@ -79,8 +83,13 @@ impl Harness {
     }
 }
 
-/// 서버 + 워크스페이스 + 살아 있는 `sh` 탭 하나.
+/// 서버 + 워크스페이스 + 살아 있는 `sh` 탭 하나. 리스는 운영값(30초)이라 폴 몇 번으로는
+/// 만료되지 않는다 — 만료 경로는 [`harness_with_lease`] 로 짧게 잡아 검증한다.
 fn harness() -> Harness {
+    harness_with_lease(mast_remote::MOBILE_SIZE_LEASE)
+}
+
+fn harness_with_lease(lease: Duration) -> Harness {
     let sessions = Arc::new(SessionManager::new());
     let dispatcher = Arc::new(Mutex::new(Dispatcher::new(Box::new(PtyHost {
         sessions: Arc::clone(&sessions),
@@ -111,6 +120,7 @@ fn harness() -> Harness {
         RemoteConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             token: TOKEN.to_string(),
+            mobile_lease: lease,
         },
         RemoteDeps {
             dispatcher: Arc::clone(&dispatcher),
@@ -127,6 +137,7 @@ fn harness() -> Harness {
         log,
         tab,
         session,
+        lease,
     }
 }
 
@@ -208,6 +219,7 @@ fn serve_again(h: &Harness) -> RemoteServer {
         RemoteConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             token: TOKEN.to_string(),
+            mobile_lease: h.lease,
         },
         RemoteDeps {
             dispatcher: Arc::clone(&h.dispatcher),
@@ -249,6 +261,23 @@ fn input(h: &Harness, session: &str, body: &[u8]) -> Reply {
     .into_bytes();
     raw.extend_from_slice(body);
     exchange(h.addr(), &raw)
+}
+
+/// `POST /api/tabs/{id}/resize?mode=…`. `session` 이 None 이면 토큰 없이 보낸다.
+fn resize(h: &Harness, session: Option<&str>, mode_query: &str) -> Reply {
+    let session_query = match session {
+        Some(token) => format!("session={token}&"),
+        None => String::new(),
+    };
+    exchange(
+        h.addr(),
+        format!(
+            "POST /api/tabs/{}/resize?{session_query}{mode_query} HTTP/1.1\r\nHost: mast\r\n\
+             Authorization: Bearer {TOKEN}\r\nContent-Length: 0\r\n\r\n",
+            h.tab
+        )
+        .as_bytes(),
+    )
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -478,4 +507,152 @@ fn a_second_client_gets_its_own_reset_snapshot() {
     assert!(contains(&second.body, PROMPT));
     assert_eq!(second.session(), first.session());
     assert_eq!(second.header("X-Mast-Cols"), "80");
+}
+
+// --- PTY 크기 소유권 (`/resize` — ADR-0016 개정) ---
+//
+// 폰의 Mobile 버튼은 이 탭의 셸을 폰 크기로 줄이고, Desktop 버튼은 데스크톱 pane
+// 크기로 되돌린다. 데스크톱의 자동 resize(글루의 `resize` 커맨드가 부르는
+// `PtySession::resize`)는 폰이 소유하는 동안 억제된다 — 여기서는 그 커맨드가 부르는
+// 것과 **같은 메서드**를 직접 불러 그 경로를 검증한다.
+
+#[test]
+fn mobile_resize_shrinks_the_pty_and_the_screen_reports_the_owner() {
+    let h = harness();
+    let first = wait_for(&h, PROMPT);
+    let token = first.session();
+    assert_eq!(first.header("X-Mast-Size-Owner"), "desktop");
+
+    let reply = resize(&h, Some(&token), "mode=mobile&cols=60&rows=20");
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(reply.header("X-Mast-Size-Owner"), "mobile");
+    assert_eq!(reply.header("X-Mast-Cols"), "60");
+    assert_eq!(reply.header("X-Mast-Rows"), "20");
+
+    // 세션이 기억한 값이 아니라 **커널이 본** 크기로 확인한다 — `stty size` 는
+    // rows cols 를 찍으므로 resize 가 실제 PTY 에 들어갔는지 끝에서 끝까지 본다.
+    input(&h, &token, b"stty size\r");
+    let printed = wait_for(&h, b"20 60");
+    assert!(
+        contains(&printed.body, b"20 60"),
+        "stty size did not see 20 60: {:?}",
+        printed.text()
+    );
+
+    // 화면 응답도 같은 크기·소유자를 싣는다.
+    let screen = screen(&h, None);
+    assert_eq!(screen.header("X-Mast-Cols"), "60");
+    assert_eq!(screen.header("X-Mast-Rows"), "20");
+    assert_eq!(screen.header("X-Mast-Size-Owner"), "mobile");
+}
+
+#[test]
+fn desktop_resize_is_suppressed_while_mobile_owns_and_release_restores_the_current_size() {
+    let h = harness();
+    let token = wait_for(&h, PROMPT).session();
+    let pty = h.sessions.get(h.session).expect("live session");
+
+    assert_eq!(
+        resize(&h, Some(&token), "mode=mobile&cols=48&rows=18").status,
+        200
+    );
+
+    // 데스크톱이 창을 두 번 옮겼다 — 둘 다 PTY 에 닿지 않고 기록만 갱신된다.
+    pty.resize(100, 40).expect("desktop resize");
+    pty.resize(120, 35).expect("desktop resize");
+    let held = screen(&h, None);
+    assert_eq!(
+        (held.header("X-Mast-Cols"), held.header("X-Mast-Rows")),
+        ("48", "18"),
+        "데스크톱 자동 resize 가 폰 크기를 덮었다"
+    );
+
+    // Desktop 버튼 — 주장 시점의 크기가 아니라 마지막 pane 크기(120x35)로 돌아간다.
+    let reply = resize(&h, Some(&token), "mode=desktop");
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(reply.header("X-Mast-Size-Owner"), "desktop");
+    assert_eq!(reply.header("X-Mast-Cols"), "120");
+    assert_eq!(reply.header("X-Mast-Rows"), "35");
+
+    let restored = screen(&h, None);
+    assert_eq!(restored.header("X-Mast-Cols"), "120");
+    assert_eq!(restored.header("X-Mast-Rows"), "35");
+    assert_eq!(restored.header("X-Mast-Size-Owner"), "desktop");
+}
+
+#[test]
+fn a_lapsed_lease_is_released_by_the_next_token_poll() {
+    let h = harness_with_lease(TEST_LEASE);
+    let token = wait_for(&h, PROMPT).session();
+    let pty = h.sessions.get(h.session).expect("live session");
+    assert_eq!(
+        resize(&h, Some(&token), "mode=mobile&cols=48&rows=18").status,
+        200
+    );
+    // 폰이 사라진 사이 데스크톱이 창을 옮겼다 — 기록만 남는다.
+    pty.resize(120, 35).expect("desktop resize");
+
+    // 리스(TEST_LEASE)가 지나고 돌아온 폴 — 그 자리에서 데스크톱 크기가 복원된다.
+    thread::sleep(TEST_LEASE + Duration::from_millis(150));
+    let screen = screen(&h, Some((0, &token)));
+    assert_eq!(screen.status, 200);
+    assert_eq!(screen.header("X-Mast-Size-Owner"), "desktop");
+    assert_eq!(screen.header("X-Mast-Cols"), "120");
+    assert_eq!(screen.header("X-Mast-Rows"), "35");
+    let log = h.log.lock().unwrap().clone();
+    assert!(
+        log.iter()
+            .any(|l| l.starts_with("remote: mobile size lease lapsed")),
+        "log: {log:?}"
+    );
+}
+
+#[test]
+fn a_tokenless_poll_neither_renews_nor_releases_a_lapsed_lease() {
+    let h = harness_with_lease(TEST_LEASE);
+    let token = wait_for(&h, PROMPT).session();
+    assert_eq!(
+        resize(&h, Some(&token), "mode=mobile&cols=48&rows=18").status,
+        200
+    );
+
+    thread::sleep(TEST_LEASE + Duration::from_millis(150));
+    // since 없는 폴(첫 요청·↻)은 하트비트가 아니다 — 소유권을 연장하지도, 그렇다고
+    // 이 요청이 복원을 대신하지도 않는다. 소유자만 데스크톱으로 보고되고 PTY 는
+    // 아직 폰 크기다 (screen_since rustdoc 의 그 순간).
+    let since_less = screen(&h, None);
+    assert_eq!(since_less.header("X-Mast-Size-Owner"), "desktop");
+    assert_eq!(since_less.header("X-Mast-Cols"), "48");
+
+    // 다음 토큰 폴이 복원을 수행한다 — 이 테스트에서는 데스크톱 resize 가 없었으니
+    // 데스크톱 기록은 스폰 크기(80x24)다.
+    let token_poll = screen(&h, Some((0, &token)));
+    assert_eq!(token_poll.header("X-Mast-Size-Owner"), "desktop");
+    assert_eq!(token_poll.header("X-Mast-Cols"), "80");
+    assert_eq!(token_poll.header("X-Mast-Rows"), "24");
+}
+
+#[test]
+fn resize_with_a_stale_session_token_is_409_and_does_not_touch_the_size() {
+    let h = harness();
+    let token = wait_for(&h, PROMPT).session();
+    let stale = format!("1:{}", h.session + 1000);
+    let reply = resize(&h, Some(&stale), "mode=mobile&cols=48&rows=18");
+    assert_eq!(reply.status, 409);
+    assert_eq!(reply.text(), "{\"error\":\"session changed\"}");
+    let after = screen(&h, None);
+    assert_eq!(after.header("X-Mast-Cols"), "80");
+    assert_eq!(after.header("X-Mast-Rows"), "24");
+    assert_eq!(after.header("X-Mast-Size-Owner"), "desktop");
+}
+
+#[test]
+fn resize_clamps_extreme_mobile_sizes() {
+    let h = harness();
+    let token = wait_for(&h, PROMPT).session();
+    let reply = resize(&h, Some(&token), "mode=mobile&cols=65535&rows=1");
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(reply.header("X-Mast-Size-Owner"), "mobile");
+    assert_eq!(reply.header("X-Mast-Cols"), "400");
+    assert_eq!(reply.header("X-Mast-Rows"), "5");
 }

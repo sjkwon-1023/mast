@@ -265,6 +265,30 @@ body {
   gap: 8px;
 }
 
+/* PTY 크기 모드 — dock 첫 줄. 누가 크기를 정하는지(폰/데스크톱)를 서버가 말한
+   값으로만 칠한다 (tab-view.ts 의 paintSizeMode). */
+.mode-row {
+  display: flex;
+  gap: 8px;
+}
+
+.mode-btn {
+  flex: 0 0 auto;
+  min-height: var(--touch);
+  padding: 0 14px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 14px;
+}
+
+.mode-btn[aria-pressed="true"] {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
 .composer-text {
   flex: 1 1 auto;
   min-width: 0;

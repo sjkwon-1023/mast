@@ -555,15 +555,23 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 
 #### Phone remote surface
 
-- **PTY follows the latest viewer — backlog (2026-09-12, not started)**. The only way a TUI
-  lays itself out for the phone is to be told the phone's size: when a phone opens a tab, resize
-  the PTY to the phone's columns/rows (the TUI redraws on SIGWINCH), and restore the desktop's
-  size when the phone's polling lease lapses or the desktop is used again — tmux's
-  `window-size latest`. Costs: the desktop pane shows the narrow layout while the phone looks,
-  a lease with a timeout has to exist, and ADR-0016 decision 5 ("the phone never resizes")
-  needs an amendment. Sequenced behind real phone use of Claude Code tabs; a faithful
-  fixed-grid mode with horizontal scroll/pinch zoom is the cheaper alternative if reading is
-  not the main use.
+- **PTY follows the latest viewer — landed 2026-09-17** (user request), reversing "the phone
+  never resizes" for one reversible path. The phone's tab view gained a *Mobile*/*Desktop* pair
+  in the dock: *Mobile* measures the visible output area's character grid once and shrinks the
+  tab's real PTY to it (the TUI redraws on SIGWINCH), *Desktop* hands the size back to the
+  desktop pane. Ownership lives in `PtySession` (`SizeOwner` + a 30 s lease; every transition
+  and PTY call under the master guard). The desktop's own `resize` path — fit, zoom, attach
+  nudge — is **suppressed but recorded** while the phone owns, so *Desktop* restores the
+  *current* pane size rather than a value captured at claim time, and the keyboard never feeds
+  the size (measured only on the press; no viewport listener). A token-matched `/screen` poll
+  is the lease heartbeat, so a phone that vanishes is cleaned up by lease lapse (next poll or
+  next desktop resize); leaving the tab or `pagehide` returns it immediately with a
+  `keepalive` request. Wire contract, cleanup rules and accepted costs (the desktop shows the
+  narrow layout while the phone looks; an absent phone with an untouched desktop stays narrow
+  until its next resize): [ADR-0016](docs/adr/0016-remote-surface-over-lan.md) amendment
+  (2026-09-17). Verification: WINDOWS-BUILD §10 "Phone-controlled PTY size" — field-only.
+  **Still open**: a fixed-grid mode with horizontal scroll/pinch zoom, if reading turns out
+  not to be the main use.
 
 - **Image attach from the phone — backlog (user decision 2026-09-08)**. The phone composer is a
   plain textarea, so a pasted image goes nowhere, and no channel exists to hand one to the agent in

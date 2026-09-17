@@ -13,10 +13,11 @@
 
 import { Terminal } from "@xterm/headless";
 
-import { fetchScreen, HttpError, postInput } from "./api";
+import { fetchScreen, HttpError, postInput, postResize } from "./api";
 import type { ScreenReply } from "./api";
 import { ENTER_DELAY_MS, InputQueue } from "./input-queue";
 import type { InputItem } from "./input-queue";
+import { measureMobileSize } from "./mobile-size";
 import { DEFAULT_MODES } from "./modes";
 import type { TerminalModes } from "./modes";
 import { PollSchedule } from "./poller";
@@ -27,7 +28,7 @@ import {
   nextRequest,
   screenQuery,
 } from "./protocol";
-import type { InputAction } from "./protocol";
+import type { InputAction, SizeOwner } from "./protocol";
 import {
   clampFontPx,
   DEFAULT_FONT_PX,
@@ -61,9 +62,19 @@ export class TabView {
   private readonly scrollKeysEl: HTMLDivElement;
   private readonly noticeEl: HTMLDivElement;
   private readonly textEl: HTMLTextAreaElement;
+  private readonly mobileBtn: HTMLButtonElement;
+  private readonly desktopBtn: HTMLButtonElement;
   private readonly controls: HTMLButtonElement[] = [];
   private readonly schedule: PollSchedule;
   private readonly queue: InputQueue;
+  /** 크기 변경 요청이 날아가 있는 동안 true — 버튼 연타가 resize 요청을 겹쳐
+   *  보내지 않게 한다 (서버는 멱등이지만 왕복마다 화면이 다시 만들어질 수 있다). */
+  private sizeBusy = false;
+  /** 페이지가 사라지는 중(`pagehide`) — dispose 를 타지 않는 종료라 따로 듣는다.
+   *  브라우저가 탭을 닫거나 앱을 스와이프해 없애는 경로가 여기로 온다. */
+  private readonly onPageHide = (): void => {
+    if (this.state.sizeOwner === "mobile") this.releaseSizeOnLeave();
+  };
 
   private term: Terminal | null = null;
   private state = { ...INITIAL_VIEW_STATE };
@@ -133,6 +144,14 @@ export class TabView {
     const send = this.actionButton("Send", "composer-send", () => this.send());
     composer.append(this.textEl, send);
 
+    // 크기 모드 — 여기 두는 이유는 헤더가 이미 Back·제목·↻·A−·A+ 로 좁은 폰 폭에
+    // 꽉 차서다. dock 의 첫 줄이라 엄지로 닿고, 키보드가 올라와도 가려지지 않는다.
+    const modeRow = document.createElement("div");
+    modeRow.className = "mode-row";
+    this.mobileBtn = this.modeButton("Mobile", "mode-mobile", () => this.claimMobileSize());
+    this.desktopBtn = this.modeButton("Desktop", "mode-desktop", () => this.releaseMobileSize());
+    modeRow.append(this.mobileBtn, this.desktopBtn);
+
     const keys = document.createElement("div");
     keys.className = "keys";
     keys.append(
@@ -156,10 +175,12 @@ export class TabView {
 
     const dock = document.createElement("div");
     dock.className = "dock";
-    dock.append(composer, keys);
+    dock.append(modeRow, composer, keys);
 
     this.root.append(header, this.noticeEl, screenArea, dock);
     this.setInputEnabled(false);
+    this.paintSizeMode(this.state.sizeOwner);
+    window.addEventListener("pagehide", this.onPageHide);
 
     this.schedule = new PollSchedule({
       intervalMs: POLL_INTERVAL_MS,
@@ -193,6 +214,11 @@ export class TabView {
   }
 
   dispose(): void {
+    // 탭을 떠나면 폰이 소유한 크기를 즉시 돌려준다 — 리스 만료(30초)를 기다리는
+    // 동안 데스크톱이 좁은 화면에 갇혀 있을 이유가 없다. keepalive 라 페이지가
+    // 사라지는 중에도 요청이 나가고, 실패해도 리스가 결국 정리한다.
+    if (this.state.sizeOwner === "mobile") this.releaseSizeOnLeave();
+    window.removeEventListener("pagehide", this.onPageHide);
     this.schedule.stop();
     this.queue.clear();
     this.destroyTerminal();
@@ -208,6 +234,19 @@ export class TabView {
     button.addEventListener("pointerdown", (event) => event.preventDefault());
     button.addEventListener("click", onClick);
     this.controls.push(button);
+    return button;
+  }
+
+  /** 크기 모드 버튼 — 포커스를 뺏지 않고, `controls`(입력 준비 게이트)에도 넣지
+   *  않는다: 화면이 검거나 오류 안내 상태여도 크기는 되돌릴 수 있어야 한다. */
+  private modeButton(label: string, className: string, onClick: () => void): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `mode-btn ${className}`;
+    button.textContent = label;
+    button.setAttribute("aria-pressed", "false");
+    button.addEventListener("pointerdown", (event) => event.preventDefault());
+    button.addEventListener("click", onClick);
     return button;
   }
 
@@ -245,6 +284,71 @@ export class TabView {
     for (const control of this.controls) control.disabled = !enabled;
   }
 
+  /** Mobile — 지금 보이는 출력 영역을 글자 격자로 재서 PTY 를 폰 크기로 줄인다.
+   *  측정은 이 순간 한 번뿐이다: 키보드가 열리고 닫혀도 다시 재지 않는다 (모듈
+   *  주석 — 흔들리는 크기가 TUI 를 계속 다시 그리게 한다). */
+  private claimMobileSize(): void {
+    const session = this.state.session;
+    if (session === null) {
+      this.setNotice("Screen is not ready yet — try again in a moment.");
+      return;
+    }
+    const size = measureMobileSize(this.outputEl, this.preEl);
+    if (size === null) {
+      // 격자를 못 재는 상태(숨김·폰트 미로딩)에서 크기를 지어내지 않는다.
+      this.setNotice("Could not measure the screen — try again.");
+      return;
+    }
+    void this.sendSize("mobile", session, size);
+  }
+
+  /** Desktop — 서버가 기억한 **현재 데스크톱 pane 크기**로 복원한다. 폰은 그 값을
+   *  보내지 않는다 (모르기 때문이다 — 창 크기는 데스크톱만 안다). */
+  private releaseMobileSize(): void {
+    const session = this.state.session;
+    if (session === null) {
+      this.setNotice("Screen is not ready yet — try again in a moment.");
+      return;
+    }
+    void this.sendSize("desktop", session);
+  }
+
+  private async sendSize(
+    mode: SizeOwner,
+    session: string,
+    size?: { cols: number; rows: number },
+  ): Promise<void> {
+    if (this.sizeBusy) return;
+    this.sizeBusy = true;
+    try {
+      const reply = await postResize(this.options.tab, session, mode, size);
+      // 서버가 적용했다고 말한 소유자로 곧바로 칠한다 — 다음 폴(2초)까지 버튼이
+      // 눌린 채로 있지 않게. 실제 크기·소유자는 다음 meta 가 다시 확인해 준다.
+      this.paintSizeMode(reply.owner);
+      this.setNotice(null);
+      this.schedule.pollNow();
+    } catch (error) {
+      this.handleSizeError(error);
+    } finally {
+      this.sizeBusy = false;
+    }
+  }
+
+  /** 탭을 떠나며 보내는 해제 — 실패해도 조용하다 (리스가 최종 안전망이고, 그
+   *  사이 사용자가 보는 화면이 없다). */
+  private releaseSizeOnLeave(): void {
+    const session = this.state.session;
+    if (session === null) return;
+    void postResize(this.options.tab, session, "desktop", undefined, { keepalive: true }).catch(
+      () => undefined,
+    );
+  }
+
+  private paintSizeMode(owner: SizeOwner): void {
+    this.mobileBtn.setAttribute("aria-pressed", String(owner === "mobile"));
+    this.desktopBtn.setAttribute("aria-pressed", String(owner === "desktop"));
+  }
+
   private async poll(generation: number): Promise<void> {
     try {
       const reply = await fetchScreen(this.options.tab, screenQuery(this.state));
@@ -274,6 +378,7 @@ export class TabView {
       this.write(bytes);
     }
     this.state = nextRequest(this.state, meta);
+    this.paintSizeMode(this.state.sizeOwner);
   }
 
   private createTerminal(cols: number, rows: number, bytes: Uint8Array): void {
@@ -467,6 +572,18 @@ export class TabView {
     this.setNotice("Could not reach mast — check the connection.");
   }
 
+  private handleSizeError(error: unknown): void {
+    if (error instanceof HttpError) {
+      this.schedule.noteStatus(error.status);
+      // 409 는 이 탭의 셸이 갈렸다는 뜻이다 — 화면도 그 셸의 것이 아니므로
+      // 입력 실패와 같은 정리(인스턴스 폐기)를 한다.
+      if (error.status === 409) this.resetToFull();
+      this.setNotice(sizeErrorText(error.status));
+      return;
+    }
+    this.setNotice("Could not resize — check the connection.");
+  }
+
   private handleScreenError(error: unknown): void {
     if (error instanceof HttpError) {
       this.schedule.noteStatus(error.status);
@@ -527,5 +644,20 @@ function inputErrorText(status: number): string {
       return "Too many requests — try again in a minute.";
     default:
       return `Input failed (${status}).`;
+  }
+}
+
+function sizeErrorText(status: number): string {
+  switch (status) {
+    case 401:
+      return "Not authorized — scan the pairing QR in mast again.";
+    case 404:
+      return "This tab is gone.";
+    case 409:
+      return "The shell restarted — the screen size was not changed.";
+    case 429:
+      return "Too many requests — try again in a minute.";
+    default:
+      return `Resize failed (${status}).`;
   }
 }

@@ -18,7 +18,7 @@ const PROMPT = "kwon1@pc:~$ ls\r\napps  crates  docs\r\nkwon1@pc:~$ ";
 const SCREEN = `\x1b[?2004h${PROMPT}`;
 const TAB = 7 as unknown as TabId;
 
-function screenResponse(url: string, screen: string): Response {
+function screenResponse(url: string, screen: string, owner = "desktop"): Response {
   const bytes = new TextEncoder().encode(screen);
   const reset = !url.includes("since=");
   const headers = new Headers({
@@ -26,6 +26,7 @@ function screenResponse(url: string, screen: string): Response {
     "X-Mast-Reset": reset ? "1" : "0",
     "X-Mast-Cols": "120",
     "X-Mast-Rows": "30",
+    "X-Mast-Size-Owner": owner,
     "X-Mast-Session": "4242:7",
   });
   const body = reset ? bytes : new Uint8Array(0);
@@ -34,6 +35,15 @@ function screenResponse(url: string, screen: string): Response {
     status: 200,
     headers,
     arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+  } as unknown as Response;
+}
+
+function resizeResponse(owner: string): Response {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ "X-Mast-Size-Owner": owner }),
+    arrayBuffer: async () => new ArrayBuffer(0),
   } as unknown as Response;
 }
 
@@ -47,6 +57,7 @@ async function until(check: () => boolean, what: string, timeoutMs = 3000): Prom
 
 describe("TabView first frame", () => {
   const posts: string[] = [];
+  const resizes: { url: string; keepalive: boolean }[] = [];
   let view: TabView | null = null;
 
   afterEach(() => {
@@ -54,16 +65,27 @@ describe("TabView first frame", () => {
     view?.root.remove();
     view = null;
     posts.length = 0;
+    resizes.length = 0;
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
-  async function mount(screen: string): Promise<TabView> {
+  async function mount(screen: string, owner = "desktop"): Promise<TabView> {
     window.localStorage.setItem("mast.remoteToken", "test-token");
+    // 서버처럼 소유자를 기억한다 — resize 가 소유자를 바꾸면 다음 폴의 화면 응답도
+    // 바뀐 소유자를 싣는다 (그래야 낙관적 페인트를 폴이 되돌리지 않는다).
+    let ownerNow = owner;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url.includes("/screen")) return screenResponse(url, screen);
+        if (url.includes("/screen")) return screenResponse(url, screen, ownerNow);
+        if (url.includes("/resize")) {
+          const mode = new URL(url, "http://mast").searchParams.get("mode");
+          ownerNow = mode === "mobile" ? "mobile" : "desktop";
+          resizes.push({ url, keepalive: init?.keepalive === true });
+          return resizeResponse(ownerNow);
+        }
         if (url.includes("/input")) {
           posts.push(String(init?.body));
           return { ok: true, status: 204, headers: new Headers() } as unknown as Response;
@@ -180,5 +202,116 @@ describe("TabView first frame", () => {
       .filter((url) => url.includes("/screen"));
     expect(screenUrls.length).toBeGreaterThan(0);
     for (const url of screenUrls) expect(url).not.toContain("since=");
+  });
+
+  // --- PTY 크기 모드 (ADR-0016 개정) ---
+
+  /** 출력 영역과 글자 격자를 흉내 낸다 — happy-dom 은 레이아웃이 없어 실제 측정이
+   *  항상 0 이다. `pre` 폭 400px, 문자 폭 10px(표본 32자 = 320px), 줄 높이 17px,
+   *  보이는 높이 640px → 400/10 - 1 = 39열, 640/17 = 37행. */
+  function stubPhoneMetrics(): void {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement): DOMRect {
+        const width = this.tagName === "SPAN" ? 320 : 400;
+        const height = this.classList.contains("screen-text") ? 640 : 17;
+        return {
+          width,
+          height,
+          top: 0,
+          left: 0,
+          right: width,
+          bottom: height,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      },
+    );
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      lineHeight: "17px",
+    } as unknown as CSSStyleDeclaration);
+  }
+  function modeButtons(mounted: TabView): {
+    mobile: HTMLButtonElement;
+    desktop: HTMLButtonElement;
+  } {
+    return {
+      mobile: mounted.root.querySelector("button.mode-mobile") as HTMLButtonElement,
+      desktop: mounted.root.querySelector("button.mode-desktop") as HTMLButtonElement,
+    };
+  }
+
+  it("Mobile posts the measured phone size, Desktop releases it", async () => {
+    stubPhoneMetrics();
+    const mounted = await mount(SCREEN);
+    const buttons = modeButtons(mounted);
+    expect(buttons.mobile.getAttribute("aria-pressed")).toBe("false");
+    expect(buttons.desktop.getAttribute("aria-pressed")).toBe("true");
+
+    buttons.mobile.click();
+    // 서버가 적용했다고 답한 소유자로 곧바로 칠한다 (다음 폴까지 기다리지 않는다).
+    await until(
+      () => buttons.mobile.getAttribute("aria-pressed") === "true",
+      "the Mobile button to be painted",
+    );
+    expect(resizes[0].url).toBe("/api/tabs/7/resize?session=4242:7&mode=mobile&cols=39&rows=37");
+    expect(buttons.desktop.getAttribute("aria-pressed")).toBe("false");
+
+    buttons.desktop.click();
+    await until(
+      () => buttons.desktop.getAttribute("aria-pressed") === "true",
+      "the Desktop button to be painted",
+    );
+    expect(resizes[1].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+  });
+
+  it("mode buttons follow the server's owner, not the last tap", async () => {
+    // 폰이 소유한 세션을 열었다 — 서버가 mobile 이라고 말하면 Mobile 이 눌린 상태다.
+    const mounted = await mount(SCREEN, "mobile");
+    const buttons = modeButtons(mounted);
+    expect(buttons.mobile.getAttribute("aria-pressed")).toBe("true");
+    expect(buttons.desktop.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("measuring alone never posts — a viewport change is not a resize", async () => {
+    stubPhoneMetrics();
+    const mounted = await mount(SCREEN);
+    // 키보드가 열리고 닫히면 visualViewport/window 가 resize 된다. 그 사건이 PTY
+    // 크기를 건드리면 TUI 가 매번 다시 그려진다 — 요청이 나가면 안 된다.
+    window.dispatchEvent(new Event("resize"));
+    window.visualViewport?.dispatchEvent(new Event("resize"));
+    window.visualViewport?.dispatchEvent(new Event("scroll"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resizes).toEqual([]);
+    expect(modeButtons(mounted).desktop.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("leaving a tab while mobile-owned releases the size immediately", async () => {
+    const mounted = await mount(SCREEN, "mobile");
+    const fetchMock = window.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockClear();
+
+    mounted.dispose();
+    await until(() => resizes.length === 1, "a release to be posted on dispose");
+    expect(resizes[0].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+    // 페이지가 사라지는 중에도 나가야 한다 — 리스 만료를 기다리지 않는 이유.
+    expect(resizes[0].keepalive).toBe(true);
+    view = null;
+  });
+
+  it("leaving a tab without mobile ownership posts nothing", async () => {
+    const mounted = await mount(SCREEN);
+    mounted.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resizes).toEqual([]);
+    view = null;
+  });
+
+  it("a pagehide while mobile-owned releases with keepalive too", async () => {
+    await mount(SCREEN, "mobile");
+    window.dispatchEvent(new Event("pagehide"));
+    await until(() => resizes.length === 1, "a release to be posted on pagehide");
+    expect(resizes[0].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+    expect(resizes[0].keepalive).toBe(true);
   });
 });

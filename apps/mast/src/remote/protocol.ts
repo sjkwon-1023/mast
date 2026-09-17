@@ -18,7 +18,18 @@ export interface ScreenMeta {
   reset: boolean;
   cols: number;
   rows: number;
+  /** PTY 크기를 지금 누가 정하는가 — Mobile/Desktop 버튼의 상태다 (ADR-0016 개정). */
+  sizeOwner: SizeOwner;
   session: string;
+}
+
+/** PTY 크기 소유자. 서버의 `X-Mast-Size-Owner` 와 같은 문자열이다 — 버튼 상태를
+ *  서버가 말한 값에서만 칠하는 것이 "버튼이 거짓말하지 않는다"의 전부다 (리스 만료·
+ *  다른 폰의 조작·탭 재시작이 전부 서버 쪽에서 일어난다). */
+export type SizeOwner = "desktop" | "mobile";
+
+export function parseSizeOwner(raw: string | null): SizeOwner | null {
+  return raw === "desktop" || raw === "mobile" ? raw : null;
 }
 
 /** 프로토콜 단계. `full` 은 "아직 화면이 없다 — `since` 없이 스냅샷을 받아야
@@ -36,6 +47,8 @@ export interface ViewState {
   session: string | null;
   cols: number;
   rows: number;
+  /** 마지막 응답이 말한 소유자 — 버튼 상태용. */
+  sizeOwner: SizeOwner;
 }
 
 export const INITIAL_VIEW_STATE: ViewState = {
@@ -44,6 +57,7 @@ export const INITIAL_VIEW_STATE: ViewState = {
   session: null,
   cols: 0,
   rows: 0,
+  sizeOwner: "desktop",
 };
 
 /** 다음 요청의 쿼리. null 이면 `since` 없이 (= reset 스냅샷을) 요청한다. */
@@ -61,6 +75,7 @@ const HEADER_END_OFFSET = "X-Mast-End-Offset";
 const HEADER_RESET = "X-Mast-Reset";
 const HEADER_COLS = "X-Mast-Cols";
 const HEADER_ROWS = "X-Mast-Rows";
+const HEADER_SIZE_OWNER = "X-Mast-Size-Owner";
 const HEADER_SESSION = "X-Mast-Session";
 
 /** 하나라도 없거나 모양이 틀리면 null 이다 — 부분적으로 읽어 두면 offset 이나
@@ -70,11 +85,13 @@ export function parseScreenMeta(headerGet: (name: string) => string | null): Scr
   const cols = parseCount(headerGet(HEADER_COLS));
   const rows = parseCount(headerGet(HEADER_ROWS));
   const resetRaw = headerGet(HEADER_RESET);
+  const sizeOwner = parseSizeOwner(headerGet(HEADER_SIZE_OWNER));
   const session = headerGet(HEADER_SESSION);
   if (endOffset === null || cols === null || rows === null) return null;
   if (resetRaw !== "0" && resetRaw !== "1") return null;
+  if (sizeOwner === null) return null;
   if (session === null || session === "") return null;
-  return { endOffset, reset: resetRaw === "1", cols, rows, session };
+  return { endOffset, reset: resetRaw === "1", cols, rows, sizeOwner, session };
 }
 
 /** 10진 비음수 정수만 받는다. `Number()` 는 ""·공백·"0x10"·"1e3" 을 전부 받아
@@ -110,10 +127,18 @@ export function nextRequest(state: ViewState, got: ScreenMeta): ViewState {
       session: got.session,
       cols: got.cols,
       rows: got.rows,
+      sizeOwner: got.sizeOwner,
     };
   }
-  if (needsRecreate(state, got)) return { ...INITIAL_VIEW_STATE };
-  return { ...state, since: got.endOffset };
+  if (needsRecreate(state, got)) {
+    // 화면 인스턴스만 접는다 — 소유자는 이 응답이 말한 값이 맞다. 여기서까지
+    // 초기값(desktop)으로 되돌리면 폰이 Mobile 을 누른 직후 재생성이 일어날 때
+    // 버튼이 잠깐 거짓말을 한다 (다음 폴까지).
+    return { ...INITIAL_VIEW_STATE, sizeOwner: got.sizeOwner };
+  }
+  // 소유자는 크기와 별개로 매 응답에서 갱신한다 — 리스가 만료돼 크기는 그대로인데
+  // 소유자만 데스크톱으로 돌아온 경우에도 버튼이 실제와 맞아야 한다.
+  return { ...state, since: got.endOffset, sizeOwner: got.sizeOwner };
 }
 
 /** 폰이 보낼 수 있는 입력. 텍스트는 붙여넣기 한 덩어리이고, 나머지는 버튼 하나에
