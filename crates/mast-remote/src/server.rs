@@ -25,7 +25,7 @@ use mast_core::session::SessionManager;
 use crate::handlers;
 use crate::http::{read_head, Head, HeadError, MAX_BODY_BYTES};
 use crate::ratelimit::{RateLimiter, DEFAULT_CAP};
-use crate::routes::{route, Route};
+use crate::routes::{route, ResizeMode, Route};
 use crate::token::token_matches;
 
 /// 넘으면 읽지도 답하지도 않고 즉시 닫는다.
@@ -406,9 +406,11 @@ fn dispatch(
             &ctx.dispatcher,
             &ctx.sessions,
             ctx.epoch,
-            tab,
-            since,
-            session.as_deref(),
+            handlers::ScreenRequest {
+                tab,
+                since,
+                session: session.as_deref(),
+            },
             ctx.mobile_lease,
             &ctx.log,
         ),
@@ -429,12 +431,7 @@ fn dispatch(
 /// 본문이 없으므로 판정 순서는 **탭·세션 → 적용**이다. 세션 토큰이 지금 세션의 것이
 /// 아니면 입력과 같은 409 다 — 탭이 respawn 됐는데 옛 화면의 버튼을 누른 경우이고,
 /// 그 요청으로 새 셸의 크기를 바꿀 근거가 없다.
-fn resize(
-    ctx: &ServerCtx,
-    tab: u64,
-    session: Option<&str>,
-    mode: crate::routes::ResizeMode,
-) -> Response {
+fn resize(ctx: &ServerCtx, tab: u64, session: Option<&str>, mode: ResizeMode) -> Response {
     let session = match handlers::resolve_session(
         &ctx.dispatcher,
         &ctx.sessions,

@@ -36,6 +36,15 @@ pub(crate) fn state(dispatcher: &Mutex<Dispatcher>) -> Response {
     }
 }
 
+/// `GET /api/tabs/{id}/screen` 의 요청 재료 — 요청 하나의 좌표(탭·오프셋·세션 토큰)가
+/// 함께 다니므로 묶었다. 서버가 라우트에서 뜯어 온 값을 그대로 싣는다.
+pub(crate) struct ScreenRequest<'a> {
+    pub tab: u64,
+    pub since: Option<u64>,
+    /// 지금 세션과 같은지 비교할 뿐, 모양은 보지 않는 불투명 토큰이다.
+    pub session: Option<&'a str>,
+}
+
 /// `GET /api/tabs/{id}/screen`.
 ///
 /// `since` 를 그대로 믿지 않는다: 세션 토큰이 없거나 지금 세션의 것이 아니면 그 오프셋은
@@ -51,12 +60,15 @@ pub(crate) fn screen(
     dispatcher: &Mutex<Dispatcher>,
     sessions: &SessionManager,
     epoch: u64,
-    tab: u64,
-    since: Option<u64>,
-    session: Option<&str>,
+    request: ScreenRequest<'_>,
     lease: Duration,
     log: &LogFn,
 ) -> Response {
+    let ScreenRequest {
+        tab,
+        since,
+        session,
+    } = request;
     let (id, pty) = match live_session(dispatcher, sessions, tab) {
         Ok(found) => found,
         Err(response) => return response,
