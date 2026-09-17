@@ -39,6 +39,7 @@ import type {
   WorkspaceId,
 } from "../shared/types";
 import { initUpdateNotice as startUpdateNotice } from "./update-notice";
+import { installShortcutGuide } from "./shortcut-guide";
 
 declare global {
   interface Window {
@@ -156,6 +157,7 @@ class App {
 
     this.initUpdateNotice();
     installReloadKey();
+    installShortcutGuide();
     installActivityPing();
     this.installWindowFocus();
 

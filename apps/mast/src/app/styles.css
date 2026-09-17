@@ -304,6 +304,63 @@ body {
   border-color: var(--accent);
 }
 
+/* Alt 를 잠깐 누르면 새 단축키의 마지막 키만 버튼 위에 띄운다.
+   배지는 레이아웃을 밀지 않고, 버튼 클릭도 가로채지 않는다. */
+.shortcut-guide [data-alt-shortcut] {
+  position: relative;
+}
+
+.shortcut-guide [data-alt-shortcut]::after {
+  content: attr(data-alt-shortcut);
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: var(--bg-panel);
+  color: var(--fg);
+  font: 700 11px/1 system-ui, sans-serif;
+  pointer-events: none;
+}
+
+.shortcut-guide .sidebar-new::after {
+  inset: 2px 6px 2px auto;
+  width: 20px;
+}
+
+.shortcut-guide .ws-card::after {
+  inset: 4px 27px auto auto;
+  width: 18px;
+  height: 17px;
+}
+
+.shortcut-guide .tab-close[data-alt-shortcut]::after {
+  display: none;
+}
+
+.shortcut-guide .pane.active .tab.active .tab-close[data-alt-shortcut]::after {
+  display: flex;
+}
+
+.shortcut-guide::after {
+  content: "Alt+1–9: workspace  ·  Alt+Shift+[ / ]: cycle  ·  Alt+Shift+D: auto split";
+  position: fixed;
+  bottom: 8px;
+  right: 8px;
+  z-index: 10;
+  max-width: min(90vw, 540px);
+  padding: 6px 9px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--fg);
+  font-size: 11px;
+  pointer-events: none;
+}
+
 /* "Pair phone" — 원격 표면이 떠 있을 때만 사이드바 푸터에 나타난다
    (main.ts 가 remote_status 로 판정, sidebar.ts setRemoteEnabled). */
 .sidebar-pair {

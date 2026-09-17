@@ -122,10 +122,10 @@ export class TextView implements ViewerView, ViewerFontTarget {
     this.barEl.append(this.rangeEl);
 
     const titles: Record<WindowAction, string> = {
-      first: "First window (Ctrl+Home)",
-      prev: "Previous window (Ctrl+PageUp)",
-      next: "Next window (Ctrl+PageDown)",
-      last: "Last window (Ctrl+End)",
+      first: "First window",
+      prev: "Previous window",
+      next: "Next window",
+      last: "Last window",
     };
     for (const action of WINDOW_ACTIONS) {
       const title = titles[action];

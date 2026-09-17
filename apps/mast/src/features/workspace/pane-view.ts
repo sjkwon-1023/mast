@@ -119,9 +119,8 @@ interface TabNodes {
   model: TabButtonModel;
 }
 
-/** 버튼 툴팁 — "<기능> (<단축키>)". 단축키 문자열은 keys.ts 의 shortcutLabel
- *  단일 소스에서만 받는다 (키를 바꾸면 툴팁이 따라오도록 — 표류 방지). 헤더
- *  버튼은 현재 전부 단축키를 가지므로 예외 없이 이 헬퍼를 쓴다. */
+/** 단축키가 있는 버튼 툴팁 — "<기능> (<단축키>)". 단축키 문자열은 keys.ts 의
+ *  shortcutLabel 단일 소스에서만 받는다. 좌우 분할 버튼은 단축키 없이 남는다. */
 function withShortcut(label: string, id: ShortcutId): string {
   return `${label} (${shortcutLabel(id)})`;
 }
@@ -386,14 +385,14 @@ export class PaneView {
         type: "createTab",
         pane: this.paneId,
         tab: { type: "terminal", cwd: paneTerminalCwd(this.pane) },
-      })),
+      }), "T"),
       // 폴더 탐색 탭 (21단계) — path null 이면 워크스페이스 rootPath, 그것도
       // 없으면 "/" 로 코어가 해석한다 (terminal 의 cwd 와 대칭).
       this.svgButton(SVG_FOLDER, withShortcut("New folder browser tab", "newFolderTab"), () => ({
         type: "createTab",
         pane: this.paneId,
         tab: { type: "folderBrowser", path: null },
-      })),
+      }), "B"),
       // Changes 는 pane 셸의 cwd 가 아니라 워크스페이스 루트에서 여는 전역
       // 작업 목록이다. path null 은 코어가 워크스페이스 rootPath 로 해석한다.
       this.svgButton(SVG_CHANGES, "New changes viewer tab", () => ({
@@ -414,7 +413,7 @@ export class PaneView {
       // (계획 D5: 컴포지션 금지, 중간 스냅샷 1프레임 렌더 방지).
       this.svgButton(
         SVG_SPLIT_LEFT_RIGHT,
-        withShortcut("Split left/right", "splitLeftRight"),
+        "Split left/right",
         () => ({
           type: "splitPane",
           pane: this.paneId,
@@ -424,7 +423,7 @@ export class PaneView {
       ),
       this.svgButton(
         SVG_SPLIT_TOP_BOTTOM,
-        withShortcut("Split top/bottom", "splitTopBottom"),
+        "Split top/bottom",
         () => ({
           type: "splitPane",
           pane: this.paneId,
@@ -462,17 +461,18 @@ export class PaneView {
   /** 아이콘 SVG 버튼 — 라벨이 텍스트가 아니라 마크업이라는 점만 iconButton 과
    *  다르다. svg 인자는 이 모듈 상단의 SVG_* 상수만 받는다 (파일발 문자열이 아닌
    *  신뢰 소스 — 상단 주석). */
-  private svgButton(svg: string, title: string, command: () => Command): HTMLButtonElement {
-    const btn = this.iconButton("", title, command);
+  private svgButton(svg: string, title: string, command: () => Command, altShortcut?: string): HTMLButtonElement {
+    const btn = this.iconButton("", title, command, altShortcut);
     btn.innerHTML = svg;
     return btn;
   }
 
-  private iconButton(label: string, title: string, command: () => Command): HTMLButtonElement {
+  private iconButton(label: string, title: string, command: () => Command, altShortcut?: string): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = label;
     btn.title = title;
+    if (altShortcut !== undefined) btn.dataset.altShortcut = altShortcut;
     btn.addEventListener("click", () => {
       void this.dispatch(command());
     });
@@ -600,6 +600,7 @@ export class PaneView {
     // 활성 탭의 × 에서만 둘이 같은 대상이다. 툴팁은 그래도 모든 탭에 같은
     // 문구를 단다 (탭마다 다른 툴팁이 더 헷갈린다).
     close.title = withShortcut("Close tab", "closeTab");
+    close.dataset.altShortcut = "W";
     close.addEventListener("click", (ev) => {
       ev.stopPropagation(); // 탭 활성화 클릭과 분리
       // tab id 는 이 노드의 키라 패치로도 변하지 않는다 — 클로저로 안전하다

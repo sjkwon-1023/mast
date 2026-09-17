@@ -77,7 +77,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   renders, resizes and persists it — what is missing is a command that reaches it.
   `SplitTree::split` matches a `Leaf` by `PaneId` and replaces it in place
   (`model.rs:250-274`), and `SplitPane` is the only split command, so every surface (the two
-  header buttons, `Ctrl+Shift+D` / `Ctrl+Shift+E`) can only ever target one leaf; `ResizeSplit`
+  header buttons, `Ctrl+Shift+D` / `Alt+Shift+D`) can only ever target one leaf; `ResizeSplit`
   is the sole command addressing a `SplitId` and it only moves a ratio. ADR-0003 neither
   decided nor deferred this — it was never raised. The smallest useful shape is a **root
   wrap** (`SplitRoot { direction, tab }`: the whole workspace tree becomes one side of a new

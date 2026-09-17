@@ -418,7 +418,7 @@ describe("Sidebar close (× 버튼 · Ctrl+Shift+Q)", () => {
     expect(child(cards()[0], ".ws-card-close").title).toBe(
       `Close workspace (${shortcutLabel("closeWorkspace")})`,
     );
-    expect(shortcutLabel("closeWorkspace")).toBe("Ctrl+Shift+Q");
+    expect(shortcutLabel("closeWorkspace")).toBe("Alt+Shift+Q");
   });
 });
 
