@@ -3,11 +3,13 @@
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -19,22 +21,33 @@ import { describe, expect, it } from "vitest";
 const onLinux = process.platform === "linux";
 const integration = onLinux ? describe : describe.skip;
 
-function requireCommand(command: string): void {
+// 러너가 mast 탭 안의 Claude Code·Codex 에서 돌면 이 값들이 이미 있다. CODEX_THREAD_ID 가 새면
+// 중첩 codex exec 게이트에 걸려 모든 notify 가 조용히 끝난다.
+const AGENT_ENV = ["CLAUDECODE", "CODEX_THREAD_ID", "CODEX_HOME", "MAST", "MAST_TAB", "BASH_ENV"];
+
+function scrubbedEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.BASH_ENV;
+  for (const key of AGENT_ENV) delete env[key];
+  return env;
+}
+
+function commandPath(command: string): string {
   try {
-    execFileSync("bash", ["--noprofile", "--norc", "-c", `command -v ${command}`], {
-      env,
-      stdio: "ignore",
+    return execFileSync("bash", ["--noprofile", "--norc", "-c", `command -v ${command}`], {
+      env: scrubbedEnv(),
+      encoding: "utf8",
       timeout: 10_000,
-    });
+    }).trim();
   } catch {
     throw new Error(`codex resume integration tests require ${command}`);
   }
 }
 
+const tools: Record<string, string> = {};
 if (onLinux) {
-  for (const command of ["bash", "jq", "timeout"]) requireCommand(command);
+  for (const command of ["bash", "jq", "timeout", "mkdir", "date", "mv", "rm", "readlink", "script", "python3"]) {
+    tools[command] = commandPath(command);
+  }
 }
 
 const sourceDir = dirname(fileURLToPath(import.meta.url));
@@ -79,7 +92,7 @@ function freshWrapperScript(): string {
   return script.replace(productionExec, "exec bash --noprofile --norc -c 'history -r; history 1'");
 }
 
-type RunOptions = { tab?: string | null; codexHome?: string };
+type RunOptions = { tab?: string | null; codexHome?: string; env?: NodeJS.ProcessEnv };
 
 class Harness {
   readonly root = mkdtempSync(join(tmpdir(), "mast codex resume-"));
@@ -87,6 +100,7 @@ class Harness {
   readonly defaultCodexHome = join(this.home, ".codex");
   readonly hookPath = join(this.root, "mast-codex-notify.sh");
   readonly notifyArgsPath = join(this.home, ".mast", "notify-argv");
+  readonly dispatcherArgsPath = join(this.home, ".mast", "dispatcher-argv");
 
   constructor() {
     mkdirSync(join(this.home, ".mast", "bin"), { recursive: true });
@@ -101,15 +115,17 @@ class Harness {
     chmodSync(this.hookPath, 0o700);
   }
 
-  run(payload: string, options: RunOptions = {}): void {
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: this.home };
-    delete env.BASH_ENV;
+  env(options: RunOptions = {}): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...scrubbedEnv(), HOME: this.home };
     const tab = options.tab === undefined ? "6" : options.tab;
-    if (tab === null) delete env.MAST_TAB;
-    else env.MAST_TAB = tab;
-    if (options.codexHome === undefined) delete env.CODEX_HOME;
-    else env.CODEX_HOME = options.codexHome;
-    execFileSync("bash", [this.hookPath, payload], {
+    if (tab !== null) env.MAST_TAB = tab;
+    if (options.codexHome !== undefined) env.CODEX_HOME = options.codexHome;
+    return { ...env, ...options.env };
+  }
+
+  run(payload: string, options: RunOptions = {}): void {
+    const env = this.env(options);
+    execFileSync(tools.bash, [this.hookPath, payload], {
       env,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -118,8 +134,7 @@ class Harness {
   }
 
   runFreshWrapper(): string {
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: this.home };
-    delete env.BASH_ENV;
+    const env: NodeJS.ProcessEnv = { ...scrubbedEnv(), HOME: this.home };
     return execFileSync("bash", ["-c", freshWrapperScript()], {
       env,
       encoding: "utf8",
@@ -151,11 +166,43 @@ class Harness {
     rmSync(this.root, { recursive: true, force: true });
   }
 
-  notifyArgs(): string[] {
-    const fields = readFileSync(this.notifyArgsPath, "utf8").split("\0");
-    const count = Number(fields.shift());
-    return fields.slice(0, count);
+  notifyArgs(): string[] | undefined {
+    return readArgv(this.notifyArgsPath);
   }
+
+  // mast-python 이 가리키는 인터프리터 자리에 argv 를 기록하고 정해진 코드로 끝나는 stub 을 둔다.
+  // 경로에 공백을 넣어 notify 스크립트의 인용을 함께 확인한다.
+  useDispatcherStub(status = 0): string {
+    const stub = join(this.root, "stub python", "python3");
+    mkdirSync(dirname(stub), { recursive: true });
+    writeFileSync(
+      stub,
+      [
+        `#!${tools.bash}`,
+        `printf '%s\\0' "$#" "$@" > ${shellQuote(this.dispatcherArgsPath)}`,
+        `exit ${status}`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    this.recordInterpreter(stub);
+    return stub;
+  }
+
+  recordInterpreter(path: string): void {
+    writeFileSync(join(this.home, ".mast", "bin", "mast-python"), `${path}\n`);
+  }
+
+  dispatcherArgs(): string[] | undefined {
+    return readArgv(this.dispatcherArgsPath);
+  }
+}
+
+function readArgv(path: string): string[] | undefined {
+  if (!existsSync(path)) return undefined;
+  const fields = readFileSync(path, "utf8").split("\0");
+  const count = Number(fields.shift());
+  return fields.slice(0, count);
 }
 
 function shellQuote(value: string): string {
@@ -166,8 +213,8 @@ function metadata(threadId: string, source: unknown): string {
   return JSON.stringify({ type: "session_meta", payload: { id: threadId, source } });
 }
 
-function payload(threadId: unknown, message = "turn complete"): string {
-  return JSON.stringify({ "thread-id": threadId, "last-assistant-message": message });
+function payload(threadId: unknown, message: unknown = "turn complete"): string {
+  return JSON.stringify({ "thread-id": threadId, "turn-id": "turn-1", "last-assistant-message": message });
 }
 
 function withHarness(test: (harness: Harness) => void): void {
@@ -295,11 +342,11 @@ integration("Codex resume notify integration", () => {
     });
   });
 
-  it("rejects unsupported metadata sources, oversized records, and truncated records", () => {
+  it("keeps the prior hint for a source mast cannot resume, an oversized record, and a truncated record", () => {
     withHarness((harness) => {
       const original = harness.seedResume("codex resume original");
-      const unsupported = "object-source";
-      harness.transcript(codex(harness), unsupported, metadata(unsupported, "other"));
+      const unsupported = "vscode-source";
+      harness.transcript(codex(harness), unsupported, metadata(unsupported, "vscode"));
       harness.run(payload(unsupported));
       expect(harness.resume()).toBe(original);
 
@@ -342,7 +389,7 @@ integration("Codex resume notify integration", () => {
     });
   });
 
-  it("still forwards the idle preview when the resume id is rejected", () => {
+  it("still forwards the idle preview when the resume id is malformed", () => {
     withHarness((harness) => {
       const original = harness.seedResume("codex resume original");
       harness.run(payload("rejected/id", "preview; line\nignored"));
@@ -350,4 +397,268 @@ integration("Codex resume notify integration", () => {
       expect(harness.notifyArgs()).toEqual(["mast:idle", "preview; line"]);
     });
   });
+});
+
+const DISPATCHER = join(sourceDir, "../../../scripts/wsl/mast-agent-hook.py");
+
+// notify 스크립트가 쓰는 도구만 둔 PATH. jq 를 빼거나 느린 jq 로 바꿔 소유권 확인이 끝나지 못하는
+// 경우를 만든다.
+function toolDir(harness: Harness, jq: "real" | "absent" | "hangs-on-metadata"): string {
+  const bin = join(harness.root, `tools-${jq}`);
+  mkdirSync(bin, { recursive: true });
+  for (const tool of ["bash", "timeout", "mkdir", "date", "mv", "rm"]) symlinkSync(tools[tool], join(bin, tool));
+  if (jq === "real") symlinkSync(tools.jq, join(bin, "jq"));
+  if (jq === "hangs-on-metadata") {
+    // 소유권 확인만 `--arg` 를 쓴다. thread id 추출은 진짜 jq 로 통과시킨다.
+    writeFileSync(
+      join(bin, "jq"),
+      [`#!${tools.bash}`, 'for arg; do [ "$arg" = --arg ] && exec sleep 30; done', `exec ${shellQuote(tools.jq)} "$@"`, ""].join("\n"),
+      { mode: 0o755 },
+    );
+  }
+  return bin;
+}
+
+function dispatcherCall(harness: Harness, ownership: string, raw: string): string[] {
+  return ["-I", join(harness.home, ".mast", "bin", "mast-agent-hook.py"), "codex-notify", ownership, raw];
+}
+
+integration("Codex notify hands the idle decision to the dispatcher", () => {
+  it("passes confirmed ownership and the raw payload, writes the hint, and does not fall back", () => {
+    withHarness((harness) => {
+      const root = "root-confirmed";
+      harness.transcript(codex(harness), root, metadata(root, "cli"));
+      harness.useDispatcherStub(0);
+      const raw = payload(root, "done");
+      harness.run(raw);
+      expect(harness.dispatcherArgs()).toEqual(dispatcherCall(harness, "confirmed", raw));
+      expect(harness.notifyArgs()).toBeUndefined();
+      expect(harness.resume()).toMatch(/^codex resume root-confirmed\n/);
+    });
+  });
+
+  // Codex 0.154 SessionSource 의 serde 표현: 최상위가 아닌 세션은 SubAgent·Internal 두 변형뿐이다.
+  it.each([
+    ["a spawned subagent", { subagent: { thread_spawn: { parent_thread_id: "root", depth: 1 } } }],
+    ["a review subagent", { subagent: "review" }],
+    ["an internal guardian session", { internal: "guardian" }],
+  ])("reports rejected for %s", (_name, source) => {
+    withHarness((harness) => {
+      const original = harness.seedResume("codex resume original");
+      const scout = "scout-rejected";
+      harness.transcript(codex(harness), scout, metadata(scout, source));
+      harness.useDispatcherStub(0);
+      const raw = payload(scout);
+      harness.run(raw);
+      expect(harness.dispatcherArgs()).toEqual(dispatcherCall(harness, "rejected", raw));
+      expect(harness.resume()).toBe(original);
+    });
+  });
+
+  const OTHER_ROOT_SOURCES = [
+    { name: "a VS Code session", record: (id: string) => metadata(id, "vscode") },
+    { name: "a custom source", record: (id: string) => metadata(id, { custom: "atlas" }) },
+    { name: "an old rollout without a source", record: (id: string) => JSON.stringify({ type: "session_meta", payload: { id } }) },
+  ];
+
+  it.each(OTHER_ROOT_SOURCES)("confirms $name for the dispatcher without writing a hint", ({ record }) => {
+    withHarness((harness) => {
+      const original = harness.seedResume("claude --resume earlier");
+      const id = "other-root";
+      harness.transcript(codex(harness), id, record(id));
+      harness.useDispatcherStub(0);
+      const raw = payload(id);
+      harness.run(raw);
+      expect(harness.dispatcherArgs()).toEqual(dispatcherCall(harness, "confirmed", raw));
+      expect(harness.notifyArgs()).toBeUndefined();
+      expect(harness.resume()).toBe(original);
+    });
+  });
+
+  it.each(OTHER_ROOT_SOURCES)("still falls back to an idle for $name when the dispatcher cannot run", ({ record }) => {
+    withHarness((harness) => {
+      const id = "other-root-fallback";
+      harness.transcript(codex(harness), id, record(id));
+      harness.run(payload(id, "resumed elsewhere"));
+      expect(harness.notifyArgs()).toEqual(["mast:idle", "resumed elsewhere"]);
+      expect(harness.resume()).toBeUndefined();
+    });
+  });
+
+  it.each([
+    { name: "no transcript", jq: "real", prepare: (_harness: Harness, _id: string) => {} },
+    {
+      name: "metadata for another id",
+      jq: "real",
+      prepare: (harness: Harness, id: string) => harness.transcript(codex(harness), id, metadata("different", "exec")),
+    },
+    {
+      name: "truncated metadata",
+      jq: "real",
+      prepare: (harness: Harness, id: string) =>
+        harness.transcript(codex(harness), id, `{"type":"session_meta","payload":{"id":"${id}","source":"other"`),
+    },
+    {
+      name: "a metadata check that times out",
+      jq: "hangs-on-metadata",
+      prepare: (harness: Harness, id: string) => harness.transcript(codex(harness), id, metadata(id, "cli")),
+    },
+  ] as const)("reports unknown ownership for $name and leaves the hint alone", ({ jq, prepare }) => {
+    withHarness((harness) => {
+      const original = harness.seedResume("codex resume original");
+      const id = "thread-unknown";
+      prepare(harness, id);
+      harness.useDispatcherStub(0);
+      const raw = payload(id);
+      harness.run(raw, { env: { PATH: toolDir(harness, jq) } });
+      expect(harness.dispatcherArgs()).toEqual(dispatcherCall(harness, "unknown", raw));
+      expect(harness.resume()).toBe(original);
+    });
+  }, 20_000);
+
+  it("reports unknown ownership without jq and falls back to the generic body", () => {
+    withHarness((harness) => {
+      const root = "root-without-jq";
+      harness.transcript(codex(harness), root, metadata(root, "cli"));
+      const raw = payload(root, "would be the body");
+      harness.useDispatcherStub(1);
+      harness.run(raw, { env: { PATH: toolDir(harness, "absent") } });
+      expect(harness.dispatcherArgs()).toEqual(dispatcherCall(harness, "unknown", raw));
+      expect(harness.notifyArgs()).toEqual(["mast:idle", "codex turn complete"]);
+      expect(harness.resume()).toBeUndefined();
+    });
+  });
+
+  it.each([
+    { name: "no interpreter is recorded", prepare: (_harness: Harness) => {} },
+    {
+      name: "the recorded interpreter does not exist",
+      prepare: (harness: Harness) => harness.recordInterpreter(join(harness.root, "gone", "python3")),
+    },
+    {
+      name: "the recorded interpreter is not executable",
+      prepare: (harness: Harness) => {
+        const path = join(harness.root, "python3-not-executable");
+        writeFileSync(path, "#!/bin/sh\nexit 0\n", { mode: 0o644 });
+        harness.recordInterpreter(path);
+      },
+    },
+    { name: "the dispatcher exits non-zero", prepare: (harness: Harness) => void harness.useDispatcherStub(1) },
+  ])("falls back to mast-notify.sh when $name", ({ prepare }) => {
+    withHarness((harness) => {
+      const root = "root-fallback";
+      harness.transcript(codex(harness), root, metadata(root, "cli"));
+      prepare(harness);
+      harness.run(payload(root, "fallback body"));
+      expect(harness.notifyArgs()).toEqual(["mast:idle", "fallback body"]);
+      expect(harness.resume()).toMatch(/^codex resume root-fallback\n/);
+    });
+  });
+
+  it.each([
+    { name: "no interpreter is recorded", prepare: (_harness: Harness) => {} },
+    { name: "the dispatcher exits non-zero", prepare: (harness: Harness) => void harness.useDispatcherStub(1) },
+  ])("never falls back for rejected ownership when $name", ({ prepare }) => {
+    withHarness((harness) => {
+      const scout = "scout-no-fallback";
+      harness.transcript(codex(harness), scout, metadata(scout, { subagent: { other: "guardian" } }));
+      prepare(harness);
+      harness.run(payload(scout));
+      expect(harness.notifyArgs()).toBeUndefined();
+    });
+  });
+
+  it("skips the hint and every emission for a codex exec nested in another Codex thread", () => {
+    withHarness((harness) => {
+      const original = harness.seedResume("codex resume outer-thread");
+      const inner = "inner-exec";
+      harness.transcript(codex(harness), inner, metadata(inner, "exec"));
+      harness.useDispatcherStub(1);
+      harness.run(payload(inner), { env: { CODEX_THREAD_ID: "outer-thread" } });
+      expect(harness.dispatcherArgs()).toBeUndefined();
+      expect(harness.notifyArgs()).toBeUndefined();
+      expect(harness.resume()).toBe(original);
+
+      const raw = payload(inner);
+      harness.useDispatcherStub(0);
+      harness.run(raw, { env: { CODEX_THREAD_ID: inner } });
+      expect(harness.dispatcherArgs()).toEqual(dispatcherCall(harness, "confirmed", raw));
+      expect(harness.resume()).toMatch(/^codex resume inner-exec\n/);
+    });
+  });
+
+  // Claude Code 의 Bash 도구가 띄운 codex exec 는 CLAUDECODE 와 MAST_TAB 을 물려받는다. 그 탭의 에이전트는 Claude 다.
+  it.each([
+    ["=1", "1"],
+    ["set but empty", ""],
+  ])("skips the hint and every emission inside Claude Code (CLAUDECODE %s)", (_name, value) => {
+    withHarness((harness) => {
+      const original = harness.seedResume("claude --resume claude-root");
+      const inner = "exec-under-claude";
+      harness.transcript(codex(harness), inner, metadata(inner, "exec"));
+      harness.useDispatcherStub(1);
+      harness.run(payload(inner), { env: { CLAUDECODE: value } });
+      expect(harness.dispatcherArgs()).toBeUndefined();
+      expect(harness.notifyArgs()).toBeUndefined();
+      expect(harness.resume()).toBe(original);
+    });
+  });
+
+  it("sanitizes the fallback body by code point under LC_ALL=C", () => {
+    withHarness((harness) => {
+      const cLocale = { env: { LC_ALL: "C", LANG: "C" } };
+      harness.run(payload("malformed/id", "a;b\u009c c\u001b]x\u0007 d\u0085e \u009b2J\nsecond"), cLocale);
+      expect(harness.notifyArgs()).toEqual(["mast:idle", "a;b  c ]x  d e  2J"]);
+      harness.run(payload("malformed/id", "가".repeat(600)), cLocale);
+      expect(harness.notifyArgs()).toEqual(["mast:idle", "가".repeat(500)]);
+      harness.run(payload("malformed/id", `${"a".repeat(499)}가나`), cLocale);
+      expect(harness.notifyArgs()).toEqual(["mast:idle", `${"a".repeat(499)}가`]);
+      for (const message of [" \t\u009c \nsecond line", "", null, 42]) {
+        harness.run(payload("malformed/id", message), cLocale);
+        expect(harness.notifyArgs()).toEqual(["mast:idle", "codex turn complete"]);
+      }
+    });
+  });
+
+  // script 가 새 pty 를 controlling tty 로 만들어 준다. 디스패처가 /dev/tty 로 쓴 OSC 가 그 출력으로
+  // 잡히고, 테스트를 돌리는 터미널에는 아무것도 새지 않는다.
+  function runInPty(harness: Harness, raw: string): string {
+    return execFileSync(
+      tools.script,
+      ["-qec", `${shellQuote(tools.bash)} ${shellQuote(harness.hookPath)} ${shellQuote(raw)}`, "/dev/null"],
+      {
+        env: { ...harness.env(), SHELL: tools.bash },
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 20_000,
+      },
+    );
+  }
+
+  it("emits idle through the real dispatcher for a confirmed root and nothing for a rejected thread", () => {
+    withHarness((harness) => {
+      copyFileSync(DISPATCHER, join(harness.home, ".mast", "bin", "mast-agent-hook.py"));
+      harness.recordInterpreter(tools.python3);
+
+      const root = "pty-root";
+      harness.transcript(codex(harness), root, metadata(root, "cli"));
+      expect(runInPty(harness, payload(root, "All tests pass; shipped\nmore"))).toBe(
+        "\u001b]777;notify;mast:idle;All tests pass, shipped\u0007",
+      );
+      expect(harness.notifyArgs()).toBeUndefined();
+
+      const scout = "pty-scout";
+      harness.transcript(codex(harness), scout, metadata(scout, { subagent: { other: "guardian" } }));
+      expect(runInPty(harness, payload(scout, "scout answer"))).toBe("");
+      expect(harness.notifyArgs()).toBeUndefined();
+      expect(harness.resume()).toMatch(/^codex resume pty-root\n/);
+
+      const vscode = "pty-vscode";
+      harness.transcript(codex(harness), vscode, metadata(vscode, "vscode"));
+      expect(runInPty(harness, payload(vscode, "picked up from VS Code"))).toBe(
+        "\u001b]777;notify;mast:idle;picked up from VS Code\u0007",
+      );
+      expect(harness.resume()).toMatch(/^codex resume pty-root\n/);
+    });
+  }, 20_000);
 });

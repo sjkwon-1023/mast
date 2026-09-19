@@ -15,11 +15,12 @@
 //!   저장된 구 id 를 남겨두면 재시작 후 새 레지스트리가 발급한 동일 숫자의 다른
 //!   세션과 충돌(오배선)한다. 재스폰 시 새 id 가 다시 채워진다 (B-2).
 //! - **에이전트 상태·알림도 pty_session 소거와 동급으로 무조건 초기화한다**
-//!   (18단계 계획, 터미널-계획-v2.md 11장): 각 워크스페이스의 `agent_status` =
-//!   `Idle`, `agent_status_source` = `None`, `last_agent_message` = `None`,
-//!   전 탭의 `notification` = `NotificationState::None`, `last_activity_ms` =
-//!   `None`. pty_session 과 동일한 이유 — 죽은 세션이 남긴 needsInput 이
-//!   재시작을 넘어 사이드바에 유령처럼 남는 걸 막는다.
+//!   (18단계 계획, 터미널-계획-v2.md 11장): 전 탭의 `agent_status` = `Idle`,
+//!   `last_agent_message`·`last_agent_message_seq` = `None`, `notification` =
+//!   `NotificationState::None`, `last_activity_ms` = `None`, 그리고 그 파생값인
+//!   각 워크스페이스의 `agent_status` = `Idle`, `last_agent_message` = `None`.
+//!   pty_session 과 동일한 이유 — 죽은 세션이 남긴 needsInput 이 재시작을 넘어
+//!   사이드바에 유령처럼 남는 걸 막는다.
 //! - **`NotStarted` 탭만 `Running` 으로 되돌린다**. 그 상태로 저장되면 부팅 재스폰 열거
 //!   ([`Dispatcher::running_terminal_tabs`](crate::command::Dispatcher::running_terminal_tabs))
 //!   에서 빠져 사용자가 탭마다 Retry 를 눌러야 한다 — 실기에서 되살린 탭 11개가 콜드 VM
@@ -371,7 +372,6 @@ fn sanitize(state: &mut AppState, reserved_max_id: Option<u64>) -> Result<Vec<St
     let mut repairs = Vec::new();
     for ws in &mut state.workspaces {
         ws.agent_status = AgentStatus::Idle;
-        ws.agent_status_source = None;
         ws.last_agent_message = None;
         for pane in ws.panes.values_mut() {
             for tab in &mut pane.tabs {
@@ -389,6 +389,9 @@ fn sanitize(state: &mut AppState, reserved_max_id: Option<u64>) -> Result<Vec<St
                 }
                 tab.notification = NotificationState::None;
                 tab.last_activity_ms = None;
+                tab.agent_status = AgentStatus::Idle;
+                tab.last_agent_message = None;
+                tab.last_agent_message_seq = None;
             }
         }
     }
@@ -716,6 +719,9 @@ mod tests {
                 },
                 notification: NotificationState::None,
                 last_activity_ms: None,
+                agent_status: AgentStatus::Idle,
+                last_agent_message: None,
+                last_agent_message_seq: None,
             }],
             active_tab: Some(TabId(tab_id)),
         }
@@ -747,7 +753,6 @@ mod tests {
                 active_pane: PaneId(2),
                 agent_status: AgentStatus::Idle,
                 last_agent_message: None,
-                agent_status_source: None,
             }],
             active_workspace: Some(WorkspaceId(1)),
             next_id,
@@ -1243,12 +1248,14 @@ mod tests {
         {
             let ws = &mut state.workspaces[0];
             ws.agent_status = AgentStatus::NeedsInput;
-            ws.agent_status_source = Some(TabId(5));
             ws.last_agent_message = Some("waiting for input".into());
             for pane in ws.panes.values_mut() {
                 for tab in &mut pane.tabs {
                     tab.notification = NotificationState::Unread;
                     tab.last_activity_ms = Some(123_456);
+                    tab.agent_status = AgentStatus::NeedsInput;
+                    tab.last_agent_message = Some("waiting for input".into());
+                    tab.last_agent_message_seq = Some(3);
                 }
             }
         }
@@ -1257,16 +1264,129 @@ mod tests {
             LoadOutcome::Restored { state, .. } => {
                 let ws = &state.workspaces[0];
                 assert_eq!(ws.agent_status, AgentStatus::Idle);
-                assert_eq!(ws.agent_status_source, None);
                 assert_eq!(ws.last_agent_message, None);
                 for pane in ws.panes.values() {
                     for tab in &pane.tabs {
                         assert_eq!(tab.notification, NotificationState::None);
                         assert_eq!(tab.last_activity_ms, None);
+                        assert_eq!(tab.agent_status, AgentStatus::Idle);
+                        assert_eq!(tab.last_agent_message, None);
+                        assert_eq!(tab.last_agent_message_seq, None);
                     }
                 }
             }
             other => panic!("Restored 여야 함: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_state_without_tab_agent_fields_loads() {
+        // 탭 단위 에이전트 필드가 생기기 전 v1 파일: 탭에는 agentStatus/lastAgentMessage
+        // 가 없고, 워크스페이스에는 제거된 agentStatusSource 키가 남아 있다. 이 파일이
+        // Corrupt 로 떨어지면 백업 후 새로 시작하므로 사용자 워크스페이스가 전부 사라진다.
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        let legacy = r#"{
+  "version": 1,
+  "state": {
+    "workspaces": [
+      {
+        "id": 1,
+        "name": "legacy",
+        "rootPath": "/home/dev/legacy",
+        "distro": "Ubuntu-24.04",
+        "gitBranch": null,
+        "gitDirty": null,
+        "layout": {
+          "type": "split",
+          "id": 4,
+          "direction": "horizontal",
+          "ratio": 0.5,
+          "first": { "type": "leaf", "pane": 2 },
+          "second": { "type": "leaf", "pane": 3 }
+        },
+        "panes": {
+          "2": {
+            "id": 2,
+            "tabs": [
+              {
+                "id": 5,
+                "title": "Terminal",
+                "kind": {
+                  "type": "terminal",
+                  "ptySession": 9,
+                  "status": { "type": "running" },
+                  "cwd": "/home/dev/legacy/src"
+                },
+                "notification": "unread",
+                "lastActivityMs": 1723100000000
+              }
+            ],
+            "activeTab": 5
+          },
+          "3": {
+            "id": 3,
+            "tabs": [
+              {
+                "id": 6,
+                "title": "notes.txt",
+                "kind": {
+                  "type": "textViewer",
+                  "path": "/home/dev/legacy/notes.txt",
+                  "scrollTop": 0.0
+                },
+                "notification": "none",
+                "lastActivityMs": null
+              }
+            ],
+            "activeTab": 6
+          }
+        },
+        "activePane": 2,
+        "agentStatus": "needsInput",
+        "lastAgentMessage": "approve?",
+        "agentStatusSource": 5
+      }
+    ],
+    "activeWorkspace": 1,
+    "nextId": 7,
+    "revision": 12
+  }
+}"#;
+        fs::write(&path, legacy).unwrap();
+
+        let LoadOutcome::Restored { state, repairs } = load(&path) else {
+            panic!("legacy v1 state must restore");
+        };
+        assert!(repairs.is_empty(), "repairs: {repairs:?}");
+        assert!(corrupt_backups(&dir).is_empty(), "corrupt 백업 경로를 타면 안 된다");
+        assert!(path.exists(), "원본이 백업으로 치워지면 안 된다");
+
+        assert_eq!(state.active_workspace, Some(WorkspaceId(1)));
+        assert_eq!(state.next_id, 7);
+        let ws = &state.workspaces[0];
+        assert_eq!(ws.root_path.as_deref(), Some("/home/dev/legacy"));
+        assert_eq!(ws.layout.leaves(), vec![PaneId(2), PaneId(3)]);
+        let TabKind::Terminal { cwd, .. } = &ws.panes[&PaneId(2)].tabs[0].kind else {
+            panic!("tab 5 must stay terminal");
+        };
+        assert_eq!(cwd.as_deref(), Some("/home/dev/legacy/src"));
+        assert_eq!(
+            ws.panes[&PaneId(3)].tabs[0].kind,
+            TabKind::TextViewer {
+                path: "/home/dev/legacy/notes.txt".into(),
+                scroll_top: 0.0,
+            }
+        );
+
+        assert_eq!(ws.agent_status, AgentStatus::Idle);
+        assert_eq!(ws.last_agent_message, None);
+        for pane in ws.panes.values() {
+            for tab in &pane.tabs {
+                assert_eq!(tab.agent_status, AgentStatus::Idle);
+                assert_eq!(tab.last_agent_message, None);
+                assert_eq!(tab.last_agent_message_seq, None);
+            }
         }
     }
 

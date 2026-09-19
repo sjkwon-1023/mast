@@ -7,13 +7,16 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { setupVersion } from "./setup-script";
+
 const project = resolve(dirname(new URL(import.meta.url).pathname), "../../..");
 const pluginPath = join(project, "scripts/wsl/mast-opencode-plugin.js");
 const provision = readFileSync(join(project, "apps/mast/src-tauri/src/provision.rs"), "utf8");
 const host = readFileSync(join(project, "apps/mast/src-tauri/src/host.rs"), "utf8");
+const version = setupVersion(provision);
 const originalHome = process.env.HOME;
 const setup = provision.split('const SETUP_SCRIPT: &str = r###"')[1]?.split('"###;')[0]
-  ?.replaceAll("@SETUP_VERSION@", "14")
+  ?.replaceAll("@SETUP_VERSION@", String(version))
   .replaceAll("@CONFIG_HELPER@", "")
   .replaceAll("@OPENCODE_PLUGIN@", () => readFileSync(pluginPath, "utf8").trimEnd());
 if (!setup) throw new Error("SETUP_SCRIPT missing");
@@ -41,7 +44,7 @@ function runSetup(root: string, source = setup, xdgConfigHome = join(root, "home
   chmodSync(binary, 0o700);
   const start = source.indexOf("# OpenCode 설치기의 PATH 줄이");
   if (start < 0) throw new Error("OpenCode setup block missing");
-  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: xdgConfigHome, MAST_HOME: join(home, ".mast"), LOG: join(home, ".mast", "setup.log"), MARKER: join(home, ".mast", ".setup-v14") };
+  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: xdgConfigHome, MAST_HOME: join(home, ".mast"), LOG: join(home, ".mast", "setup.log"), MARKER: join(home, ".mast", `.setup-v${version}`) };
   const result = spawnSync("bash", ["--noprofile", "--norc", "-s"], {
     input: `set -u\nlog() { printf '%s\\n' \"$*\" >> \"$LOG\"; }\n${source.slice(start)}`, env, encoding: "utf8", timeout: 5000,
   });
@@ -113,7 +116,7 @@ describe("OpenCode plugin and setup", () => {
     expect(first.status, first.stderr).toBe(0);
     const target = join(first.home, ".config/opencode/plugins/mast.js");
     expect(readFileSync(target, "utf8")).toBe(readFileSync(pluginPath, "utf8"));
-    expect(existsSync(join(first.home, ".mast/.setup-v14"))).toBe(true);
+    expect(existsSync(join(first.home, `.mast/.setup-v${version}`))).toBe(true);
     writeFileSync(target, "// user version\n");
     const second = runSetup(root);
     expect(second.status, second.stderr).toBe(0);
@@ -153,7 +156,7 @@ describe("OpenCode plugin and setup", () => {
     writeFileSync(blocked, "occupied");
     const result = runSetup(root, setup, blocked);
     expect(result.status).toBe(1);
-    expect(existsSync(join(result.home, ".mast/.setup-v14"))).toBe(false);
+    expect(existsSync(join(result.home, `.mast/.setup-v${version}`))).toBe(false);
     expect(result.stderr).toContain("OpenCode plugin installation failed");
   });
 

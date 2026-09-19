@@ -19,6 +19,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, describe, expect, it } from "vitest";
 
+import { assembleSetupScript, setupVersion } from "./setup-script";
+
 const ROOT = mkdtempSync(join(tmpdir(), "mast-config-cli-test-"));
 const HELPER = resolve(dirname(fileURLToPath(import.meta.url)), "../../../scripts/wsl/mast-config.py");
 const PYTHON = "python3";
@@ -340,13 +342,10 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
   });
 
   it("installs the embedded helper and routes config argv without terminal control sequences", () => {
-    const source = readFileSync(resolve(dirname(HELPER), "../../apps/mast/src-tauri/src/provision.rs"), "utf8");
-    const raw = source.split('const SETUP_SCRIPT: &str = r###"')[1]?.split('"###;')[0];
-    expect(raw).toBeDefined();
-    const expanded = raw!.replaceAll("@SETUP_VERSION@", "14")
-      .replace("@CONFIG_HELPER@", () => readFileSync(HELPER, "utf8"))
-      .replace("@OPENCODE_PLUGIN@", () => readFileSync(resolve(dirname(HELPER), "mast-opencode-plugin.js"), "utf8").trimEnd());
-    expect(spawnSync("bash", ["-n", "-c", expanded], { encoding: "utf8", timeout: 5_000 }).status).toBe(0);
+    const expanded = assembleSetupScript();
+    expect(expanded).toContain(`.setup-v${setupVersion()}`);
+    // 임베드 파일로 커진 스크립트는 인자 하나의 커널 한도(128 KiB)를 넘으므로 stdin 으로 넘긴다.
+    expect(spawnSync("bash", ["-n"], { input: expanded, encoding: "utf8", timeout: 5_000 }).status).toBe(0);
     const install = expanded.slice(expanded.indexOf('cat > "$CLI.tmp"'), expanded.indexOf("# --- 3. mast-send.sh"));
     const home = dirname(fixture());
     const bin = join(home, ".mast", "bin");
@@ -359,7 +358,7 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
       input: "log() { :; }\n" + install, env, encoding: "utf8", timeout: 5_000,
     });
     expect(installed.status, installed.stderr).toBe(0);
-    expect(readFileSync(helper, "utf8").trimEnd()).toBe(readFileSync(HELPER, "utf8").trimEnd());
+    expect(readFileSync(helper, "utf8")).toBe(readFileSync(HELPER, "utf8"));
     const helpResult = spawnSync("bash", [cli, "config", "--help"], { env, encoding: "utf8", timeout: 5_000 });
     expect(helpResult.status, helpResult.stderr).toBe(0);
     expect(helpResult.stdout).toContain("mast config set remote");

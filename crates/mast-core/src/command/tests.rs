@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use super::events::recompute_agent_summary;
 use super::queries::parse_tab_id_target;
 use super::*;
 use crate::model::{
@@ -1541,14 +1542,19 @@ fn batch(events: &[(SessionId, OscEvent)]) -> OscBatch {
     b
 }
 
-/// 워크스페이스의 에이전트 상태 3종 (상태, 출처 탭, 미리보기 메시지).
-fn agent(d: &Dispatcher, ws: WorkspaceId) -> (AgentStatus, Option<TabId>, Option<String>) {
+/// 워크스페이스의 파생 에이전트 상태 (상태, 미리보기 메시지).
+fn agent(d: &Dispatcher, ws: WorkspaceId) -> (AgentStatus, Option<String>) {
     let w = d.state().workspace(ws).unwrap();
-    (
-        w.agent_status,
-        w.agent_status_source,
-        w.last_agent_message.clone(),
-    )
+    (w.agent_status, w.last_agent_message.clone())
+}
+
+fn tab_agent(d: &Dispatcher, tab: TabId) -> (AgentStatus, Option<String>) {
+    let t = tab_view(d, tab);
+    (t.agent_status, t.last_agent_message.clone())
+}
+
+fn msg(text: &str) -> Option<String> {
+    Some(text.to_owned())
 }
 
 /// 탭 값 관측 헬퍼 — 전 워크스페이스 범위 탐색.
@@ -1594,7 +1600,12 @@ fn apply_osc_routes_delta_to_the_tab_owning_the_session() {
     assert_eq!(t1.title, "agent");
     assert_eq!(t1.notification, NotificationState::Unread);
     assert_eq!(t1.last_activity_ms, Some(1_000));
+    assert!(t1.last_agent_message_seq.is_some());
     assert_eq!(tab_cwd(&d, tab1).as_deref(), Some("/home/u/my proj"));
+    assert_eq!(
+        tab_agent(&d, tab1),
+        (AgentStatus::NeedsInput, msg("approve?"))
+    );
 
     // 같은 pane 의 다른 탭은 그대로.
     let t2 = tab_view(&d, tab2);
@@ -1602,16 +1613,10 @@ fn apply_osc_routes_delta_to_the_tab_owning_the_session() {
     assert_eq!(t2.notification, NotificationState::None);
     assert_eq!(t2.last_activity_ms, None);
     assert_eq!(tab_cwd(&d, tab2), None);
+    assert_eq!(tab_agent(&d, tab2), (AgentStatus::Idle, None));
 
-    // 워크스페이스 레벨 상태 + 출처 탭 기록.
-    assert_eq!(
-        agent(&d, ws),
-        (
-            AgentStatus::NeedsInput,
-            Some(tab1),
-            Some("approve?".to_owned())
-        )
-    );
+    // 워크스페이스는 탭에서 파생된다.
+    assert_eq!(agent(&d, ws), (AgentStatus::NeedsInput, msg("approve?")));
 }
 
 #[test]
@@ -1646,7 +1651,8 @@ fn a_late_delta_cannot_reach_an_exited_tab() {
         code: Some(0),
         ended_at_ms: 1_700_000_000_000,
     });
-    assert_eq!(agent(&d, ws).0, AgentStatus::Idle);
+    assert_eq!(agent(&d, ws), (AgentStatus::Idle, None));
+    assert_eq!(tab_agent(&d, tab), (AgentStatus::Idle, None));
     assert_eq!(terminal_of(&d, tab).1, None, "세션을 놓은 뒤가 전제다");
     let before = serde_json::to_value(d.state()).unwrap();
 
@@ -1671,27 +1677,36 @@ fn apply_osc_keeps_needs_input_against_other_tabs() {
         batch(&[(s1, status_notify("mast:needsInput", "approve?"))]),
         1_000,
     );
-    assert_eq!(agent(&d, ws).1, Some(tab1));
 
-    // 다른 탭의 running·idle 은 입력 대기를 가리지 못한다 (출처도 유지).
-    for token in ["mast:running", "mast:idle"] {
-        d.apply_osc(batch(&[(s2, status_notify(token, ""))]), 2_000);
-        assert_eq!(agent(&d, ws).0, AgentStatus::NeedsInput, "{token}");
-        assert_eq!(agent(&d, ws).1, Some(tab1), "{token}");
+    // 다른 탭의 running·idle 은 입력 대기를 가리지 못하고, 그 탭 자신에만 남는다.
+    for (token, status) in [
+        ("mast:running", AgentStatus::Running),
+        ("mast:idle", AgentStatus::Idle),
+    ] {
+        d.apply_osc(batch(&[(s2, status_notify(token, "other"))]), 2_000);
+        assert_eq!(
+            agent(&d, ws),
+            (AgentStatus::NeedsInput, msg("approve?")),
+            "{token}"
+        );
+        assert_eq!(tab_agent(&d, tab2), (status, msg("other")), "{token}");
     }
 
-    // 단 다른 탭의 needsInput 은 반영되고 출처가 그 탭으로 옮겨간다.
+    // 두 번째 needsInput 은 더 최근이므로 미리보기가 그 탭으로 옮겨간다.
     d.apply_osc(
         batch(&[(s2, status_notify("mast:needsInput", "second"))]),
         3_000,
     );
-    assert_eq!(agent(&d, ws).0, AgentStatus::NeedsInput);
-    assert_eq!(agent(&d, ws).1, Some(tab2));
+    assert_eq!(agent(&d, ws), (AgentStatus::NeedsInput, msg("second")));
+    assert_eq!(
+        tab_agent(&d, tab1),
+        (AgentStatus::NeedsInput, msg("approve?"))
+    );
 }
 
 #[test]
-fn apply_osc_lets_the_same_source_leave_needs_input() {
-    // 사용자가 응답하면 같은 출처 탭의 UserPromptSubmit(running)이 자연 강등한다.
+fn apply_osc_lets_the_waiting_tab_leave_needs_input() {
+    // 사용자가 응답하면 그 탭의 UserPromptSubmit(running)이 자연 강등한다.
     let (mut d, _host) = dispatcher();
     let (ws, pane) = create_ws(&mut d, "ws");
     let (tab1, s1) = create_terminal_tab(&mut d, pane);
@@ -1700,15 +1715,9 @@ fn apply_osc_lets_the_same_source_leave_needs_input() {
         1_000,
     );
     assert!(d.apply_osc(batch(&[(s1, status_notify("mast:running", ""))]), 2_000));
-    assert_eq!(
-        agent(&d, ws),
-        (
-            AgentStatus::Running,
-            Some(tab1),
-            // 빈 body 는 앞선 메시지를 지우지 않는다 (notify.rs last-non-empty).
-            Some("approve?".to_owned())
-        )
-    );
+    // 빈 body 는 앞선 메시지를 지우지 않는다 (notify.rs last-non-empty).
+    assert_eq!(tab_agent(&d, tab1), (AgentStatus::Running, msg("approve?")));
+    assert_eq!(agent(&d, ws), (AgentStatus::Running, msg("approve?")));
 }
 
 #[test]
@@ -1831,7 +1840,7 @@ fn close_workspace_fallback_clears_unread_of_newly_visible_tabs() {
 }
 
 #[test]
-fn close_tab_resets_agent_status_source() {
+fn close_tab_drops_the_closed_tabs_status_and_message() {
     let (mut d, _host) = dispatcher();
     let (ws, pane) = create_ws(&mut d, "ws");
     let (tab1, s1) = create_terminal_tab(&mut d, pane);
@@ -1842,31 +1851,27 @@ fn close_tab_resets_agent_status_source() {
     );
 
     d.dispatch(Command::CloseTab { tab: tab1 }).unwrap();
-    // 상태·출처만 되돌아간다 (미리보기 메시지는 리셋 대상이 아니다).
-    assert_eq!(
-        agent(&d, ws),
-        (AgentStatus::Idle, None, Some("approve?".to_owned()))
-    );
+    // 메시지도 닫힌 탭과 함께 사라진다 — 남은 탭 중 알린 탭이 없다.
+    assert_eq!(agent(&d, ws), (AgentStatus::Idle, None));
 }
 
 #[test]
-fn close_pane_resets_agent_status_source_for_any_removed_tab() {
-    // pane 의 두 번째 탭이 출처여도 리셋된다 — 제거되는 탭 전부를 확인하지
-    // 않으면 죽은 탭의 needsInput 이 사이드바에 영원히 남는다.
+fn close_pane_drops_agent_state_of_every_removed_tab() {
+    // ClosePane 뒤 남은 탭들로 파생값을 다시 계산하지 않으면 제거된 탭의 needsInput
+    // 이 사이드바에 남는다.
     let (mut d, _host) = dispatcher();
     let (ws, pane1) = create_ws(&mut d, "ws");
     let (pane2, _split) = split_empty(&mut d, pane1, SplitDirection::Vertical);
     create_terminal_tab(&mut d, pane2);
-    let (second, s2) = create_terminal_tab(&mut d, pane2);
+    let (_second, s2) = create_terminal_tab(&mut d, pane2);
     d.apply_osc(
         batch(&[(s2, status_notify("mast:needsInput", "approve?"))]),
         1_000,
     );
-    assert_eq!(agent(&d, ws).1, Some(second));
+    assert_eq!(agent(&d, ws).0, AgentStatus::NeedsInput);
 
     d.dispatch(Command::ClosePane { pane: pane2 }).unwrap();
-    assert_eq!(agent(&d, ws).0, AgentStatus::Idle);
-    assert_eq!(agent(&d, ws).1, None);
+    assert_eq!(agent(&d, ws), (AgentStatus::Idle, None));
 }
 
 /// distro 를 단 워크스페이스 헬퍼 — 해제 통지가 어느 배포판으로 가야 하는지
@@ -2100,37 +2105,34 @@ fn closing_a_viewer_tab_releases_nothing() {
 }
 
 #[test]
-fn session_exited_resets_agent_status_source() {
+fn session_exited_clears_the_exited_tabs_agent_state() {
     let (mut d, _host) = dispatcher();
     let (ws, pane) = create_ws(&mut d, "ws");
-    let (tab1, s1) = create_terminal_tab(&mut d, pane);
+    let (_tab1, s1) = create_terminal_tab(&mut d, pane);
     let (tab2, s2) = create_terminal_tab(&mut d, pane);
     d.apply_osc(
         batch(&[(s2, status_notify("mast:needsInput", "approve?"))]),
         1_000,
     );
-    assert_eq!(agent(&d, ws).1, Some(tab2));
 
-    // 출처가 아닌 탭의 종료는 상태를 건드리지 않는다.
+    // 기다리지 않던 탭의 종료는 워크스페이스를 건드리지 않는다.
     d.apply_event(SessionEvent::SessionExited {
         session: s1,
         code: Some(0),
         ended_at_ms: 1_700_000_000_000,
     });
-    assert_eq!(agent(&d, ws).0, AgentStatus::NeedsInput);
-    assert_eq!(agent(&d, ws).1, Some(tab2));
+    assert_eq!(agent(&d, ws), (AgentStatus::NeedsInput, msg("approve?")));
 
-    // 출처 탭의 종료는 Idle 로 되돌린다.
+    // 기다리던 탭의 종료는 그 탭과 파생값을 함께 비운다.
     let rev = d.state().revision;
     d.apply_event(SessionEvent::SessionExited {
         session: s2,
         code: Some(0),
         ended_at_ms: 1_700_000_000_000,
     });
-    assert_eq!(agent(&d, ws).0, AgentStatus::Idle);
-    assert_eq!(agent(&d, ws).1, None);
+    assert_eq!(tab_agent(&d, tab2), (AgentStatus::Idle, None));
+    assert_eq!(agent(&d, ws), (AgentStatus::Idle, None));
     assert_eq!(d.state().revision, rev + 1);
-    let _ = tab1;
 }
 
 #[test]
@@ -2153,15 +2155,287 @@ fn apply_osc_bumps_revision_once_per_batch() {
     ));
     assert_eq!(d.state().revision, rev + 1);
 
-    // 바뀔 것이 없는 배치는 false — 글루가 스냅샷 발행을 건너뛴다.
+    // 바뀔 것이 없는 배치는 false — 글루가 스냅샷 발행을 건너뛴다. 반복은 미리보기에
+    // 이미 오른 탭(동률로 이긴 s1)의 것이어야 한다: 다른 탭의 반복 알림은 그 탭을
+    // 최신으로 올려 미리보기를 실제로 바꾼다.
     assert!(!d.apply_osc(
         batch(&[
-            (s2, OscEvent::Osc0Title("b".into())),
-            (s2, status_notify("mast:idle", "two")),
+            (s1, OscEvent::Osc0Title("a".into())),
+            (s1, status_notify("mast:running", "one")),
         ]),
         1_000,
     ));
     assert_eq!(d.state().revision, rev + 1);
+}
+
+#[test]
+fn an_idle_from_the_tab_that_waited_does_not_mask_another_tabs_running() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    let (_a, sa) = create_terminal_tab(&mut d, pane);
+    let (_b, sb) = create_terminal_tab(&mut d, pane);
+    d.apply_osc(batch(&[(sa, status_notify("mast:needsInput", ""))]), 1_000);
+    d.apply_osc(batch(&[(sb, status_notify("mast:running", ""))]), 2_000);
+    d.apply_osc(batch(&[(sa, status_notify("mast:idle", ""))]), 3_000);
+    assert_eq!(agent(&d, ws).0, AgentStatus::Running);
+}
+
+#[test]
+fn another_tabs_idle_does_not_mask_running() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    let (_a, sa) = create_terminal_tab(&mut d, pane);
+    let (_b, sb) = create_terminal_tab(&mut d, pane);
+    d.apply_osc(batch(&[(sa, status_notify("mast:running", ""))]), 1_000);
+    d.apply_osc(batch(&[(sb, status_notify("mast:idle", "done"))]), 2_000);
+    assert_eq!(agent(&d, ws).0, AgentStatus::Running);
+}
+
+#[test]
+fn one_tab_leaving_needs_input_keeps_the_other_waiting_tab() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    let (a, sa) = create_terminal_tab(&mut d, pane);
+    let (b, sb) = create_terminal_tab(&mut d, pane);
+    d.apply_osc(
+        batch(&[(sa, status_notify("mast:needsInput", "approve A?"))]),
+        1_000,
+    );
+    d.apply_osc(
+        batch(&[(sb, status_notify("mast:needsInput", "approve B?"))]),
+        2_000,
+    );
+    // A 의 running 문구가 가장 최근이어도 미리보기는 기다리는 탭(B)의 것이다.
+    d.apply_osc(
+        batch(&[(sa, status_notify("mast:running", "working"))]),
+        3_000,
+    );
+    assert_eq!(tab_agent(&d, a), (AgentStatus::Running, msg("working")));
+    assert_eq!(
+        tab_agent(&d, b),
+        (AgentStatus::NeedsInput, msg("approve B?"))
+    );
+    assert_eq!(agent(&d, ws), (AgentStatus::NeedsInput, msg("approve B?")));
+}
+
+#[test]
+fn removing_the_waiting_tab_keeps_another_tabs_running() {
+    enum Removal {
+        CloseTab,
+        ClosePane,
+        SessionExited,
+    }
+    for removal in [Removal::CloseTab, Removal::ClosePane, Removal::SessionExited] {
+        let (mut d, _host) = dispatcher();
+        let (ws, pane1) = create_ws(&mut d, "ws");
+        let (_b, sb) = create_terminal_tab(&mut d, pane1);
+        let (pane2, _split) = split_empty(&mut d, pane1, SplitDirection::Vertical);
+        let (a, sa) = create_terminal_tab(&mut d, pane2);
+        d.apply_osc(
+            batch(&[
+                (sb, status_notify("mast:running", "building")),
+                (sa, status_notify("mast:needsInput", "approve?")),
+            ]),
+            1_000,
+        );
+        assert_eq!(agent(&d, ws).0, AgentStatus::NeedsInput);
+
+        let label = match removal {
+            Removal::CloseTab => {
+                d.dispatch(Command::CloseTab { tab: a }).unwrap();
+                "CloseTab"
+            }
+            Removal::ClosePane => {
+                d.dispatch(Command::ClosePane { pane: pane2 }).unwrap();
+                "ClosePane"
+            }
+            Removal::SessionExited => {
+                d.apply_event(SessionEvent::SessionExited {
+                    session: sa,
+                    code: Some(0),
+                    ended_at_ms: 1_700_000_000_000,
+                });
+                "SessionExited"
+            }
+        };
+        assert_eq!(
+            agent(&d, ws),
+            (AgentStatus::Running, msg("building")),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn workspace_message_prefers_the_most_urgent_tab_over_a_newer_idle() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    let (_a, sa) = create_terminal_tab(&mut d, pane);
+    let (_b, sb) = create_terminal_tab(&mut d, pane);
+    d.apply_osc(
+        batch(&[(sa, status_notify("mast:needsInput", "approve?"))]),
+        1_000,
+    );
+    d.apply_osc(batch(&[(sb, status_notify("mast:idle", "done"))]), 2_000);
+    assert_eq!(agent(&d, ws), (AgentStatus::NeedsInput, msg("approve?")));
+}
+
+#[test]
+fn workspace_message_follows_arrival_order_not_tab_order_or_clock() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    let (a, sa) = create_terminal_tab(&mut d, pane);
+    let (b, sb) = create_terminal_tab(&mut d, pane);
+    assert!(a < b);
+    // 늦게 온 쪽이 TabId 도 크고 벽시계도 뒤로 갔다 — 둘 중 하나로 고르면 a 가 이긴다.
+    d.apply_osc(batch(&[(sa, status_notify("mast:idle", "a done"))]), 2_000);
+    d.apply_osc(batch(&[(sb, status_notify("mast:idle", "b done"))]), 1_000);
+    assert_eq!(agent(&d, ws), (AgentStatus::Idle, msg("b done")));
+
+    // 한 배치 안의 동률은 작은 TabId 가 이긴다.
+    d.apply_osc(
+        batch(&[
+            (sb, status_notify("mast:idle", "b again")),
+            (sa, status_notify("mast:idle", "a again")),
+        ]),
+        3_000,
+    );
+    assert_eq!(agent(&d, ws), (AgentStatus::Idle, msg("a again")));
+}
+
+#[test]
+fn a_repeated_message_makes_its_tab_the_newest() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    let (_a, sa) = create_terminal_tab(&mut d, pane);
+    let (_b, sb) = create_terminal_tab(&mut d, pane);
+    d.apply_osc(batch(&[(sa, status_notify("mast:idle", "done"))]), 1_000);
+    d.apply_osc(batch(&[(sb, status_notify("mast:idle", "b done"))]), 2_000);
+    assert_eq!(agent(&d, ws).1, msg("b done"));
+
+    // 문구가 탭에 이미 있던 것과 같아도 도착 시각은 갱신된다.
+    let rev = d.state().revision;
+    assert!(d.apply_osc(batch(&[(sa, status_notify("mast:idle", "done"))]), 3_000));
+    assert_eq!(agent(&d, ws), (AgentStatus::Idle, msg("done")));
+    assert_eq!(d.state().revision, rev + 1);
+}
+
+#[test]
+fn a_running_workspace_previews_a_message_from_a_tab_that_is_not_running() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    let (_a, sa) = create_terminal_tab(&mut d, pane);
+    let (_b, sb) = create_terminal_tab(&mut d, pane);
+    d.apply_osc(batch(&[(sb, status_notify("mast:idle", "done"))]), 1_000);
+    d.apply_osc(batch(&[(sa, status_notify("mast:running", ""))]), 2_000);
+    assert_eq!(agent(&d, ws), (AgentStatus::Running, msg("done")));
+}
+
+#[test]
+fn a_running_tabs_stale_message_does_not_hide_a_newer_one() {
+    // 실제 훅 순서: needsInput 에 본문, idle 에 본문, running 은 본문이 없어 A 의
+    // 이전 문구가 탭에 그대로 남는다.
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    let (a, sa) = create_terminal_tab(&mut d, pane);
+    let (_b, sb) = create_terminal_tab(&mut d, pane);
+    d.apply_osc(
+        batch(&[(sa, status_notify("mast:needsInput", "Claude is waiting"))]),
+        1_000,
+    );
+    d.apply_osc(batch(&[(sb, status_notify("mast:idle", "done"))]), 2_000);
+    d.apply_osc(batch(&[(sa, status_notify("mast:running", ""))]), 3_000);
+    assert_eq!(
+        tab_agent(&d, a),
+        (AgentStatus::Running, msg("Claude is waiting"))
+    );
+    assert_eq!(agent(&d, ws), (AgentStatus::Running, msg("done")));
+}
+
+#[test]
+fn a_needs_input_workspace_never_borrows_another_tabs_message() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    let (_a, sa) = create_terminal_tab(&mut d, pane);
+    let (_b, sb) = create_terminal_tab(&mut d, pane);
+    d.apply_osc(batch(&[(sb, status_notify("mast:idle", "done"))]), 1_000);
+    d.apply_osc(batch(&[(sa, status_notify("mast:needsInput", ""))]), 2_000);
+    assert_eq!(agent(&d, ws), (AgentStatus::NeedsInput, None));
+}
+
+#[test]
+fn a_status_neutral_message_counts_when_it_is_the_newest() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    let (_a, sa) = create_terminal_tab(&mut d, pane);
+    let (b, sb) = create_terminal_tab(&mut d, pane);
+    d.apply_osc(batch(&[(sa, status_notify("mast:idle", "done"))]), 1_000);
+    // 이미 Idle 인 탭에서는 상태 중립 알림이 Idle 을 주장해도 드러나지 않는다.
+    d.apply_osc(batch(&[(sb, status_notify("mast:running", ""))]), 2_000);
+
+    d.apply_osc(
+        batch(&[(sb, OscEvent::Osc9Notify("build finished".into()))]),
+        3_000,
+    );
+    assert_eq!(
+        tab_agent(&d, b),
+        (AgentStatus::Running, msg("build finished"))
+    );
+    assert_eq!(agent(&d, ws), (AgentStatus::Running, msg("build finished")));
+
+    d.apply_osc(
+        batch(&[(sb, status_notify("not-a-token", "heads up"))]),
+        4_000,
+    );
+    assert_eq!(tab_agent(&d, b), (AgentStatus::Running, msg("heads up")));
+    assert_eq!(agent(&d, ws), (AgentStatus::Running, msg("heads up")));
+}
+
+#[test]
+fn startup_timeout_keeps_the_tabs_agent_state() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    let (tab, session) = create_terminal_tab(&mut d, pane);
+    d.apply_osc(
+        batch(&[(session, status_notify("mast:needsInput", "approve?"))]),
+        1_000,
+    );
+    d.apply_event(SessionEvent::SessionStartupTimeout { session });
+    assert_eq!(terminal_of(&d, tab).0, TerminalStatus::NotStarted);
+    assert_eq!(
+        tab_agent(&d, tab),
+        (AgentStatus::NeedsInput, msg("approve?"))
+    );
+    assert_eq!(agent(&d, ws), (AgentStatus::NeedsInput, msg("approve?")));
+}
+
+#[test]
+fn snapshot_fixture_workspace_agent_fields_match_their_tabs() {
+    // tests/dispatcher.rs 의 round-trip 은 파생 규칙을 볼 수 없다
+    // (recompute_agent_summary 가 크레이트 밖에 보이지 않는다).
+    #[derive(serde::Deserialize)]
+    struct Snapshot {
+        state: AppState,
+    }
+    let snapshot: Snapshot =
+        serde_json::from_str(include_str!("../../../../fixtures/stage10-snapshot.json")).unwrap();
+    for ws in &snapshot.state.workspaces {
+        let mut recomputed = ws.clone();
+        assert!(
+            !recompute_agent_summary(&mut recomputed),
+            "workspace {:?} 의 파생값이 탭과 어긋남",
+            ws.id
+        );
+        assert_eq!(&recomputed, ws);
+    }
+    assert!(
+        snapshot
+            .state
+            .workspaces
+            .iter()
+            .any(|ws| ws.agent_status == AgentStatus::NeedsInput),
+        "fixture 가 탭 needsInput → 워크스페이스 파생의 예시를 싣고 있어야 한다"
+    );
 }
 
 /// pty_session 없는 터미널 탭 값 — persist sanitize 직후 형태.
@@ -2176,6 +2450,9 @@ fn sessionless_tab(id: u64, status: TerminalStatus, cwd: Option<&str>) -> Tab {
         },
         notification: NotificationState::None,
         last_activity_ms: None,
+        agent_status: AgentStatus::Idle,
+        last_agent_message: None,
+        last_agent_message_seq: None,
     }
 }
 
@@ -2232,7 +2509,6 @@ fn adopted_state() -> AppState {
             active_pane: PaneId(2),
             agent_status: AgentStatus::Idle,
             last_agent_message: None,
-            agent_status_source: None,
         }],
         active_workspace: Some(WorkspaceId(1)),
         next_id: 8,
@@ -2402,6 +2678,53 @@ fn respawn_failure_keeps_the_exit_an_exited_tab_already_had() {
             }
         )
     );
+}
+
+/// 시작 표식을 못 낸 채 에이전트 알림을 남긴 탭 — 재시도 대상(NotStarted)이면서 세션을
+/// 문 채 탭 상태가 살아 있는 형태다.
+fn not_started_tab_waiting_for_input(d: &mut Dispatcher) -> SessionId {
+    let s5 = d.respawn_tab(TabId(5)).unwrap();
+    d.apply_osc(
+        batch(&[(s5, status_notify("mast:needsInput", "approve?"))]),
+        1_000,
+    );
+    d.apply_event(SessionEvent::SessionStartupTimeout { session: s5 });
+    assert_eq!(
+        agent(d, WorkspaceId(1)),
+        (AgentStatus::NeedsInput, msg("approve?"))
+    );
+    s5
+}
+
+#[test]
+fn respawn_failure_clears_the_tabs_agent_state() {
+    let (mut d, host) = adopted_dispatcher();
+    not_started_tab_waiting_for_input(&mut d);
+
+    host.set_fail_spawn(true);
+    d.respawn_tab(TabId(5)).unwrap_err();
+    assert!(matches!(
+        terminal_kind(&d, PaneId(2), 0).1,
+        TerminalStatus::Exited { .. }
+    ));
+    assert_eq!(tab_agent(&d, TabId(5)), (AgentStatus::Idle, None));
+    assert_eq!(agent(&d, WorkspaceId(1)), (AgentStatus::Idle, None));
+}
+
+#[test]
+fn respawn_does_not_carry_the_previous_sessions_agent_state() {
+    let (mut d, host) = adopted_dispatcher();
+    let old = not_started_tab_waiting_for_input(&mut d);
+
+    let revived = d.respawn_tab(TabId(5)).unwrap();
+    assert_eq!(host.kills(), vec![old]);
+    assert_eq!(
+        terminal_kind(&d, PaneId(2), 0),
+        (Some(revived), TerminalStatus::Running)
+    );
+    assert_eq!(tab_agent(&d, TabId(5)), (AgentStatus::Idle, None));
+    assert_eq!(tab_view(&d, TabId(5)).last_agent_message_seq, None);
+    assert_eq!(agent(&d, WorkspaceId(1)), (AgentStatus::Idle, None));
 }
 
 /// 실행 중 죽은 탭을 되살리는 경로 (ADR-0010). 정상 경로로 온 Exited 탭은 세션을

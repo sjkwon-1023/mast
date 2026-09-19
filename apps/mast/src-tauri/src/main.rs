@@ -347,8 +347,9 @@ fn main() {
             commands::pick_workspace_folder,
             // 터미널 링크 클릭 → Windows 기본 브라우저 (ADR-0012).
             commands::open_url,
-            // needsInput OS 토스트 — 지금 화면에 보이지 않는 워크스페이스의 상승
-            // 전이에서만 프론트가 부른다 (판정 계약은 커맨드 rustdoc).
+            // needsInput OS 토스트 — 탭의 상승 전이 하나에 한 번, 그 탭의 워크스페이스가
+            // 지금 화면에 보이지 않을 때만 프론트가 부른다 (판정은
+            // features/notifications/chime.ts, 계약은 커맨드 rustdoc).
             commands::notify_toast,
             // 뷰어 파일 접근 (21단계) — 읽기 전용 콘텐츠 플레인.
             commands::fs_list_dir,
