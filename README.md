@@ -126,26 +126,30 @@ and unknown existing keys are preserved. Full reference: [`docs/SETTINGS.md`](./
 
 ## Keyboard shortcuts
 
-Global shortcuts are all `Ctrl+Shift`, so plain `Ctrl` combinations stay with your shell. Anything
-not listed goes straight to the PTY.
+Most app shortcuts use `Ctrl+Shift` or `Alt+Shift`; unlisted keys go to the PTY.
 
 | Key | Action |
 |---|---|
-| `Ctrl+1` … `Ctrl+9` | Switch workspace by sidebar position |
+| `Ctrl+1` … `Ctrl+9` / `Alt+1` … `Alt+9` | Switch workspace by sidebar position |
+| `Ctrl+Shift+[` / `]` or `Alt+Shift+[` / `]` | Cycle workspaces |
 | `Ctrl+Shift+↑ ↓ ← →` | Move focus to the adjacent pane |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Cycle tabs in the active pane |
-| `Ctrl+Shift+T` | New terminal tab |
-| `Ctrl+Shift+B` | New folder browser tab |
-| `Ctrl+Shift+W` | Close the active tab |
+| `Ctrl+Shift+T` / `Alt+Shift+T` | New terminal tab |
+| `Ctrl+Shift+B` / `Alt+Shift+B` | New folder browser tab |
+| `Ctrl+Shift+W` / `Alt+Shift+W` | Close the active tab |
 | `Ctrl+Shift+D` | Split the pane top/bottom |
-| `Ctrl+Shift+E` | Split the pane left/right |
-| `Ctrl+Shift+N` | New workspace |
+| `Alt+Shift+D` | Split along the active pane's longer side |
+| `Ctrl+Shift+N` / `Alt+Shift+N` | New workspace |
+| `Ctrl+Shift+Q` / `Alt+Shift+Q` | Close the active workspace |
 | `Ctrl+Shift+R` | Reload the window |
 | `Ctrl+V` / `Ctrl+Shift+V` / `Shift+Insert` | Paste |
 | `Ctrl+C` / `Ctrl+Shift+C` | Copy when there is a selection — a bare `Ctrl+C` with no selection still sends SIGINT |
 
 Drag workspace cards to reorder them; `Ctrl+1`–`Ctrl+9` follow that order. The full list, including
 viewer-local keys, is in [`apps/mast/src/shared/keys.ts`](./apps/mast/src/shared/keys.ts).
+Hold `Alt` for 1.314 seconds to show Alt shortcut keys on buttons and workspace cards; release
+it to hide the guide. The guide also lists Alt shortcuts without a matching button. The Ctrl
+bindings above remain available but are not shown in the app's shortcut hints.
 
 ## Troubleshooting
 

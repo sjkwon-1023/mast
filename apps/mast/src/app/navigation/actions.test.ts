@@ -59,6 +59,16 @@ describe("navigation wiring", () => {
     });
   });
 
+  it("auto split follows the active pane's longer side", () => {
+    const host = context(structuredClone(snapshotJson) as unknown as StateSnapshot);
+    host.paneRects = () => [{ pane: 2, x: 0, y: 0, w: 1200, h: 700 }];
+    runNavAction(host, { type: "splitPaneAuto" });
+    expect(host.dispatchUI).toHaveBeenLastCalledWith(expect.objectContaining({ direction: "horizontal" }));
+    host.paneRects = () => [{ pane: 2, x: 0, y: 0, w: 600, h: 900 }];
+    runNavAction(host, { type: "splitPaneAuto" });
+    expect(host.dispatchUI).toHaveBeenLastCalledWith(expect.objectContaining({ direction: "vertical" }));
+  });
+
   it("uses sidebar callbacks before a snapshot exists", () => {
     const host = context();
     runNavAction(host, { type: "newWorkspaceHere" });

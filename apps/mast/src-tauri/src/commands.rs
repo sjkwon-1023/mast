@@ -368,7 +368,7 @@ pub fn user_activity(state: State<'_, AppState>, visible: Option<bool>) {
 ///
 /// `deny_unknown_fields` 는 **일부러 걸지 않는다** — 뒤 버전이 넣을 키가 든
 /// 파일을 옛 빌드가 통째로 거부하면 폰트까지 같이 죽는다 (전방 호환).
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiSettings {
     /// xterm `fontFamily` — CSS font-family 문자열 그대로.
@@ -382,6 +382,12 @@ pub struct UiSettings {
     /// 파일도 열지 않고 쓰기 스레드도 뜨지 않는다 ([`crate::logfile`]). 켠 뒤에는
     /// 앱을 다시 시작해야 한다 — 부팅 때 한 번만 읽는다.
     pub log: Option<bool>,
+    /// 탭 제목 옆에 그 탭의 안정 `Tab.id`(`#12` — `mast ls`/`mast send '#<id>'` 의
+    /// 주소)를 보여 줄지. **미설정은 표시가 기본값**이라 여기서는 `None` 과 `true`
+    /// 가 같은 뜻이고 `false` 만 숨긴다 — 기본값 해석은 프론트가 한다
+    /// (features/workspace/tab-id-settings.ts). `log` 와 같은 규율로 부팅 때 한 번만
+    /// 읽으므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
+    pub show_tab_ids: Option<bool>,
     /// 원격 표면(LAN 폴링, [`crate::remote`]). **키가 있으면 켜짐**이고 없으면
     /// 리스너도 스레드도 토큰 파일도 생기지 않는다. `log` 와 같은 규율으로 부팅 때
     /// 한 번만 읽으므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
@@ -393,7 +399,7 @@ pub struct UiSettings {
 /// `port` 를 `Option` 으로 두지 않는 것이 계약이다 — 빠지면 serde 가 "missing field"
 /// 로 파일 전체의 파싱을 실패시켜 사용자가 상태 라인에서 이유를 본다. 기본 포트를
 /// 몰래 채우면 사용자가 쓰지 않은 포트가 LAN 에 열린다.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteSettings {
     /// 바인드할 TCP 포트. [`REMOTE_PORT_RANGE`] 밖이면 에러다.
@@ -452,7 +458,14 @@ pub(crate) fn read_ui_settings(app: &AppHandle) -> Result<UiSettings, String> {
         }
         Err(err) => return Err(format!("cannot read {}: {err}", path.display())),
     };
-    let settings: UiSettings = serde_json::from_str(&text)
+    parse_ui_settings(&text, &path)
+}
+
+/// JSON 텍스트 → 검증된 설정. 파일 읽기와 분리한 순수 부분이라 단위 테스트가
+/// `AppHandle` 없이 직접 부른다 (아래 `tests` — Windows CI 에서만 도는 글루라
+/// 파싱 계약은 여기에 잠근다). `path` 는 오류 문구에 쓰는 표시용 경로다.
+fn parse_ui_settings(text: &str, path: &Path) -> Result<UiSettings, String> {
+    let settings: UiSettings = serde_json::from_str(text)
         .map_err(|err| format!("cannot parse {}: {err}", path.display()))?;
     if let Some(size) = settings.font_size {
         if !FONT_SIZE_RANGE.contains(&size) {
@@ -1126,4 +1139,51 @@ fn decode_utf16le(bytes: &[u8]) -> String {
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
     String::from_utf16_lossy(&units)
+}
+
+// 글루는 Linux 개발 호스트에서 컴파일되지 않으므로 이 테스트들은 Windows CI 에서만
+// 돈다 (ci.yml 의 `cargo test --workspace --target x86_64-pc-windows-msvc`).
+// `AppHandle` 을 타지 않는 순수 파싱·검증만 여기서 잠근다.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn path() -> &'static Path {
+        Path::new("settings.json")
+    }
+
+    #[test]
+    fn show_tab_ids_reads_a_boolean_and_leaves_missing_as_unset() {
+        let off = parse_ui_settings(r#"{"showTabIds": false}"#, path()).unwrap();
+        assert_eq!(off.show_tab_ids, Some(false));
+
+        let on = parse_ui_settings(r#"{"showTabIds": true}"#, path()).unwrap();
+        assert_eq!(on.show_tab_ids, Some(true));
+
+        // 미설정(None)과 true 는 같은 뜻 — "표시" 기본값 해석은 프론트가 한다
+        // (features/workspace/tab-id-settings.ts). 여기서 true 를 채우면 기본값이
+        // 두 곳에 생긴다.
+        let absent = parse_ui_settings("{}", path()).unwrap();
+        assert_eq!(absent.show_tab_ids, None);
+    }
+
+    #[test]
+    fn show_tab_ids_rejects_a_non_boolean_instead_of_defaulting() {
+        // 잘못된 타입은 조용히 기본값으로 넘기지 않고 파일 전체를 사유와 함께
+        // 실패시킨다 (fontSize·remote.port 와 같은 loud-fail 규율).
+        for text in [r#"{"showTabIds": "yes"}"#, r#"{"showTabIds": 1}"#] {
+            let err = parse_ui_settings(text, path()).unwrap_err();
+            assert!(err.contains("settings.json"), "{err}");
+        }
+    }
+
+    #[test]
+    fn unknown_keys_stay_forward_compatible_and_known_range_checks_still_hold() {
+        // 뒤 버전이 넣을 키가 든 파일을 옛 빌드가 거부하면 안 된다 (deny_unknown_fields
+        // 를 걸지 않은 이유).
+        let future = parse_ui_settings(r#"{"future": {"enabled": true}}"#, path()).unwrap();
+        assert_eq!(future.show_tab_ids, None);
+        assert!(parse_ui_settings(r#"{"fontSize": 200}"#, path()).is_err());
+        assert!(parse_ui_settings(r#"{"remote": {"port": 80}}"#, path()).is_err());
+    }
 }

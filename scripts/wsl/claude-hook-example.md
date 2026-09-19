@@ -27,7 +27,7 @@ with the tool call it guards, happen entirely in the WSL-side scripts this docum
 
 ## Automatic provisioning
 
-**mast auto-provisions this on first run per distro (`~/.mast/.setup-v15`); this
+**mast auto-provisions this on first run per distro (`~/.mast/.setup-v16`); this
 document remains the contract and the manual path.**
 
 On launch the app streams a setup script into `wsl.exe [-d <distro>] -- bash -s` for every
@@ -96,12 +96,12 @@ A full run, in order:
 
 | Marker | Written when | To run it again |
 |---|---|---|
-| `~/.mast/.setup-v15` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v15` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
-| `~/.mast/.setup-v15-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v15-codex` reruns that step alone |
-| `~/.mast/.setup-v15-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v15-agy` reruns that step alone |
+| `~/.mast/.setup-v16` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v16` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
+| `~/.mast/.setup-v16-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v16-codex` reruns that step alone |
+| `~/.mast/.setup-v16-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v16-agy` reruns that step alone |
 
 With the main marker in place, a launch still runs an agent step whose directory exists and
-whose sub-marker does not — which is how a Codex or Antigravity CLI installed after setup v15
+whose sub-marker does not — which is how a Codex or Antigravity CLI installed after setup v16
 gets its hooks without waiting for the next version. That run uses the files already in
 `~/.mast/bin` (if one is missing it falls back to a full run), checks for `python3` again and,
 for Codex, resolves the dispatcher interpreter again; it adds no `notify` line, no AGENTS.md
@@ -120,8 +120,8 @@ When a run fails:
 - A file that is not writable or is a dangling symlink, and for Codex a `config.toml` with inline
   hooks, is **skipped** with a notice and counts as finished: the sub-marker is written — for
   Claude Code, whose merge is part of steps 1–11, the main marker — so no launch retries it. Once
-  the cause is fixed, `rm ~/.mast/.setup-v15-codex` (or `-agy`; for Claude Code
-  `rm ~/.mast/.setup-v15`) wires the hooks, or add the notice's snippet by hand.
+  the cause is fixed, `rm ~/.mast/.setup-v16-codex` (or `-agy`; for Claude Code
+  `rm ~/.mast/.setup-v16`) wires the hooks, or add the notice's snippet by hand.
 - A Codex or Antigravity CLI hooks file whose **content** the merge cannot handle is refused
   with exit 3: the file is left untouched and the sub-marker **is** written, because a rerun
   would refuse it the same way. The notice names the problem and says to edit the file and
@@ -155,8 +155,8 @@ that setup could not write somewhere — `cannot install …`, `cannot create �
 | When | The notice says |
 |---|---|
 | No `python3` | Install it, or wire the hooks by hand from this document |
-| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v15` (`rm ~/.mast/.setup-v15-codex` when only the Codex step ran) |
-| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v15` |
+| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v16` (`rm ~/.mast/.setup-v16-codex` when only the Codex step ran) |
+| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v16` |
 | A Codex install older than a hook feature mast relies on | Its path, and each missing feature ([version limits](#codex-version-limits)) |
 | Codex hooks were written | How to trust them — the wording follows the Codex version |
 | `config.toml` has inline `[hooks]` tables, `features.hooks = false`, `approvals_reviewer = "auto_review"`, or a stale `[hooks.state]` entry | What mast did not do, and why |
@@ -200,7 +200,7 @@ A version that cannot be read means different things per agent: Claude Code fail
 | `Stop` | `""` | `"$HOME/.mast/bin/mast-claude-hook.sh"` | dispatcher: session inactive, clear its root approvals |
 
 The three status rows are what mast has wired since stage 18. The eight dispatcher rows arrived
-with setup v15 and are left out (`--no-dispatcher`) without Python 3.8+, or when a Claude Code
+with setup v16 and are left out (`--no-dispatcher`) without Python 3.8+, or when a Claude Code
 install is older than 2.1.118 or reports no readable version. The literal file is under
 [Example settings.json](#example-settingsjson), and what the dispatcher rows do under
 [Claude Code approval tracking](#claude-code-approval-tracking--the-dispatcher-rows).
@@ -694,7 +694,7 @@ exit 0
 
 ## Example settings.json
 
-What setup v15 writes into a `~/.claude/settings.json` that had no hooks. A hand install uses
+What setup v16 writes into a `~/.claude/settings.json` that had no hooks. A hand install uses
 the same paths: the dispatcher entry point looks for the dispatcher and for
 `~/.mast/bin/mast-python` under `~/.mast/bin`.
 
@@ -906,7 +906,7 @@ them — and `mast-codex-notify.sh` runs it in `codex-notify` mode. Its source i
 
 ## Claude Code approval tracking — the dispatcher rows
 
-Before setup v15, a Claude Code tab that asked for approval stayed at `needs input` until the
+Before setup v16, a Claude Code tab that asked for approval stayed at `needs input` until the
 turn's `Stop`, however quickly you approved: no status hook fires in between. Reporting
 `running` on every tool result would be wrong the other way. Claude Code runs subagents in the
 background by default, and their tool results would clear a prompt that the main agent — or
@@ -1055,7 +1055,7 @@ deletes the tab's history ([ADR-0013](../../docs/adr/0013-retiring-a-closed-tab.
 
 Codex's `notify` program is run once per completed turn (`agent-turn-complete`) and receives
 the payload as a single JSON object appended as the **final argv element** — not on stdin.
-Since setup v15 it is no longer Codex's only signal: the [hooks](#codex-hooks--codexhooksjson)
+Since setup v16 it is no longer Codex's only signal: the [hooks](#codex-hooks--codexhooksjson)
 report running, needs input and idle as they happen. `notify` stays for what the hooks cannot
 do — the resume hint — and as a gated fallback idle. `~/.mast/bin/mast-codex-notify.sh` is that
 program; its source is the `provision.rs` heredoc, and this section is its contract. Given `$1`:
@@ -1118,7 +1118,7 @@ or a catch-up summary's `notify` fires in the same tab. The first rule that matc
 
 1. `MAST_TAB` missing or not decimal → nothing.
 2. `~/.mast/no-codex-hooks` exists → `idle` straight away, without reading hook state (the
-   behavior before setup v15).
+   behavior before setup v16).
 3. `CLAUDECODE` set, or `CODEX_THREAD_ID` set to another thread → nothing.
 4. Under the tab's hook-state lock (3 s):
    - the payload does not parse, or lacks `thread-id` or `turn-id` → `idle` (fail open);
@@ -1147,7 +1147,7 @@ too.
 
 ### The OpenCode half — global `mast.js` plugin
 
-Setup v15 installs one global plugin at `$XDG_CONFIG_HOME/opencode/plugins/mast.js` (or
+Setup v16 installs one global plugin at `$XDG_CONFIG_HOME/opencode/plugins/mast.js` (or
 `~/.config/opencode/plugins/mast.js` when `XDG_CONFIG_HOME` is unset). It detects the
 standard curl installation at `~/.opencode/bin/opencode` even when the non-interactive
 setup shell cannot see the installer's interactive PATH export. It does not install a
@@ -1175,7 +1175,7 @@ checks in `docs/WINDOWS-BUILD.md`. `--pure`, server modes (`serve`, `web`, `atta
 
 ## Codex hooks — `~/.codex/hooks.json`
 
-Setup v15 gives Codex live status: `running` when a prompt is submitted or a tool call finishes,
+Setup v16 gives Codex live status: `running` when a prompt is submitted or a tool call finishes,
 `needs input` while an approval dialog is open, `idle` when a turn stops or is interrupted.
 The `notify` line above stays wired alongside.
 
@@ -1522,11 +1522,11 @@ PROMPT_COMMAND="__mast_osc${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
    therefore has a tty, so it only takes step 1 — its purpose is to see whether the delivery
    path itself is alive.
 2. Read `~/.mast/setup.log`: each merged row (`added`, `wired`, `migrated`, `narrowed`) and
-   every notice is there, and the markers `~/.mast/.setup-v15`, `.setup-v15-codex` and
-   `.setup-v15-agy` show which steps finished.
+   every notice is there, and the markers `~/.mast/.setup-v16`, `.setup-v16-codex` and
+   `.setup-v16-agy` show which steps finished.
 3. Then run each agent inside a mast terminal and confirm that its hooks update the tab's badge
    and dot, the pane badge, and the sidebar status and preview. The field checklist is
-   `docs/WINDOWS-BUILD.md` §10, "v0.3.32 — Agent state signals verification (setup v15)". A
+   `docs/WINDOWS-BUILD.md` §10, "v0.3.32 — Agent state signals verification (setup v16)". A
    synthetic check has to reset first and give the second token its own flush window —
    `sleep 5; mast-notify.sh mast:idle x; sleep 0.2; mast-notify.sh mast:needsInput y` — because
    the needs-input onset fires only on a transition, and two tokens within 100 ms collapse into

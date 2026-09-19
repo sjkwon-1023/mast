@@ -33,6 +33,7 @@ import { installFrontEndLogging } from "../infrastructure/logging";
 import { applyTerminalSettings } from "../features/terminal/settings";
 import { applyHighlightSettings } from "../features/viewers/text/settings";
 import { applyViewerFontSettings } from "../features/viewers/viewer-font";
+import { applyTabIdSettings } from "../features/workspace/tab-id-settings";
 import { initWindowVisibility } from "../infrastructure/window-visibility";
 import { WorkspaceView } from "../features/workspace/workspace-view";
 import type {
@@ -43,6 +44,7 @@ import type {
   TabId,
 } from "../shared/types";
 import { initUpdateNotice as startUpdateNotice } from "./update-notice";
+import { installShortcutGuide } from "./shortcut-guide";
 
 declare global {
   interface Window {
@@ -153,6 +155,7 @@ class App {
 
     this.initUpdateNotice();
     installReloadKey();
+    installShortcutGuide();
     installActivityPing();
     this.installWindowFocus();
 
@@ -176,6 +179,7 @@ class App {
       applyTerminalSettings(settings);
       applyViewerFontSettings(settings);
       applyHighlightSettings(settings);
+      applyTabIdSettings(settings);
     } catch (err) {
       console.error("get_ui_settings failed", err);
       this.showError(formatCommandError(err));

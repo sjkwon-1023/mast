@@ -77,7 +77,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   renders, resizes and persists it — what is missing is a command that reaches it.
   `SplitTree::split` matches a `Leaf` by `PaneId` and replaces it in place
   (`model.rs:250-274`), and `SplitPane` is the only split command, so every surface (the two
-  header buttons, `Ctrl+Shift+D` / `Ctrl+Shift+E`) can only ever target one leaf; `ResizeSplit`
+  header buttons, `Ctrl+Shift+D` / `Alt+Shift+D`) can only ever target one leaf; `ResizeSplit`
   is the sole command addressing a `SplitId` and it only moves a ratio. ADR-0003 neither
   decided nor deferred this — it was never raised. The smallest useful shape is a **root
   wrap** (`SplitRoot { direction, tab }`: the whole workspace tree becomes one side of a new
@@ -374,7 +374,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   resume-command entry in `host.rs::bash_argv`'s whitelist when the agent has one (today
   `claude --resume`, `codex resume` and `opencode --session`), and a matching section in
   `scripts/wsl/claude-hook-example.md`.
-  - **Antigravity CLI — landed** (v0.3.32, setup v15, [ADR-0026](docs/adr/0026-tab-agent-state-and-hook-signals.md)
+  - **Antigravity CLI — landed** (v0.3.32, setup v16, [ADR-0026](docs/adr/0026-tab-agent-state-and-hook-signals.md)
     decision 8; field verification pending). Only the **CLI** is in scope: the IDE's agents do
     not run in a mast tab, so there is no pts to emit into and no tab to attribute a toast to.
     `mast-hooks-merge.py agy` adds one named hook `"mast"` to the global
@@ -435,7 +435,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   fixed by `--exec` in v0.3.3 and field-confirmed.
 
 - **Agent state is per tab and driven by the agents' hooks — landed 2026-09-15** (v0.3.32,
-  setup v15; Windows field verification pending). Three defects at once: Codex only ever reported
+  setup v16; Windows field verification pending). Three defects at once: Codex only ever reported
   idle (legacy `notify` was its one signal); a single workspace status slot with an
   `agent_status_source` let a sibling's idle hide a running tab, a closed tab reset live ones and a
   second waiting tab go unannounced; and Claude Code sat at needs input from an approval until
@@ -467,7 +467,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   coverage entry above. **Provisioning** (`mast-hooks-merge.py`, Python 3.6): symlink-preserving
   atomic writes with a re-read before replace, snippet notices for read-only or dangling targets,
   exit 3 for deterministic content refusals with `~/.mast/no-codex-hooks` / `no-agy-hooks`
-  opt-outs, sub-markers `.setup-v15-codex` / `.setup-v15-agy` so an agent installed later runs only
+  opt-outs, sub-markers `.setup-v16-codex` / `.setup-v16-agy` so an agent installed later runs only
   its own step, and version gates over fixed install locations where the lowest copy decides —
   Claude Code below 2.1.118 or unreadable gets status rows only, Codex notices at
   0.124/0.129/0.131/0.133/0.148/0.150, agy below 1.1.10. A 173 KB script made `run()` tolerate

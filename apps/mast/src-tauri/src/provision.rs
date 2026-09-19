@@ -33,7 +33,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 15;
+const SETUP_VERSION: u32 = 16;
 
 /// 설치 스크립트 heredoc 에 통째로 들어가는 레포 파일들: (자리표시자, heredoc 종결 줄, 내용).
 ///
