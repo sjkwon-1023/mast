@@ -9,6 +9,8 @@
   --border: #3c3c3c;
   --accent: #4ea1ff;
   --danger: #e06c75;
+  /* 데스크톱 styles.css 의 --warn 과 같은 값 — 응답 대기 표시는 두 표면이 같은 색. */
+  --warn: #d7a55b;
   --touch: 44px;
 }
 
@@ -171,9 +173,20 @@ body {
 }
 
 .tab-title {
+  /* 점이 앞에 붙어도 제목이 왼쪽에 남게 한다 — 공간을 전부 margin 이 흡수하므로
+     점 없는 행(제목 + 상세)의 배치는 그대로다. */
+  margin-right: auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 응답 대기 탭 표시 — 워크스페이스 뱃지("needs input")가 **어느 워크스페이스**인지를
+   말하고, 이 점이 **어느 탭**인지를 가리킨다. */
+.tab-needs-input {
+  flex: 0 0 auto;
+  color: var(--warn);
+  font-size: 12px;
 }
 
 .tab-detail {
@@ -263,6 +276,30 @@ body {
 .composer {
   display: flex;
   gap: 8px;
+}
+
+/* PTY 크기 모드 — dock 첫 줄. 누가 크기를 정하는지(폰/데스크톱)를 서버가 말한
+   값으로만 칠한다 (tab-view.ts 의 paintSizeMode). */
+.mode-row {
+  display: flex;
+  gap: 8px;
+}
+
+.mode-btn {
+  flex: 0 0 auto;
+  min-height: var(--touch);
+  padding: 0 14px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 14px;
+}
+
+.mode-btn[aria-pressed="true"] {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .composer-text {

@@ -65,6 +65,7 @@ fn harness() -> Harness {
         RemoteConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             token: TOKEN.to_string(),
+            mobile_lease: mast_remote::MOBILE_SIZE_LEASE,
         },
         RemoteDeps {
             dispatcher: Arc::clone(&dispatcher),
@@ -241,6 +242,37 @@ fn state_requires_a_bearer_token() {
     let ok = get(h.addr(), "/api/state", Some(TOKEN));
     assert_eq!(ok.status, 200);
     assert_eq!(ok.header("Content-Type"), Some("application/json"));
+}
+
+#[test]
+fn resize_requires_a_bearer_token() {
+    let h = harness();
+    let reply = post(
+        h.addr(),
+        "/api/tabs/1/resize?mode=desktop",
+        None,
+        &[],
+        b"",
+    );
+    assert_json_error(&reply, 401, "unauthorized");
+}
+
+#[test]
+fn resize_without_a_live_session_is_409() {
+    // FakeHost 는 세션을 만들지 않는다 — 탭 id 는 모델에 있지만 레지스트리가 비어
+    // 있으므로 크기 변경이 적용될 대상이 없다. 세션 토큰은 모양만 갖추면 된다:
+    // 레지스트리 조회가 토큰 비교보다 먼저라 토큰이 틀려도 결론은 같은 409 다
+    // (토큰 없음이 먼저 걸리면 "session changed" 가 되어 다른 경로를 검사하게 된다).
+    let h = harness();
+    let (tab, _session) = terminal_tab(&h.dispatcher);
+    let reply = post(
+        h.addr(),
+        &format!("/api/tabs/{tab}/resize?mode=mobile&cols=48&rows=57&session=1:1"),
+        Some(TOKEN),
+        &[],
+        b"",
+    );
+    assert_json_error(&reply, 409, "tab has no live session");
 }
 
 #[test]

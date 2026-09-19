@@ -199,16 +199,49 @@ pub struct SessionStats {
     pub replay_bytes: usize,
 }
 
+/// PTY 창 크기를 지금 누가 정하는가. 데스크톱 pane 의 fit 이 기본이고, 폰이
+/// 모바일 크기를 주장하는 동안(리스 유효)은 폰이다 — [`PtySession::resize`] 의
+/// 억제 규칙과 [`PtySession::release_mobile_size`] 의 복원 대상이 이 값에서 나온다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SizeOwner {
+    Desktop,
+    Mobile,
+}
+
+impl SizeOwner {
+    /// 와이어·응답 헤더(`X-Mast-Size-Owner`)에 싣는 문자열. 양쪽이 같은 값을
+    /// 말해야 폰의 버튼 상태가 서버의 실제 소유자와 어긋나지 않는다.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SizeOwner::Desktop => "desktop",
+            SizeOwner::Mobile => "mobile",
+        }
+    }
+}
+
+/// [`PtySession::renew_mobile_lease`] 의 결과 — 폴 하트비트가 무엇을 했는가.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseRenewal {
+    /// 폰이 이 세션의 크기를 소유하고 있지 않다 — 할 일이 없었다.
+    NotOwned,
+    /// 리스를 연장했다.
+    Renewed,
+    /// 리스가 이미 지나 있었다 — 데스크톱 크기로 복원했다.
+    Lapsed { cols: u16, rows: u16 },
+}
+
 /// [`PtySession::screen_since`] 의 반환 — 폴링 소비자가 화면을 세우는 데 필요한
 /// 전부다. `reset` 이면 `bytes` 는 처음부터 그릴 재료(모드 preamble + 스냅샷)이고,
 /// 아니면 `since` 이후의 raw 델타다. `cols`/`rows` 는 이 세션의 현재 PTY 크기 —
-/// 수신자가 같은 크기로 터미널을 만들어야 replay 가 맞게 그려진다.
+/// 수신자가 같은 크기로 터미널을 만들어야 replay 가 맞게 그려진다. `size_owner` 는
+/// 그 크기를 지금 누가 정하는지다 (버튼 상태용).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Screen {
     pub end_offset: u64,
     pub reset: bool,
     pub cols: u16,
     pub rows: u16,
+    pub size_owner: SizeOwner,
     pub bytes: Vec<u8>,
 }
 
@@ -246,6 +279,30 @@ type SharedWriter = Arc<Mutex<Option<Box<dyn Write + Send>>>>;
 /// `ClosePseudoConsole` 이라 블록된 read 를 풀어주는 종료 전파 수단이기도 하다.
 type SharedMaster = Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>;
 
+/// PTY 창 크기의 소유권 상태 — `PtySession` 의 `size` Atomic 과 짝이다.
+///
+/// 소유권 전환과 PTY 적용은 **`master` guard 아래에서** 일어난다 — 판정과 적용이
+/// 갈라지면 동시에 온 데스크톱 resize 와 모바일 주장이 서로 다른 순서로 PTY 에
+/// 들어가 "소유자는 폰인데 PTY 는 데스크톱 크기"인 상태가 굳을 수 있다. 그래서
+/// 이 상태를 만지는 모든 메서드가 `master` 를 먼저 잡는다 (lock 순서:
+/// `master` → `size_state`, 역방향 없음 — `size_state` 는 다른 lock 을 잡지 않는다).
+struct SizeState {
+    /// 데스크톱 pane 이 **마지막으로 보고한** 크기. 폰이 소유하는 동안에도 계속
+    /// 갱신된다 — "컴퓨터" 복원이 옛 크기가 아니라 지금 pane 크기로 돌아가게 하는
+    /// 값이다 ([`PtySession::resize`]).
+    desktop: (u16, u16),
+    /// 모바일 소유 만료 시각. `Some` 이면 폰이 소유 중이고, 지난 시각이면 만료다.
+    mobile_until: Option<Instant>,
+}
+
+impl SizeState {
+    /// 지금 폰이 소유 중인가. 만료된 리스는 소유로 치지 않는다 — 만료 정리는
+    /// 만료된 상태를 실제로 쓰는 메서드의 몫이다.
+    fn mobile_owned(&self, now: Instant) -> bool {
+        self.mobile_until.is_some_and(|until| now < until)
+    }
+}
+
 /// PTY 세션 핸들. 스레드 간 공유 가능(`&self` API + 내부 Mutex).
 pub struct PtySession {
     shared: Arc<Shared>,
@@ -263,6 +320,13 @@ pub struct PtySession {
     /// Atomic 인 것은 이 파일에 없던 lock 순서 규약(`inner` ↔ `master`)을 새로
     /// 만들지 않기 위해서다.
     size: AtomicU32,
+    /// 크기 소유권 (데스크톱 vs 모바일). `size` 와 달리 판정과 전환이 원자적이어야
+    /// 해서 Mutex 다 — lock 순서는 [`SizeState`] rustdoc 참조.
+    size_state: Mutex<SizeState>,
+    /// 테스트 전용 resize 실패 주입. 라이브 PTY 의 `master.resize` 실패(ioctl 오류)는
+    /// 재현할 방법이 없어 이 한 지점만 열어 둔다 — [`Self::apply_master_resize`].
+    #[cfg(test)]
+    fail_resizes: std::sync::atomic::AtomicBool,
 }
 
 impl PtySession {
@@ -370,7 +434,45 @@ impl PtySession {
             master,
             killer: Mutex::new(killer),
             size: AtomicU32::new(pack_size(spec.cols, spec.rows)),
+            // 스폰 크기가 첫 데스크톱 크기다 — 데스크톱 pane 이 attach 하며 곧 실제
+            // pane 크기로 덮어쓰지만, 그 전에 폰이 소유를 주장해도 복원할 값이 있다.
+            size_state: Mutex::new(SizeState {
+                desktop: (spec.cols, spec.rows),
+                mobile_until: None,
+            }),
+            #[cfg(test)]
+            fail_resizes: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// PTY 창 크기 적용 — 크기 소유권을 만지는 모든 경로가 이 한 지점을 지난다.
+    ///
+    /// 소유권 전이는 **이 호출이 성공한 뒤에만** 일어나야 한다: 적용이 실패했는데
+    /// 소유권만 넘어가면 데스크톱 resize 가 전부 억제된 채 PTY 는 옛 크기로 굳는다.
+    /// `#[cfg(test)]` 의 실패 주입도 이 지점 하나로 모은다 — 위 필드 rustdoc.
+    fn apply_master_resize(
+        &self,
+        master: &(dyn MasterPty + Send),
+        cols: u16,
+        rows: u16,
+    ) -> anyhow::Result<()> {
+        #[cfg(test)]
+        if self.fail_resizes.load(Ordering::SeqCst) {
+            anyhow::bail!("injected resize failure");
+        }
+        master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+    }
+
+    /// 테스트 전용 — resize 적용 실패를 주입한다 (단위 테스트가 소유권 전이의
+    /// 실패 분기를 실제 코드 경로로 지나가게 하는 유일한 수단).
+    #[cfg(all(test, unix))]
+    fn inject_resize_failure(&self, fail: bool) {
+        self.fail_resizes.store(fail, Ordering::SeqCst);
     }
 
     /// PTY 입력(stdin)으로 bytes 를 쓴다. kill 이후에는 에러.
@@ -385,21 +487,144 @@ impl PtySession {
     }
 
     /// PTY 창 크기를 변경한다 (자식에게 SIGWINCH 전달). kill 이후에는 에러.
+    ///
+    /// **데스크톱 pane 의 요청**이다 (fit·attach nudge 등). 폰이 모바일 크기를
+    /// 소유하는 동안에는 PTY 에 적용하지 않고 **데스크톱 크기만 기록**한다 — 폰을
+    /// 보는 사이 창을 옮기거나 workspace 를 오가도 TUI 가 폰 너비로 남아야 하기
+    /// 때문이다. 기록은 억제 중에도 계속되므로, 리스가 끝난 뒤의 첫 적용
+    /// (`resize` 자신 또는 [`release_mobile_size`](Self::release_mobile_size))은
+    /// **저장된 옛 크기가 아니라 그 시점의 pane 크기**로 돌아간다.
     pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
         let guard = self.master.lock().unwrap();
         let master = guard
             .as_ref()
             .ok_or_else(|| anyhow!("session already killed"))?;
-        master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
+        let now = Instant::now();
+        let mut state = self.size_state.lock().unwrap();
+        state.desktop = (cols, rows);
+        if state.mobile_owned(now) {
+            return Ok(());
+        }
+        // 만료된 리스는 적용 경로에서 정리한다 — 남겨 두면 다음 판정도 같은
+        // 결론이지만, 여기서 지워야 `screen_since` 가 소유자를 곧바로 Desktop 으로
+        // 보고한다 (PTY 도 이 적용으로 실제로 돌아온다). **적용 성공 뒤에 지운다**:
+        // 적용이 실패하면 기록이 남아야 다음 해제·하트비트가 복원을 재시도한다.
+        self.apply_master_resize(&**master, cols, rows)?;
+        state.mobile_until = None;
+        drop(state);
         // guard 를 놓기 전에 기록한다 — 잠금 밖에서 순차로 쓰면 동시에 온 두 resize 가
         // PTY 와 이 기록에 서로 다른 순서로 들어가, 실제 크기와 다른 값이 굳는 창이 있다.
         self.size.store(pack_size(cols, rows), Ordering::Relaxed);
         Ok(())
+    }
+
+    /// 폰이 이 세션의 PTY 크기를 주장한다 (모바일 모드). 즉시 적용하고 리스를 세운다
+    /// ([`renew_mobile_lease`](Self::renew_mobile_lease) 가 연장·만료를 맡는다).
+    ///
+    /// 버튼 재탭으로 같은 주장이 다시 오면 크기·리스만 갱신한다. 리스가 지나 있었다면
+    /// 데스크톱 크기 기록은 그대로 두고 다시 폰 크기로 덮는다 — 어느 쪽이든 이 호출
+    /// 뒤의 PTY 크기는 인자다. **적용이 실패하면 소유권을 넘기지 않는다**: 실패한
+    /// 주장이 리스만 세우면 데스크톱 resize 가 억제된 채 PTY 는 옛 크기로 남는다.
+    /// kill 이후에는 에러.
+    pub fn resize_mobile(&self, cols: u16, rows: u16, lease: Duration) -> anyhow::Result<()> {
+        let guard = self.master.lock().unwrap();
+        let master = guard
+            .as_ref()
+            .ok_or_else(|| anyhow!("session already killed"))?;
+        // 리스 갱신도 `size_state` 안이다 — 적용과 소유권이 갈라지면 동시에 온
+        // 데스크톱 resize 와 순서가 뒤집혀 "소유자는 폰인데 PTY 는 데스크톱"이 굳는다.
+        let mut state = self.size_state.lock().unwrap();
+        self.apply_master_resize(&**master, cols, rows)?;
+        state.mobile_until = Some(Instant::now() + lease);
+        drop(state);
+        self.size.store(pack_size(cols, rows), Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// 폰의 "컴퓨터" 복원 — **지금 기록된 데스크톱 pane 크기**로 되돌리고 소유권을
+    /// 데스크톱에 넘긴다. 기록은 폰이 소유하는 동안에도 데스크톱의 resize 요청마다
+    /// 갱신됐으므로( [`resize`](Self::resize) ) 옛 크기가 아니라 현재 pane 크기다.
+    ///
+    /// 멱등이고 **죽은 세션에도 관대하다**: 소유하지 않았거나 적용할 master 가 이미
+    /// 없으면(종료·kill) 할 일이 없다는 뜻이라 `Ok` 다 — 탭을 떠나며 보내는 해제
+    /// 요청이 실패로 보고될 이유가 없다. 반대로 주장([`resize_mobile`](Self::resize_mobile))은
+    /// 적용할 대상이 없으면 에러다 (적용을 요구한 요청이 적용되지 않았다).
+    ///
+    /// **적용이 실패하면 소유권을 데스크톱으로 넘기지 않는다** — 넘기면 소유자만
+    /// 데스크톱이고 PTY 는 폰 크기인 채라, 다음 해제가 재시도할 근거가 사라진다.
+    pub fn release_mobile_size(&self) -> anyhow::Result<()> {
+        let guard = self.master.lock().unwrap();
+        let mut state = self.size_state.lock().unwrap();
+        if state.mobile_until.is_none() {
+            return Ok(());
+        }
+        let (cols, rows) = state.desktop;
+        let Some(master) = guard.as_ref() else {
+            // 적용할 master 가 없다(종료·kill) — 복원할 PTY 자체가 없으므로 소유권만
+            // 정리한다. 죽은 세션의 해제가 실패로 보고될 이유는 없다.
+            state.mobile_until = None;
+            return Ok(());
+        };
+        self.apply_master_resize(&**master, cols, rows)?;
+        state.mobile_until = None;
+        drop(state);
+        self.size.store(pack_size(cols, rows), Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// 폰의 폴 하트비트 — 리스가 살아 있으면 연장하고, 이미 지났으면 **그 자리에서
+    /// 데스크톱 복원**을 수행한다. 만료 판정과 복원이 한 lock(master → size_state)
+    /// 안에 있는 것은, 폰이 끊긴 뒤 처음 돌아온 폴이 데스크톱 크기를 곧바로 보게
+    /// 하기 위해서다 (screen_since 는 이 호출 뒤에 읽는다).
+    ///
+    /// 세션이 이미 죽었으면(master 없음) 적용할 대상이 없으므로 상태만 정리하고
+    /// [`LeaseRenewal::NotOwned`] 를 돌려준다 — 이 경로는 best-effort 라 에러가 아니다.
+    /// 복원 적용이 실패하면 만료된 리스 기록을 지우지 않는다: 소유자 보고는 만료
+    /// 시각 기준이라 그 순간에도 Desktop 이고, 기록이 남아야 다음 폴이 다시 시도한다.
+    pub fn renew_mobile_lease(&self, lease: Duration) -> LeaseRenewal {
+        let guard = self.master.lock().unwrap();
+        let mut state = self.size_state.lock().unwrap();
+        let now = Instant::now();
+        if state.mobile_owned(now) {
+            state.mobile_until = Some(now + lease);
+            return LeaseRenewal::Renewed;
+        }
+        // 소유 이력이 없으면 할 일이 없다. 만료된 리스(Some, now 지남)는 여기서
+        // 지우지 않고 복원 적용이 성공해야 지운다.
+        if state.mobile_until.is_none() {
+            return LeaseRenewal::NotOwned;
+        }
+        let (cols, rows) = state.desktop;
+        let Some(master) = guard.as_ref() else {
+            state.mobile_until = None;
+            return LeaseRenewal::NotOwned;
+        };
+        if self.apply_master_resize(&**master, cols, rows).is_err() {
+            // 적용 실패는 폰의 폴을 실패로 만들지 않는다 — 만료된 기록을 남겨
+            // 다음 폴(또는 다음 데스크톱 resize)이 같은 복원을 다시 시도한다.
+            return LeaseRenewal::NotOwned;
+        }
+        state.mobile_until = None;
+        drop(state);
+        self.size.store(pack_size(cols, rows), Ordering::Relaxed);
+        LeaseRenewal::Lapsed { cols, rows }
+    }
+
+    /// 지금 크기를 정하는 소유자 — 만료된 리스는 `None` 으로 정리하지 않고
+    /// 데스크톱으로 보고만 한다 (정리는 실제로 크기를 되돌리는 경로의 몫).
+    pub fn size_owner(&self) -> SizeOwner {
+        let state = self.size_state.lock().unwrap();
+        if state.mobile_owned(Instant::now()) {
+            SizeOwner::Mobile
+        } else {
+            SizeOwner::Desktop
+        }
+    }
+
+    /// 현재 PTY 크기 `(cols, rows)` — 화면 바이트를 만들지 않는 값싼 조회다
+    /// ([`screen_since`](Self::screen_since) 는 스냅샷까지 만든다).
+    pub fn size(&self) -> (u16, u16) {
+        unpack_size(self.size.load(Ordering::Relaxed))
     }
 
     /// 프론트엔드가 n bytes 소비를 완료했다. Resume 전환 시 리더를 깨운다.
@@ -541,10 +766,15 @@ impl PtySession {
     /// (그 구간은 이미 evict 됐다), 그리고 **`since > bytes_out`**. 마지막은 탭
     /// respawn(ADR-0010)처럼 수신자가 **다른 세션의 오프셋**을 들고 온 경우다: 새
     /// 세션의 `bytes_out` 은 0 부터 다시 시작하므로 옛 오프셋이 미래처럼 보인다.
+    ///
+    /// `size_owner` 는 폰의 버튼 상태용이다. 만료된 리스는 **소유자만** 데스크톱으로
+    /// 보고하고 PTY 크기는 아직 폰 것일 수 있다 — 실제 복원은 폴 핸들러가
+    /// [`renew_mobile_lease`](Self::renew_mobile_lease) 로 먼저 수행한다.
     pub fn screen_since(&self, since: Option<u64>) -> Screen {
-        // 크기는 `inner` 밖의 Atomic 이다. 다른 데이터를 발행하지 않는 단일 값이라
-        // Relaxed 로 충분하고, 여기서 `master` 를 잡으면 lock 순서 규약이 생긴다.
-        let (cols, rows) = unpack_size(self.size.load(Ordering::Relaxed));
+        // 크기와 소유자는 `inner` 밖의 값이다. 다른 데이터를 발행하지 않는 값들이라
+        // 여기서 `master` 를 잡지 않는다 — 그러면 lock 순서 규약이 생긴다.
+        let (cols, rows) = self.size();
+        let size_owner = self.size_owner();
         let inner = self.shared.inner.lock().unwrap();
         let end_offset = inner.bytes_out;
         // 보관 창의 시작 오프셋. replay 는 evict 로 앞이 잘리므로 스트림 좌표계로
@@ -568,6 +798,7 @@ impl PtySession {
             reset,
             cols,
             rows,
+            size_owner,
             bytes,
         }
     }
@@ -1095,5 +1326,163 @@ mod tests {
         apply_mode_event(&mut modes, &dec(&[1], false));
         assert_eq!(modes.get(&1), Some(&false));
         assert_eq!(modes.len(), MAX_TRACKED_DEC_MODES);
+    }
+
+    /// 모바일 크기 소유권의 **실패 분기** — 라이브 PTY 의 `master.resize` 실패
+    /// (ioctl 오류)는 재현할 방법이 없어 [`PtySession::inject_resize_failure`] 하나로
+    /// 주입한다. integration 테스트는 crate 밖이라 `cfg(test)` 주입점을 볼 수 없어
+    /// 여기(단위 테스트)에 둔다 — 실제 셸을 PTY 로 띄운 채 전이 규칙을 검증한다.
+    #[cfg(unix)]
+    mod mobile_size_ownership {
+        use std::time::Duration;
+
+        use crate::osc::OscEvent;
+        use crate::session::{
+            Delivery, LeaseRenewal, PtySession, SessionOptions, SessionSink, SizeOwner, SpawnSpec,
+        };
+
+        struct NullSink;
+
+        impl SessionSink for NullSink {
+            fn on_output(&self, _offset: u64, _bytes: &[u8]) -> Delivery {
+                Delivery::Delivered
+            }
+            fn on_osc(&self, _event: &OscEvent) {}
+            fn on_exit(&self, _code: Option<u32>) {}
+        }
+
+        fn spawn_quiet() -> PtySession {
+            PtySession::spawn(
+                SpawnSpec {
+                    program: "sh".into(),
+                    args: vec!["-c".into(), "sleep 30".into()],
+                    cwd: None,
+                    cols: 80,
+                    rows: 24,
+                },
+                Box::new(NullSink),
+                SessionOptions::default(),
+            )
+            .expect("failed to spawn sh in pty")
+        }
+
+        #[test]
+        fn a_failed_mobile_claim_keeps_desktop_ownership_and_can_retry() {
+            let session = spawn_quiet();
+            let lease = Duration::from_secs(30);
+            session.inject_resize_failure(true);
+
+            assert!(
+                session.resize_mobile(60, 20, lease).is_err(),
+                "주입된 resize 실패를 성공으로 보고하면 안 된다"
+            );
+
+            // 소유권도 크기 기록도 옮겨가지 않았다 — 데스크톱 resize 가 계속 적용된다.
+            let after = session.screen_since(None);
+            assert_eq!(after.size_owner, SizeOwner::Desktop);
+            assert_eq!((after.cols, after.rows), (80, 24));
+            session.inject_resize_failure(false);
+            session.resize(100, 40).expect("desktop resize still applies");
+            assert_eq!(session.screen_since(None).cols, 100);
+
+            // 재시도는 실제로 적용되고 그때 소유권이 넘어간다.
+            session.resize_mobile(60, 20, lease).expect("retry applies");
+            let owned = session.screen_since(None);
+            assert_eq!((owned.cols, owned.rows), (60, 20));
+            assert_eq!(owned.size_owner, SizeOwner::Mobile);
+            session.kill();
+        }
+
+        #[test]
+        fn a_failed_mobile_release_keeps_mobile_ownership_and_can_retry() {
+            let session = spawn_quiet();
+            let lease = Duration::from_secs(30);
+            session.resize_mobile(60, 20, lease).expect("claim mobile size");
+            // 폰 소유 중의 데스크톱 resize — 기록만 갱신된다.
+            session.resize(120, 35).expect("desktop resize recorded");
+            session.inject_resize_failure(true);
+
+            assert!(
+                session.release_mobile_size().is_err(),
+                "주입된 resize 실패를 성공으로 보고하면 안 된다"
+            );
+
+            // 실패한 해제는 소유권을 넘기지 않는다 — 억제도 그대로다.
+            let still = session.screen_since(None);
+            assert_eq!(still.size_owner, SizeOwner::Mobile);
+            assert_eq!((still.cols, still.rows), (60, 20));
+            session.resize(140, 45).expect("desktop resize still suppressed");
+            let suppressed = session.screen_since(None);
+            assert_eq!((suppressed.cols, suppressed.rows), (60, 20));
+
+            // 재시도가 그 시점의 데스크톱 크기(140x45)로 복원한다.
+            session.inject_resize_failure(false);
+            session.release_mobile_size().expect("retry restores");
+            let restored = session.screen_since(None);
+            assert_eq!(restored.size_owner, SizeOwner::Desktop);
+            assert_eq!((restored.cols, restored.rows), (140, 45));
+            session.kill();
+        }
+
+        #[test]
+        fn a_failed_lapsed_restore_is_retried_by_the_next_heartbeat() {
+            let session = spawn_quiet();
+            session
+                .resize_mobile(50, 15, Duration::from_millis(40))
+                .expect("claim mobile size");
+            session.resize(120, 30).expect("desktop resize recorded");
+            std::thread::sleep(Duration::from_millis(120));
+
+            session.inject_resize_failure(true);
+            assert_eq!(
+                session.renew_mobile_lease(Duration::from_secs(30)),
+                LeaseRenewal::NotOwned
+            );
+            // 만료 기준 소유자 보고는 Desktop 이지만 PTY 는 아직 폰 크기다 — 기록을
+            // 지우지 않아 다음 하트비트가 같은 복원을 다시 시도한다.
+            let lapsed = session.screen_since(None);
+            assert_eq!(lapsed.size_owner, SizeOwner::Desktop);
+            assert_eq!((lapsed.cols, lapsed.rows), (50, 15));
+
+            session.inject_resize_failure(false);
+            assert_eq!(
+                session.renew_mobile_lease(Duration::from_secs(30)),
+                LeaseRenewal::Lapsed { cols: 120, rows: 30 }
+            );
+            let restored = session.screen_since(None);
+            assert_eq!((restored.cols, restored.rows), (120, 30));
+            assert_eq!(restored.size_owner, SizeOwner::Desktop);
+            // 이미 복원했으니 다음 하트비트는 할 일이 없다.
+            assert_eq!(
+                session.renew_mobile_lease(Duration::from_secs(30)),
+                LeaseRenewal::NotOwned
+            );
+            session.kill();
+        }
+
+        #[test]
+        fn a_failed_desktop_resize_keeps_the_lapsed_lease_for_a_retry() {
+            let session = spawn_quiet();
+            session
+                .resize_mobile(50, 15, Duration::from_millis(40))
+                .expect("claim mobile size");
+            std::thread::sleep(Duration::from_millis(120));
+
+            session.inject_resize_failure(true);
+            assert!(
+                session.resize(120, 30).is_err(),
+                "주입된 resize 실패를 성공으로 보고하면 안 된다"
+            );
+
+            // 실패한 적용은 만료 기록을 지우지 않는다 — 다음 하트비트(또는 해제)가
+            // 같은 복원을 다시 시도한다.
+            session.inject_resize_failure(false);
+            assert_eq!(
+                session.renew_mobile_lease(Duration::from_secs(30)),
+                LeaseRenewal::Lapsed { cols: 120, rows: 30 }
+            );
+            assert_eq!(session.screen_since(None).cols, 120);
+            session.kill();
+        }
     }
 }

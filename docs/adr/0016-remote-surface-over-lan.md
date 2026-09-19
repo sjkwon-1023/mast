@@ -240,3 +240,155 @@ netsh script generation. Its unit tests run in the existing host-side `cargo tes
 mast-core` gate. The app retains COM collection, current-executable discovery, temporary
 script lifetime, UAC/netsh execution and the serialized IPC status. Rule interpretation,
 script content and UI outcomes are unchanged; no Windows API is needed to test the policy.
+
+## Amendment (2026-09-17) — the phone can own the PTY size, as a lease
+
+Decision 5's "the phone never resizes" is what made the phone readable at all, and it has one
+known cost: the phone renders the PTY's own grid as text, so a TUI drawing at the desktop's
+width fragments at the phone's (v0.3.22 amendment). The only correct narrow layout comes from
+the TUI itself — a PTY that follows the phone, tmux's `window-size latest`. This amendment adds
+that, deliberately reversible from the phone.
+
+1. **Ownership lives in the session, not in the remote crate.** `PtySession` keeps a
+   `SizeOwner` (`Desktop`/`Mobile`) plus the desktop pane's last reported size, and every
+   transition and the PTY call it makes happen **under the existing `master` guard** — a
+   desktop `resize` racing a phone claim cannot end as "owner mobile, PTY desktop".
+   `PtySession::resize` — the path the desktop's fit and attach nudge already used — records
+   the pane size **even while suppressed** and applies it only when the phone is not owning.
+   That is what makes *Desktop* restore the *current* pane size: a window, zoom or workspace
+   resize during mobile mode updates the record without touching the PTY.
+2. **The wire is one authenticated mutation**: `POST /api/tabs/{id}/resize?session=<token>`
+   with `mode=mobile&cols=&rows=` or `mode=desktop`. Session-token rules are the input path's
+   (a mismatch is 409 and changes nothing); the response carries the applied
+   `X-Mast-Size-Owner`/`Cols`/`Rows`, and mobile sizes are clamped to 20–400 columns and 5–150
+   rows. Every `/screen` reply carries `X-Mast-Size-Owner` too, so the phone's two buttons are
+   painted from server truth — lease lapse, another phone's press and a tab restart all happen
+   server-side.
+3. **Ownership is a lease, and polls keep it alive.** A token-matched `/screen` poll refreshes
+   an active claim (any phone watching the tab keeps the layout it is looking at); the lease is
+   **30 s**, so a phone that is locked, killed or off Wi-Fi does not hold the desktop hostage.
+   A lapsed lease is restored by whichever comes first: the next token-matched poll — which is
+   also how a returning phone gets a desktop-sized first frame — or the next desktop resize.
+   A poll without a matching token neither renews nor releases (it cannot speak for the
+   session it is looking at).
+4. **The phone decides once, on a button press.** The size is a snapshot of the visible output
+   area (measured character grid minus one column of slack, `mobile-size.ts`); the keyboard
+   opening or closing afterwards changes nothing — no viewport listener feeds this path, which
+   is the point (a PTY that resizes with the keyboard redraws the TUI under the user's hands).
+5. **Disposal returns the size early; the lease is the net.** Leaving the tab, or the page
+   itself going away (`pagehide`), sends a `keepalive` `mode=desktop`; the lease covers the
+   paths that never run (crash, battery, network loss).
+
+Accepted costs and limits. The desktop pane shows the phone's narrow layout while the phone
+owns the size — its terminal keeps its own geometry, so the TUI's redraw is drawn at phone
+width until the size is released (the cost the backlog named). If the phone vanishes *and* the
+desktop is not touched, the narrow PTY outlives the lease: nothing polls and nothing resizes,
+and the next window resize, zoom, splitter drag or workspace switch (attach nudge) restores it.
+Last press wins when two phones disagree, and both see the loser's result on their next poll.
+A restarted tab is a new session owned by the desktop — the phone's stale token gets 409 from
+`/resize` and a reset from `/screen`. Verification: WINDOWS-BUILD §10 "Phone-controlled PTY
+size" — field-only, since the layout question needs a real phone and a real TUI.
+
+## Amendment (2026-09-17) — a secure pairing path over Tailscale, behind a Secure/Normal choice
+
+The plain-HTTP limit above is not hypothetical on a shared network, and it hard-blocks the two
+features that were rejected partly because of it — home-screen install and web push ("push in
+particular cannot work over plain HTTP on a LAN"). Building TLS into mast was the costly half
+of every fix: a self-signed certificate has to be trusted on the phone (profile install on
+iOS), a stable hostname has to exist anyway or origin-bound state (localStorage, the home-screen
+icon, later a push subscription) dies with a DHCP lease, and TLS would pull a certificate stack
+into a crate whose whole point is a small dependency surface.
+
+1. **The *Pair phone* dialog offers two modes: Secure (Tailscale) and Normal (trusted LAN).**
+   Normal is the existing surface, unchanged: LAN HTTP, the QR carries `http://<ip>:<port>/#t=…`,
+   and the warning that anyone with the Wi-Fi password can read the token and the typed text
+   stays in the dialog. Secure is the path below. The choice is presented at pairing time
+   because that is the moment the user is deciding how their phone will reach their PC.
+
+2. **Secure means Tailscale, and mast terminates no TLS.** Tailscale's `serve` runs inside the
+   installed client: `tailscale serve --bg --https=443 http://127.0.0.1:<remote port>` maps
+   HTTPS on the tailnet to the local listener, terminating TLS in the daemon with an
+   automatically provisioned certificate for `<machine>.<tailnet>.ts.net`. mast keeps binding
+   `0.0.0.0:<port>` and speaks plain HTTP on the loopback hop; nothing in `crates/mast-remote`
+   changes for this. The pairing QR then carries `https://<machine>.<tailnet>.ts.net/#t=…`.
+
+3. **The dialog guides; what mast automates stays behind a button and is verified after.** If
+   Tailscale is not installed on the PC, Secure shows the download link and a retry (the shape
+   the firewall dialog already uses). If it is installed, mast reads the node's DNS name
+   (`tailscale status --json`) and the serve state (`tailscale serve status`), and offers to run
+   the `serve` mapping — the firewall amendment's precedent: one explicit user act, a narrow
+   write, and success judged by re-reading state rather than by the command's exit code. Port
+   forwarding through `serve` needs no elevation per Tailscale's docs; that is to be confirmed
+   on the field machine before the button is wired. The tailnet's HTTPS certificates must be
+   enabled in the Tailscale admin console by the user — mast cannot do it, so the dialog names
+   that as the next step when certificate provisioning fails.
+
+4. **Both modes can be live at once, and they are different origins.** The listener serves the
+   LAN and the loopback hop at the same time, so the modes are not exclusive; a phone paired
+   over the ts.net name has a different origin and its own token copy in storage (the token
+   file is the same secret). Switching modes therefore means re-pairing — accepted, and the
+   reason the choice lives in the pairing dialog.
+
+5. **What the secure origin buys.** Traffic on the phone's leg is WireGuard-encrypted and the
+   bearer token is no longer readable by a LAN peer; the origin is stable across DHCP changes
+   and works away from home; and it is the prerequisite for the home-screen *install* on
+   Android and for web push on both platforms. Push itself is still not started — this
+   amendment removes its blocker, not the work.
+
+Accepted costs and limits. A third-party client and a tailnet account join the setup (the cost
+ADR-0016 already named for this upgrade path), and the phone keeps a VPN profile (always-on
+cost, battery). The tailnet name and machine names are published in the public certificate
+ledger when HTTPS is enabled — a privacy step the dialog should say out loud. Tailnet clients
+reach the server from `127.0.0.1` through the proxy, so the per-IP limiter degenerates to one
+bucket shared by the user's own devices; the token remains the gate. The surface becomes
+reachable from any device in the tailnet — device identity, not the LAN, is the perimeter — and
+Funnel (public internet exposure) is not part of this. The `serve` mapping is Tailscale-side
+state that survives mast restarts, but its absence must surface as a pairing-dialog failure,
+not a silent timeout.
+
+Not implemented. This amendment records the direction and the contract sketch; no code changed
+with it. The field checklist (both phone platforms, the admin-console step, the away-from-home
+case) belongs in WINDOWS-BUILD §10 with the implementation.
+
+## Amendment (2026-09-19) — ownership moves only on a successful PTY resize
+
+The 2026-09-17 lease amendment said "every transition and the PTY call it makes happen under
+the existing `master` guard". That was necessary but not sufficient: the guard kept two racing
+callers from interleaving, while a **failed** `master.resize` (ioctl error, or a master that is
+alive but no longer answering) still moved ownership first. The result was the split state the
+amendment was meant to prevent, in a form the guard cannot see — owner mobile with the PTY at
+the desktop size (or the reverse), which suppresses every desktop resize until the lease lapses.
+
+1. **A claim or a release transfers ownership only after `master.resize` returns `Ok`.**
+   `resize_mobile` keeps its previous lease value when the apply fails, so the desktop's
+   resizes are not suppressed and the phone can press *Mobile* again; `release_mobile_size`
+   keeps the mobile lease when the restore fails, so a later release (or the next lapsed-lease
+   heartbeat) retries instead of leaving the PTY narrow with a desktop owner. The lapsed-lease
+   restore in `renew_mobile_lease` and the desktop `resize` path likewise clear the expired
+   record only after an apply succeeds — the next poll (or the next desktop resize) retries,
+   where before a failed restore was handed to "the next desktop resize" that may never come.
+2. **Only a successful resize reply writes the owner into the phone's lifetime state.**
+   The button paint used to be the reply's only effect, so a *Back*/*pagehide* between the
+   reply and the next poll skipped the release and parked the desktop on the narrow layout
+   until the lease lapsed. The reply's owner is now stored where the dispose/pagehide path
+   reads it; the reply's cols/rows are deliberately **not** stored — the screen instance's
+   geometry still comes from the next `/screen` meta, which is what keeps `needsRecreate`
+   honest.
+3. **Leaving during an in-flight claim still hands the size back.** If the page goes away
+   while a `mode=mobile` request is on the wire, the successful reply is answered with the
+   same `keepalive` `mode=desktop` the ordinary dispose path sends. A release that fails is
+   not recorded as a success: the local owner stays mobile, so a later leave retries, and the
+   30 s lease remains the net. A page restored from the back-forward cache is alive again:
+   `pageshow` clears the leaving flag, or its next *Mobile* press would be handed back the
+   moment it succeeded.
+4. **A screen reply cannot undo a newer resize reply.** Each successful resize bumps a
+   request-ordering stamp; a poll whose request predates the stamp keeps the local owner
+   instead of applying the stale `X-Mast-Size-Owner` it carries. Size, session and reset
+   fields are unaffected, and the next poll restores server truth.
+
+Verification: the failure branches run on the dev host with a test-only resize-failure
+injection point in `PtySession` (`cargo test -p mast-core`, four cases: failed claim, failed
+release, failed lapsed restore, failed desktop resize) plus the existing unix PTY integration suite; the phone
+lifecycle is locked by `npx vitest run src/remote/tab-view.test.ts` (success-then-Back,
+in-flight leave, failed keepalive, stale poll). Field items 5–7 of WINDOWS-BUILD §10
+"Phone-controlled PTY size" cover what only a real phone and TUI can answer.

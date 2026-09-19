@@ -17,5 +17,7 @@ mod routes;
 mod server;
 mod token;
 
-pub use server::{serve, AssetFn, LogFn, RemoteConfig, RemoteDeps, RemoteServer, StaticAsset};
+pub use server::{
+    serve, AssetFn, LogFn, RemoteConfig, RemoteDeps, RemoteServer, StaticAsset, MOBILE_SIZE_LEASE,
+};
 pub use token::{load_or_create_token, TokenError};

@@ -21,6 +21,12 @@ pub(crate) enum Route {
         tab: u64,
         session: Option<String>,
     },
+    /// PTY 크기의 소유권 요청 (ADR-0016 개정) — 폰의 Mobile/Desktop 버튼이 낸다.
+    Resize {
+        tab: u64,
+        session: Option<String>,
+        mode: ResizeMode,
+    },
     /// 자산 콜백에 넘길 키. 이미 세그먼트 규칙을 통과한 값이다.
     Static {
         key: String,
@@ -28,6 +34,15 @@ pub(crate) enum Route {
     NotFound,
     /// 라우트는 맞는데 쿼리가 깨졌다 — 400.
     BadRequest,
+}
+
+/// `POST /api/tabs/{id}/resize?mode=…` 의 모드. 폰이 `mobile` 로 크기를 주장하면
+/// PTY 가 그 크기로 줄고, `desktop` 은 소유권을 데스크톱에 돌려준다 (복원 크기는
+/// 서버가 기억한 현재 데스크톱 pane 크기 — 클라이언트는 크기를 보내지 않는다).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResizeMode {
+    Desktop,
+    Mobile { cols: u16, rows: u16 },
 }
 
 /// 탭 id 는 여기서 `u64` 로만 나른다. 모델의 `TabId` 로 옮기는 것은 핸들러(B2)의 몫이고,
@@ -75,6 +90,31 @@ pub(crate) fn route(method: Method, path: &str, query: Option<&str>) -> Route {
                 session: session_param(query),
             }
         }
+        ["api", "tabs", tab, "resize"] if method == Method::Post => {
+            let Some(tab) = parse_u64(tab) else {
+                return Route::NotFound;
+            };
+            let mode = match query_param(query, "mode") {
+                Some("desktop") => ResizeMode::Desktop,
+                Some("mobile") => {
+                    let (Some(cols), Some(rows)) = (
+                        query_param(query, "cols").and_then(parse_u16),
+                        query_param(query, "rows").and_then(parse_u16),
+                    ) else {
+                        return Route::BadRequest;
+                    };
+                    ResizeMode::Mobile { cols, rows }
+                }
+                // 모드 누락·오타는 깨진 쿼리다. 기본값을 지어내면 클라이언트가
+                // 어느 쪽을 요청했는지와 서버가 한 일이 갈린다.
+                _ => return Route::BadRequest,
+            };
+            Route::Resize {
+                tab,
+                session: session_param(query),
+                mode,
+            }
+        }
         ["remote", tail @ ..] if method == Method::Get && !tail.is_empty() => {
             if tail.iter().all(|seg| is_safe_segment(seg)) {
                 Route::Static {
@@ -112,6 +152,17 @@ fn parse_u64(raw: &str) -> Option<u64> {
         return None;
     }
     raw.parse().ok()
+}
+
+/// PTY 크기(u16) 파서. `parse_u64` 와 같은 규율에 0 을 더해 거른다 — 0열·0행은
+/// 크기가 아니라 부재이고, 하한 클램프가 그 실수를 조용히 20열로 바꿔 주면
+/// 클라이언트는 자기 계산이 틀렸다는 사실을 영영 모른다.
+fn parse_u16(raw: &str) -> Option<u16> {
+    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let value: u16 = raw.parse().ok()?;
+    (value > 0).then_some(value)
 }
 
 /// `key=value&…` 최소 파서. 퍼센트 디코딩도 `+` → 공백 변환도 하지 않는다: 우리가 읽는
@@ -285,6 +336,69 @@ mod tests {
                 since: None,
                 session: None,
             }
+        );
+    }
+
+    #[test]
+    fn resize_carries_the_mode_and_the_mobile_size() {
+        assert_eq!(
+            route(
+                Method::Post,
+                "/api/tabs/9/resize",
+                Some("mode=mobile&cols=48&rows=57&session=1:4")
+            ),
+            Route::Resize {
+                tab: 9,
+                session: Some("1:4".to_string()),
+                mode: ResizeMode::Mobile { cols: 48, rows: 57 },
+            }
+        );
+        assert_eq!(
+            route(Method::Post, "/api/tabs/9/resize", Some("mode=desktop")),
+            Route::Resize {
+                tab: 9,
+                session: None,
+                mode: ResizeMode::Desktop,
+            }
+        );
+    }
+
+    #[test]
+    fn resize_with_a_broken_query_is_a_bad_request() {
+        for query in [
+            "",
+            "mode=",
+            "mode=mobil",
+            "mode=MOBILE&cols=48&rows=57",
+            "mode=mobile",
+            "mode=mobile&cols=48",
+            "mode=mobile&rows=57",
+            "mode=mobile&cols=&rows=57",
+            "mode=mobile&cols=0&rows=57",
+            "mode=mobile&cols=-1&rows=57",
+            "mode=mobile&cols=48&rows=+57",
+            "mode=mobile&cols=48&rows=1.5",
+            // u16 상한 초과 — 절단해서 받으면 클라이언트가 요청한 크기와 달라진다.
+            "mode=mobile&cols=65536&rows=57",
+            "mode=mobile&cols=48&rows=99999",
+        ] {
+            assert_eq!(
+                route(Method::Post, "/api/tabs/9/resize", Some(query)),
+                Route::BadRequest,
+                "query = {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn resize_is_post_only_and_unknown_tabs_are_not_found() {
+        assert_eq!(
+            get("/api/tabs/9/resize", Some("mode=desktop")),
+            Route::NotFound
+        );
+        assert_eq!(
+            route(Method::Post, "/api/tabs/abc/resize", Some("mode=desktop")),
+            Route::NotFound
         );
     }
 

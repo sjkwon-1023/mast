@@ -25,7 +25,7 @@ use mast_core::session::SessionManager;
 use crate::handlers;
 use crate::http::{read_head, Head, HeadError, MAX_BODY_BYTES};
 use crate::ratelimit::{RateLimiter, DEFAULT_CAP};
-use crate::routes::{route, Route};
+use crate::routes::{route, ResizeMode, Route};
 use crate::token::token_matches;
 
 /// 넘으면 읽지도 답하지도 않고 즉시 닫는다.
@@ -84,7 +84,18 @@ pub struct RemoteConfig {
     pub bind: SocketAddr,
     /// 페어링 토큰(`Authorization: Bearer`). 로그·응답 어디에도 실리지 않는다.
     pub token: String,
+    /// 폰이 주장한 PTY 크기(모바일 모드)를 유지하는 리스 길이. 폴 간격(2초)보다
+    /// 넉넉해야 화면이 가려지거나 요청 한두 번이 실패해도 소유가 풀리지 않고,
+    /// 폰이 사라졌을 때는 데스크톱이 오래 좁은 화면에 갇히지 않을 만큼 짧아야 한다.
+    /// 테스트가 짧은 값을 넣을 수 있게 설정으로 열어 둔다 (운영 값은
+    /// [`MOBILE_SIZE_LEASE`]).
+    pub mobile_lease: Duration,
 }
+
+/// 운영 기본값 — 30초. 폴 2초 간격의 15배라 잠깐의 네트워크 끊김·백그라운드 전환을
+/// 견디고, 폰이 죽으면 데스크톱이 30초 뒤(다음 폴 또는 다음 데스크톱 resize)에
+/// 원래 크기로 돌아온다.
+pub const MOBILE_SIZE_LEASE: Duration = Duration::from_secs(30);
 
 pub struct RemoteDeps {
     pub dispatcher: Arc<Mutex<Dispatcher>>,
@@ -141,6 +152,7 @@ pub fn serve(cfg: RemoteConfig, deps: RemoteDeps) -> std::io::Result<RemoteServe
         // 구분할 수 없다 — 폰이 옛 화면을 보고 보낸 입력이 새 셸에서 실행되는 것을
         // 막는 것이 이 epoch 의 전부다.
         epoch,
+        mobile_lease: cfg.mobile_lease,
         dispatcher: deps.dispatcher,
         sessions: deps.sessions,
         assets: deps.assets,
@@ -177,6 +189,8 @@ fn random_epoch() -> std::io::Result<u64> {
 struct ServerCtx {
     token: String,
     epoch: u64,
+    /// 모바일 크기 리스 길이 — [`RemoteConfig::mobile_lease`] 에서 온다.
+    mobile_lease: Duration,
     dispatcher: Arc<Mutex<Dispatcher>>,
     sessions: Arc<SessionManager>,
     assets: AssetFn,
@@ -301,7 +315,9 @@ fn handle(mut stream: TcpStream, ctx: &ServerCtx) {
 
     // ③ 라우팅.
     let target = route(head.method, &head.path, head.query.as_deref());
-    let is_input = matches!(target, Route::Input { .. });
+    // 핸들러가 본문을 직접 읽는 라우트 — 나머지는 본문이 선언돼 있어도 읽지 않으므로
+    // 뒤처리(drain)가 필요하다.
+    let handler_reads_body = matches!(target, Route::Input { .. });
     let declared_body = head.content_length.is_some_and(|n| n > 0) || head.has_transfer_encoding;
     let mut response = match target {
         Route::NotFound => not_found(),
@@ -345,7 +361,7 @@ fn handle(mut stream: TcpStream, ctx: &ServerCtx) {
     };
     // 본문을 실은 GET 처럼 핸들러가 읽지 않은 본문이 남아 있으면 거절 응답과 같은 뒤처리가
     // 필요하다 — 미독 데이터가 남은 채 닫으면 RST 가 방금 쓴 응답을 지울 수 있다.
-    if declared_body && !is_input {
+    if declared_body && !handler_reads_body {
         response.drain = true;
     }
     respond(&mut stream, response);
@@ -353,7 +369,7 @@ fn handle(mut stream: TcpStream, ctx: &ServerCtx) {
 
 fn needs_auth(target: &Route) -> bool {
     match target {
-        Route::State | Route::Screen { .. } | Route::Input { .. } => true,
+        Route::State | Route::Screen { .. } | Route::Input { .. } | Route::Resize { .. } => true,
         // 정적 자산은 인증이 없다 — 토큰을 담은 페이지 자체를 받아 가는 경로다.
         Route::Static { .. } | Route::NotFound | Route::BadRequest => false,
     }
@@ -390,15 +406,43 @@ fn dispatch(
             &ctx.dispatcher,
             &ctx.sessions,
             ctx.epoch,
-            tab,
-            since,
-            session.as_deref(),
+            handlers::ScreenRequest {
+                tab,
+                since,
+                session: session.as_deref(),
+            },
+            ctx.mobile_lease,
+            &ctx.log,
         ),
         Route::Input { tab, session } => input(stream, ctx, inbound, tab, session.as_deref()),
+        Route::Resize {
+            tab,
+            session,
+            mode,
+        } => resize(ctx, tab, session.as_deref(), mode),
         Route::Static { key } => handlers::static_asset(&ctx.assets, &key),
         // ③ 에서 이미 응답한 갈래다.
         Route::NotFound | Route::BadRequest => not_found(),
     }
+}
+
+/// `POST /api/tabs/{id}/resize`.
+///
+/// 본문이 없으므로 판정 순서는 **탭·세션 → 적용**이다. 세션 토큰이 지금 세션의 것이
+/// 아니면 입력과 같은 409 다 — 탭이 respawn 됐는데 옛 화면의 버튼을 누른 경우이고,
+/// 그 요청으로 새 셸의 크기를 바꿀 근거가 없다.
+fn resize(ctx: &ServerCtx, tab: u64, session: Option<&str>, mode: ResizeMode) -> Response {
+    let session = match handlers::resolve_session(
+        &ctx.dispatcher,
+        &ctx.sessions,
+        ctx.epoch,
+        tab,
+        session,
+    ) {
+        Ok(session) => session,
+        Err(response) => return response,
+    };
+    handlers::resize(&session, mode, ctx.mobile_lease, &ctx.log)
 }
 
 /// `POST /api/tabs/{id}/input`.
@@ -440,7 +484,7 @@ fn input(
         return Response::error(413, "Content Too Large", "body too large");
     }
 
-    let session = match handlers::resolve_input_session(
+    let session = match handlers::resolve_session(
         &ctx.dispatcher,
         &ctx.sessions,
         ctx.epoch,

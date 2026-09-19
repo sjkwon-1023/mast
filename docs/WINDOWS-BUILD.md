@@ -2654,6 +2654,59 @@ original back with `cp -p /tmp/mast-entry.orig "$f"` before timing anything in i
     - A tool-heavy turn in Claude Code and in Codex leaves no screen artifacts or cursor drift.
     - While idle, no extra resident process or wakeup exists, and hook stdout stays empty.
 
+### Phone-controlled PTY size — verification
+
+This is pending Windows field verification, and it is field-only by nature: the question is a
+TUI's layout on a real phone against a real desktop pane. The server half is covered on the dev
+host (`cargo test -p mast-remote` — including the SIGWINCH the shell sees — and the ownership
+rules in `cargo test -p mast-core`); `apps/mast` covers the phone side (`npx vitest run
+src/remote`). Contract: [ADR-0016](adr/0016-remote-surface-over-lan.md) amendment (2026-09-17).
+
+1. **Mobile.** On the phone, open a Claude Code or Codex tab and press *Mobile*. The TUI
+   redraws at the phone's width (box borders, tables and the input box no longer fragment), the
+   *Mobile* chip is highlighted, and the desktop pane now shows that same narrow drawing. In a
+   plain shell tab, `stty size` prints the phone's rows and columns.
+2. **Keyboard.** With the mobile layout up, tap the composer (keyboard opens) and dismiss it:
+   neither may change the layout or redraw the screen — the PTY size is fixed at the press.
+   Rotating the phone is allowed to look unchanged for the same reason.
+3. **Desktop.** Press *Desktop*: the TUI redraws at the desktop pane's current size and the
+   chip flips back. Resize the desktop window (or the pane, via the splitter) *while* mobile
+   mode is on, then press *Desktop*: the restored size must be the new one, not the size from
+   before the resize.
+4. **Desktop resize is suppressed.** In mobile mode, resize the desktop window and drag a
+   splitter: the phone's layout stays narrow (the desktop pane keeps showing the narrow
+   drawing — that is the accepted cost).
+5. **Leaving the tab.** In mobile mode press *Back* on the phone and watch the desktop pane: it
+   returns to its own size within a poll or two. Repeat by closing/swiping away the phone
+   browser (`pagehide`), and by locking the phone or walking out of Wi-Fi (the 30 s lease):
+   the desktop size returns without touching the phone. Then the tight timing: press *Mobile*
+   and *Back* back to back, before the next poll lands — the desktop size must still return
+   at once (the phone writes a successful claim into its own state, so leaving hands it
+   back). Repeat with *Mobile* followed immediately by swiping the browser away.
+6. **Concurrent phones.** With two phones on the same tab, press *Mobile* on one: both show the
+   mobile layout and the *Mobile* chip. Press *Desktop* on the other: both flip back at their
+   next poll. Last press wins.
+7. **Tab restart while owned.** In mobile mode, restart the tab from the desktop banner: the
+   phone flips to the *Desktop* chip after its next poll (or shows "The shell restarted"), and
+   a *Mobile* press claims the new session.
+
+### Phone needsInput dot — verification
+
+Phone page only; the state JSON is unchanged. The dev host locks the judgment and the DOM
+handling (`npx vitest run src/remote/list-view.test.ts`); what only the field can answer is
+whether a real waiting agent shows up on the right row.
+
+1. **Dot appears.** In a tab run `~/.mast/bin/mast-notify.sh mast:idle done` then
+   `~/.mast/bin/mast-notify.sh mast:needsInput "approve?"` (reset first — the same transition
+   rule as the toast checks). Open the phone's workspace list: that tab's row carries a warn
+   `●` next to its title, and the workspace card still shows the `needs input` badge. A
+   sibling tab in the same workspace has no dot.
+2. **Two waiting tabs, one released.** Drive a *second* tab of the same workspace to needsInput:
+   both rows carry a dot (the dot is the tab's own `agentStatus`, not a workspace-level
+   approximation). Run `~/.mast/bin/mast-notify.sh mast:running` in the first tab: only its dot
+   disappears at the next poll while the second tab keeps its own — and the workspace badge
+   stays `needs input` because the second tab is still waiting. Reset both tabs afterwards.
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy

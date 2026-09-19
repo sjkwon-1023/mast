@@ -18,7 +18,12 @@ const PROMPT = "kwon1@pc:~$ ls\r\napps  crates  docs\r\nkwon1@pc:~$ ";
 const SCREEN = `\x1b[?2004h${PROMPT}`;
 const TAB = 7 as unknown as TabId;
 
-function screenResponse(url: string, screen: string): Response {
+function screenResponse(
+  url: string,
+  screen: string,
+  owner = "desktop",
+  session = "4242:7",
+): Response {
   const bytes = new TextEncoder().encode(screen);
   const reset = !url.includes("since=");
   const headers = new Headers({
@@ -26,7 +31,8 @@ function screenResponse(url: string, screen: string): Response {
     "X-Mast-Reset": reset ? "1" : "0",
     "X-Mast-Cols": "120",
     "X-Mast-Rows": "30",
-    "X-Mast-Session": "4242:7",
+    "X-Mast-Size-Owner": owner,
+    "X-Mast-Session": session,
   });
   const body = reset ? bytes : new Uint8Array(0);
   return {
@@ -34,6 +40,15 @@ function screenResponse(url: string, screen: string): Response {
     status: 200,
     headers,
     arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+  } as unknown as Response;
+}
+
+function resizeResponse(owner: string): Response {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ "X-Mast-Size-Owner": owner }),
+    arrayBuffer: async () => new ArrayBuffer(0),
   } as unknown as Response;
 }
 
@@ -45,8 +60,40 @@ async function until(check: () => boolean, what: string, timeoutMs = 3000): Prom
   }
 }
 
+type FetchImpl = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+/** 직접 만든 fetch 구현으로 뷰를 띄운다 — 지연 응답·이탈 사례가 기본 스텁의
+ *  즉시 응답으로는 재현되지 않아서다. */
+async function mountWith(impl: FetchImpl): Promise<TabView> {
+  window.localStorage.setItem("mast.remoteToken", "test-token");
+  vi.stubGlobal("fetch", vi.fn(impl));
+  const mounted = new TabView({ tab: TAB, title: "t", onBack: () => undefined });
+  document.body.append(mounted.root);
+  const textarea = mounted.root.querySelector("textarea") as HTMLTextAreaElement;
+  expect(textarea.disabled).toBe(true);
+  mounted.start();
+  await until(() => !textarea.disabled, "input to become enabled");
+  return mounted;
+}
+
+/** resolve/reject 를 밖에서 쥐는 promise — "요청 진행 중 이탈" 을 만들 때 쓴다. */
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("TabView first frame", () => {
   const posts: string[] = [];
+  const resizes: { url: string; keepalive: boolean }[] = [];
   let view: TabView | null = null;
 
   afterEach(() => {
@@ -54,31 +101,31 @@ describe("TabView first frame", () => {
     view?.root.remove();
     view = null;
     posts.length = 0;
+    resizes.length = 0;
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
-  async function mount(screen: string): Promise<TabView> {
-    window.localStorage.setItem("mast.remoteToken", "test-token");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        if (url.includes("/screen")) return screenResponse(url, screen);
-        if (url.includes("/input")) {
-          posts.push(String(init?.body));
-          return { ok: true, status: 204, headers: new Headers() } as unknown as Response;
-        }
-        throw new Error(`unexpected request ${url}`);
-      }),
-    );
-
-    const mounted = new TabView({ tab: TAB, title: "t", onBack: () => undefined });
+  async function mount(screen: string, owner = "desktop"): Promise<TabView> {
+    // 서버처럼 소유자를 기억한다 — resize 가 소유자를 바꾸면 다음 폴의 화면 응답도
+    // 바뀐 소유자를 싣는다 (그래야 낙관적 페인트를 폴이 되돌리지 않는다).
+    let ownerNow = owner;
+    const mounted = await mountWith(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/screen")) return screenResponse(url, screen, ownerNow);
+      if (url.includes("/resize")) {
+        const mode = new URL(url, "http://mast").searchParams.get("mode");
+        ownerNow = mode === "mobile" ? "mobile" : "desktop";
+        resizes.push({ url, keepalive: init?.keepalive === true });
+        return resizeResponse(ownerNow);
+      }
+      if (url.includes("/input")) {
+        posts.push(String(init?.body));
+        return { ok: true, status: 204, headers: new Headers() } as unknown as Response;
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
     view = mounted;
-    document.body.append(mounted.root);
-    const textarea = mounted.root.querySelector("textarea") as HTMLTextAreaElement;
-    expect(textarea.disabled).toBe(true);
-    mounted.start();
-    await until(() => !textarea.disabled, "input to become enabled");
     return mounted;
   }
 
@@ -180,5 +227,432 @@ describe("TabView first frame", () => {
       .filter((url) => url.includes("/screen"));
     expect(screenUrls.length).toBeGreaterThan(0);
     for (const url of screenUrls) expect(url).not.toContain("since=");
+  });
+
+  // --- PTY 크기 모드 (ADR-0016 개정) ---
+
+  /** 출력 영역과 글자 격자를 흉내 낸다 — happy-dom 은 레이아웃이 없어 실제 측정이
+   *  항상 0 이다. `pre` 폭 400px, 문자 폭 10px(표본 32자 = 320px), 줄 높이 17px,
+   *  보이는 높이 640px → 400/10 - 1 = 39열, 640/17 = 37행. */
+  function stubPhoneMetrics(): void {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement): DOMRect {
+        const width = this.tagName === "SPAN" ? 320 : 400;
+        const height = this.classList.contains("screen-text") ? 640 : 17;
+        return {
+          width,
+          height,
+          top: 0,
+          left: 0,
+          right: width,
+          bottom: height,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      },
+    );
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      lineHeight: "17px",
+    } as unknown as CSSStyleDeclaration);
+  }
+  function modeButtons(mounted: TabView): {
+    mobile: HTMLButtonElement;
+    desktop: HTMLButtonElement;
+  } {
+    return {
+      mobile: mounted.root.querySelector("button.mode-mobile") as HTMLButtonElement,
+      desktop: mounted.root.querySelector("button.mode-desktop") as HTMLButtonElement,
+    };
+  }
+
+  it("Mobile posts the measured phone size, Desktop releases it", async () => {
+    stubPhoneMetrics();
+    const mounted = await mount(SCREEN);
+    const buttons = modeButtons(mounted);
+    expect(buttons.mobile.getAttribute("aria-pressed")).toBe("false");
+    expect(buttons.desktop.getAttribute("aria-pressed")).toBe("true");
+
+    buttons.mobile.click();
+    // 서버가 적용했다고 답한 소유자로 곧바로 칠한다 (다음 폴까지 기다리지 않는다).
+    await until(
+      () => buttons.mobile.getAttribute("aria-pressed") === "true",
+      "the Mobile button to be painted",
+    );
+    expect(resizes[0].url).toBe("/api/tabs/7/resize?session=4242:7&mode=mobile&cols=39&rows=37");
+    expect(buttons.desktop.getAttribute("aria-pressed")).toBe("false");
+
+    buttons.desktop.click();
+    await until(
+      () => buttons.desktop.getAttribute("aria-pressed") === "true",
+      "the Desktop button to be painted",
+    );
+    expect(resizes[1].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+  });
+
+  it("mode buttons follow the server's owner, not the last tap", async () => {
+    // 폰이 소유한 세션을 열었다 — 서버가 mobile 이라고 말하면 Mobile 이 눌린 상태다.
+    const mounted = await mount(SCREEN, "mobile");
+    const buttons = modeButtons(mounted);
+    expect(buttons.mobile.getAttribute("aria-pressed")).toBe("true");
+    expect(buttons.desktop.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("measuring alone never posts — a viewport change is not a resize", async () => {
+    stubPhoneMetrics();
+    const mounted = await mount(SCREEN);
+    // 키보드가 열리고 닫히면 visualViewport/window 가 resize 된다. 그 사건이 PTY
+    // 크기를 건드리면 TUI 가 매번 다시 그려진다 — 요청이 나가면 안 된다.
+    window.dispatchEvent(new Event("resize"));
+    window.visualViewport?.dispatchEvent(new Event("resize"));
+    window.visualViewport?.dispatchEvent(new Event("scroll"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resizes).toEqual([]);
+    expect(modeButtons(mounted).desktop.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("leaving a tab while mobile-owned releases the size immediately", async () => {
+    const mounted = await mount(SCREEN, "mobile");
+    const fetchMock = window.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockClear();
+
+    mounted.dispose();
+    await until(() => resizes.length === 1, "a release to be posted on dispose");
+    expect(resizes[0].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+    // 페이지가 사라지는 중에도 나가야 한다 — 리스 만료를 기다리지 않는 이유.
+    expect(resizes[0].keepalive).toBe(true);
+    view = null;
+  });
+
+  it("leaving a tab without mobile ownership posts nothing", async () => {
+    const mounted = await mount(SCREEN);
+    mounted.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resizes).toEqual([]);
+    view = null;
+  });
+
+  it("a pagehide while mobile-owned releases with keepalive too", async () => {
+    await mount(SCREEN, "mobile");
+    window.dispatchEvent(new Event("pagehide"));
+    await until(() => resizes.length === 1, "a release to be posted on pagehide");
+    expect(resizes[0].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+    expect(resizes[0].keepalive).toBe(true);
+  });
+
+  it("a claim that succeeds right before Back is handed back at once", async () => {
+    // 폴을 멈춰 소유자를 되돌리지 못하게 한다 — 주장 성공이 수명 상태에 반영되지
+    // 않으면 dispose 가 해제를 보내지 않는다 (예전에는 다음 폴까지 기다렸다).
+    const mounted = await mount(SCREEN);
+    mounted.setVisible(false);
+    stubPhoneMetrics();
+    const buttons = modeButtons(mounted);
+    buttons.mobile.click();
+    await until(
+      () => buttons.mobile.getAttribute("aria-pressed") === "true",
+      "the claim to be applied",
+    );
+
+    mounted.dispose();
+    await until(() => resizes.length === 2, "the release on dispose");
+    expect(resizes[1].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+    expect(resizes[1].keepalive).toBe(true);
+    view = null;
+  });
+
+  it("leaving while a claim is in flight releases it once the claim succeeds", async () => {
+    const claim = deferred<Response>();
+    const mounted = await mountWith(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/screen")) return screenResponse(url, SCREEN, "desktop");
+      if (url.includes("/resize")) {
+        const mode = new URL(url, "http://mast").searchParams.get("mode");
+        resizes.push({ url, keepalive: init?.keepalive === true });
+        if (mode === "mobile") return claim.promise;
+        return resizeResponse("desktop");
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    view = mounted;
+    mounted.setVisible(false);
+    stubPhoneMetrics();
+    modeButtons(mounted).mobile.click();
+    await until(() => resizes.length === 1, "the claim to be sent");
+
+    // 요청이 진행 중인 상태로 떠난다 — 응답이 성공하면 그 자리에서 되돌려야 한다.
+    mounted.dispose();
+    expect(resizes.length).toBe(1);
+    claim.resolve(resizeResponse("mobile"));
+    await until(() => resizes.length === 2, "the release after the late claim");
+    expect(resizes[1].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+    expect(resizes[1].keepalive).toBe(true);
+    view = null;
+  });
+
+  it("a failed keepalive release is not treated as success", async () => {
+    // 해제 요청이 네트워크 오류로 실패한다 — 성공으로 속이면(소유권을 데스크톱으로
+    // 바꾸면) 다음 이탈에서 아무 요청도 나가지 않는다.
+    let releaseFailures = 0;
+    const mounted = await mountWith(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/screen")) return screenResponse(url, SCREEN, "desktop");
+      if (url.includes("/resize")) {
+        const mode = new URL(url, "http://mast").searchParams.get("mode");
+        resizes.push({ url, keepalive: init?.keepalive === true });
+        if (mode === "mobile") return resizeResponse("mobile");
+        releaseFailures += 1;
+        throw new TypeError("network down");
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    view = mounted;
+    mounted.setVisible(false);
+    stubPhoneMetrics();
+    const buttons = modeButtons(mounted);
+    buttons.mobile.click();
+    await until(
+      () => buttons.mobile.getAttribute("aria-pressed") === "true",
+      "the claim to be applied",
+    );
+
+    window.dispatchEvent(new Event("pagehide"));
+    await until(() => resizes.length === 2, "the release on pagehide");
+    // 실패한 해제는 소유권을 바꾸지 않는다 — 다시 이탈하면 재시도된다.
+    mounted.dispose();
+    await until(() => resizes.length === 3, "the retried release on dispose");
+    expect(resizes[2].keepalive).toBe(true);
+    expect(releaseFailures).toBe(2);
+    view = null;
+  });
+
+  it("a page restored from the back-forward cache can claim the size again", async () => {
+    // pagehide 뒤 bfcache 에서 되살아난 페이지 — 이탈 표시가 남아 있으면 새 주장이
+    // 성공하는 즉시 되돌려져(keepalive 해제) 폰이 소유를 가질 수 없다.
+    const mounted = await mount(SCREEN, "mobile");
+    window.dispatchEvent(new Event("pagehide"));
+    await until(() => resizes.length === 1, "the release on pagehide");
+
+    window.dispatchEvent(new Event("pageshow"));
+    stubPhoneMetrics();
+    const buttons = modeButtons(mounted);
+    buttons.mobile.click();
+    await until(() => resizes.length === 2, "the re-claim after restore");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(buttons.mobile.getAttribute("aria-pressed")).toBe("true");
+    expect(resizes.length).toBe(2);
+  });
+
+  it("a delayed release reply does not clear a newer claim's release coordinate", async () => {
+    // pagehide 해제가 날아간 사이 bfcache 복원 뒤 같은 세션으로 다시 주장한다. 해제
+    // 응답이 늦게 도착하며 새 주장의 좌표를 지우면, 서버는 mobile 인데 이쪽은 해제
+    // 좌표를 잃어 다음 이탈(Back)에서 데스크톱으로 되돌릴 수 없다.
+    const release = deferred<Response>();
+    const mounted = await mountWith(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/screen")) return screenResponse(url, SCREEN, "mobile");
+      if (url.includes("/resize")) {
+        const mode = new URL(url, "http://mast").searchParams.get("mode");
+        resizes.push({ url, keepalive: init?.keepalive === true });
+        if (mode === "mobile") return resizeResponse("mobile");
+        // 서버는 이미 데스크톱으로 처리했다 — HTTP 응답만 늦는다.
+        return release.promise;
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    view = mounted;
+    mounted.setVisible(false); // 폴이 좌표를 다시 세우지 않게 멈춘다
+
+    window.dispatchEvent(new Event("pagehide"));
+    await until(() => resizes.length === 1, "the release on pagehide");
+
+    window.dispatchEvent(new Event("pageshow"));
+    stubPhoneMetrics();
+    modeButtons(mounted).mobile.click();
+    await until(() => resizes.length === 2, "the re-claim after restore");
+
+    // 늦은 해제 응답 — 새 주장의 좌표를 지우면 안 된다.
+    release.resolve(resizeResponse("desktop"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    mounted.dispose();
+    await until(() => resizes.length === 3, "the release on the later departure");
+    expect(resizes[2].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+    expect(resizes[2].keepalive).toBe(true);
+    view = null;
+  });
+
+  it("a refresh then Back still releases the size the server says is Mobile", async () => {
+    // ↻ 는 화면 상태를 초기화하지만 서버의 소유권은 그대로다 — 해제 좌표를 화면
+    // 상태와 함께 버리면 이탈 해제가 나가지 않아 데스크톱이 리스 만료까지 좁다.
+    const nextScreen = deferred<Response>();
+    let screens = 0;
+    const mounted = await mountWith(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/screen")) {
+        screens += 1;
+        if (screens === 1) return screenResponse(url, SCREEN, "mobile");
+        return nextScreen.promise; // ↻ 뒤 스냅샷은 오지 않는다
+      }
+      if (url.includes("/resize")) {
+        resizes.push({ url, keepalive: init?.keepalive === true });
+        return resizeResponse("desktop");
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    view = mounted;
+
+    (mounted.root.querySelector("button.bar-refresh") as HTMLButtonElement).click();
+    mounted.dispose();
+    await until(() => resizes.length === 1, "the release on dispose after refresh");
+    expect(resizes[0].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+    expect(resizes[0].keepalive).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resizes.length).toBe(1); // 중복 해제는 없다
+    view = null;
+  });
+
+  it("a refresh then pagehide still releases the size the server says is Mobile", async () => {
+    const nextScreen = deferred<Response>();
+    let screens = 0;
+    const mounted = await mountWith(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/screen")) {
+        screens += 1;
+        if (screens === 1) return screenResponse(url, SCREEN, "mobile");
+        return nextScreen.promise;
+      }
+      if (url.includes("/resize")) {
+        resizes.push({ url, keepalive: init?.keepalive === true });
+        return resizeResponse("desktop");
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    view = mounted;
+
+    (mounted.root.querySelector("button.bar-refresh") as HTMLButtonElement).click();
+    window.dispatchEvent(new Event("pagehide"));
+    await until(() => resizes.length === 1, "the release on pagehide after refresh");
+    expect(resizes[0].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+    expect(resizes[0].keepalive).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resizes.length).toBe(1); // 중복 해제는 없다
+  });
+
+  it("a claim that lands after a refresh and Back is released with its own session", async () => {
+    // 주장이 날아가 있는 사이 ↻ 로 화면 상태가 비고 그 다음 Back — 보상 해제는
+    // state.session(이제 null)이 아니라 요청 시점의 세션으로 나가야 한다.
+    const claim = deferred<Response>();
+    const mounted = await mountWith(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/screen")) return screenResponse(url, SCREEN, "desktop");
+      if (url.includes("/resize")) {
+        const mode = new URL(url, "http://mast").searchParams.get("mode");
+        resizes.push({ url, keepalive: init?.keepalive === true });
+        if (mode === "mobile") return claim.promise;
+        return resizeResponse("desktop");
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    view = mounted;
+    mounted.setVisible(false); // 폴이 state 를 되돌리지 않게 멈춘다
+    stubPhoneMetrics();
+    modeButtons(mounted).mobile.click();
+    await until(() => resizes.length === 1, "the claim to be sent");
+
+    (mounted.root.querySelector("button.bar-refresh") as HTMLButtonElement).click();
+    mounted.dispose();
+    expect(resizes.length).toBe(1); // 아직 해제는 없다 — 주장이 성공해야 나간다
+
+    claim.resolve(resizeResponse("mobile"));
+    await until(() => resizes.length === 2, "the release after the late claim");
+    expect(resizes[1].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+    expect(resizes[1].keepalive).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resizes.length).toBe(2); // 보상 해제 하나뿐 — 중복은 없다
+    view = null;
+  });
+
+  it("a claim for a replaced shell does not repaint or release the new shell", async () => {
+    // 주장이 나간 뒤 탭이 Restart 되면(새 세션) 그 응답은 옛 셸의 것이다 —
+    // 새 화면의 소유자도 해제 좌표도 덮지 않는다.
+    const claim = deferred<Response>();
+    let screens = 0;
+    const mounted = await mountWith(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/screen")) {
+        screens += 1;
+        return screens === 1
+          ? screenResponse(url, SCREEN, "desktop")
+          : screenResponse(url, SCREEN, "desktop", "5000:9");
+      }
+      if (url.includes("/resize")) {
+        const mode = new URL(url, "http://mast").searchParams.get("mode");
+        resizes.push({ url, keepalive: init?.keepalive === true });
+        if (mode === "mobile") return claim.promise;
+        return resizeResponse("desktop");
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    view = mounted;
+    const textarea = mounted.root.querySelector("textarea") as HTMLTextAreaElement;
+    stubPhoneMetrics();
+    modeButtons(mounted).mobile.click();
+    await until(() => resizes.length === 1, "the claim to be sent");
+
+    // 다음 폴이 새 셸의 스냅샷을 받는다 — 옛 화면 인스턴스가 접힌다.
+    mounted.setVisible(false);
+    mounted.setVisible(true);
+    await until(() => textarea.disabled, "the old shell's screen to be dropped");
+    mounted.setVisible(false); // 옛 주장의 늦은 페인트를 폴이 덮지 않게 멈춘다
+
+    claim.resolve(resizeResponse("mobile"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(modeButtons(mounted).mobile.getAttribute("aria-pressed")).toBe("false");
+    expect(resizes.length).toBe(1); // 해제도 나가지 않는다
+
+    mounted.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resizes.length).toBe(1);
+    view = null;
+  });
+
+  it("a screen reply requested before a successful claim does not undo its owner", async () => {
+    // 폴 하나가 날아가 있는 동안 Mobile 이 성공한다 — 그 폴의 응답(옛 소유자)이
+    // 늦게 도착해도 폰 소유를 데스크톱으로 되돌리면, 버튼도 이탈 해제도 틀린다.
+    const stalePoll = deferred<Response>();
+    let screenCalls = 0;
+    const mounted = await mountWith(async (input) => {
+      const url = String(input);
+      if (url.includes("/screen")) {
+        screenCalls += 1;
+        if (screenCalls === 1) return screenResponse(url, SCREEN, "desktop");
+        if (screenCalls === 2) return stalePoll.promise;
+        return new Promise<Response>(() => undefined); // 이후 폴은 영영 오지 않는다
+      }
+      if (url.includes("/resize")) {
+        resizes.push({ url, keepalive: false });
+        return resizeResponse("mobile");
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    view = mounted;
+    stubPhoneMetrics();
+
+    // 폴 하나를 띄운다 — 숨겼다 보이면 즉시 발사된다.
+    mounted.setVisible(false);
+    mounted.setVisible(true);
+    await until(() => screenCalls === 2, "the poll to be in flight");
+
+    const buttons = modeButtons(mounted);
+    buttons.mobile.click();
+    await until(
+      () => buttons.mobile.getAttribute("aria-pressed") === "true",
+      "the claim to be applied",
+    );
+
+    stalePoll.resolve(screenResponse("/screen?since=1&session=4242:7", SCREEN, "desktop"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(buttons.mobile.getAttribute("aria-pressed")).toBe("true");
+    expect(buttons.desktop.getAttribute("aria-pressed")).toBe("false");
   });
 });

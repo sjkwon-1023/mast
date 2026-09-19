@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 
 use mast_core::osc::OscEvent;
 use mast_core::session::{
-    Delivery, PtySession, SessionId, SessionManager, SessionOptions, SessionSink, SpawnSpec,
+    Delivery, LeaseRenewal, PtySession, SessionId, SessionManager, SessionOptions, SessionSink,
+    SizeOwner, SpawnSpec,
 };
 
 /// 개별 대기 상한 — hang 방지 가드. WSL 부하를 감안해 넉넉히 잡는다.
@@ -883,6 +884,150 @@ fn screen_since_leaves_flow_and_reattach_untouched() {
         "both paths must re-assert the same modes"
     );
     session.kill();
+}
+
+// --- 모바일 크기 소유권 (원격 `/resize` — ADR-0016 개정) ---
+//
+// 폰이 "Mobile" 을 누르면 PTY 크기를 폰이 소유하고, "Desktop" 을 누르거나 폴 리스가
+// 끝나면 데스크톱 pane 크기로 돌아간다. 계약은 `PtySession::resize`·
+// `release_mobile_size`·`renew_mobile_lease` rustdoc.
+
+/// MARK1 을 찍고 조용히 사는 스크립트 — 크기 주장만 검사하는 테스트의 공통 대기점.
+fn spawn_quiet_session() -> (PtySession, Receiver<Event>) {
+    let (session, rx) = spawn_script(r"printf 'MARK1\n'; sleep 30", SessionOptions::default());
+    wait_for_marker(&rx, "MARK1");
+    (session, rx)
+}
+
+#[test]
+fn desktop_resize_is_suppressed_while_mobile_owns_the_size_and_restores_the_latest_pane_size() {
+    let (session, _rx) = spawn_quiet_session();
+    let lease = Duration::from_secs(30);
+
+    session.resize_mobile(60, 20, lease).expect("claim mobile size");
+    let owned = session.screen_since(None);
+    assert_eq!((owned.cols, owned.rows), (60, 20));
+    assert_eq!(owned.size_owner, SizeOwner::Mobile);
+
+    // 폰이 소유하는 동안의 데스크톱 resize — 전부 억제되고 기록만 갱신된다.
+    session.resize(100, 40).expect("desktop resize");
+    session.resize(120, 35).expect("desktop resize");
+    let still_mobile = session.screen_since(None);
+    assert_eq!(
+        (still_mobile.cols, still_mobile.rows),
+        (60, 20),
+        "데스크톱 자동 resize 가 폰 크기를 덮었다"
+    );
+    assert_eq!(still_mobile.size_owner, SizeOwner::Mobile);
+
+    // 복원은 주장 시점(100x40 중간값이 아니라) 마지막 pane 크기인 120x35 로 간다.
+    session.release_mobile_size().expect("release mobile size");
+    let restored = session.screen_since(None);
+    assert_eq!((restored.cols, restored.rows), (120, 35));
+    assert_eq!(restored.size_owner, SizeOwner::Desktop);
+    session.kill();
+}
+
+#[test]
+fn release_without_mobile_ownership_leaves_the_size_alone() {
+    let (session, _rx) = spawn_quiet_session();
+    session.resize(100, 40).expect("desktop resize");
+    session
+        .release_mobile_size()
+        .expect("release is idempotent");
+    let screen = session.screen_since(None);
+    assert_eq!((screen.cols, screen.rows), (100, 40));
+    assert_eq!(screen.size_owner, SizeOwner::Desktop);
+    session.kill();
+}
+
+#[test]
+fn a_lapsed_lease_is_restored_by_the_next_heartbeat() {
+    let (session, _rx) = spawn_quiet_session();
+    // 리스가 살아 있는 동안 데스크톱이 창을 옮겼다 — 기록만 갱신된다.
+    session
+        .resize_mobile(50, 15, Duration::from_millis(40))
+        .expect("claim mobile size");
+    session.resize(120, 30).expect("desktop resize");
+
+    thread::sleep(Duration::from_millis(120));
+    // 하트비트가 만료를 발견하면 그 자리에서 복원한다 (폰이 끊겼다 돌아온 폴).
+    let renewal = session.renew_mobile_lease(Duration::from_secs(30));
+    assert_eq!(renewal, LeaseRenewal::Lapsed { cols: 120, rows: 30 });
+    let screen = session.screen_since(None);
+    assert_eq!((screen.cols, screen.rows), (120, 30));
+    assert_eq!(screen.size_owner, SizeOwner::Desktop);
+
+    // 이미 데스크톱 소유라 다음 하트비트는 할 일이 없다.
+    assert_eq!(
+        session.renew_mobile_lease(Duration::from_secs(30)),
+        LeaseRenewal::NotOwned
+    );
+    session.kill();
+}
+
+#[test]
+fn a_live_heartbeat_keeps_the_mobile_size_owned() {
+    let (session, _rx) = spawn_quiet_session();
+    // 부하 걸린 러너에서도 20ms 짜리 잠들기가 리스를 넘기지 않도록 넉넉히 잡는다.
+    let lease = Duration::from_millis(400);
+    session
+        .resize_mobile(50, 15, lease)
+        .expect("claim mobile size");
+
+    // 리스보다 짧은 간격으로 계속 두드리면 소유가 유지된다.
+    for _ in 0..4 {
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            session.renew_mobile_lease(lease),
+            LeaseRenewal::Renewed
+        );
+    }
+    assert_eq!(session.screen_since(None).size_owner, SizeOwner::Mobile);
+
+    // 두드리기를 멈추면 다음 하트비트가 만료를 정리한다.
+    thread::sleep(Duration::from_millis(600));
+    assert_eq!(
+        session.renew_mobile_lease(lease),
+        LeaseRenewal::Lapsed { cols: 80, rows: 24 }
+    );
+    session.kill();
+}
+
+#[test]
+fn an_expired_lease_reports_desktop_before_anything_restores_the_pty() {
+    let (session, _rx) = spawn_quiet_session();
+    session
+        .resize_mobile(50, 15, Duration::from_millis(30))
+        .expect("claim mobile size");
+    thread::sleep(Duration::from_millis(80));
+
+    // 소유권은 이미 데스크톱에게 돌아갔지만 PTY 는 아직 폰 크기다 — 이 순간을
+    // 숨기지 않고 드러낸다 (screen_since rustdoc). 복원은 적용 경로의 몫이다.
+    let lapsed = session.screen_since(None);
+    assert_eq!(lapsed.size_owner, SizeOwner::Desktop);
+    assert_eq!((lapsed.cols, lapsed.rows), (50, 15));
+
+    session.resize(120, 30).expect("desktop resize applies");
+    assert_eq!(session.screen_since(None).cols, 120);
+    session.kill();
+}
+
+#[test]
+fn a_mobile_claim_on_a_killed_session_errors_but_release_is_tolerant() {
+    let (session, _rx) = spawn_quiet_session();
+    session
+        .resize_mobile(50, 15, Duration::from_secs(30))
+        .expect("claim mobile size");
+    session.kill();
+
+    assert!(
+        session.resize_mobile(40, 12, Duration::from_secs(30)).is_err(),
+        "적용할 master 가 없는데 성공을 보고하면 폰이 거짓말을 듣는다"
+    );
+    session
+        .release_mobile_size()
+        .expect("죽은 세션의 해제는 할 일이 없을 뿐이다");
 }
 
 // --- take_record (끝난 탭의 기록) ---

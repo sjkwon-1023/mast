@@ -117,6 +117,11 @@ export class ListView {
       const row = document.createElement("button");
       row.type = "button";
       row.className = "tab";
+      // 점은 워크스페이스 파생 상태가 아니라 **탭 자신의 agentStatus** 로 판정한다 —
+      // 한 워크스페이스에서 둘이 동시에 기다리면 두 행 모두 점을 갖고, 하나만
+      // 풀려도 그 행에서만 사라진다. OSC 는 PTY 세션에서만 오므로 상태를 가진
+      // 탭은 항상 터미널 탭이다 (뷰어 행에는 붙일 자리가 없다).
+      if (tab.agentStatus === "needsInput") row.append(needsInputEl());
       row.append(tabTitleEl(tab.title), tabDetailEl(label));
       row.addEventListener("click", () => this.options.onOpenTab(tab.id, tab.title));
       block.append(row);
@@ -129,6 +134,16 @@ export class ListView {
     }
     return block;
   }
+}
+
+/** 응답 대기 점 — 데스크톱 탭 배지와 같은 클래스 이름·색 계열이라 두 표면이 같은
+ *  뜻으로 읽힌다 (데스크톱은 같은 자리에 "!" 배지, 폰은 폭이 좁아 점). */
+function needsInputEl(): HTMLElement {
+  const el = document.createElement("span");
+  el.className = "tab-needs-input";
+  el.textContent = "●";
+  el.title = "Needs input";
+  return el;
 }
 
 function tabTitleEl(text: string): HTMLElement {
@@ -183,7 +198,9 @@ function panesInLayoutOrder(ws: Workspace): Pane[] {
   return out;
 }
 
-/** 화면에 나오는 것만 담는다. */
+/** 화면에 나오는 것만 담는다. 탭별 agentStatus 를 포함하는 이유는 점이 그 값으로
+ *  붙기 때문이다 — 빠지면 한 탭이 풀려도 서명이 그대로라 **옛 탭에 점이 남는다**
+ *  (render 는 서명이 같으면 DOM 을 건드리지 않는다). */
 function signatureOf(snapshot: StateSnapshot): string {
   return JSON.stringify(
     snapshot.state.workspaces.map((ws) => [
@@ -192,7 +209,7 @@ function signatureOf(snapshot: StateSnapshot): string {
       ws.agentStatus,
       ws.lastAgentMessage,
       panesInLayoutOrder(ws).map((pane) =>
-        pane.tabs.map((tab) => [tab.id, tab.title, tabDetail(tab.kind)]),
+        pane.tabs.map((tab) => [tab.id, tab.title, tabDetail(tab.kind), tab.agentStatus]),
       ),
     ]),
   );

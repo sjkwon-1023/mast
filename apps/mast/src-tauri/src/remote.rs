@@ -124,6 +124,7 @@ pub fn init(
         mast_remote::RemoteConfig {
             bind: SocketAddr::from(([0, 0, 0, 0], port)),
             token: token.clone(),
+            mobile_lease: mast_remote::MOBILE_SIZE_LEASE,
         },
         mast_remote::RemoteDeps {
             dispatcher,

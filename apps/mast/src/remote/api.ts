@@ -6,8 +6,8 @@
 // (ADR-0016 의 한계 절). 그래서 이 페이지는 모델 문자열을 HTML 로 해석되는 자리에 절대
 // 넣지 않는다 — 전부 `textContent` 다 (list-view.ts).
 
-import { parseScreenMeta } from "./protocol";
-import type { ScreenMeta, ScreenQuery } from "./protocol";
+import { parseSizeOwner, parseScreenMeta } from "./protocol";
+import type { ScreenMeta, ScreenQuery, SizeOwner } from "./protocol";
 import type { StateSnapshot, TabId } from "../shared/types";
 
 const TOKEN_KEY = "mast.remoteToken";
@@ -93,4 +93,39 @@ export async function postInput(tab: TabId, session: string, data: string): Prom
     headers: { "Content-Type": "text/plain" },
     body: data,
   });
+}
+
+/** `POST /resize` 의 성공 응답 — 서버가 실제로 적용한 크기와 소유자다. 폰이 보낸
+ *  크기는 서버가 클램프할 수 있으므로(1열·3행 같은 극단) 버튼 상태는 이 값으로
+ *  칠한다. `cols`/`rows` 는 버튼 페인트에 쓰지 않는다 — 화면 인스턴스의 크기는
+ *  다음 폴의 meta 가 정한다 (그 전에 state 를 바꾸면 `needsRecreate` 판정이
+ *  어긋나 옛 크기 터미널에 새 크기 델타가 들어간다). */
+export interface SizeReply {
+  owner: SizeOwner;
+}
+
+/** `mode=mobile` 이면 `cols`·`rows` 가 필수다 — 서버는 그 값으로 PTY 를 줄인다.
+ *  `mode=desktop` 은 크기를 보내지 않는다: 복원 크기는 서버가 기억한 현재
+ *  데스크톱 pane 크기이고, 폰은 그 값을 알 방법도 알 필요도 없다.
+ *
+ *  `keepalive` 는 탭을 떠나며 보내는 해제 요청용이다 — 페이지가 사라지는 중에도
+ *  요청이 나가게 한다 (리스 만료가 최종 안전망이지만, 즉시 돌려주는 것이 낫다). */
+export async function postResize(
+  tab: TabId,
+  session: string,
+  mode: SizeOwner,
+  size?: { cols: number; rows: number },
+  options: { keepalive?: boolean } = {},
+): Promise<SizeReply> {
+  const query =
+    mode === "mobile"
+      ? `mode=mobile&cols=${size?.cols ?? ""}&rows=${size?.rows ?? ""}`
+      : "mode=desktop";
+  const response = await request(`/api/tabs/${tab}/resize?session=${session}&${query}`, {
+    method: "POST",
+    keepalive: options.keepalive ?? false,
+  });
+  const owner = parseSizeOwner(response.headers.get("X-Mast-Size-Owner"));
+  if (owner === null) throw new Error("resize reply has malformed headers");
+  return { owner };
 }
