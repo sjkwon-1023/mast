@@ -358,6 +358,10 @@ pub struct Dispatcher {
     /// 이미 본 표식은 별도로 기억해 늦은 마감이 Running을 NotStarted로 되돌리지 못하게 한다.
     /// 세션 ID는 휘발성이므로 persist하지 않는다.
     started_sessions: HashSet<SessionId>,
+    /// `Tab::last_agent_message_seq` 의 공급원. 배치마다 한 번만 올려, 같은 배치에 온
+    /// 메시지끼리는 순번이 같아 작은 TabId 동률 규칙이 가르게 한다. 복원된 탭의 순번은
+    /// 비어 있으므로 부팅마다 0 부터 다시 세도 순서가 어긋나지 않는다.
+    osc_batch_seq: u64,
 }
 
 impl Dispatcher {
@@ -366,6 +370,7 @@ impl Dispatcher {
             state: AppState::new(),
             host,
             started_sessions: HashSet::new(),
+            osc_batch_seq: 0,
         }
     }
 
@@ -384,6 +389,7 @@ impl Dispatcher {
             state,
             host,
             started_sessions: HashSet::new(),
+            osc_batch_seq: 0,
         }
     }
 

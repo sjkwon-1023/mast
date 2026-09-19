@@ -116,19 +116,12 @@ pub struct Workspace {
     pub layout: SplitTree,
     pub panes: BTreeMap<PaneId, Pane>,
     pub active_pane: PaneId,
-    /// OSC 알림이 갱신하는 에이전트 상태 (계획 v2 9장). 기록한 탭은
-    /// [`Workspace::agent_status_source`] 에 남는다.
+    /// 탭들의 [`Tab::agent_status`] 에서 재계산되는 **저장 파생값**이다 — 탭을
+    /// 바꾸는 경로가 함께 갱신하며 직접 쓰지 않는다. 사이드바와 폰 `/api/state` 의
+    /// 구 페이지가 워크스페이스 단위로 읽기 때문에 필드로 남아 있다.
     pub agent_status: AgentStatus,
-    /// 사이드바 미리보기용 OSC 777 body (계획 v2 9장).
+    /// 사이드바 미리보기 — [`Workspace::agent_status`] 와 같은 파생값이다.
     pub last_agent_message: Option<String>,
-    /// `agent_status` 를 마지막으로 기록한 탭 (18단계 계획 core 계약). needsInput
-    /// 우선 규칙에서 "같은 출처의 강등만 허용"을 판정하고, 그 탭이 사라질 때
-    /// 상태를 Idle 로 되돌리는 리셋 대상을 알아내는 데 쓴다.
-    ///
-    /// None 이면 JSON 에 아예 나타나지 않는다 — 이 필드를 모르는 기존 스냅샷
-    /// (golden fixture·디스크의 state.json)과 계약이 그대로 유지된다.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_status_source: Option<TabId>,
 }
 
 impl Workspace {
@@ -192,12 +185,25 @@ impl Workspace {
 }
 
 /// 에이전트 상태 3값 enum — 이진 unread 가 아니다 (계획 v2 9장).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentStatus {
     Running,
     NeedsInput,
+    #[default]
     Idle,
+}
+
+impl AgentStatus {
+    /// 워크스페이스 파생에서 어느 탭의 상태가 이기는가. 선언 순서가 우선순위와 달라
+    /// `Ord` 파생으로는 틀린 답이 나온다.
+    pub fn urgency(self) -> u8 {
+        match self {
+            AgentStatus::Idle => 0,
+            AgentStatus::Running => 1,
+            AgentStatus::NeedsInput => 2,
+        }
+    }
 }
 
 /// 탭 알림 상태.
@@ -408,6 +414,21 @@ pub struct Tab {
     /// 마지막 활동 시각 (epoch ms) — OSC 델타 반영 시 글루가 주입한 시각으로
     /// 갱신된다 (코어는 시계를 읽지 않는다).
     pub last_activity_ms: Option<u64>,
+    /// 이 탭의 에이전트가 `mast:` 토큰으로 알린 상태. 두 에이전트 필드를 모르는 구
+    /// `state.json` 은 기본값으로 읽힌다 (`PERSIST_VERSION` 은 그대로 1). 직렬화는
+    /// 항상 한다 — 프론트 타입이 필수 필드로 미러한다.
+    #[serde(default)]
+    pub agent_status: AgentStatus,
+    #[serde(default)]
+    pub last_agent_message: Option<String>,
+    /// 메시지가 도착한 OSC 배치의 순번 (`Dispatcher` 가 배치마다 올린다). 벽시계
+    /// 시각을 쓰지 않는 이유: 절전 복귀나 시간 동기화로 시계가 뒤로 가면 나중에 온
+    /// 메시지가 더 오래된 것으로 보인다. 같은 문구가 다시 와도 갱신한다 — 워크스페이스
+    /// 미리보기는 "가장 최근에 알린 탭"을 고르는데, 문구 비교로 갱신을 거르면 같은
+    /// 알림을 반복하는 탭이 오래된 것으로 밀린다. 순번은 프로세스마다 다시 세므로
+    /// 스냅샷·persist 에 나가지 않는다.
+    #[serde(skip)]
+    pub last_agent_message_seq: Option<u64>,
 }
 
 /// 탭 종류별 상태 (10단계 계획 1장 "타입 공간은 지금 확정" 기준). 생성 경로는
@@ -674,31 +695,64 @@ mod tests {
             active_pane: PaneId(2),
             agent_status: AgentStatus::Idle,
             last_agent_message: None,
-            agent_status_source: None,
+        }
+    }
+
+    fn test_tab() -> Tab {
+        Tab {
+            id: TabId(7),
+            title: "/".into(),
+            kind: TabKind::FolderBrowser { path: "/".into() },
+            notification: NotificationState::None,
+            last_activity_ms: None,
+            agent_status: AgentStatus::NeedsInput,
+            last_agent_message: Some("approve?".into()),
+            last_agent_message_seq: Some(1),
         }
     }
 
     #[test]
-    fn agent_status_source_is_omitted_while_none() {
-        // None → JSON 에 키 자체가 없다 (이 필드를 모르는 기존 스냅샷과의 계약
-        // 유지 — fixtures/stage10-snapshot.json round-trip 은 tests/dispatcher.rs).
-        let mut ws = test_workspace();
-        let json = serde_json::to_value(&ws).unwrap();
+    fn agent_status_defaults_to_idle_and_ranks_needs_input_highest() {
+        assert_eq!(AgentStatus::default(), AgentStatus::Idle);
+        assert!(AgentStatus::NeedsInput.urgency() > AgentStatus::Running.urgency());
+        assert!(AgentStatus::Running.urgency() > AgentStatus::Idle.urgency());
+    }
+
+    #[test]
+    fn tab_agent_fields_always_serialize_without_the_arrival_seq() {
+        let json = serde_json::to_value(test_tab()).unwrap();
+        assert_eq!(json["agentStatus"], serde_json::json!("needsInput"));
+        assert_eq!(json["lastAgentMessage"], serde_json::json!("approve?"));
         assert!(
-            json.get("agentStatusSource").is_none(),
-            "None 인데 키가 나타남: {json}"
+            json.get("lastAgentMessageSeq").is_none(),
+            "도착 순번은 스냅샷에 나가지 않는다: {json}"
         );
 
-        // Some → camelCase 키로 탭 id 가 실린다.
-        ws.agent_status_source = Some(TabId(7));
-        let json = serde_json::to_value(&ws).unwrap();
-        assert_eq!(json["agentStatusSource"], serde_json::json!(7));
+        // 비어 있어도 키는 나온다 — 프론트가 필수 필드로 미러한다.
+        let mut idle = test_tab();
+        idle.agent_status = AgentStatus::Idle;
+        idle.last_agent_message = None;
+        let json = serde_json::to_value(idle).unwrap();
+        assert_eq!(json["agentStatus"], serde_json::json!("idle"));
+        assert_eq!(json["lastAgentMessage"], serde_json::Value::Null);
+    }
 
-        // 키 없는 JSON 은 None 으로 역직렬화된다 (serde default).
-        let mut without = json.as_object().unwrap().clone();
-        without.remove("agentStatusSource");
-        let parsed: Workspace = serde_json::from_value(without.into()).unwrap();
-        assert_eq!(parsed.agent_status_source, None);
+    #[test]
+    fn legacy_json_without_tab_agent_fields_deserializes_to_defaults() {
+        let mut json = serde_json::to_value(test_tab()).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("agentStatus");
+        object.remove("lastAgentMessage");
+        let parsed: Tab = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.agent_status, AgentStatus::Idle);
+        assert_eq!(parsed.last_agent_message, None);
+        assert_eq!(parsed.last_agent_message_seq, None);
+
+        // 제거된 워크스페이스 키가 남은 구 파일도 그대로 읽힌다.
+        let mut ws = serde_json::to_value(test_workspace()).unwrap();
+        ws["agentStatusSource"] = serde_json::json!(7);
+        let parsed: Workspace = serde_json::from_value(ws).unwrap();
+        assert_eq!(parsed, test_workspace());
     }
 
     #[test]

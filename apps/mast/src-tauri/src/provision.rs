@@ -35,6 +35,166 @@ use crate::winlog;
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
 const SETUP_VERSION: u32 = 16;
 
+/// 설치 스크립트 heredoc 에 통째로 들어가는 레포 파일들: (자리표시자, heredoc 종결 줄, 내용).
+///
+/// 자리표시자는 heredoc 본문 한 줄 전체이고, 치환은 그 줄바꿈까지 파일 내용으로 바꾼다
+/// (`setup_script`). 그래서 설치된 파일은 레포 파일과 바이트 단위로 같다. 순서대로 치환하므로
+/// 앞서 넣은 파일에 뒤 자리표시자나 자기 종결 줄이 들어 있으면 스크립트가 조용히 깨진다 —
+/// 아래 `const _` 가 그 경우를 빌드 실패로 만든다.
+const EMBEDDED_FILES: [(&str, &str, &str); 7] = [
+    (
+        "@CONFIG_HELPER@",
+        "MAST_CONFIG_EOF",
+        include_str!("../../../../scripts/wsl/mast-config.py"),
+    ),
+    (
+        "@HOOKS_MERGE@",
+        "MAST_HOOKS_MERGE_EOF",
+        include_str!("../../../../scripts/wsl/mast-hooks-merge.py"),
+    ),
+    (
+        "@AGENT_HOOK@",
+        "MAST_AGENT_HOOK_EOF",
+        include_str!("../../../../scripts/wsl/mast-agent-hook.py"),
+    ),
+    (
+        "@CLAUDE_HOOK@",
+        "MAST_CLAUDE_HOOK_EOF",
+        include_str!("../../../../scripts/wsl/mast-claude-hook.sh"),
+    ),
+    (
+        "@CODEX_HOOK@",
+        "MAST_CODEX_HOOK_EOF",
+        include_str!("../../../../scripts/wsl/mast-codex-hook.sh"),
+    ),
+    (
+        "@AGY_HOOK@",
+        "MAST_AGY_HOOK_EOF",
+        include_str!("../../../../scripts/wsl/mast-agy-hook.sh"),
+    ),
+    (
+        "@OPENCODE_PLUGIN@",
+        "MAST_OPENCODE_PLUGIN_EOF",
+        include_str!("../../../../scripts/wsl/mast-opencode-plugin.js"),
+    ),
+];
+
+const VERSION_PLACEHOLDER: &str = "@SETUP_VERSION@";
+
+// 스크립트 한 번, 파일마다 한 번만 훑는다. 자리표시자·종결 줄마다 따로 찾으면 const 평가 단계
+// 수가 rustc 의 long_running_const_eval 한도를 넘는다. 표에 없는 자리표시자는 치환되지 않은 채 설치되고
+// (훅 파일 본문이 `@X@` 한 줄이 된다) 아무 테스트도 그 파일을 보지 않으므로 여기서 막는다.
+const _: () = {
+    let script = SETUP_SCRIPT.as_bytes();
+    let mut count = [0usize; EMBEDDED_FILES.len()];
+    let mut found = [0usize; EMBEDDED_FILES.len()];
+    let mut at = 0;
+    while at < script.len() {
+        let len = placeholder_len(script, at);
+        if len > 0 {
+            let mut known = len == VERSION_PLACEHOLDER.len() && starts_at(script, VERSION_PLACEHOLDER.as_bytes(), at);
+            let mut i = 0;
+            while i < EMBEDDED_FILES.len() {
+                let placeholder = EMBEDDED_FILES[i].0.as_bytes();
+                if len == placeholder.len() && starts_at(script, placeholder, at) {
+                    count[i] += 1;
+                    found[i] = at;
+                    known = true;
+                }
+                i += 1;
+            }
+            assert!(
+                known,
+                "SETUP_SCRIPT has an @TOKEN@ that is neither an EMBEDDED_FILES placeholder nor @SETUP_VERSION@"
+            );
+        }
+        at += 1;
+    }
+    let mut i = 0;
+    while i < EMBEDDED_FILES.len() {
+        let (placeholder, delimiter, file) = EMBEDDED_FILES[i];
+        assert!(
+            count[i] == 1 && is_heredoc_body(script, found[i], placeholder.as_bytes(), delimiter.as_bytes()),
+            "a placeholder must appear once in SETUP_SCRIPT, as the whole body of its heredoc"
+        );
+        assert!(
+            !file.is_empty() && file.as_bytes()[file.len() - 1] == b'\n',
+            "an embedded file must end with a newline, or its heredoc delimiter lands on its last line"
+        );
+        assert!(
+            embeds_safely(file.as_bytes(), delimiter.as_bytes()),
+            "an embedded file contains its heredoc delimiter or a placeholder a later substitution would rewrite"
+        );
+        i += 1;
+    }
+};
+
+const fn embeds_safely(file: &[u8], delimiter: &[u8]) -> bool {
+    let mut at = 0;
+    while at < file.len() {
+        if file[at] == b'@' {
+            let mut i = 0;
+            while i < EMBEDDED_FILES.len() {
+                if starts_at(file, EMBEDDED_FILES[i].0.as_bytes(), at) {
+                    return false;
+                }
+                i += 1;
+            }
+        } else if file[at] == delimiter[0] && starts_at(file, delimiter, at) {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
+
+/// `at` 에서 시작하는 `@[A-Z_]+@` 의 길이. 없으면 0.
+const fn placeholder_len(bytes: &[u8], at: usize) -> usize {
+    if bytes[at] != b'@' {
+        return 0;
+    }
+    let mut end = at + 1;
+    while end < bytes.len() && (bytes[end].is_ascii_uppercase() || bytes[end] == b'_') {
+        end += 1;
+    }
+    if end > at + 1 && end < bytes.len() && bytes[end] == b'@' {
+        end + 1 - at
+    } else {
+        0
+    }
+}
+
+const fn starts_at(haystack: &[u8], needle: &[u8], at: usize) -> bool {
+    if at + needle.len() > haystack.len() {
+        return false;
+    }
+    let mut k = 0;
+    while k < needle.len() {
+        if haystack[at + k] != needle[k] {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+/// 앞은 `<<'DELIM'` 줄, 뒤는 `DELIM` 줄이어야 한다. rustc 가 소스 리터럴의 CRLF 를 LF 로 바꾸므로
+/// 줄 끝은 LF 만 본다.
+const fn is_heredoc_body(script: &[u8], at: usize, placeholder: &[u8], delimiter: &[u8]) -> bool {
+    let opener_len = b"<<'".len() + delimiter.len() + b"'\n".len();
+    if at < opener_len {
+        return false;
+    }
+    let opener = at - opener_len;
+    let closing = at + placeholder.len() + 1;
+    starts_at(script, b"<<'", opener)
+        && starts_at(script, delimiter, opener + 3)
+        && starts_at(script, b"'\n", at - 2)
+        && starts_at(script, b"\n", at + placeholder.len())
+        && starts_at(script, delimiter, closing)
+        && starts_at(script, b"\n", closing + delimiter.len())
+}
+
 /// 프로세스 수명 캐시 — **해석된** distro 이름 기준으로 앱 실행당 1회만 스폰한다.
 /// 기본 distro(None)는 claim 전에 실제 이름으로 해석된다:
 /// `""` 키를 그대로 쓰면 기본 배포판이 어느 워크스페이스의 named distro 와 같은
@@ -124,22 +284,20 @@ fn run(distro: Option<&str>) -> Result<(), String> {
         .spawn()
         .map_err(|err| format!("cannot run wsl.exe: {err}"))?;
 
-    // Windows 체크아웃(core.autocrlf)이 이 소스 파일을 CRLF 로 물고 왔더라도 WSL
-    // 안의 bash 는 '\r' 를 토큰의 일부로 읽어 통째로 깨진다 (.gitattributes 가
-    // 커버하는 건 *.sh 뿐이다). 스트림에 싣기 전에 LF 로 정규화한다.
-    let script = SETUP_SCRIPT
-        .replace("@SETUP_VERSION@", &SETUP_VERSION.to_string())
-        .replace("@CONFIG_HELPER@", include_str!("../../../../scripts/wsl/mast-config.py"))
-        .replace("@OPENCODE_PLUGIN@", include_str!("../../../../scripts/wsl/mast-opencode-plugin.js").trim_end_matches('\n'))
-        .replace("\r\n", "\n");
+    let script = setup_script();
     {
         let mut stdin = child
             .stdin
             .take()
             .ok_or_else(|| "wsl.exe stdin pipe missing".to_owned())?;
-        stdin
-            .write_all(script.as_bytes())
-            .map_err(|err| format!("cannot stream the setup script: {err}"))?;
+        // 마커가 있으면 스크립트는 앞 몇 줄만 읽고 끝나 파이프가 닫힌다. bash 는 파이프 stdin 을 필요한
+        // 만큼만 읽으므로, 임베드 파일로 커진 나머지가 파이프 버퍼에 다 들어가지 못하면 BrokenPipe 가
+        // 된다. 그 경우 성패는 아래 종료 코드가 판정한다.
+        if let Err(err) = stdin.write_all(script.as_bytes()) {
+            if err.kind() != std::io::ErrorKind::BrokenPipe {
+                return Err(format!("cannot stream the setup script: {err}"));
+            }
+        }
         // drop = EOF. 이게 없으면 bash 가 stdin 을 계속 기다려 아래 wait 가 멈춘다.
     }
 
@@ -164,6 +322,19 @@ fn run(distro: Option<&str>) -> Result<(), String> {
         if stderr.is_empty() { "" } else { ": " },
         stderr
     ))
+}
+
+/// rustc 는 소스 리터럴의 CRLF 를 LF 로 바꾸지만 `include_str!` 은 파일 바이트 그대로다. Windows
+/// 체크아웃(core.autocrlf)이 임베드한 .py 를 CRLF 로 물고 오면 WSL 안의 bash·python 이 '\r' 를
+/// 토큰의 일부로 읽으므로 (.gitattributes 가 커버하는 건 *.sh 뿐이다) 치환 뒤에 LF 로 정규화한다.
+/// `apps/mast/tests/setup-script.ts` 가 같은 치환을 따른다.
+#[cfg(windows)]
+fn setup_script() -> String {
+    let mut script = SETUP_SCRIPT.replace(VERSION_PLACEHOLDER, &SETUP_VERSION.to_string());
+    for (placeholder, _delimiter, file) in EMBEDDED_FILES {
+        script = script.replace(&format!("{placeholder}\n"), file);
+    }
+    script.replace("\r\n", "\n")
 }
 
 /// **wsl.exe 자신이 내는 오류**(배포판 없음, WSL 미설치 등)는 UTF-16LE 이고
@@ -205,21 +376,26 @@ fn run(_distro: Option<&str>) -> Result<(), String> {
 /// 별도 원본이 없다 (여기가 원본이다 — 계약은 `claude-hook-example.md` 가 산문으로
 /// 기술한다). 다만 CLI 의 `mast_emit` 는 notify 스크립트와 **같은 tty 해석 규율**
 /// 이라 한쪽을 고치면 다른 쪽도 같이 고친다. Codex 쪽 스크립트는 그 복제를 늘리지
-/// 않으려고 `mast-notify.sh` 를 자식으로 불러 방출을 위임한다.
+/// 않으려고 방출을 `mast-agent-hook.py codex-notify` 에, 인터프리터가 없거나 디스패처가
+/// 죽었을 때는 `mast-notify.sh` 에 맡긴다. `EMBEDDED_FILES` 로 들어가는 파일은
+/// `scripts/wsl/` 의 레포 파일이 원본이다.
 ///
 /// 스크립트의 사용자 대면 출력은 레포 컨벤션에 따라 영어다.
 const SETUP_SCRIPT: &str = r###"
 # mast provisioning — streamed into `wsl.exe [-d <distro>] -- bash -s` by the app on
-# first launch, once per distro. It installs the agent notification script and the mast
-# CLI, wires the Claude Code hooks described in scripts/wsl/claude-hook-example.md, and
-# installs the mast-send skill (scripts/wsl/skills/mast-send/SKILL.md).
+# first launch, once per distro. It installs the agent notification script, the hook
+# dispatcher and the mast CLI, wires the Claude Code, Codex and Antigravity CLI hooks described
+# in scripts/wsl/claude-hook-example.md, installs the mast-send skill
+# (scripts/wsl/skills/mast-send/SKILL.md), and installs the global OpenCode plugin.
 #
 # Nothing here may read stdin: that stream is this script itself.
-# Every step is idempotent, and the marker file short-circuits later runs entirely.
+# Every step is idempotent, and the marker files short-circuit later runs.
 set -u
 
 MAST_HOME="$HOME/.mast"
 MARKER="$MAST_HOME/.setup-v@SETUP_VERSION@"
+CODEX_MARKER="$MARKER-codex"
+AGY_MARKER="$MARKER-agy"
 LOG="$MAST_HOME/setup.log"
 NOTIFY="$MAST_HOME/bin/mast-notify.sh"
 CODEX_NOTIFY="$MAST_HOME/bin/mast-codex-notify.sh"
@@ -236,8 +412,24 @@ CODEX_CONFIG="$HOME/.codex/config.toml"
 # files means no home path (spaces, quotes) can break their syntax.
 NOTIFY_CMD='"$HOME/.mast/bin/mast-notify.sh"'
 CODEX_NOTIFY_CMD='"$HOME/.mast/bin/mast-codex-notify.sh"'
+CLAUDE_HOOK_CMD='"$HOME/.mast/bin/mast-claude-hook.sh"'
+HOOKS_MERGE="$MAST_HOME/bin/mast-hooks-merge.py"
+MAST_PYTHON="$MAST_HOME/bin/mast-python"
+NOTICES="$MAST_HOME/.setup-notices.$$"
+VERSION_OUT="$MAST_HOME/.agent-version.$$"
+PY_CHECK='import sys; print("%d.%d.%d" % sys.version_info[:3]); sys.exit(sys.version_info < (3, 8))'
 
-if [ -f "$MARKER" ]; then
+# 마커만 보면 이 버전을 설치한 뒤에 깐 Codex·Antigravity CLI 는 다음 버전까지 훅이 없다. 에이전트 디렉터리가
+# 있는데 그 단계가 끝난 기록이 없으면 그 단계만 한 번 더 돈다(아래 "agent steps only").
+CODEX_PENDING=no
+AGY_PENDING=no
+if [ -d "$HOME/.codex" ] && [ ! -f "$CODEX_MARKER" ]; then
+  CODEX_PENDING=yes
+fi
+if [ -d "$HOME/.gemini/antigravity-cli" ] && [ ! -f "$AGY_MARKER" ]; then
+  AGY_PENDING=yes
+fi
+if [ -f "$MARKER" ] && [ "$CODEX_PENDING" = no ] && [ "$AGY_PENDING" = no ]; then
   exit 0
 fi
 
@@ -250,6 +442,332 @@ log() {
   printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || echo '?')" "$*" \
     >> "$LOG" 2>/dev/null || true
 }
+
+# 앱은 설치 스크립트의 stderr 를 "provisioning notice" 로 남기지만 opt-in 로그가 꺼져 있으면
+# 아무 데도 보이지 않는다. 사용자가 할 일은 setup.log 에도 남겨 언제든 찾을 수 있게 한다.
+notice() {
+  printf '[mast] setup: %s\n' "$*" >&2
+  log "notice: $*"
+}
+
+# merge 헬퍼는 사용자가 할 일만 stderr 로 내고 이미 "[mast] setup: " 로 시작한다.
+forward_notices() {
+  if [ -s "$NOTICES" ]; then
+    cat "$NOTICES" >&2
+    log "$(cat "$NOTICES")"
+  fi
+  rm -f "$NOTICES"
+}
+
+version_lt() {
+  local IFS=.
+  local -a left=($1) right=($2)
+  local i
+  for i in 0 1 2; do
+    if (( 10#${left[i]:-0} < 10#${right[i]:-0} )); then
+      return 0
+    fi
+    if (( 10#${left[i]:-0} > 10#${right[i]:-0} )); then
+      return 1
+    fi
+  done
+  return 1
+}
+
+# $1 = 에이전트 CLI 이름. 탭이 실행할 수 있는 설치본을 한 줄에 하나씩 출력하고, 링크를 푼 경로가 같으면 한 번만
+# 낸다. 탭의 PATH 는 사용자 rc(nvm·volta 등)가 만들지만 여기서 rc 를 실행하지 않는다. 대화형 bash 는 SIGTERM 을
+# 무시해 timeout 을 넘겨 멈추고, rc 가 띄운 백그라운드 자식은 출력 파이프를 물고, rc 가 이 스크립트의 stdin 을
+# 읽거나 부수효과를 낼 수 있기 때문이다. 대신 설치기들이 쓰는 고정 위치를 모두 본다. /mnt 아래는 Windows 쪽
+# 설치본이라 이 distro 의 설정을 읽지 않는다.
+agent_candidates() {
+  local name="$1" candidate resolved seen=$'\n'
+  local -a candidates=("$(command -v "$name" 2> /dev/null)" "$HOME/.local/bin/$name")
+  if [ "$name" = claude ]; then
+    # 옛 로컬 설치기는 PATH 가 아니라 alias 로 이 파일을 가리킨다.
+    candidates+=("$HOME/.claude/local/$name")
+  fi
+  shopt -s nullglob
+  candidates+=("$HOME/.volta/bin/$name" "$HOME/.bun/bin/$name" "$HOME/.npm-global/bin/$name"
+    "$HOME"/.nvm/versions/node/*/bin/"$name")
+  shopt -u nullglob
+  for candidate in "${candidates[@]}"; do
+    case "$candidate" in
+      /mnt/*)
+        log "$name: $candidate is a Windows install; not checked"
+        continue ;;
+      /*) ;;
+      *) continue ;;
+    esac
+    [ -f "$candidate" ] && [ -x "$candidate" ] || continue
+    resolved="$(readlink -f -- "$candidate" 2> /dev/null)" || resolved="$candidate"
+    case "$seen" in
+      *$'\n'"$resolved"$'\n'*) continue ;;
+    esac
+    seen="$seen$resolved"$'\n'
+    printf '%s\n' "$candidate"
+  done
+}
+
+# $1 = 설치본 경로. 출력의 첫 x.y.z 를 내고, 없으면 아무것도 내지 않는다.
+# - 설치본 디렉터리를 PATH 앞에 두어 npm shim 의 `#!/usr/bin/env node` 가 같은 nvm·volta bin 의 node 를 찾게 한다.
+#   `PATH=… timeout` 으로 두면 bash 가 timeout 자체도 그 PATH 로 찾으므로 env 로 넘긴다.
+# - 출력은 파이프가 아니라 파일로 받는다. --version 이 띄운 자식이 파이프를 물고 남으면 명령 치환이 그 자식이
+#   끝날 때까지 기다린다.
+# - -k 는 TERM 을 무시하는 프로그램까지 끝낸다. 그 KILL 은 프로세스 그룹 전체라 timeout 자신도 죽는다. 그러면 bash
+#   가 stderr 에 "Killed" 줄을 내 알림으로 새는데, 명령 치환 안에서는 내지 않으므로 이 함수는 `$(…)` 로만 부른다.
+agent_version() {
+  local path="$1" output=""
+  timeout -k 1 10 env PATH="${path%/*}:$PATH" "$path" --version < /dev/null > "$VERSION_OUT" 2> /dev/null
+  IFS= read -r -d '' -n 65536 output 2> /dev/null < "$VERSION_OUT"
+  rm -f "$VERSION_OUT"
+  if [[ "$output" =~ [0-9]+\.[0-9]+\.[0-9]+ ]]; then
+    printf '%s' "${BASH_REMATCH[0]}"
+  fi
+}
+
+# $1 = 에이전트 CLI 이름. 탭이 어느 설치본을 실행할지 모르므로 가장 낮은 버전으로 판정한다. 결과는
+# LOWEST_VERSION·LOWEST_PATH(읽은 버전이 없으면 빈 값)와 버전을 못 읽은 첫 설치본 UNREADABLE_PATH 에 둔다.
+judge_agent() {
+  local name="$1" candidate version
+  LOWEST_VERSION=""
+  LOWEST_PATH=""
+  UNREADABLE_PATH=""
+  while IFS= read -r candidate; do
+    version="$(agent_version "$candidate")"
+    if [ -z "$version" ]; then
+      log "$name: $candidate --version is unreadable"
+      [ -n "$UNREADABLE_PATH" ] || UNREADABLE_PATH="$candidate"
+    else
+      log "$name: $candidate --version reports $version"
+      if [ -z "$LOWEST_VERSION" ] || version_lt "$version" "$LOWEST_VERSION"; then
+        LOWEST_VERSION="$version"
+        LOWEST_PATH="$candidate"
+      fi
+    fi
+  done < <(agent_candidates "$name")
+}
+
+# $1 = 에이전트 단계의 완료 마커. 쓰지 못하면 그 마커가 없으므로 다음 실행이 그 단계만 다시 한다.
+agent_step_done() {
+  if ! : > "$1"; then
+    echo "[mast] setup: cannot create the marker $1" >&2
+  fi
+}
+
+# 전체 설치의 5단계와 에이전트 단계만 도는 실행이 같은 검사와 안내를 쓴다. 안내는 한 실행에 한 번만 낸다.
+PYTHON3=unchecked
+python3_gate() {
+  if [ "$PYTHON3" = unchecked ]; then
+    PYTHON3=yes
+    if ! command -v python3 > /dev/null 2>&1; then
+      PYTHON3=no
+      notice "python3 not found in this distro; install it to let mast wire the agent hooks (or wire them by hand: scripts/wsl/claude-hook-example.md)"
+      log "agent hooks not wired; retried on the next launch"
+    fi
+  fi
+  [ "$PYTHON3" = yes ]
+}
+
+# 훅 진입점과 mast-codex-notify.sh 는 PATH 가 아니라 mast-python 에 적힌 절대경로로 디스패처를 띄운다. 에이전트가
+# 훅을 돌리는 환경의 PATH 는 여기와 다를 수 있기 때문이다. 링크를 풀지 않는 이유는 배포판 업그레이드로 python3.X 가
+# 바뀌어도 /usr/bin/python3 은 남기 때문이다. python3_gate 를 통과한 뒤에만 부른다.
+# PY3·PY3_VERSION 을 채우고, 3.8 이상이면 mast-python 을 쓰고 0, 3.8 미만이거나 버전을 못 읽으면 1, mast-python 을
+# 쓰지 못하면 2 를 돌려준다.
+resolve_dispatcher_python() {
+  PY3="$(command -v python3)"
+  case "$PY3" in
+    /*) ;;
+    *) PY3="$PWD/$PY3" ;;
+  esac
+  if ! PY3_VERSION="$("$PY3" -c "$PY_CHECK" < /dev/null 2>/dev/null)"; then
+    return 1
+  fi
+  if ! { printf '%s\n' "$PY3" > "$MAST_PYTHON.tmp" && mv -f "$MAST_PYTHON.tmp" "$MAST_PYTHON"; }; then
+    rm -f "$MAST_PYTHON.tmp"
+    echo "[mast] setup: cannot install $MAST_PYTHON" >&2
+    return 2
+  fi
+  log "dispatcher python: $PY3 ($PY3_VERSION)"
+}
+
+# $1 = 설치 경로, $2 = 실행 파일이면 exec. 본문은 heredoc 으로 stdin 에 들어온다.
+install_embedded() {
+  if ! cat > "$1.tmp" || { [ "$2" = exec ] && ! chmod +x "$1.tmp"; } || ! mv -f "$1.tmp" "$1"; then
+    rm -f "$1.tmp"
+    echo "[mast] setup: cannot install $1" >&2
+    exit 1
+  fi
+  log "installed: $1"
+}
+
+# --- 6c. Codex hooks (~/.codex/hooks.json) -----------------------------------------------
+# 전체 설치와 에이전트 단계만 도는 실행이 함께 쓴다. DISPATCHER 는 전체 설치면 5a 의 판정이고, 에이전트 단계만
+# 도는 실행이면 unresolved 여서 여기서 다시 고른다.
+# 병합이 실패해도 이후 단계는 계속한다. 형태가 틀린 hooks.json 하나 때문에 Antigravity 설치까지 막히지 않게
+# 하려는 것이다. 읽기·쓰기 실패(python3 부재 포함)는 다음 실행에서 풀릴 수 있어 이 단계의 마커를 쓰지 않는다. 전체
+# 마커는 그대로 쓴다. 단계 마커가 없는 것만으로 다음 실행은 이 단계만 다시 돌지만, 전체 마커까지 없으면 전체 설치가
+# 다시 돌아 사용자가 지운 Codex notify 줄·AGENTS.md 블록·훅 행을 되살리고 Claude·Python 안내를 반복한다. 파일 내용
+# 때문에 병합할 수 없다는 판정(헬퍼 exit 3)은 다시 돌려도 같으므로 단계를 끝난 것으로 기록한다. 그러지 않으면 매
+# 실행마다 같은 병합과 안내가 반복된다.
+codex_hooks_step() {
+  local trust=launch limits=""
+  if [ ! -d "$HOME/.codex" ]; then
+    log "codex hooks: no ~/.codex; skipped (Codex not installed here)"
+    return
+  fi
+  if [ -e "$MAST_HOME/no-codex-hooks" ]; then
+    log "codex hooks: ~/.mast/no-codex-hooks exists; skipped"
+    agent_step_done "$CODEX_MARKER"
+    return
+  fi
+  if ! python3_gate; then
+    log "codex hooks: no python3; retried on the next launch"
+    return
+  fi
+  # 전체 설치의 판정은 기록으로 남지 않는다. 3.8 미만이면 mast-python 을 지우므로, 그 뒤 Python 을 올려도 기록만
+  # 봐서는 알 수 없다.
+  if [ "$DISPATCHER" = unresolved ]; then
+    resolve_dispatcher_python
+    case $? in
+      0) DISPATCHER=yes ;;
+      1)
+        # mast-python 은 지우지 않는다. 전체 설치가 깔아 둔 Claude 디스패처 행이 그 기록을 쓰고, 기록된 인터프리터는
+        # 지금 PATH 의 python3 과 다를 수 있다.
+        DISPATCHER=no
+        log "codex hooks: dispatcher python $PY3 is ${PY3_VERSION:-unreadable}, not 3.8+"
+        notice "Python 3.8+ is needed for mast's Codex hooks; install it and run rm ~/.mast/.setup-v@SETUP_VERSION@-codex to retry"
+        ;;
+      *)
+        log "codex hooks: cannot record the dispatcher python; retried on the next launch"
+        return
+        ;;
+    esac
+  fi
+  if [ "$DISPATCHER" != yes ]; then
+    log "codex hooks: no Python 3.8+ for the dispatcher; skipped"
+    agent_step_done "$CODEX_MARKER"
+    return
+  fi
+  # 경계는 openai/codex 태그의 소스로 확인했다: hooks 기능 기본값(features/src/lib.rs), trust 판정
+  # (hooks/src/engine/discovery.rs), /hooks 의 trust(0.129.0 tui hooks browser), 실행 시 검토 창
+  # (tui/src/startup_hooks_review.rs), SubagentStop·Interrupt 이벤트(config/src/hook_config.rs), async 훅 건너뜀
+  # 경고(discovery.rs). 버전을 못 읽으면 최신 Codex 로 보고 실행 시 검토 창을 안내한다.
+  judge_agent codex
+  if [ -z "$LOWEST_VERSION" ]; then
+    log "codex hooks: no readable Codex version; no version notices"
+  else
+    if version_lt "$LOWEST_VERSION" 0.124.0; then
+      limits="$limits; hooks are off by default before 0.124.0, so none of them run"
+    fi
+    if version_lt "$LOWEST_VERSION" 0.129.0; then
+      trust=none
+      limits="$limits; hooks run without a trust review before 0.129.0"
+    elif version_lt "$LOWEST_VERSION" 0.131.0; then
+      trust=slash
+    fi
+    if version_lt "$LOWEST_VERSION" 0.133.0; then
+      limits="$limits; SubagentStop arrived in 0.133.0, so an approval a subagent never finished can keep the tab at needs input"
+    fi
+    if version_lt "$LOWEST_VERSION" 0.148.0; then
+      limits="$limits; async hooks are skipped with a warning before 0.148.0, so Codex approvals never show as needs input"
+    fi
+    if version_lt "$LOWEST_VERSION" 0.150.0; then
+      limits="$limits; Interrupt arrived in 0.150.0, so after Esc the tab can stay running or needs input until the next prompt"
+    fi
+    if [ -n "$limits" ]; then
+      notice "Codex $LOWEST_VERSION at $LOWEST_PATH predates parts of mast's Codex hooks: ${limits#; }. Update or remove that copy to lift these."
+    fi
+  fi
+  python3 "$HOOKS_MERGE" codex "$HOME/.codex/hooks.json" --config "$CODEX_CONFIG" --trust-notice "$trust" \
+    < /dev/null >> "$LOG" 2> "$NOTICES"
+  merge_status=$?
+  forward_notices
+  case "$merge_status" in
+    0)
+      log "codex hooks: step done"
+      agent_step_done "$CODEX_MARKER"
+      ;;
+    3)
+      log "codex hooks: refused (exit 3)"
+      notice "Codex hooks were not installed, and mast will not retry until you edit ~/.codex/hooks.json and run rm ~/.mast/.setup-v@SETUP_VERSION@-codex; to stop mast from installing them, create ~/.mast/no-codex-hooks"
+      agent_step_done "$CODEX_MARKER"
+      ;;
+    *)
+      log "codex hooks: failed (exit $merge_status)"
+      echo "[mast] setup: Codex hooks were not installed; see ~/.mast/setup.log (retried on the next launch)" >&2
+      ;;
+  esac
+}
+
+# --- 6d. Antigravity CLI hooks (~/.gemini/config/hooks.json) -----------------------------
+# merge 헬퍼만 쓰고 디스패처는 쓰지 않는다. 실패 처리는 6c 와 같다.
+agy_hooks_step() {
+  if [ ! -d "$HOME/.gemini/antigravity-cli" ]; then
+    log "agy hooks: no ~/.gemini/antigravity-cli; skipped (Antigravity CLI not installed here)"
+    return
+  fi
+  if [ -e "$MAST_HOME/no-agy-hooks" ]; then
+    log "agy hooks: ~/.mast/no-agy-hooks exists; skipped"
+    agent_step_done "$AGY_MARKER"
+    return
+  fi
+  if ! python3_gate; then
+    log "agy hooks: no python3; retried on the next launch"
+    return
+  fi
+  # Antigravity CLI 1.1.10 CHANGELOG: hooks.json 훅이 내장 종료 검사보다 먼저 돌게 되어 "lets `Stop`
+  # hooks run at all instead of sitting unreachable behind the built-ins".
+  judge_agent agy
+  if [ -z "$LOWEST_VERSION" ]; then
+    log "agy hooks: no readable Antigravity CLI version; no version notice"
+  elif version_lt "$LOWEST_VERSION" 1.1.10; then
+    notice "Antigravity CLI $LOWEST_VERSION at $LOWEST_PATH never runs hooks.json Stop hooks (fixed in 1.1.10), so a tab stays running after agy finishes a turn; update or remove that copy"
+  fi
+  python3 "$HOOKS_MERGE" agy "$HOME/.gemini/config/hooks.json" \
+    < /dev/null >> "$LOG" 2> "$NOTICES"
+  merge_status=$?
+  forward_notices
+  case "$merge_status" in
+    0)
+      log "agy hooks: step done"
+      agent_step_done "$AGY_MARKER"
+      ;;
+    3)
+      log "agy hooks: refused (exit 3)"
+      notice "Antigravity CLI hooks were not installed, and mast will not retry until you edit ~/.gemini/config/hooks.json and run rm ~/.mast/.setup-v@SETUP_VERSION@-agy; to stop mast from installing them, create ~/.mast/no-agy-hooks"
+      agent_step_done "$AGY_MARKER"
+      ;;
+    *)
+      log "agy hooks: failed (exit $merge_status)"
+      echo "[mast] setup: Antigravity CLI hooks were not installed; see ~/.mast/setup.log (retried on the next launch)" >&2
+      ;;
+  esac
+}
+
+# --- agent steps only ---------------------------------------------------------------------
+# 마커가 있으면 나머지 단계는 이미 끝났다. 다시 돌리면 사용자가 opt-out 으로 지운 Codex notify 줄·AGENTS.md 블록·
+# 훅 행이 버전이 바뀌지 않았는데도 되살아나므로, 남은 에이전트 단계만 설치된 파일로 돈다. 그 파일이 없으면 전체
+# 설치로 간다. 목록은 두 단계가 실행하는 파일과 설치한 훅이 실행하는 파일 전부다. 빠진 채 이 경로를 돌면 병합이
+# 매 실행 실패하거나 없는 파일을 가리키는 훅이 끝난 단계로 기록된다.
+if [ -f "$MARKER" ]; then
+  missing=""
+  for file in "$HOOKS_MERGE" "$MAST_HOME/bin/mast-agent-hook.py" "$MAST_HOME/bin/mast-codex-hook.sh" \
+      "$MAST_HOME/bin/mast-agy-hook.sh" "$NOTIFY"; do
+    [ -f "$file" ] || missing="$file"
+  done
+  if [ -z "$missing" ]; then
+    log "setup v@SETUP_VERSION@ exists; running only the missing agent steps"
+    if [ "$CODEX_PENDING" = yes ]; then
+      DISPATCHER=unresolved
+      codex_hooks_step
+    fi
+    if [ "$AGY_PENDING" = yes ]; then
+      agy_hooks_step
+    fi
+    exit 0
+  fi
+  log "setup v@SETUP_VERSION@ exists but $missing is missing; running every step"
+fi
 
 log "setup v@SETUP_VERSION@ starting"
 
@@ -367,69 +885,99 @@ log "notify script installed: $NOTIFY"
 # Codex's notify program, run once per completed turn. It exists as its own script because
 # Codex hands its payload over as a final argv argument rather than on stdin, which is a
 # different shape from a Claude Code hook — and because that payload is what carries the
-# thread id the resume hint needs. The OSC emission itself is delegated to the script above
-# rather than copied: one more copy of the tty resolution is one more copy to keep in step.
+# thread id the resume hint needs. Whether the turn still needs an idle is decided by the hook
+# dispatcher, which sees the tab's hook state; the notify script is the fallback when that
+# dispatcher cannot run. Neither path copies the tty resolution into this script.
 cat > "$CODEX_NOTIFY.tmp" <<'MAST_CODEX_NOTIFY_EOF'
 #!/usr/bin/env bash
-# Called by Codex as its `notify` program, once per completed turn (agent-turn-complete),
-# to emit mast:idle and record how to resume the Codex thread that just finished.
-# Arguments: $1 = the notification payload, a single JSON object Codex appends as the final
-#            argv element. Nothing is read from stdin — Codex sends nothing there.
+# Codex 의 notify 프로그램. Codex 는 턴이 끝날 때마다 payload JSON 을 마지막 argv 로 붙여 부르고 stdin 으로는
+# 아무것도 보내지 않는다.
+#
+# 이 스크립트는 idle 을 보낼지 정하지 않는다. 그 판정은 탭 훅 상태를 가진 mast-agent-hook.py 가 payload 원문을
+# 직접 읽어서 한다. 여기서 jq 로 뽑는 값은 셋에만 쓴다: thread id 는 resume 힌트와 소유권 확인에, 본문 첫 줄은
+# dispatcher 를 못 쓸 때의 fallback idle 에. jq 가 없거나 payload 가 JSON 이 아니면 thread id 가 비어 힌트를
+# 쓰지 않고 소유권은 unknown 이 되며, fallback 본문은 기본 문구가 된다. 키는 codex-cli 0.147 기준 kebab-case 이고
+# snake_case 도 받는다.
+#
+# 모델 출력이 터미널로 가는 OSC 안에 들어가므로 C0·DEL 은 sequence 를 일찍 끝내고, C1 의 U+009C(ST)·
+# U+009B(CSI)는 xterm 이 OSC 안에서도 종결·CSI 로 읽는다. 정리와 500자 자르기를 jq 에서 코드포인트 단위로 하는
+# 이유는 bash 의 [[:cntrl:]]·${var:0:n} 이 로케일을 따라, C 로케일에서는 UTF-8 로 인코딩된 C1 을 놓치고
+# 멀티바이트 문자를 바이트 중간에서 자르기 때문이다.
 set -euo pipefail
 
 PAYLOAD="${1:-}"
 
-# Codex 0.147 serializes the payload with kebab-case keys ("thread-id",
-# "last-assistant-message"); the same fields have appeared snake_cased, so both spellings
-# are accepted and neither field is required. Without jq, or with a payload that does not
-# parse, both stay empty and only the generic notification below goes out.
 THREAD_ID=""
-MESSAGE=""
+BODY=""
 if [[ -n "$PAYLOAD" ]] && command -v jq > /dev/null 2>&1; then
   THREAD_ID="$(printf '%s' "$PAYLOAD" \
     | jq -r '."thread-id" // .thread_id // empty' 2>/dev/null || true)"
-  MESSAGE="$(printf '%s' "$PAYLOAD" \
-    | jq -r '."last-assistant-message" // .last_assistant_message // empty' 2>/dev/null || true)"
+  BODY="$(printf '%s' "$PAYLOAD" | jq -r '
+    (."last-assistant-message" // .last_assistant_message) | strings
+    | (split("\n") | .[0] // "")
+    | explode
+    | map(if . < 32 or (. >= 127 and . < 160) then 32 else . end)
+    | .[:500]
+    | if all(. == 32) then "" else implode end' 2>/dev/null || true)"
 fi
-
-# Preview body: the first line of the agent's closing message, capped at 500 characters.
-# Control characters become spaces first — this text is model output on its way into an
-# escape sequence written to a terminal, and an embedded BEL would end the sequence early
-# and hand what follows to the terminal as raw input.
-BODY="${MESSAGE%%$'\n'*}"
-BODY="${BODY//[[:cntrl:]]/ }"
-BODY="${BODY:0:500}"
 if [[ -z "$BODY" ]]; then
   BODY="codex turn complete"
 fi
 
-# Codex 0.154의 임시 catch-up 턴도 같은 MAST_TAB으로 notify를 호출한다.
-# payload에는 임시 세션 여부가 없으므로, 저장된 최상위 CLI/exec 세션만 인정한다.
-# source가 객체인 서브에이전트도 제외한다. transcript 형식은 Codex의 내부 계약이라
-# 확인하지 못하면 기존 힌트를 보존한다. DB 스키마나 cwd로 다른 세션을 추측하지 않는다.
-resumable_codex_thread() {
+# 이 탭의 에이전트가 아직 일하는 중이고 힌트도 그 세션 것이어야 하므로 둘 다 건드리지 않는다. 바깥 Codex 턴이
+# 띄운 `codex exec` 는 바깥 thread id 를 CODEX_THREAD_ID 로, Claude Code 의 Bash 도구가 띄운 것은 CLAUDECODE 를
+# 물려받는다(값이 비어 있어도 설정돼 있으면 Claude 안이다. dispatcher 도 같은 기준이다).
+if [[ -n "${CLAUDECODE+set}" ]] || [[ -n "${CODEX_THREAD_ID:-}" && "$CODEX_THREAD_ID" != "$THREAD_ID" ]]; then
+  exit 0
+fi
+
+# Codex 0.154의 임시 catch-up 턴도 같은 MAST_TAB으로 notify를 호출한다. payload에는 임시 세션 여부가 없으므로
+# 저장된 transcript 의 첫 레코드로 판정한다. transcript 형식은 Codex의 내부 계약이라 확인하지 못하면 기존
+# 힌트를 보존한다. DB 스키마나 cwd로 다른 세션을 추측하지 않는다.
+# - resumable: id 가 맞고 source 가 cli·exec. mast 탭에서 `codex resume` 으로 이어 갈 수 있어 힌트를 쓴다.
+# - confirmed: id 가 맞고 서브에이전트·내부 세션이 아닌 나머지 최상위 세션. vscode·custom 이나 source 가 없는 옛
+#   rollout(Codex 는 없는 값을 vscode 로 읽는다)을 탭에서 resume 한 경우다. idle 은 이 탭 것이지만 힌트는 쓰지 않는다.
+# - rejected: source 가 {"subagent": …} 나 {"internal": …} 인 경우만. Codex 의 is_non_root_agent 와 같은 기준이고,
+#   dispatcher 는 이 판정으로 idle 을 생략하므로 좁게 둔다.
+# - unknown: 읽지 못했거나 잘렸거나 시간이 넘은 경우.
+codex_thread_ownership() {
   LC_ALL=C timeout --kill-after=1s 2s bash -s -- "${CODEX_HOME:-$HOME/.codex}" "$THREAD_ID" <<'MAST_CODEX_RESUME_CHECK_EOF'
 shopt -s nullglob
+verdict=unknown
 for transcript in "$1"/sessions/*/*/*/rollout-*-"$2".jsonl; do
   [[ -f "$transcript" && -r "$transcript" ]] || continue
   metadata=
   # 대화 본문은 읽지 않는다. 첫 레코드가 비정상적으로 커도 1 MiB에서 멈춘다.
   IFS= read -r -n 1048576 metadata < "$transcript" || continue
-  if printf '%s\n' "$metadata" | jq -e --arg id "$2" '
-    .type == "session_meta" and .payload.id == $id
-    and (.payload.source == "cli" or .payload.source == "exec")
-  ' > /dev/null 2>&1; then
-    exit 0
-  fi
+  found="$(printf '%s\n' "$metadata" | jq -r --arg id "$2" '
+    if .type == "session_meta" and .payload.id == $id then
+      .payload.source as $source
+      | if $source == "cli" or $source == "exec" then "resumable"
+        elif ($source | type) == "object" and ($source | has("subagent") or has("internal")) then "rejected"
+        else "confirmed" end
+    else "unknown" end' 2> /dev/null)"
+  case "$found" in
+    resumable | confirmed) echo "$found"; exit 0 ;;
+    rejected) verdict=rejected ;;
+  esac
 done
-exit 1
+echo "$verdict"
 MAST_CODEX_RESUME_CHECK_EOF
 }
 
+OWNERSHIP=unknown
+RESUMABLE=no
+if [[ -n "${MAST_TAB:-}" && "$THREAD_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  case "$(codex_thread_ownership 2>/dev/null || true)" in
+    resumable) OWNERSHIP=confirmed; RESUMABLE=yes ;;
+    confirmed) OWNERSHIP=confirmed ;;
+    rejected) OWNERSHIP=rejected ;;
+  esac
+fi
+
 # Claude와 같은 형식으로 원자 교체한다. 마지막 사용자 세션이 이기며 내부 턴은
-# 힌트를 바꾸지 않는다. 실패하더라도 아래의 기존 idle 알림은 계속 보낸다.
-if [[ -n "${MAST_TAB:-}" && "$THREAD_ID" =~ ^[A-Za-z0-9_-]+$ ]] \
-    && resumable_codex_thread 2>/dev/null; then
+# 힌트를 바꾸지 않는다. 실패하더라도 아래의 idle 판정은 계속 한다.
+if [[ "$RESUMABLE" == yes ]]; then
   RESUME_FILE="$HOME/.mast/resume/tab-$MAST_TAB"
   if mkdir -p "$HOME/.mast/resume" 2>/dev/null; then
     if printf 'codex resume %s\n%s\n' "$THREAD_ID" "$(date +%s 2>/dev/null || echo 0)" \
@@ -440,9 +988,23 @@ if [[ -n "${MAST_TAB:-}" && "$THREAD_ID" =~ ^[A-Za-z0-9_-]+$ ]] \
   fi
 fi
 
-# Hand the emission to the notify script: same tty resolution, same semicolon substitution,
-# one implementation. stdin is closed because that script reads it when it is not a tty.
-"$HOME/.mast/bin/mast-notify.sh" mast:idle "$BODY" < /dev/null || true
+# notify 는 Stop 훅을 기다리지 않고 늦게 도착할 수 있어, 훅이 이미 처리한 턴이나 다음 턴이 시작된
+# 뒤의 idle 은 버려야 한다. 그 판정은 탭 훅 상태를 가진 dispatcher 가 payload 원문으로 한다.
+MAST_PY=""
+if [[ -r "$HOME/.mast/bin/mast-python" ]]; then
+  IFS= read -r MAST_PY < "$HOME/.mast/bin/mast-python" || true
+fi
+if [[ -n "$MAST_PY" && -f "$MAST_PY" && -x "$MAST_PY" ]] \
+    && "$MAST_PY" -I "$HOME/.mast/bin/mast-agent-hook.py" codex-notify "$OWNERSHIP" "$PAYLOAD" \
+      < /dev/null > /dev/null 2>&1; then
+  exit 0
+fi
+
+# dispatcher 를 못 쓰면 예전처럼 idle 을 보낸다. rejected 는 이 탭의 root 세션이 아니라는 확인된
+# 사실이라 그 idle 은 틀린 상태다. stdin 을 닫는 이유는 notify 스크립트가 tty 가 아니면 읽기 때문이다.
+if [[ "$OWNERSHIP" != rejected ]]; then
+  "$HOME/.mast/bin/mast-notify.sh" mast:idle "$BODY" < /dev/null || true
+fi
 
 # Even if the emission fails, the notify program exits successfully (miss a notification
 # rather than have Codex report a failing notify command).
@@ -962,6 +1524,26 @@ if [ "$status" -ne 0 ] || ! chmod +x "$XDG_OPEN.tmp" || ! mv -f "$XDG_OPEN.tmp" 
 fi
 log "xdg-open shim installed: $XDG_OPEN"
 
+# --- 3c. agent hook scripts ---------------------------------------------------------------
+# 레포 scripts/wsl 의 파일을 앱 빌드 때 임베드한 것이다. 에이전트 설정 파일에 적는 훅 명령은 이
+# 경로만 가리키고 바뀌지 않으므로, 버전마다 덮어써도 Codex 재신뢰가 필요 없다. 파이썬 파일은
+# 인터프리터로 실행하니 실행 비트가 필요 없다.
+install_embedded "$HOOKS_MERGE" data <<'MAST_HOOKS_MERGE_EOF'
+@HOOKS_MERGE@
+MAST_HOOKS_MERGE_EOF
+install_embedded "$MAST_HOME/bin/mast-agent-hook.py" data <<'MAST_AGENT_HOOK_EOF'
+@AGENT_HOOK@
+MAST_AGENT_HOOK_EOF
+install_embedded "$MAST_HOME/bin/mast-claude-hook.sh" exec <<'MAST_CLAUDE_HOOK_EOF'
+@CLAUDE_HOOK@
+MAST_CLAUDE_HOOK_EOF
+install_embedded "$MAST_HOME/bin/mast-codex-hook.sh" exec <<'MAST_CODEX_HOOK_EOF'
+@CODEX_HOOK@
+MAST_CODEX_HOOK_EOF
+install_embedded "$MAST_HOME/bin/mast-agy-hook.sh" exec <<'MAST_AGY_HOOK_EOF'
+@AGY_HOOK@
+MAST_AGY_HOOK_EOF
+
 # --- 4. mast-send skill ---------------------------------------------------------------
 # The agent-facing pane-to-pane send channel. Installed as a Claude Code skill so an agent
 # discovers the channel on its own instead of having to be told about it. Byte-identical to
@@ -1054,135 +1636,61 @@ log "mast-send skill installed: $CLAUDE_SKILL_DIR/SKILL.md"
 # The merge needs a JSON parser: settings.json is the user's file and existing values must
 # survive untouched, which rules out text munging. Without python3 we stop **before the
 # marker** so the next launch retries instead of leaving a half-provisioned distro behind.
-if ! command -v python3 > /dev/null 2>&1; then
-  log "python3 not found; Claude hooks not wired (retried on the next launch)"
-  echo "[mast] setup: python3 not found in this distro; install it to let mast wire the Claude Code hooks (or wire them by hand: scripts/wsl/claude-hook-example.md)" >&2
+if ! python3_gate; then
   exit 0
 fi
 
-if python3 - "$CLAUDE_SETTINGS" "$NOTIFY_CMD" <<'MAST_CLAUDE_EOF' >> "$LOG" 2>&1
-import json
-import os
-import re
-import shutil
-import sys
+# --- 5a. dispatcher interpreter (resolve_dispatcher_python) ------------------------------
+DISPATCHER=yes
+resolve_dispatcher_python
+case $? in
+  0) ;;
+  1)
+    # 마커는 그대로 쓴다. 매 부팅마다 같은 안내를 반복하지 않기 위해서다.
+    DISPATCHER=no
+    rm -f "$MAST_PYTHON"
+    log "dispatcher python: $PY3 is ${PY3_VERSION:-unreadable}, not 3.8+; approval tracking and Codex hooks skipped"
+    notice "Python 3.8+ is needed for mast's Claude/Codex approval tracking; install it and run rm ~/.mast/.setup-v@SETUP_VERSION@ to retry"
+    ;;
+  *) exit 1 ;;
+esac
 
-settings_path, notify_cmd = sys.argv[1], sys.argv[2]
+CLAUDE_FLAG=""
+if [ "$DISPATCHER" != yes ]; then
+  CLAUDE_FLAG="--no-dispatcher"
+fi
+# 디스패처 행은 Claude Code 2.1.118 이상에서만 둔다. 더 낮으면 상태 행만 둔다.
+# - 2.1.101 CHANGELOG: "an unrecognized hook event name in `settings.json` no longer causes the entire file to be
+#   ignored". 그 전 버전은 디스패처 행의 새 이벤트 이름 하나 때문에 사용자 설정 전체를 버린다.
+# - PostToolBatch 는 npm 배포본의 훅 이벤트 목록에 2.1.118 에서 처음 들어갔다(2.1.101·2.1.112 cli.js, 2.1.113·
+#   2.1.117 네이티브 바이너리에는 없다). 그 전에는 Post 없이 끝난 거부 호출의 승인 대기를 거둘 수 없어 탭이 턴이
+#   끝날 때까지 needs input 에 남는다. SessionStart(source)·PermissionRequest·PostToolUse·PostToolUseFailure·
+#   SubagentStop 은 2.1.101 에 이미 있다.
+# 버전을 못 읽은 설치본이 하나라도 있으면 위 두 경우를 가릴 수 없으므로 상태 행만 둔다.
+judge_agent claude
+if [ -n "$UNREADABLE_PATH" ]; then
+  CLAUDE_FLAG="--no-dispatcher"
+  notice "cannot read the version of Claude Code at $UNREADABLE_PATH, and mast's approval tracking needs Claude Code 2.1.118 or later, so mast wired only its status hooks; once '$UNREADABLE_PATH --version' works or that copy is removed, run rm ~/.mast/.setup-v@SETUP_VERSION@ to add approval tracking"
+elif [ -z "$LOWEST_VERSION" ]; then
+  log "claude: no installation found; hook events not limited by version"
+elif version_lt "$LOWEST_VERSION" 2.1.101; then
+  CLAUDE_FLAG="--no-dispatcher"
+  notice "Claude Code $LOWEST_VERSION at $LOWEST_PATH ignores all of ~/.claude/settings.json when it names a hook event it does not know (fixed in 2.1.101), so mast wired only its status hooks; update that copy to 2.1.118 or later or remove it, and run rm ~/.mast/.setup-v@SETUP_VERSION@ to add approval tracking"
+elif version_lt "$LOWEST_VERSION" 2.1.118; then
+  CLAUDE_FLAG="--no-dispatcher"
+  notice "Claude Code $LOWEST_VERSION at $LOWEST_PATH has no PostToolBatch hook (added in 2.1.118), which mast's approval tracking needs to clear an approval whose tool call never ran, so mast wired only its status hooks; update or remove that copy and run rm ~/.mast/.setup-v@SETUP_VERSION@ to add approval tracking"
+fi
 
-# The three events of the OSC contract (scripts/wsl/claude-hook-example.md).
-EVENTS = [
-    ("UserPromptSubmit", "mast:running"),
-    ("Notification", "mast:needsInput 'needs input'"),
-    ("Stop", "mast:idle done"),
-]
-# A hook that runs *some* mast-notify.sh already covers its event: never add a second one.
-MARK = "mast-notify.sh"
-
-
-def resolve(path):
-    """Compare hook paths by what they point at, not by how they are spelled."""
-    return os.path.normpath(os.path.expanduser(os.path.expandvars(path)))
-
-
-# Our own installed copy. A hook pointing anywhere else runs an older copy of the same
-# contract (the manual path in the document, a hand-wired ~/.claude/hooks/...), so it is
-# migrated onto this one instead of being left to run stale code.
-CANONICAL = resolve(notify_cmd.strip().strip('"').strip("'"))
-
-# Leading word of a hook command: "quoted", 'quoted', or a bare run of non-space characters.
-# Group 1 is the indent, group 2 the word with its quotes — enough to splice the path out
-# and leave the arguments after it exactly as the user wrote them.
-FIRST_WORD = re.compile(r'^(\s*)("[^"]*"|\'[^\']*\'|\S+)')
-
-data = {}
-if os.path.exists(settings_path):
-    with open(settings_path, encoding="utf-8") as handle:
-        text = handle.read().strip()
-    if text:
-        # A settings.json we cannot parse is never overwritten: this raises, the setup
-        # fails without a marker, and the user's file stays exactly as it was.
-        data = json.loads(text)
-if not isinstance(data, dict):
-    raise SystemExit("%s is not a JSON object; left untouched" % settings_path)
-
-hooks = data.setdefault("hooks", {})
-if not isinstance(hooks, dict):
-    raise SystemExit('%s: "hooks" is not an object; left untouched' % settings_path)
-
-
-def entries_of(groups):
-    """Every hook entry of an event, flattened. Malformed shapes are skipped, not repaired."""
-    for group in groups:
-        if not isinstance(group, dict):
-            continue
-        for entry in group.get("hooks") or []:
-            if isinstance(entry, dict):
-                yield entry
-
-
-migrated, added, kept, foreign = [], [], [], []
-for event, args in EVENTS:
-    groups = hooks.setdefault(event, [])
-    if not isinstance(groups, list):
-        raise SystemExit('%s: hooks.%s is not an array; left untouched' % (settings_path, event))
-    wired = False
-    for entry in entries_of(groups):
-        command = str(entry.get("command", ""))
-        # Anything that is not one of our scripts belongs to the user and is never touched.
-        if MARK not in command:
-            continue
-        wired = True
-        match = FIRST_WORD.match(command)
-        word = match.group(2) if match else ""
-        if MARK not in word:
-            # The script is there but not as the command's leading word (wrapped in a shell,
-            # piped, ...). Rewriting that safely is guesswork, and it already covers the
-            # event, so it stays exactly as it is.
-            foreign.append(event)
-            continue
-        if resolve(word.strip('"').strip("'")) == CANONICAL:
-            kept.append(event)
-            continue
-        entry["command"] = match.group(1) + notify_cmd + command[match.end():]
-        migrated.append(event)
-    if wired:
-        continue
-    groups.append(
-        {
-            "matcher": "",
-            "hooks": [{"type": "command", "command": "%s %s" % (notify_cmd, args)}],
-        }
-    )
-    added.append(event)
-
-report = []
-for label, events in (
-    ("migrated", migrated),
-    ("added", added),
-    ("already wired", kept),
-    ("left untouched (not the leading word)", foreign),
-):
-    if events:
-        report.append("%s %s" % (label, ", ".join(events)))
-print("claude: %s in %s" % ("; ".join(report) or "nothing to do", settings_path))
-
-if not migrated and not added:
-    raise SystemExit(0)
-
-os.makedirs(os.path.dirname(settings_path), exist_ok=True)
-tmp = settings_path + ".mast-tmp"
-with open(tmp, "w", encoding="utf-8") as handle:
-    json.dump(data, handle, indent=2, ensure_ascii=False)
-    handle.write("\n")
-if os.path.exists(settings_path):
-    shutil.copymode(settings_path, tmp)
-os.replace(tmp, settings_path)
-print("claude: %s written" % settings_path)
-MAST_CLAUDE_EOF
-then
+# 병합 규칙은 mast-hooks-merge.py 에 있다. stdin 을 닫는 이유는 이 스크립트의 stdin 이 스크립트
+# 자신이기 때문이다.
+python3 "$HOOKS_MERGE" claude "$CLAUDE_SETTINGS" "$NOTIFY_CMD" "$CLAUDE_HOOK_CMD" ${CLAUDE_FLAG:+"$CLAUDE_FLAG"} \
+  < /dev/null >> "$LOG" 2> "$NOTICES"
+merge_status=$?
+forward_notices
+if [ "$merge_status" -eq 0 ]; then
   log "claude: hook wiring done"
 else
-  log "claude: hook wiring failed (see the message above)"
+  log "claude: hook wiring failed (exit $merge_status)"
   echo "[mast] setup: Claude Code hook wiring failed; see ~/.mast/setup.log" >&2
   exit 1
 fi
@@ -1397,6 +1905,11 @@ else
   fi
 fi
 
+# --- 6c·6d. agent hooks (functions above) ------------------------------------------------
+codex_hooks_step
+agy_hooks_step
+
+# --- 6e. OpenCode plugin -------------------------------------------------------------------
 # OpenCode 설치기의 PATH 줄이 ~/.bashrc의 비대화형 가드 뒤에 있으므로
 # 비대화형 setup에서 command -v만 보면 설치된 CLI도 놓친다.
 if [ -x "$HOME/.opencode/bin/opencode" ] || command -v opencode > /dev/null 2>&1; then
@@ -1472,3 +1985,23 @@ fi
 log "setup v@SETUP_VERSION@ complete"
 exit 0
 "###;
+
+/// Linux 게이트의 테스트는 `apps/mast/tests/setup-script.ts` 의 TS 사본으로 조립한 스크립트를 돌린다. 실제로
+/// 배포되는 조립 결과는 Windows 에서만 컴파일되는 이 함수이므로 사본과 어긋나는 치환은 여기서만 드러난다.
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_script_embeds_every_file_once_and_leaves_no_placeholder() {
+        let script = setup_script();
+        let bytes = script.as_bytes();
+        for at in 0..bytes.len() {
+            assert_eq!(placeholder_len(bytes, at), 0, "unreplaced token at byte {at}");
+        }
+        for (_placeholder, delimiter, file) in EMBEDDED_FILES {
+            let block = format!("<<'{delimiter}'\n{}{delimiter}\n", file.replace("\r\n", "\n"));
+            assert_eq!(script.matches(&block).count(), 1, "{delimiter}");
+        }
+    }
+}

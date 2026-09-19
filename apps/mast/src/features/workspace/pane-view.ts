@@ -47,7 +47,7 @@
 import { respawnTab } from "../../infrastructure/backend";
 import { paneTerminalCwd, shortcutBadge, shortcutLabel } from "../../shared/keys";
 import type { ShortcutId } from "../../shared/keys";
-import { paneUnread, sameTabButton, tabStripModel, tabStripPlan } from "./tab-strip-model";
+import { paneNeedsInput, paneUnread, sameTabButton, tabStripModel, tabStripPlan } from "./tab-strip-model";
 import { tabIdsVisible } from "./tab-id-settings";
 import type { TabButtonModel } from "./tab-strip-model";
 import type { TerminalView } from "../terminal/view";
@@ -114,6 +114,7 @@ export interface SendController {
 interface TabNodes {
   root: HTMLElement;
   title: HTMLSpanElement;
+  needsInput: HTMLSpanElement;
   /** 안정 Tab.id 배지 (`#12`) — showTabIds 가 끄면 hidden. */
   id: HTMLSpanElement;
   dot: HTMLSpanElement;
@@ -565,8 +566,13 @@ export class PaneView {
       });
     }
     this.lastStrip = model;
-    // skip 이면 unread 도 불변이라 여기까지 오지 않는다 — 배지도 무접촉.
-    this.unreadEl.hidden = !paneUnread(model);
+    // skip 이면 unread·needsInput 도 불변이라 여기까지 오지 않는다 — 배지도 무접촉.
+    const needsInput = paneNeedsInput(model);
+    this.unreadEl.hidden = !(paneUnread(model) || needsInput);
+    this.unreadEl.classList.toggle("needs-input", needsInput);
+    this.unreadEl.title = needsInput
+      ? "Agent needs input in this pane"
+      : "Unread notification in this pane";
   }
 
   private tabButton(model: TabButtonModel): TabNodes {
@@ -577,6 +583,13 @@ export class PaneView {
     const title = document.createElement("span");
     title.className = "tab-title";
 
+    // needsInput·dot·exited 배지는 값에 따라 있다 없다 하지만 노드는 항상 만들고
+    // hidden 으로만 토글한다 — 자식이 들락날락하면 in-place 패치의 의미가 없어진다.
+    const needsInput = document.createElement("span");
+    needsInput.className = "tab-needs-input";
+    needsInput.textContent = "!";
+    needsInput.title = "Needs input";
+
     // 탭의 안정 ID — `mast ls` 의 TAB 열과 `mast send '#<id>'` 가 받는 그 주소다.
     // 모델이 이미 들고 있는 Tab.id(model.tab)를 그대로 옮기며, 여기서 새로 만들지
     // 않는다. 노드 수명 = 탭 id 라 클로저로 굳혀도 안전하다 (applyTab 주석 참조).
@@ -584,8 +597,6 @@ export class PaneView {
     id.className = "tab-id";
     id.title = `Tab #${model.tab}`;
 
-    // dot·exited 배지는 값에 따라 있다 없다 하지만 노드는 항상 만들고 hidden
-    // 으로만 토글한다 — 자식이 들락날락하면 in-place 패치의 의미가 없어진다.
     const dot = document.createElement("span");
     dot.className = "tab-dot";
     dot.textContent = "●";
@@ -618,9 +629,9 @@ export class PaneView {
       void this.dispatch({ type: "closeTab", tab: model.tab });
     });
 
-    el.append(title, id, dot, exited, notStarted, close);
+    el.append(title, id, needsInput, dot, exited, notStarted, close);
 
-    const nodes: TabNodes = { root: el, title, id, dot, exited, notStarted, model };
+    const nodes: TabNodes = { root: el, title, id, needsInput, dot, exited, notStarted, model };
     this.applyTab(nodes, model);
 
     el.addEventListener("click", () => this.onTabClick(nodes.model));
@@ -636,6 +647,7 @@ export class PaneView {
     nodes.root.title = model.title; // 잘린 제목의 툴팁
 
     setText(nodes.title, model.title);
+    nodes.needsInput.hidden = !model.needsInput;
     // ID 배지 — 부팅 때 한 번 정해진 설정이라 렌더 중 변하지 않는다. 꺼져 있으면
     // 텍스트도 비우고 hidden 으로 자리까지 걷는다 (노드는 상주 — 위 dot 규율).
     const idText = tabIdsVisible() ? `#${model.tab}` : "";

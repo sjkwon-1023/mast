@@ -29,6 +29,8 @@ function terminalTab(id: number, notification: NotificationState): Tab {
     kind: { type: "terminal", ptySession: id * 100, status: { type: "running" }, cwd: null },
     notification,
     lastActivityMs: null,
+    agentStatus: "idle",
+    lastAgentMessage: null,
   };
 }
 

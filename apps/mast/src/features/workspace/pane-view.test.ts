@@ -21,7 +21,15 @@ import type { VisibleViewer } from "./view-reconcile";
 import type { ViewerKind, ViewerView } from "../viewers/viewer-view";
 import { shortcutBadge } from "../../shared/keys";
 import type { UiSettings } from "../../infrastructure/backend";
-import type { Command, NotificationState, Pane, PaneId, Tab, TerminalStatus } from "../../shared/types";
+import type {
+  AgentStatus,
+  Command,
+  NotificationState,
+  Pane,
+  PaneId,
+  Tab,
+  TerminalStatus,
+} from "../../shared/types";
 
 /** 설정 이펙트가 파일 밖으로 새지 않게 하는 최소 UiSettings — ID 표시 기본값은 true. */
 function idSettings(showTabIds: boolean | null): UiSettings {
@@ -42,6 +50,7 @@ function terminalTab(
     status?: TerminalStatus;
     notification?: NotificationState;
     cwd?: string;
+    agentStatus?: AgentStatus;
   } = {},
 ): Tab {
   return {
@@ -55,6 +64,8 @@ function terminalTab(
     },
     notification: opts.notification ?? "none",
     lastActivityMs: null,
+    agentStatus: opts.agentStatus ?? "idle",
+    lastAgentMessage: null,
   };
 }
 
@@ -65,6 +76,8 @@ function folderTab(id: number, path = "/home/u"): Tab {
     kind: { type: "folderBrowser", path },
     notification: "none",
     lastActivityMs: null,
+    agentStatus: "idle",
+    lastAgentMessage: null,
   };
 }
 
@@ -239,6 +252,59 @@ describe("PaneView tab strip rendering", () => {
     expect(after[1].classList.contains("exited")).toBe(true);
   });
 
+  it("toggles the needsInput badge in place, independently of the unread dot", () => {
+    const { view, tabs, dispatched } = mount();
+    view.update(pane(THREE, 10), true, null, null);
+    const before = tabs();
+    const badge = child(before[1], ".tab-needs-input");
+    expect(badge.hidden).toBe(true);
+    expect(badge.textContent).toBe("!");
+    expect(badge.title).toBe("Needs input");
+
+    view.update(
+      pane([terminalTab(10), terminalTab(11, { agentStatus: "needsInput" }), terminalTab(12)], 10),
+      true,
+      null,
+      null,
+    );
+    const needing = tabs();
+    expect(needing[1]).toBe(before[1]);
+    expect(child(needing[1], ".tab-needs-input")).toBe(badge);
+    expect(badge.hidden).toBe(false);
+    expect(child(needing[1], ".tab-dot").hidden).toBe(true);
+
+    // 두 배지는 한 탭에 함께 뜰 수 있고 서로를 끄지 않는다.
+    view.update(
+      pane(
+        [
+          terminalTab(10),
+          terminalTab(11, { agentStatus: "needsInput", notification: "unread" }),
+          terminalTab(12),
+        ],
+        10,
+      ),
+      true,
+      null,
+      null,
+    );
+    expect(badge.hidden).toBe(false);
+    expect(child(tabs()[1], ".tab-dot").hidden).toBe(false);
+
+    view.update(
+      pane([terminalTab(10), terminalTab(11, { notification: "unread" }), terminalTab(12)], 10),
+      true,
+      null,
+      null,
+    );
+    expect(tabs()[1]).toBe(before[1]);
+    expect(badge.hidden).toBe(true);
+    expect(child(tabs()[1], ".tab-dot").hidden).toBe(false);
+
+    // 패치된 노드의 클릭 배선이 그대로다.
+    tabs()[1].click();
+    expect(dispatched).toEqual([{ type: "activateTab", tab: 11 }]);
+  });
+
   it("moves the active class without rebuilding the tabs", () => {
     const { view, tabs } = mount();
     view.update(pane(THREE, 10), true, null, null);
@@ -329,6 +395,53 @@ describe("PaneView tab id badges", () => {
     expect(tabs().map((t) => child(t, ".tab-id").textContent)).toEqual(["#12", "#10"]);
   });
 
+  // 병합 접점 고정: needsInput 배지(#37)와 탭 ID 배지(#40)는 같은 탭 버튼 안에서 각자
+  // 노드를 갖고, 한쪽 상태 변화가 in-place 패치와 재조립을 지나도 다른 쪽을 잃지 않는다.
+  it("keeps the needsInput badge and the id badge together through a patch and a rebuild", () => {
+    const { view, tabs } = mount();
+    view.update(pane([terminalTab(10), terminalTab(11)], 10), true, null, null);
+    const before = tabs();
+    const idNode = child(before[1], ".tab-id");
+    const needsInputNode = child(before[1], ".tab-needs-input");
+
+    // 상태 패치 — 두 노드가 그대로 남고 각자만 갱신된다.
+    view.update(
+      pane([terminalTab(10), terminalTab(11, { agentStatus: "needsInput" })], 10),
+      true,
+      null,
+      null,
+    );
+    const patched = tabs();
+    expect(patched[1]).toBe(before[1]);
+    expect(child(patched[1], ".tab-id")).toBe(idNode);
+    expect(child(patched[1], ".tab-needs-input")).toBe(needsInputNode);
+    expect(idNode.textContent).toBe("#11");
+    expect(needsInputNode.hidden).toBe(false);
+
+    // 동일 모델(skip) — DOM 무접촉이라 두 배지 노드가 그대로 남는다.
+    view.update(
+      pane([terminalTab(10), terminalTab(11, { agentStatus: "needsInput" })], 10),
+      true,
+      null,
+      null,
+    );
+    expect(tabs()[1]).toBe(before[1]);
+    expect(child(tabs()[1], ".tab-id")).toBe(idNode);
+    expect(child(tabs()[1], ".tab-needs-input")).toBe(needsInputNode);
+
+    // 재정렬(rebuild) — 새 노드에도 두 배지가 함께 실린다.
+    view.update(
+      pane([terminalTab(11, { agentStatus: "needsInput" }), terminalTab(10)], 11),
+      true,
+      null,
+      null,
+    );
+    const rebuilt = tabs();
+    expect(rebuilt.map((t) => child(t, ".tab-id").textContent)).toEqual(["#11", "#10"]);
+    expect(child(rebuilt[0], ".tab-needs-input").hidden).toBe(false);
+    expect(child(rebuilt[1], ".tab-needs-input").hidden).toBe(true);
+  });
+
   it("hides the ids in place when showTabIds is false", () => {
     applyTabIdSettings(idSettings(false));
     const { view, tabs } = mount();
@@ -368,6 +481,35 @@ describe("PaneView unread badge", () => {
 
     view.update(pane(THREE, 10), true, null, null);
     expect(badge().hidden).toBe(true);
+  });
+
+  it("shows with the needs-input class for a tab that needs input, even without unread", () => {
+    const { view, tabs, badge } = mount();
+    view.update(pane(THREE, 10), true, null, null);
+    const before = tabs();
+
+    view.update(
+      pane([terminalTab(10), terminalTab(11), terminalTab(12, { agentStatus: "needsInput" })], 10),
+      true,
+      null,
+      null,
+    );
+    expect(badge().hidden).toBe(false);
+    expect(badge().classList.contains("needs-input")).toBe(true);
+    expect(tabs()[0]).toBe(before[0]);
+
+    view.update(
+      pane([terminalTab(10), terminalTab(11), terminalTab(12, { notification: "unread" })], 10),
+      true,
+      null,
+      null,
+    );
+    expect(badge().hidden).toBe(false);
+    expect(badge().classList.contains("needs-input")).toBe(false);
+
+    view.update(pane(THREE, 10), true, null, null);
+    expect(badge().hidden).toBe(true);
+    expect(badge().classList.contains("needs-input")).toBe(false);
   });
 
   it("survives a strip rebuild", () => {

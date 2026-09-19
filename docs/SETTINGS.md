@@ -135,8 +135,9 @@ Viewer tabs have ids too, but `mast send` cannot target them. Default **on**; se
 
 Every tab carries its own id — active and inactive, terminal and viewer alike. The number is
 not invented for the badge: it is the tab's model id, assigned when the tab is created and kept
-across a restart, a rename and changes to the tab strip, so an address stays valid. Anything
-other than `true`/`false` is an error, like the other keys. Read once at boot.
+across a restart, a rename and changes to the tab strip, so an address stays valid. `true` and
+`false` are the only values; JSON `null` counts as unset, as it does for the other keys, and any
+other type is an error. Read once at boot.
 
 ## `remote`
 

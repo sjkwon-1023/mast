@@ -5,6 +5,11 @@ Status: accepted (2026-08-22) · Verification: WINDOWS-BUILD §10 v0.3.11 item 2
 **Amended by [ADR-0018](0018-exited-tab-as-terminal-record.md)** (2026-09-12): the same release
 path now also deletes the tab's record file, `records/tab-<id>.bin`.
 
+**Amended by [ADR-0026](0026-tab-agent-state-and-hook-signals.md)** (2026-09-15): the same batched
+`rm` also removes the hook dispatcher's `~/.mast/agent-hooks/tab-<id>.json`, `.lock` and `.diag`
+and their `.tmp.*` leftovers. A hook that lands after the `rm` can recreate the lock file (and the
+state or diagnostic file when it has something to record), and nothing sweeps those.
+
 ## Context
 
 Every mast terminal tab gets private state inside WSL. The spawn wrapper points `HISTFILE` at

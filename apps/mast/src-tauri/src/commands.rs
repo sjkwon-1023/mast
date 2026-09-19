@@ -571,13 +571,13 @@ const TOAST_LOG_MAX_BYTES: u64 = 64 * 1024;
 /// 발신 AUMID 는 [`crate::app_identity::APP_USER_MODEL_ID`] — 셸에 **등록하는 값과
 /// 같은 상수 하나**다 (v0.3.6 의 "플러그인이 무엇을 싣는가" 추론 사슬이 사라졌다).
 ///
-/// **언제 부를지는 전적으로 프론트 계약이다**: `main.ts` 의 `notifyNeedsInput` 이
-/// needsInput 상승 전이(`chime.ts::detectNeedsInputOnset` 의 `onsets`) 중
-/// `chime.ts::needsInputToastTargets` 가 남긴 것만 부른다 — 창이 포커스이고 그
-/// 워크스페이스가 활성일 때(=이미 화면에 보인다)만 조용하고, 비포커스거나 다른
-/// 워크스페이스면 띄운다. 여기서 포커스를 다시 판정하지 않는 이유는 판정을 두 곳에
-/// 두면 두 사실이 어긋나기 때문이다 — 프론트가 쓰는 포커스도 결국 이 프로세스가
-/// 보낸 OS 신호(`main.rs` `window-focus`)다.
+/// **언제 부를지는 전적으로 프론트 계약이다**: `app/main.ts` 의 `notifyNeedsInput` 이
+/// 탭 단위 needsInput 상승 전이(`features/notifications/chime.ts::detectNeedsInputOnset`
+/// 의 `onsets`) 중 `features/notifications/chime.ts::needsInputToastTargets` 가 남긴
+/// 것마다 한 번씩 부른다 — 창이 포커스이고 그 워크스페이스가 활성일 때(=이미 화면에
+/// 보인다)만 조용하고, 비포커스거나 다른 워크스페이스면 띄운다. 여기서 포커스를 다시
+/// 판정하지 않는 이유는 판정을 두 곳에 두면 두 사실이 어긋나기 때문이다 — 프론트가
+/// 쓰는 포커스도 결국 이 프로세스가 보낸 OS 신호(`main.rs` `window-focus`)다.
 ///
 /// 실패는 ① `toast.log` 에 한 줄, ② `Err(사유)` 로 프론트(console.debug) — 두 곳
 /// 모두에 남긴다. 삼키지 않되 UI 동작을 막지도 않는다. 상태도 Dispatcher lock 도
@@ -586,13 +586,18 @@ const TOAST_LOG_MAX_BYTES: u64 = 64 * 1024;
 /// COM 아파트가 그 스레드에 있다).
 #[cfg(windows)]
 #[tauri::command]
-pub fn notify_toast(app: AppHandle, title: String, body: String) -> Result<(), String> {
+pub fn notify_toast(
+    app: AppHandle,
+    title: String,
+    body: String,
+    log_label: String,
+) -> Result<(), String> {
     let result = tauri_winrt_notification::Toast::new(crate::app_identity::APP_USER_MODEL_ID)
         .title(&title)
         .text1(&body)
         .show()
         .map_err(|err| format!("cannot show the toast: {err}"));
-    log_toast_attempt(&app, &title, &result);
+    log_toast_attempt(&app, &log_label, &result);
     result
 }
 
@@ -600,7 +605,7 @@ pub fn notify_toast(app: AppHandle, title: String, body: String) -> Result<(), S
 /// 명시적으로 실패한다 (`pick_workspace_folder` 의 cfg 분기와 같은 규율).
 #[cfg(not(windows))]
 #[tauri::command]
-pub fn notify_toast(title: String, body: String) -> Result<(), String> {
+pub fn notify_toast(title: String, body: String, _log_label: String) -> Result<(), String> {
     Err(format!("toasts are Windows-only (dropped: {title} / {body})"))
 }
 
@@ -608,11 +613,12 @@ pub fn notify_toast(title: String, body: String) -> Result<(), String> {
 /// 로그를 못 남기는 것 자체는 알림 동작과 무관하므로 어떤 실패도 조용히 포기한다
 /// (여기서 다시 Err 를 만들면 진단 장치가 진단 대상을 가린다).
 ///
-/// 본문(에이전트 마지막 메시지)은 **일부러 남기지 않는다** — 어느 워크스페이스에
-/// 무슨 결과로 시도했는지가 진단에 필요한 전부이고, 대화 내용을 디스크에 쌓을
-/// 이유는 없다. 제목의 줄바꿈은 공백으로 눕혀 "시도 1건 = 1줄"을 지킨다.
+/// 본문(에이전트 마지막 메시지)도 제목도 **일부러 남기지 않는다** — 제목에는 OSC 0/2 로
+/// 들어온 탭 제목(작업 주제·경로)이 실린다. 어느 워크스페이스의 어느 탭에 무슨 결과로
+/// 시도했는지가 진단에 필요한 전부라, 프론트가 `워크스페이스 이름 #탭 id` 형태의
+/// `label` 을 따로 넘긴다. 줄바꿈은 공백으로 눕혀 "시도 1건 = 1줄"을 지킨다.
 #[cfg(windows)]
-fn log_toast_attempt(app: &AppHandle, title: &str, result: &Result<(), String>) {
+fn log_toast_attempt(app: &AppHandle, label: &str, result: &Result<(), String>) {
     use std::io::Write;
 
     let Ok(dir) = app.path().app_data_dir() else {
@@ -635,10 +641,10 @@ fn log_toast_attempt(app: &AppHandle, title: &str, result: &Result<(), String>) 
     let Ok(mut file) = options.open(&path) else {
         return;
     };
-    let flat_title = title.replace(['\r', '\n'], " ");
+    let flat_label = label.replace(['\r', '\n'], " ");
     let line = match result {
-        Ok(()) => format!("{} ok title=\"{flat_title}\"", local_timestamp()),
-        Err(err) => format!("{} err title=\"{flat_title}\": {err}", local_timestamp()),
+        Ok(()) => format!("{} ok label=\"{flat_label}\"", local_timestamp()),
+        Err(err) => format!("{} err label=\"{flat_label}\": {err}", local_timestamp()),
     };
     let _ = writeln!(file, "{line}");
 }

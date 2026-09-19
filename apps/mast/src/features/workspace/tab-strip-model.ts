@@ -17,6 +17,9 @@ export interface TabButtonModel {
    *  시작을 못 한 것이고, 늦게라도 표식이 오면 저절로 걷힌다. */
   notStarted: boolean;
   notification: boolean;
+  /** unread 와 별개다: unread 는 사용자가 탭을 보면 걷히지만, needsInput 은 에이전트가
+   *  다음 상태 토큰을 보낼 때까지 남는다. */
+  needsInput: boolean;
 }
 
 export function tabStripModel(pane: Pane): TabButtonModel[] {
@@ -27,6 +30,7 @@ export function tabStripModel(pane: Pane): TabButtonModel[] {
     exited: tab.kind.type === "terminal" && tab.kind.status.type === "exited",
     notStarted: tab.kind.type === "terminal" && tab.kind.status.type === "notStarted",
     notification: tab.notification === "unread",
+    needsInput: tab.agentStatus === "needsInput",
   }));
 }
 
@@ -45,7 +49,8 @@ export function sameTabButton(a: TabButtonModel, b: TabButtonModel): boolean {
     a.active === b.active &&
     a.exited === b.exited &&
     a.notStarted === b.notStarted &&
-    a.notification === b.notification
+    a.notification === b.notification &&
+    a.needsInput === b.needsInput
   );
 }
 
@@ -79,4 +84,10 @@ export function tabStripPlan(
  *  알림을 pane 층에서 대신 표면화한다 (계획 v2 9장 3층 중 pane 층). */
 export function paneUnread(models: TabButtonModel[]): boolean {
   return models.some((m) => m.notification);
+}
+
+/** paneUnread 와 같은 이유로 pane 층에 따로 둔다 — 넘쳐 잘린 탭의 needsInput 배지는
+ *  화면에 없다. */
+export function paneNeedsInput(models: TabButtonModel[]): boolean {
+  return models.some((m) => m.needsInput);
 }

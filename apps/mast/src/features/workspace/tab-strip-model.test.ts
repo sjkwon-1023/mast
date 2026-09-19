@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { paneUnread, sameTabButton, tabStripModel, tabStripPlan } from "./tab-strip-model";
+import {
+  paneNeedsInput,
+  paneUnread,
+  sameTabButton,
+  tabStripModel,
+  tabStripPlan,
+} from "./tab-strip-model";
 import type { TabButtonModel } from "./tab-strip-model";
-import type { NotificationState, Pane, Tab, TerminalStatus } from "../../shared/types";
+import type { AgentStatus, NotificationState, Pane, Tab, TerminalStatus } from "../../shared/types";
 
 function terminalTab(
   id: number,
@@ -11,6 +17,7 @@ function terminalTab(
     status?: TerminalStatus;
     notification?: NotificationState;
     session?: number | null;
+    agentStatus?: AgentStatus;
   } = {},
 ): Tab {
   return {
@@ -24,6 +31,8 @@ function terminalTab(
     },
     notification: opts.notification ?? "none",
     lastActivityMs: null,
+    agentStatus: opts.agentStatus ?? "idle",
+    lastAgentMessage: null,
   };
 }
 
@@ -34,6 +43,8 @@ function viewerTab(id: number): Tab {
     kind: { type: "textViewer", path: "C:/tmp/a.txt", scrollTop: 0 },
     notification: "none",
     lastActivityMs: null,
+    agentStatus: "idle",
+    lastAgentMessage: null,
   };
 }
 
@@ -91,6 +102,7 @@ describe("tabStripModel", () => {
         exited: true,
         notStarted: false,
         notification: true,
+        needsInput: false,
       },
     ]);
   });
@@ -108,8 +120,25 @@ describe("tabStripModel", () => {
         exited: false,
         notStarted: true,
         notification: false,
+        needsInput: false,
       },
     ]);
+  });
+
+  it("needsInput 은 탭의 agentStatus 에서 오고 unread 와 독립이다", () => {
+    const p = pane(
+      1,
+      [
+        terminalTab(10, { agentStatus: "needsInput" }),
+        terminalTab(11, { agentStatus: "needsInput", notification: "unread" }),
+        terminalTab(12, { agentStatus: "running", notification: "unread" }),
+        terminalTab(13, { agentStatus: "idle" }),
+      ],
+      10,
+    );
+    const models = tabStripModel(p);
+    expect(models.map((m) => m.needsInput)).toEqual([true, true, false, false]);
+    expect(models.map((m) => m.notification)).toEqual([false, true, true, false]);
   });
 });
 
@@ -121,6 +150,7 @@ function button(tab: number, over: Partial<TabButtonModel> = {}): TabButtonModel
     exited: false,
     notStarted: false,
     notification: false,
+    needsInput: false,
     ...over,
   };
 }
@@ -153,6 +183,12 @@ describe("tabStripPlan", () => {
     );
   });
 
+  it("needsInput 만 바뀌어도 patch 한다", () => {
+    const prev = [button(10, { active: true }), button(11)];
+    const next = [button(10, { active: true }), button(11, { needsInput: true })];
+    expect(tabStripPlan(prev, next)).toBe("patch");
+  });
+
   it("rebuilds when a tab is added or removed", () => {
     const prev = [button(10), button(11)];
     expect(tabStripPlan(prev, [button(10), button(11), button(12)])).toBe("rebuild");
@@ -176,6 +212,7 @@ describe("sameTabButton", () => {
     expect(sameTabButton(button(10), button(10, { active: true }))).toBe(false);
     expect(sameTabButton(button(10), button(10, { exited: true }))).toBe(false);
     expect(sameTabButton(button(10), button(10, { notification: true }))).toBe(false);
+    expect(sameTabButton(button(10), button(10, { needsInput: true }))).toBe(false);
   });
 });
 
@@ -190,5 +227,20 @@ describe("paneUnread", () => {
       true,
     );
     expect(paneUnread([button(10, { active: true, notification: true })])).toBe(true);
+  });
+});
+
+describe("paneNeedsInput", () => {
+  it("is false for an empty pane and when no tab needs input", () => {
+    expect(paneNeedsInput([])).toBe(false);
+    expect(paneNeedsInput([button(10, { active: true, notification: true }), button(11)])).toBe(
+      false,
+    );
+  });
+
+  it("is true when any tab needs input, including a hidden one", () => {
+    expect(paneNeedsInput([button(10, { active: true }), button(11, { needsInput: true })])).toBe(
+      true,
+    );
   });
 });

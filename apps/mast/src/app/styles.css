@@ -637,6 +637,20 @@ body {
   font-size: 7px;
 }
 
+/* 응답 대기 배지 — unread dot 과 한 탭에 같이 뜰 수 있어 모양(채운 "!")과 색 둘 다
+   갈라 둔다. unread 는 탭을 보면 걷히지만 이 배지는 에이전트가 다음 상태를 알릴
+   때까지 남는다. */
+.tab-needs-input {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--warn);
+  color: var(--bg);
+  font-size: 9px;
+  font-weight: bold;
+  line-height: 1.4;
+}
+
 /* Exited 배지 — 세션이 끝난 terminal 탭 (replay 만 표시 중) */
 .tab-exited {
   flex: 0 0 auto;
@@ -1400,8 +1414,8 @@ body {
   border-color: var(--send);
 }
 
-/* pane 집계 unread 배지 (18단계) — 이 pane 의 어느 탭이든 미확인 알림이 있으면
-   헤더 맨 앞(탭바 왼쪽)에 뜬다. 탭바가 넘쳐 잘린 탭의 dot 을 pane 층에서 대신
+/* pane 집계 배지 (18단계) — 이 pane 의 어느 탭이든 미확인 알림이나 응답 대기가 있으면
+   헤더 맨 앞(탭바 왼쪽)에 뜬다. 탭바가 넘쳐 잘린 탭의 배지를 pane 층에서 대신
    보여주는 자리다. display 를 지정하지 않아 hidden 속성만으로 감춰진다 (패치 대상) */
 .pane-dot {
   flex: 0 0 auto;
@@ -1409,4 +1423,10 @@ body {
   margin: 0 2px;
   color: var(--accent);
   font-size: 7px;
+}
+
+/* 응답 대기가 unread 보다 우선한다 — 색은 탭의 needsInput 배지와 같다. */
+.pane-dot.needs-input {
+  color: var(--warn);
+  font-size: 9px;
 }
