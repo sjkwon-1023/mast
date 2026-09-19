@@ -77,11 +77,24 @@ export class TabView {
    *  이미 옛 소유자를 싣고 있다 — 그 값으로 현재 소유자를 되돌리지 않는다
    *  (`poll` 의 요청 시점 캡처). */
   private ownerEpoch = 0;
+  /** 서버가 마지막으로 말한 셸의 세션 토큰 — 화면 동기화의 `state.session` 과
+   *  분리한다. `nextRequest` 는 재생성이 필요하면 `state.session` 을 비워 다음
+   *  폴이 `since` 없이 나가게 하는데, 그 순간에도 진행 중인 크기 요청이 옛 셸의
+   *  것인지 판정할 좌표가 필요하다 (`sendSize` 의 stale 판정). */
+  private knownSession: string | null = null;
+  /** 이탈 때 desktop 복원을 보낼 세션 — 서버가 mobile 소유라고 확인해 준 셸이다.
+   *  ↻(`resetToFull`)는 화면 상태만 버리므로 이 값은 남긴다: 새 화면 응답이 오기
+   *  전에 떠나도 서버의 소유권은 그대로라 해제가 나가야 한다. */
+  private releaseSession: string | null = null;
+  /** 해제 좌표를 대입한 횟수 — 해제 요청은 보낼 때의 값을 캡처하고 응답 시점에
+   *  그대로일 때만 좌표를 지운다. 같은 세션 재주장도 새 대입이라, 늦은 응답이
+   *  새 주장의 좌표를 지우지 않는다. */
+  private releaseEpoch = 0;
   /** 페이지가 사라지는 중(`pagehide`) — dispose 를 타지 않는 종료라 따로 듣는다.
    *  브라우저가 탭을 닫거나 앱을 스와이프해 없애는 경로가 여기로 온다. */
   private readonly onPageHide = (): void => {
     this.left = true;
-    if (this.state.sizeOwner === "mobile") this.releaseSizeOnLeave();
+    this.releaseSizeOnLeave();
   };
   /** bfcache 복원(`pageshow`) — 떠남 표시를 내린다. 표시가 남으면 되살아난 페이지의
    *  새 주장이 성공하는 즉시 되돌려져 폰이 소유를 가질 수 없다 (이 리스너는 로드
@@ -234,8 +247,9 @@ export class TabView {
     this.left = true;
     // 탭을 떠나면 폰이 소유한 크기를 즉시 돌려준다 — 리스 만료(30초)를 기다리는
     // 동안 데스크톱이 좁은 화면에 갇혀 있을 이유가 없다. keepalive 라 페이지가
-    // 사라지는 중에도 요청이 나가고, 실패해도 리스가 결국 정리한다.
-    if (this.state.sizeOwner === "mobile") this.releaseSizeOnLeave();
+    // 사라지는 중에도 요청이 나가고, 실패해도 리스가 결국 정리한다. 판정·좌표는
+    // `releaseSession` 이다 — ↻ 로 화면 상태가 초기화돼도 남아 있다.
+    this.releaseSizeOnLeave();
     window.removeEventListener("pagehide", this.onPageHide);
     window.removeEventListener("pageshow", this.onPageShow);
     this.schedule.stop();
@@ -341,20 +355,29 @@ export class TabView {
     this.sizeBusy = true;
     try {
       const reply = await postResize(this.options.tab, session, mode, size);
-      // 서버가 적용했다고 답한 소유자를 버튼 페인트에만 쓰지 않고 **수명 상태에도**
-      // 반영한다 — 그러지 않으면 다음 폴(2초) 전에 Back/pagehide 로 떠날 때 이미
-      // 폰 소유인데도 해제 요청이 나가지 않아 데스크톱이 리스 만료까지 좁은 채로
-      // 남는다. 화면 인스턴스의 cols/rows 는 건드리지 않는다: 실제 격자는 다음
-      // 폴의 meta 가 정한다 (먼저 바꾸면 needsRecreate 판정이 어긋난다).
-      this.state = { ...this.state, sizeOwner: reply.owner };
-      this.ownerEpoch += 1;
+      // 응답이 오는 사이 화면이 다른 셸로 갈렸다면(탭 Restart) 이 응답은 옛 셸의
+      // 것이다 — 새 화면의 소유자도 해제 좌표도 이 응답으로 정하지 않는다.
+      const stale = this.knownSession !== null && this.knownSession !== session;
+      if (!stale) {
+        // 서버가 적용했다고 답한 소유자를 버튼 페인트에만 쓰지 않고 **수명 상태에도**
+        // 반영한다 — 그러지 않으면 다음 폴(2초) 전에 Back/pagehide 로 떠날 때 이미
+        // 폰 소유인데도 해제 요청이 나가지 않아 데스크톱이 리스 만료까지 좁은 채로
+        // 남는다. 화면 인스턴스의 cols/rows 는 건드리지 않는다: 실제 격자는 다음
+        // 폴의 meta 가 정한다 (먼저 바꾸면 needsRecreate 판정이 어긋난다).
+        this.state = { ...this.state, sizeOwner: reply.owner };
+        this.ownerEpoch += 1;
+        // 해제 좌표는 **요청 시점의 세션**으로 잡는다 — 응답이 오는 사이 ↻ 가
+        // 화면 상태를 비웠을 수 있다 (그래도 서버에는 이 세션의 소유권이 있다).
+        this.setReleaseSession(reply.owner === "mobile" ? session : null);
+      }
       if (this.left) {
         // 요청이 날아가 있는 사이 페이지를 떠났다 — 방금 성공한 주장을 여기서
         // 되돌린다. 해제 요청이 실패해도 성공으로 속이지 않는다: 소유자 상태는
         // 서버 응답으로만 바뀌고, 최종 안전망은 리스 만료다.
-        if (reply.owner === "mobile") this.releaseSizeOnLeave();
+        if (reply.owner === "mobile" && !stale) this.releaseSizeOnLeave();
         return;
       }
+      if (stale) return;
       // 다음 폴(2초)까지 버튼이 눌린 채로 있지 않게. 실제 크기·소유자는 다음
       // meta 가 다시 확인해 준다.
       this.paintSizeMode(reply.owner);
@@ -369,15 +392,34 @@ export class TabView {
     }
   }
 
+  /** 해제 좌표를 바꾸고 세대를 올린다 — 올리는 이유는 `releaseSizeOnLeave`. */
+  private setReleaseSession(session: string | null): void {
+    this.releaseSession = session;
+    this.releaseEpoch += 1;
+  }
+
   /** 탭을 떠나며 보내는 해제 — 실패해도 조용하다 (리스가 최종 안전망이고, 그
-   *  사이 사용자가 보는 화면이 없다). 성공으로 속이지도 않는다: 여기서 소유권
-   *  상태를 바꾸지 않으므로 실패한 해제는 다음 이탈·다음 폴에서 다시 시도된다. */
+   *  사이 사용자가 보는 화면이 없다). 서버가 데스크톱이라고 **확인해 준** 경우에만
+   *  좌표를 지우므로, 실패한 해제는 다음 이탈·다음 폴에서 다시 시도된다. */
   private releaseSizeOnLeave(): void {
-    const session = this.state.session;
+    const session = this.releaseSession;
     if (session === null) return;
-    void postResize(this.options.tab, session, "desktop", undefined, { keepalive: true }).catch(
-      () => undefined,
-    );
+    // 보낼 때의 세대를 캡처한다 — 응답이 도착했을 때 세대가 그대로이고 좌표도
+    // 같은 세션이어야 이 해제가 지금 좌표를 지울 자격이 있다. bfcache 복원 뒤
+    // 같은 세션으로 다시 주장했다면 세대가 달라, 늦은 해제 응답이 새 주장의
+    // 좌표를 지우지 않는다 (지우면 다음 이탈이 데스크톱으로 못 되돌린다).
+    const epoch = this.releaseEpoch;
+    void postResize(this.options.tab, session, "desktop", undefined, { keepalive: true })
+      .then((reply) => {
+        if (
+          reply.owner === "desktop" &&
+          this.releaseEpoch === epoch &&
+          this.releaseSession === session
+        ) {
+          this.setReleaseSession(null);
+        }
+      })
+      .catch(() => undefined);
   }
 
   private paintSizeMode(owner: SizeOwner): void {
@@ -407,8 +449,8 @@ export class TabView {
     // 서버도 그 변경으로 소유자가 바뀌었는데, 그 전에 만들어진 이 응답으로
     // 되돌리면 폰이 이미 소유 중인데 버튼·이탈 해제가 데스크톱으로 판단한다.
     // 크기·세션은 그대로 응답을 따르고, 소유자는 다음 폴이 다시 확인해 준다.
-    const meta =
-      ownerEpoch === this.ownerEpoch ? reply.meta : { ...reply.meta, sizeOwner: this.state.sizeOwner };
+    const trusted = ownerEpoch === this.ownerEpoch;
+    const meta = trusted ? reply.meta : { ...reply.meta, sizeOwner: this.state.sizeOwner };
     if (this.state.phase === "full") {
       // 서버 계약상 `since` 없는 요청의 응답은 항상 reset 이다. 아니면 화면을
       // 세울 수 없으므로 상태를 그대로 두고 다음 폴에서 다시 요청한다.
@@ -422,7 +464,13 @@ export class TabView {
     } else if (bytes.length > 0) {
       this.write(bytes);
     }
+    this.knownSession = meta.session;
     this.state = nextRequest(this.state, meta);
+    if (trusted) {
+      // 서버가 확인해 준 소유자·세션이 해제 좌표다 — 리스 만료나 다른 폰의 조작은
+      // 서버에서 일어나므로 폴의 응답만이 그것을 알려 준다.
+      this.setReleaseSession(meta.sizeOwner === "mobile" ? meta.session : null);
+    }
     this.paintSizeMode(this.state.sizeOwner);
   }
 
@@ -582,8 +630,13 @@ export class TabView {
   }
 
   /** 이미 아무것도 없으면 건드리지 않는다 — 실패가 2초마다 반복되는 동안
-   *  세대만 계속 올리게 된다. */
-  private resetToFull(): void {
+   *  세대만 계속 올리게 된다. `keepOwnership` 은 ↻(화면만 다시 맞춤)용이다:
+   *  셸이 갈린 409·404 에서는 서버의 소유권도 사라졌으므로 좌표를 버린다. */
+  private resetToFull(keepOwnership = false): void {
+    if (!keepOwnership) {
+      this.knownSession = null;
+      this.setReleaseSession(null);
+    }
     if (this.term === null) return;
     this.destroyTerminal();
     this.state = { ...INITIAL_VIEW_STATE };
@@ -594,7 +647,9 @@ export class TabView {
    *  검거나 오류 notice 상태(입력 비활성)에서도 눌린다. */
   private refresh(): void {
     this.setNotice(null);
-    this.resetToFull();
+    // ↻ 는 화면만 다시 맞춘다 — 서버가 아직 폰을 소유자로 알고 있으면 그 좌표를
+    // 남겨야 새 화면 응답 전에 떠나도 해제가 나간다.
+    this.resetToFull(true);
     this.schedule.pollNow();
   }
 
