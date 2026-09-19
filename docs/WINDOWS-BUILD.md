@@ -2195,8 +2195,8 @@ two workspaces throughout and switch with `Ctrl+1`/`Ctrl+2`.
    anywhere but by reading the code. If the drag does *not* cancel, say so: the fix is to widen
    the target test, not to abandon the narrowing (a plain click to focus a pane must keep not
    cancelling).
-8. **A reload does not keep the place.** Scroll up, press F5: the tab comes back at the bottom.
-   That is the documented boundary (ADR-0019 decision 3), not a defect.
+8. **Historical reload boundary, superseded 2026-09-20.** At the time, a WebView reload lost the
+   place. Use Ctrl+Shift+R to reload mast; F5 is passed to the terminal.
 9. **A closed tab leaves nothing behind.** Scroll a tab up, close it, open a new terminal tab in
    the same pane: the new tab starts at the bottom.
 10. **Which screen does Codex actually use here?** (Answers the conflict in ADR-0019's Context.)
@@ -2332,6 +2332,25 @@ restore apart from bytes that never arrived. Item 9 turns the log **off** again 
    keyboard must stay up — focus must not leave the composer.
 14. On an iPhone with a home indicator, confirm the bottom dock (composer + key bar) sits above
    it and is not obscured.
+
+### Unreleased — Codex scroll after WebView reload (ADR-0019 amendment 2026-09-20)
+
+This is pending Windows WebView2 field verification. Automated browser tests confirm the
+`pagehide` capture and restore logic, but do not prove WebView2 emits `pagehide` for a Tauri
+`window.reload()`.
+
+1. In a Codex tab, scroll up to identifiable lines and press Ctrl+Shift+R. The same area should
+   return after the replay and reprint settle. F5 must still reach Codex rather than reload mast.
+2. Repeat with `MAST_RESET_HIDDEN_SECS=30`: scroll up, focus another window for more than 30
+   seconds, then return. Check `mast.log` for `reset: reloading webview` and confirm the place is
+   restored. Repeat after switching workspaces so an inactive tab's stored position is restored
+   when that workspace becomes active again.
+3. Scroll up in a tab, exit its shell and press Restart. The new PTY session must start at the
+   bottom. Close a scrolled tab and create another; the closed tab's place must not reappear.
+4. If a pane instead jumps to the top, record the `scroll: scrollback wiped` and `scroll: restore
+   ended` lines around it. A jump without the wipe line is a different path from ADR-0019's ED3
+   handler. Check whether `sessionStorage["mast:scroll-memory"]` existed across the reload;
+   absence means the capture did not run. Record the installed mast and Codex versions.
 
 ### v0.3.29 — Codex resume ownership verification (setup v12)
 
