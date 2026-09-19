@@ -23,6 +23,11 @@ node_modules
 dist/
 build/
 
+# Secure Remote Pages bundle (built by apps/mast/vite.secure-remote.config.ts) — 의도적으로
+# Tauri frontendDist 밖에 있지만 산출물이므로 커밋하지 않는다. 앱이 서빙하는 `dist/remote` 는
+# 위의 `dist/` 규칙이 이미 덮는다.
+apps/mast/dist-secure-remote/
+
 # Python
 __pycache__/
 *.py[cod]

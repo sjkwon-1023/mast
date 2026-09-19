@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 정적 페이지의 CSP. WebTransport 는 connect-src 의 적용을 받고, QR 의 host:port 는
+         매번 달라지므로 https: 전체를 연다. 평문 http: 를 열지 않으므로 mast 의 기존
+         HTTP API(같은 포트의 TCP 표면)로는 이 페이지에서 요청이 나갈 수 없다. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https:; base-uri 'none'; form-action 'none'"
+    />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="color-scheme" content="dark" />
+    <title>mast secure remote</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="../src/secure-remote/main.ts"></script>
+  </body>
+</html>

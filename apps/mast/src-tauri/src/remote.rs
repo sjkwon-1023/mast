@@ -13,9 +13,9 @@ use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 
-use tauri::{AppHandle, Manager, State};
 use mast_core::command::Dispatcher;
 use mast_core::session::SessionManager;
+use tauri::{AppHandle, Manager, State};
 
 use crate::winlog;
 
@@ -280,7 +280,10 @@ fn pairing_url(ip: IpAddr, port: u16, token: &str) -> String {
 /// 라우팅될 일이 없어, 질문은 "기본 경로가 나가는 인터페이스가 무엇인가"로 좁혀진다.
 /// 인터페이스를 열거해 사설 대역을 고르는 방법보다 정확하다 — 어느 것이 폰과 같은
 /// 링크인지는 라우팅 테이블만 안다.
-fn lan_ip() -> Result<IpAddr, String> {
+///
+/// Secure Remote QR 도 같은 질문을 쓰므로 `pub(crate)` 다 (`secure_remote` 가 IPv4 로
+/// 좁혀 쓴다).
+pub(crate) fn lan_ip() -> Result<IpAddr, String> {
     let socket = UdpSocket::bind("0.0.0.0:0")
         .map_err(|err| format!("cannot open a socket to find the LAN address: {err}"))?;
     socket

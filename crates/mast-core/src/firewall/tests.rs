@@ -8,6 +8,15 @@ fn target() -> Target {
         exe: normalize_exe(EXE),
         port: PORT,
         profiles: PROFILE_PRIVATE,
+        protocol: Protocol::Tcp,
+    }
+}
+
+/// Secure Remote(UDP) 판정 대상 — 같은 exe·포트·프로필, 전송만 다르다.
+fn udp_target() -> Target {
+    Target {
+        protocol: Protocol::Udp,
+        ..target()
     }
 }
 
@@ -329,4 +338,137 @@ fn script_text_deletes_the_old_rule_first_when_asked() {
 #[test]
 fn script_text_refuses_a_quoted_path() {
     assert!(script_text(r#"C:\a"b\mast.exe"#, PORT, false).is_err());
+}
+
+// ---- Secure Remote(UDP) — Local HTTP(TCP) 규칙과 공존 불변식 ----
+
+/// UDP 규칙의 정본. 테스트마다 한 필드씩 비튼다.
+fn udp_allowing_rule() -> RuleRecord {
+    RuleRecord {
+        name: SECURE_RULE_NAME.to_owned(),
+        protocol: PROTOCOL_UDP,
+        ..allowing_rule()
+    }
+}
+
+#[test]
+fn the_two_surfaces_have_distinct_rule_names() {
+    assert_ne!(Protocol::Tcp.rule_name(), Protocol::Udp.rule_name());
+    assert_eq!(Protocol::ALL.len(), 2);
+    assert!(Protocol::ALL.contains(&Protocol::Tcp));
+    assert!(Protocol::ALL.contains(&Protocol::Udp));
+}
+
+#[test]
+fn judge_does_not_let_a_tcp_allow_reach_the_udp_surface() {
+    // 같은 프로그램·같은 포트·같은 프로필의 TCP 허용은 UDP 판정에 닿지 않는다.
+    assert_eq!(
+        judge(&udp_target(), &[allowing_rule()], false),
+        Verdict::Missing
+    );
+}
+
+#[test]
+fn judge_does_not_let_a_udp_allow_reach_the_tcp_surface() {
+    assert_eq!(
+        judge(&target(), &[udp_allowing_rule()], false),
+        Verdict::Missing
+    );
+}
+
+#[test]
+fn judge_allows_each_surface_independently_on_one_pc() {
+    // Local HTTP TCP 와 Secure Remote UDP 가 같은 7331 을 써도 둘 다 허용될 수 있다.
+    let rules = vec![allowing_rule(), udp_allowing_rule()];
+    assert_eq!(judge(&target(), &rules, false), Verdict::Allowed);
+    assert_eq!(judge(&udp_target(), &rules, false), Verdict::Allowed);
+}
+
+#[test]
+fn judge_reads_an_any_protocol_allow_for_both_surfaces() {
+    // Windows 의 "허용" 프롬프트가 만드는 프로토콜 Any 규칙은 두 표면 모두에 해당한다.
+    let prompt = RuleRecord {
+        protocol: PROTOCOL_ANY,
+        local_ports: String::new(),
+        ..allowing_rule()
+    };
+    assert_eq!(
+        judge(&target(), std::slice::from_ref(&prompt), false),
+        Verdict::Allowed
+    );
+    assert_eq!(
+        judge(&udp_target(), std::slice::from_ref(&prompt), false),
+        Verdict::Allowed
+    );
+}
+
+#[test]
+fn judge_reports_a_udp_stale_path_only_for_the_udp_rule() {
+    let moved = RuleRecord {
+        name: SECURE_RULE_NAME.to_owned(),
+        application_name: r"C:\Old\mast-x64.exe".to_owned(),
+        ..udp_allowing_rule()
+    };
+    assert_eq!(
+        judge(&udp_target(), std::slice::from_ref(&moved), false),
+        Verdict::StalePath {
+            program: r"C:\Old\mast-x64.exe".to_owned()
+        }
+    );
+    // 같은 규칙이 TCP 판정에는 남의 규칙이다 (이름이 다르고 프로토콜도 다르다).
+    assert_eq!(judge(&target(), &[moved], false), Verdict::Missing);
+}
+
+#[test]
+fn judge_lets_a_udp_program_block_beat_a_udp_allow() {
+    let block = || RuleRecord {
+        name: "vendor udp block".to_owned(),
+        action_allow: false,
+        ..udp_allowing_rule()
+    };
+    assert_eq!(
+        judge(&udp_target(), &[udp_allowing_rule(), block()], false),
+        Verdict::Blocked {
+            rule: "vendor udp block".to_owned()
+        }
+    );
+    // 그 Block 이 UDP 라도 TCP 판정에는 닿지 않는다 — 같은 목록에 Block 을 **넣은 채**
+    // TCP 대상으로 판정해야 프로토콜 필터가 실제로 검증된다. Block 을 빼면 Allow 만
+    // 남아 이 단언이 아무것도 검증하지 못한다.
+    assert_eq!(
+        judge(&target(), &[allowing_rule(), block()], false),
+        Verdict::Allowed
+    );
+}
+
+#[test]
+fn udp_script_writes_the_secure_rule_and_never_public() {
+    let script = script_text_for(Protocol::Udp, EXE, PORT, false).unwrap();
+    assert_eq!(
+        script,
+        "pushd advfirewall firewall\r\n\
+         add rule name=\"mast secure remote (LAN)\" dir=in action=allow protocol=UDP \
+         localport=7331 program=\"C:\\Users\\me\\Downloads\\mast-x64.exe\" \
+         profile=domain,private enable=yes\r\n\
+         popd\r\n"
+    );
+    assert!(!script.contains("public"), "Public 프로필을 열면 안 된다");
+}
+
+#[test]
+fn udp_script_deletes_only_its_own_rule_first() {
+    let script = script_text_for(Protocol::Udp, EXE, PORT, true).unwrap();
+    assert!(
+        script.contains("delete rule name=\"mast secure remote (LAN)\"\r\n"),
+        "{script}"
+    );
+    assert!(
+        !script.contains(RULE_NAME),
+        "UDP 스크립트가 TCP 규칙을 지우면 안 된다: {script}"
+    );
+}
+
+#[test]
+fn udp_script_refuses_a_quoted_path_too() {
+    assert!(script_text_for(Protocol::Udp, r#"C:\a"b\mast.exe"#, PORT, false).is_err());
 }

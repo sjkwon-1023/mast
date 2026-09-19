@@ -14,7 +14,8 @@ state; the frontend receives revisioned snapshots and renders disposable views.
 | `features/notifications/` | Needs-input notification decisions and the existing dormant chime implementation. |
 | `infrastructure/` | Tauri command/event wrappers, native window visibility and runtime logging. |
 | `shared/` | Serialized Rust contracts, shared keyboard decisions/selectors, command error formatting and font bounds. |
-| `remote/` | Phone browser entry point, HTTP protocol, polling and views. Built separately through `remote/index.html`. |
+| `remote/` | Phone browser entry point, HTTP protocol, polling and views. Built separately through `remote/index.html`. `transport.ts` is the network seam the two phone surfaces share; `app.ts` is the shared shell. |
+| `secure-remote/` | Secure Remote static entry for the public HTTPS page: strict QR fragment parsing, the v1 WebTransport frame codec and client. Built separately through `secure-remote/index.html` with base `/mast/`. |
 
 Import the module that owns a value directly. Settings and pure helpers have their own
 modules so consumers do not load a view to use them. The workspace renderer assembles the

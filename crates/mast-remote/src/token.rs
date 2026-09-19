@@ -79,6 +79,15 @@ pub fn load_or_create_token(path: &Path) -> Result<String, TokenError> {
     }
 }
 
+/// Secure Remote 페어링 전용 토큰 — 32B CSPRNG, base64url 무패딩 43자.
+///
+/// Local HTTP 의 [`load_or_create_token`] 과 달리 **파일에 쓰지 않는다**: 페어링마다
+/// 새로 만들고 메모리에서만 살며, QR 의 fragment 로만 나간다. 실패는 약한 대체값 없이
+/// 그대로 올린다 — 추측 가능한 토큰으로 원격이 열리는 것보다 시작 실패가 낫다.
+pub fn generate_secure_token() -> Result<String, TokenError> {
+    generate_token()
+}
+
 /// 32B CSPRNG → base64url 무패딩 43자.
 ///
 /// 엔트로피를 못 얻은 자리에서 약한 대체값(시각·pid)으로 토큰을 만들면 원격이 열린 채
@@ -164,6 +173,14 @@ mod tests {
     #[test]
     fn two_generated_tokens_differ() {
         assert_ne!(generate_token().unwrap(), generate_token().unwrap());
+    }
+
+    #[test]
+    fn secure_remote_tokens_are_valid_and_fresh_each_time() {
+        let first = generate_secure_token().unwrap();
+        let second = generate_secure_token().unwrap();
+        assert!(is_valid_token(&first), "{first}");
+        assert_ne!(first, second, "페어링마다 새 토큰이어야 한다");
     }
 
     #[test]

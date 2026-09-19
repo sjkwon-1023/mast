@@ -5,8 +5,8 @@
 use mast_core::firewall::Verdict;
 #[cfg(windows)]
 use mast_core::firewall::{
-    firewall_off, judge, normalize_exe, profile_names, script_text, RuleRecord, Target,
-    PROFILE_DOMAIN, PROFILE_PRIVATE, PROFILE_PUBLIC, RULE_NAME,
+    firewall_off, judge, normalize_exe, profile_names, script_text_for, Protocol, RuleRecord,
+    Target, PROFILE_DOMAIN, PROFILE_PRIVATE, PROFILE_PUBLIC,
 };
 
 #[cfg(windows)]
@@ -201,7 +201,12 @@ fn read_rule(rule: &INetFwRule) -> Option<RuleRecord> {
     let name = unsafe { rule.Name() }.ok()?.to_string();
     let enabled = unsafe { rule.Enabled() }.ok()? != VARIANT_FALSE;
     let direction_in = unsafe { rule.Direction() }.ok()? == NET_FW_RULE_DIR_IN;
-    if name != RULE_NAME && !(enabled && direction_in) {
+    // 우리 이름의 규칙은 두 표면 모두 꺼져 있거나 아웃바운드여도 stalePath 판정과
+    // 중복 제거(delete)가 봐야 한다.
+    let ours = Protocol::ALL
+        .iter()
+        .any(|surface| surface.rule_name() == name);
+    if !ours && !(enabled && direction_in) {
         return None;
     }
 
@@ -452,9 +457,10 @@ fn run_elevated_netsh(script: &std::path::Path) -> Result<Applied, String> {
     outcome
 }
 
-/// 성공/거절은 `Ok`, 그 밖은 `Err(사유)`.
+/// 성공/거절은 `Ok`, 그 밖은 `Err(사유)`. `protocol` 이 규칙 이름·스크립트·삭제
+/// 대상을 가른다 — TCP 로 부르면 Local HTTP 의 기존 동작 그대로다.
 #[cfg(windows)]
-fn apply(port: u16) -> Result<Applied, String> {
+fn apply(protocol: Protocol, port: u16) -> Result<Applied, String> {
     let exe = current_exe_exact()?;
 
     // 수집 실패를 감내한다: COM 이 답하지 않아도 버튼은 동작해야 한다. 규칙 자체가
@@ -472,21 +478,42 @@ fn apply(port: u16) -> Result<Applied, String> {
             );
         }
     }
+    let rule_name = protocol.rule_name();
     let delete_first = collected
         .as_ref()
-        .is_some_and(|collected| collected.rules.iter().any(|rule| rule.name == RULE_NAME));
+        .is_some_and(|collected| collected.rules.iter().any(|rule| rule.name == rule_name));
 
-    let script = script_text(&exe, port, delete_first)?;
+    let script = script_text_for(protocol, &exe, port, delete_first)?;
     let scratch = TempScript::write(&script)?;
     // 본문 자체는 남기지 않는다 — 재현에 필요한 것은 어느 경로·포트로 무엇을 했나다.
-    winlog!("remote: firewall apply {exe}:{port} (replacing an existing rule: {delete_first})");
+    // TCP 문구는 현장 진단 문서가 그대로 인용하는 문장이라 유지하고, UDP 는 전송을 밝힌다.
+    if protocol == Protocol::Tcp {
+        winlog!("remote: firewall apply {exe}:{port} (replacing an existing rule: {delete_first})");
+    } else {
+        winlog!(
+            "remote: firewall apply udp {exe}:{port} (replacing an existing rule: {delete_first})"
+        );
+    }
     run_elevated_netsh(&scratch.path)
 }
 
 /// 지금 이 exe·이 포트가 허용돼 있는지 판정한다. 실패는 `unknown` 으로 나가고 오류로
 /// 올라가지 않는다 — 대화상자는 "확인하지 못했다"를 보여 줄 수 있어야 한다.
+///
+/// TCP 는 Local HTTP, UDP 는 Secure Remote 다. 같은 포트 번호라도 전송이 달라
+/// 서로의 규칙·판정 결과에 영향을 주지 않는다.
 #[cfg(windows)]
 pub fn status(port: u16) -> FirewallStatus {
+    status_for(Protocol::Tcp, port)
+}
+
+#[cfg(windows)]
+pub fn secure_status(port: u16) -> FirewallStatus {
+    status_for(Protocol::Udp, port)
+}
+
+#[cfg(windows)]
+fn status_for(protocol: Protocol, port: u16) -> FirewallStatus {
     let exe = match current_exe_text() {
         Ok(exe) => exe,
         Err(err) => return FirewallStatus::unknown(String::new(), port, err),
@@ -499,6 +526,7 @@ pub fn status(port: u16) -> FirewallStatus {
         exe: normalize_exe(&exe),
         port,
         profiles: collected.current_profiles,
+        protocol,
     };
     let verdict = judge(&target, &collected.rules, collected.firewall_off);
     FirewallStatus::new(
@@ -512,7 +540,17 @@ pub fn status(port: u16) -> FirewallStatus {
 /// 사용자 클릭에만 반응하는 적용 경로. UAC 창이 한 번 뜬다.
 #[cfg(windows)]
 pub fn allow(port: u16) -> AllowOutcome {
-    let (outcome, detail) = match apply(port) {
+    allow_for(Protocol::Tcp, port)
+}
+
+#[cfg(windows)]
+pub fn secure_allow(port: u16) -> AllowOutcome {
+    allow_for(Protocol::Udp, port)
+}
+
+#[cfg(windows)]
+fn allow_for(protocol: Protocol, port: u16) -> AllowOutcome {
+    let (outcome, detail) = match apply(protocol, port) {
         Ok(Applied::Ran) => ("applied", None),
         Ok(Applied::Declined) => ("declined", None),
         Err(reason) => ("failed", Some(reason)),
@@ -521,7 +559,7 @@ pub fn allow(port: u16) -> AllowOutcome {
     AllowOutcome {
         outcome,
         detail,
-        status: status(port),
+        status: status_for(protocol, port),
     }
 }
 
@@ -535,12 +573,22 @@ pub fn status(port: u16) -> FirewallStatus {
 }
 
 #[cfg(not(windows))]
+pub fn secure_status(port: u16) -> FirewallStatus {
+    status(port)
+}
+
+#[cfg(not(windows))]
 pub fn allow(port: u16) -> AllowOutcome {
     AllowOutcome {
         outcome: "failed",
         detail: Some("unsupported on this platform".to_owned()),
         status: status(port),
     }
+}
+
+#[cfg(not(windows))]
+pub fn secure_allow(port: u16) -> AllowOutcome {
+    allow(port)
 }
 
 #[cfg(test)]

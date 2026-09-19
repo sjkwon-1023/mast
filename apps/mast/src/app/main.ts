@@ -198,10 +198,11 @@ class App {
   private async initRemote(): Promise<void> {
     try {
       const status = await remoteStatus();
+      // Local HTTP 서버가 실패로 떠 있으면 알린다. "Pair phone" 버튼은 이 상태와
+      // 무관하게 항상 보인다 — 꺼져 있으면 다이얼로그가 설정·Secure Remote 안내를 한다.
       if (status.state === "failed") {
         this.showError(status.reason ?? "remote surface failed to start");
       }
-      this.sidebar.setRemoteEnabled(status.state === "on");
     } catch (err) {
       console.error("remote_status failed", err);
     }

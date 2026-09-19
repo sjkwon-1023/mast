@@ -269,6 +269,90 @@ export function remoteFirewallAllow(): Promise<AllowOutcome> {
   return invoke<AllowOutcome>("remote_firewall_allow");
 }
 
+// --- Secure Remote (WebTransport) ----------------------------------------------
+// src-tauri `secure_remote.rs` 의 계약 미러. Local HTTP 와 달리 이 표면은 설정과
+// 무관하게 **시작할 때만** UDP 리스너·TLS 자원을 연다. token·cert hash·개인키는
+// 어떤 응답에도 싣지 않는다 (QR URL 은 성공한 start 응답에만 있다).
+
+/** 서버 상태 — Rust `SecureRemoteStatus.state` 그대로. `idle` 은 서버 없음,
+ *  `waiting` 은 폰 접속 대기, `connected` 는 인증된 폰이 붙어 있는 상태다. */
+export type SecureRemoteState =
+  | "idle"
+  | "starting"
+  | "waiting"
+  | "connected"
+  | "stopping"
+  | "failed";
+
+/** `secure_remote_status` / `secure_remote_cancel` 의 응답. `pairingId` 는 그
+ *  상태가 가리키는 페어링(없으면 null), `reason` 은 `failed` 의 사유다. */
+export interface SecureRemoteStatus {
+  state: SecureRemoteState;
+  pairingId: string | null;
+  reason: string | null;
+}
+
+/** 성공한 `secure_remote_start` 의 응답 — QR URL 은 이 응답에만 실린다. */
+export interface SecureRemoteStart {
+  state: "waiting";
+  pairingId: string;
+  url: string;
+}
+
+/** Secure Remote 커맨드 거절 코드. `busy` 는 다른 페어링 진행 중, `connected` 는
+ *  이미 폰이 붙어 있음, `stopping` 은 이전 종료 미완, `cancelled` 는 이 ID 가
+ *  취소됨, `failed` 는 생성 실패(message 에 사유)다. */
+export type SecureRemoteRejectCode = "busy" | "connected" | "stopping" | "cancelled" | "failed";
+
+/** 커맨드 reject payload — Rust `SecureRemoteCommandError` 의 직렬화 형태다. */
+export interface SecureRemoteCommandError {
+  code: SecureRemoteRejectCode;
+  message: string;
+}
+
+/** reject payload 를 방어적으로 좁힌다. IPC 레벨 실패 등 계약 밖 값이 올 수
+ *  있으므로 호출자는 이 가드가 false 면 공통 포맷터로 보낸다. */
+export function isSecureRemoteCommandError(error: unknown): error is SecureRemoteCommandError {
+  if (typeof error !== "object" || error === null) return false;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  return (
+    typeof message === "string" &&
+    (code === "busy" ||
+      code === "connected" ||
+      code === "stopping" ||
+      code === "cancelled" ||
+      code === "failed")
+  );
+}
+
+/** Secure Remote 수명 상태 조회 — 비밀은 실리지 않으므로 언제든 부를 수 있다. */
+export function secureRemoteStatus(): Promise<SecureRemoteStatus> {
+  return invoke<SecureRemoteStatus>("secure_remote_status");
+}
+
+/** QR 페어링 시작. `pairingId` 는 UI 가 만든 UUID 다 — 같은 ID 로 두 번 시작할
+ *  수 없다(취소된 ID 는 tombstone 으로 거절된다). 바인드가 끝난 뒤에만 URL 이 온다. */
+export function secureRemoteStart(pairingId: string): Promise<SecureRemoteStart> {
+  return invoke<SecureRemoteStart>("secure_remote_start", { pairingId });
+}
+
+/** 페어링 취소 — 적용 뒤의 상태를 그대로 돌려준다. 인증이 먼저 승인된 연결은
+ *  `connected` 로 돌아오고 서버는 그 연결의 수명에 맡겨진다. */
+export function secureRemoteCancel(pairingId: string): Promise<SecureRemoteStatus> {
+  return invoke<SecureRemoteStatus>("secure_remote_cancel", { pairingId });
+}
+
+/** Secure Remote UDP 7331 전용 방화벽 판정 — TCP 커맨드와 완전히 별개다. */
+export function secureRemoteFirewallStatus(): Promise<FirewallStatus> {
+  return invoke<FirewallStatus>("secure_remote_firewall_status");
+}
+
+/** Secure Remote UDP 규칙 생성 — **사용자가 버튼을 누를 때만** 부른다 (UAC 는
+ *  사용자가 답할 때까지 resolve 되지 않는다). */
+export function secureRemoteFirewallAllow(): Promise<AllowOutcome> {
+  return invoke<AllowOutcome>("secure_remote_firewall_allow");
+}
+
 // --- 뷰어 파일 접근 (21단계) --------------------------------------------------
 // folderBrowser·textViewer 가 쓰는 읽기 전용 커맨드 3종. 백엔드가 Windows 에서
 // \\wsl.localhost UNC 로 접근하므로 프론트는 항상 **리눅스 경로**를 넘긴다.

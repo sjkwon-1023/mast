@@ -1,13 +1,59 @@
 //! Windows 방화벽 규칙 판정과 netsh 스크립트 생성. Win32 I/O는 앱 글루가 맡는다.
 
-/// 감지(stalePath·중복 제거)와 스크립트가 같은 문자열을 봐야 하므로 상수 하나로
-/// 둔다.
+/// Local HTTP(TCP)의 규칙 이름. 감지(stalePath·중복 제거)와 스크립트가 같은 문자열을
+/// 봐야 하므로 상수 하나로 둔다.
 pub const RULE_NAME: &str = "mast remote (LAN)";
 
-/// `NET_FW_IP_PROTOCOL_TCP` / `_ANY` 의 수치. 판정은 COM 없이 도는 순수 함수라
-/// windows 타입이 아니라 값으로 받는다.
+/// Secure Remote(UDP 7331)의 규칙 이름. Local HTTP 와 **별개 규칙**이라 둘이 같은
+/// 포트 번호를 써도 서로의 판정·삭제에 섞이지 않는다.
+pub const SECURE_RULE_NAME: &str = "mast secure remote (LAN)";
+
+/// `NET_FW_IP_PROTOCOL_TCP` / `_UDP` / `_ANY` 의 수치. 판정은 COM 없이 도는 순수
+/// 함수라 windows 타입이 아니라 값으로 받는다.
 const PROTOCOL_TCP: i32 = 6;
+const PROTOCOL_UDP: i32 = 17;
 const PROTOCOL_ANY: i32 = 256;
+
+/// 판정 대상의 전송 프로토콜. 규칙 이름·COM 프로토콜 번호·스크립트 토큰이 이 값
+/// 하나로 함께 갈린다 — TCP 와 UDP 는 같은 7331 을 써도 별개 표면이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Protocol {
+    Tcp,
+    Udp,
+}
+
+impl Protocol {
+    /// 우리가 소유한 규칙 이름 전부 — 글루의 규칙 수집이 "우리 이름"을 가릴 때 쓴다.
+    pub const ALL: [Protocol; 2] = [Protocol::Tcp, Protocol::Udp];
+
+    /// 이 표면 몫의 규칙 이름.
+    pub fn rule_name(self) -> &'static str {
+        match self {
+            Protocol::Tcp => RULE_NAME,
+            Protocol::Udp => SECURE_RULE_NAME,
+        }
+    }
+
+    fn number(self) -> i32 {
+        match self {
+            Protocol::Tcp => PROTOCOL_TCP,
+            Protocol::Udp => PROTOCOL_UDP,
+        }
+    }
+
+    /// 프로토콜 Any(`NET_FW_IP_PROTOCOL_ANY`) 규칙은 두 표면 모두에 해당한다 —
+    /// Windows 의 "이 앱의 통신을 허용" 프롬프트가 만드는 모양이다.
+    fn covers(self, rule_protocol: i32) -> bool {
+        rule_protocol == self.number() || rule_protocol == PROTOCOL_ANY
+    }
+
+    fn script_token(self) -> &'static str {
+        match self {
+            Protocol::Tcp => "TCP",
+            Protocol::Udp => "UDP",
+        }
+    }
+}
 
 /// `NET_FW_PROFILE2_*` 의 비트값. 위와 같은 이유로 값으로 둔다.
 pub const PROFILE_DOMAIN: i32 = 1;
@@ -32,6 +78,8 @@ pub struct Target {
     pub port: u16,
     /// `CurrentProfileTypes` 비트마스크.
     pub profiles: i32,
+    /// 판정하려는 전송. 이 값(또는 Any)과 프로토콜이 맞는 규칙만 후보다.
+    pub protocol: Protocol,
 }
 
 /// COM 규칙 하나를 판정에 필요한 만큼만 옮겨 담은 값. 판정이 COM 없이 테스트되도록
@@ -120,7 +168,7 @@ pub fn judge(target: &Target, rules: &[RuleRecord], all_profiles_off: bool) -> V
     let reaches_us = |rule: &RuleRecord| {
         rule.enabled
             && rule.direction_in
-            && (rule.protocol == PROTOCOL_TCP || rule.protocol == PROTOCOL_ANY)
+            && target.protocol.covers(rule.protocol)
             && ports_cover(rule.protocol, &rule.local_ports, target.port)
     };
     let our_program = |rule: &RuleRecord| normalize_exe(&rule.application_name) == target.exe;
@@ -157,8 +205,11 @@ pub fn judge(target: &Target, rules: &[RuleRecord], all_profiles_off: bool) -> V
 
     // 우리 이름의 규칙이 다른 경로를 가리킨다 = exe 를 옮겼다. 경로가 비어 있으면
     // "모든 프로그램" 규칙이라 보여 줄 옛 경로가 없으므로 이 갈래에 넣지 않는다.
+    // 이름은 이 표면 몫이다 — UDP 판정이 TCP 규칙의 옛 경로를 보고하지 않는다.
     if let Some(rule) = rules.iter().find(|rule| {
-        rule.name == RULE_NAME && !rule.application_name.trim().is_empty() && !our_program(rule)
+        rule.name == target.protocol.rule_name()
+            && !rule.application_name.trim().is_empty()
+            && !our_program(rule)
     }) {
         return Verdict::StalePath {
             program: rule.application_name.clone(),
@@ -174,22 +225,35 @@ pub fn judge(target: &Target, rules: &[RuleRecord], all_profiles_off: bool) -> V
     Verdict::Missing
 }
 
-/// 승격할 스크립트의 입력은 current_exe 원문과 u16 포트만 허용한다. 따옴표 경로는 거부한다.
-/// 기존 동명 규칙이 있을 때만 먼저 삭제한다. 규칙은 domain/private에만 적용한다.
+/// Local HTTP(TCP) 규칙을 만드는 스크립트 — 기존 계약 그대로다.
 pub fn script_text(exe: &str, port: u16, delete_first: bool) -> Result<String, String> {
+    script_text_for(Protocol::Tcp, exe, port, delete_first)
+}
+
+/// 승격할 스크립트의 입력은 current_exe 원문과 u16 포트만 허용한다. 따옴표 경로는 거부한다.
+/// 기존 동명 규칙이 있을 때만 먼저 삭제한다. 규칙은 domain/private에만 적용한다 —
+/// Public 프로필은 어느 프로토콜도 열지 않는다.
+pub fn script_text_for(
+    protocol: Protocol,
+    exe: &str,
+    port: u16,
+    delete_first: bool,
+) -> Result<String, String> {
     if exe.contains('"') {
         return Err("the executable path contains a quote character".to_owned());
     }
+    let name = protocol.rule_name();
     let delete = if delete_first {
-        format!("delete rule name=\"{RULE_NAME}\"\r\n")
+        format!("delete rule name=\"{name}\"\r\n")
     } else {
         String::new()
     };
     Ok(format!(
         "pushd advfirewall firewall\r\n\
-         {delete}add rule name=\"{RULE_NAME}\" dir=in action=allow protocol=TCP \
+         {delete}add rule name=\"{name}\" dir=in action=allow protocol={} \
          localport={port} program=\"{exe}\" profile=domain,private enable=yes\r\n\
-         popd\r\n"
+         popd\r\n",
+        protocol.script_token()
     ))
 }
 
