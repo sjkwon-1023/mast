@@ -428,6 +428,12 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   from this distro's `/proc`). Keyboard targeting for the old manual send mode stays absorbed
   by the stage-17 retirement — it is not coming back.
 
+- **Agent-facing file and diff presentation commands — backlog (user request 2026-09-20).**
+  Add `mast` CLI commands that let an agent open a chosen file in the appropriate viewer or
+  show a chosen diff to the user in mast. Define the target pane, workspace confinement, path
+  validation and read-only diff contract before implementation; these commands should present
+  material for review, not edit it.
+
 - **Cross-workspace send/`ls` would need an explicit opt-in** — both halves of the agent
   channel stop at the requester's own workspace (2026-08-11 decision, ADR-0005 addendum); if
   reaching another project's pane ever becomes a real need it arrives as a named opt-in, never
