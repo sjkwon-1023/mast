@@ -25,11 +25,13 @@ mast config set fontFamily "Cascadia Code, monospace"
 mast config set fontSize 15
 mast config set highlightLanguages '["python","rust"]'
 mast config set log true
+mast config set showTabIds false         # hide the #id badges on tab titles
 mast config set remote                    # enable on 7331
 mast config set remote true --port 7441   # enable on 7441
 mast config set remote --port 7441        # same, true is optional
 mast config set remote false              # remove remote, disabling it after restart
 mast config reset fontSize                # remove this override
+mast config reset showTabIds              # back to the default (shown)
 mast config reset remote                  # disable phone access
 ```
 
@@ -63,6 +65,7 @@ and retrying. External editors do not participate in this lock: do not edit the 
   "fontSize": 15,
   "highlightLanguages": ["python", "javascript", "typescript", "rust", "json", "toml", "css", "html"],
   "log": false,
+  "showTabIds": true,
   "remote": { "port": 7331 }
 }
 ```
@@ -118,6 +121,23 @@ themselves and any printable character as `(char)`.
 The file is capped at 4 MiB and rolls over into `mast.log.1`, so leaving it on will not fill a
 disk. It is a different file from `toast.log`, which records Windows notification delivery and
 exists whether or not `log` is on.
+
+## `showTabIds`
+
+Shows each tab's **stable id** next to its title, as `#12`. For terminal tabs, that is the
+number `mast ls` prints in its `TAB` column and the address `mast send '#12' …` takes.
+Viewer tabs have ids too, but `mast send` cannot target them. Default **on**; set it to
+`false` to hide the badges:
+
+```json
+"showTabIds": false
+```
+
+Every tab carries its own id — active and inactive, terminal and viewer alike. The number is
+not invented for the badge: it is the tab's model id, assigned when the tab is created and kept
+across a restart, a rename and changes to the tab strip, so an address stays valid. `true` and
+`false` are the only values; JSON `null` counts as unset, as it does for the other keys, and any
+other type is an error. Read once at boot.
 
 ## `remote`
 

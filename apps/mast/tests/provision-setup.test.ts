@@ -540,6 +540,30 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     }
   });
 
+  // 이 브랜치의 에이전트 상태 빌드(#37)가 남긴 v15 마커도 16 보다 낮다. 16 으로 올린 이유가 그
+  // 마커에 막히지 않고 새 config helper(showTabIds)를 다시 깔기 위해서이므로, v15 마커가 전체
+  // 실행을 막지 않고 옛 helper 사본을 현재 사본으로 갈아 놓는지 고정한다.
+  it("upgrades a v15 install from this branch's agent-state builds: the full run redelivers the config helper", () => {
+    const distro = new Distro();
+    distro.agent("claude", "2.1.270 (Claude Code)");
+    distro.write(distro.path(".mast", ".setup-v15"), "");
+    distro.write(distro.path(".mast", "bin", "mast-config.py"), "# v15 copy without showTabIds\n");
+
+    const run = distro.run();
+
+    expect(run.status).toBe(0);
+    expect(distro.marker()).toBe(true);
+    // 옛 마커는 지우지 않는다 — 마커 정리는 사용자 몫이다.
+    expect(existsSync(distro.path(".mast", ".setup-v15"))).toBe(true);
+    expect(readFileSync(distro.path(".mast", "bin", "mast-config.py"), "utf8")).toBe(
+      readFileSync(join(WSL_SCRIPTS, "mast-config.py"), "utf8"),
+    );
+    expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_WITH_DISPATCHER);
+    const log = distro.log();
+    expect(log).toContain(FULL_RUN_LOG);
+    expect(log).not.toContain(AGENT_ONLY_LOG);
+  });
+
   it("skips the Codex and Antigravity CLI hooks behind their opt-out markers and records both steps as done", () => {
     const distro = new Distro().withAgents();
     distro.write(distro.path(".mast", "no-codex-hooks"), "");

@@ -476,7 +476,7 @@ regression once the model fields are dynamic.
    submitting a prompt shows `running` (no dot), a permission prompt shows `needsInput`
    with the sidebar preview populated from the hook's message (dot set), and finishing a
    turn shows `idle` (dot set, preview persists — an empty body never clears the previous
-   message). Activating the tab clears its dot immediately. (Since setup v15 the `Notification`
+   message). Activating the tab clears its dot immediately. (Since setup v16 the `Notification`
    hook fires for prompt types only, and dispatcher hooks sit next to these three; §10 v0.3.32
    covers them.)
 3. **needsInput priority across tabs** — with one tab's session at `needsInput`, trigger
@@ -647,7 +647,7 @@ keyboard-first UX batch need one focused re-verification round. Pull, run
 (`*.sh text eol=lf`) re-materializes them with LF endings, then rebuild.
 
 1. **Hook auto-provisioning + tty fallback** *(historical — this round ran against setup v2;
-   setup v15 adds dispatcher hooks, narrows the `Notification` matcher and wires Codex and
+   setup v16 adds dispatcher hooks, narrows the `Notification` matcher and wires Codex and
    Antigravity CLI hooks, so on a current build run §10 v0.3.32 items 1–2 instead, which cover
    the fresh distro, the second distro on demand and the idempotent relaunch below)* — the hooks
    are no longer wired by hand: on
@@ -895,7 +895,7 @@ three, and the last two items below cover the front-end half of the same batch.
 The v3 marker differs from v2, so **an already-provisioned distro re-provisions on the next
 launch** — no manual cleanup. Run the app from a console so its stderr is visible.
 
-1. **Hooks are migrated onto the provisioned script** *(on setup v15 and later the migration
+1. **Hooks are migrated onto the provisioned script** *(on setup v16 and later the migration
    still applies, but the log reads `migrated <Event>` / `added <Event> role=status` /
    `wired <Event> role=status`, and `mast-claude-hook.sh` dispatcher hooks are added next to
    the three below)* — before launching, note what
@@ -2353,10 +2353,10 @@ Local automated reproduction: `cd apps/mast && npx vitest run tests/codex-resume
 No real sessions or user history are modified by that test. Storage-format assumptions and
 the bounded-check fallback are recorded in `scripts/wsl/claude-hook-example.md`.
 
-### v0.3.32 — Agent state signals verification (setup v15)
+### v0.3.32 — Agent state signals verification (setup v16)
 
 **Not yet run — no item below has passed.** v0.3.32 keeps agent status per tab and derives the
-workspace card from its tabs, and setup v15 adds the Claude Code dispatcher hooks, the Codex
+workspace card from its tabs, and setup v16 adds the Claude Code dispatcher hooks, the Codex
 hooks and the Antigravity CLI hooks. Rules, limits and notices are in
 [`scripts/wsl/claude-hook-example.md`](../scripts/wsl/claude-hook-example.md). The Linux suites
 (`apps/mast/tests/agent-hooks.test.ts`, `provision-hooks.test.ts`, `provision-setup.test.ts`,
@@ -2384,11 +2384,11 @@ artifact, not an app defect — two earlier rounds were lost to exactly that.
 
 **Rerunning a setup step on a distro that finished item 1.** Setup runs when mast starts and
 skips every step whose marker exists. An agent step reruns once its sub-marker is gone:
-`rm ~/.mast/.setup-v15-codex` (Codex) or `rm ~/.mast/.setup-v15-agy` (Antigravity CLI), then
-restart mast; that run logs `setup v15 exists; running only the missing agent steps`. The rest —
+`rm ~/.mast/.setup-v16-codex` (Codex) or `rm ~/.mast/.setup-v16-agy` (Antigravity CLI), then
+restart mast; that run logs `setup v16 exists; running only the missing agent steps`. The rest —
 the Claude Code merge and its version guard, the dispatcher Python, the Codex `notify` line and
 the AGENTS.md block — runs only in a full run, which reruns both agent steps too:
-`rm ~/.mast/.setup-v15`, then restart mast; that run logs `setup v15 starting`. A bullet that
+`rm ~/.mast/.setup-v16`, then restart mast; that run logs `setup v16 starting`. A bullet that
 edits a file names its backup; copy the backup back when the bullet is done.
 
 **Which terminal a hook writes to** (items 12 and 15). A hook process that has a controlling
@@ -2406,19 +2406,19 @@ command in the agent's configuration does not change, so Codex asks for no new t
 original back with `cp -p /tmp/mast-entry.orig "$f"` before timing anything in item 15.
 
 1. **Upgrade from setup v13, and a fresh distro.**
-   - On a distro last provisioned by v0.3.31, launch once. `~/.mast/.setup-v15` exists, and so
-     do `~/.mast/.setup-v15-codex` and `~/.mast/.setup-v15-agy` wherever `~/.codex` and
+   - On a distro last provisioned by v0.3.31, launch once. `~/.mast/.setup-v16` exists, and so
+     do `~/.mast/.setup-v16-codex` and `~/.mast/.setup-v16-agy` wherever `~/.codex` and
      `~/.gemini/antigravity-cli` exist.
    - `setup.log` shows `claude: added <Event> role=dispatcher` for `SessionStart`,
      `UserPromptSubmit`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
       `PostToolBatch`, `SubagentStop` and `Stop`, and `claude: narrowed Notification`. A machine
-      that ran a v14 build — this branch's intermediate builds or the OpenCode-only v0.3.32
-      release — reruns automatically, since its `.setup-v14*` markers do not match v15; where its
-      `settings.json` already holds those rows, the expected lines are
+      that ran a v14 build (the OpenCode-only v0.3.32 release) or a v15 build of this branch
+      reruns automatically, since its `.setup-v14*` / `.setup-v15*` markers do not match v16;
+      where its `settings.json` already holds those rows, the expected lines are
       `claude: wired <Event> role=dispatcher` and `claude: already-narrowed Notification`.
    - Every hook and key of your own in `settings.json` is unchanged, and a symlinked
      `settings.json` is still a link.
-   - `rm ~/.mast/.setup-v15` and relaunch: every row logs `wired` (the Notification group
+   - `rm ~/.mast/.setup-v16` and relaunch: every row logs `wired` (the Notification group
      `already-narrowed`), every merged file logs `result=unchanged`, there is no `added` or
      `narrowed` line and no Codex trust notice (it is printed only when `hooks.json` is
      written), and every group in `~/.codex/hooks.json` keeps its position. Notices about a
@@ -2428,10 +2428,10 @@ original back with `cp -p /tmp/mast-entry.orig "$f"` before timing anything in i
    - A fresh distro (no `~/.mast`) with `python3` 3.8 or later and either no Claude Code or
      2.1.118 or later: one launch logs `claude: added <Event> role=status` for
      `UserPromptSubmit`, `Notification` and `Stop`, `claude: added <Event> role=dispatcher` for
-      the eight events above, no `narrowed` line, and `setup v15 complete`. Relaunch: `setup.log`
+      the eight events above, no `narrowed` line, and `setup v16 complete`. Relaunch: `setup.log`
       gains no line.
    - A second distro on demand: create a workspace pinned to a distro that has never run mast
-     (section 4). Its `~/.mast/.setup-v15` appears without restarting mast.
+     (section 4). Its `~/.mast/.setup-v16` appears without restarting mast.
 2. **Setup notices and reruns.**
    - Every notice is in `setup.log` — as `notice: …`, or as the `[mast] setup: …` text the merge
      helper printed — and in `mast.log` as a `provisioning notice`.
@@ -2442,40 +2442,40 @@ original back with `cp -p /tmp/mast-entry.orig "$f"` before timing anything in i
      `mv ~/.claude/settings.json /tmp/mast-claude-settings.json`, and put a stub on a candidate
      path that holds no real install (use `~/.volta/bin` if `~/.bun/bin/claude` exists):
      `mkdir -p ~/.bun/bin && printf '#!/bin/sh\necho 2.1.117\n' > ~/.bun/bin/claude && chmod +x ~/.bun/bin/claude`.
-     `rm ~/.mast/.setup-v15` and relaunch: `setup.log` shows
+     `rm ~/.mast/.setup-v16` and relaunch: `setup.log` shows
      `claude: /home/<you>/.bun/bin/claude --version reports 2.1.117`, a
      `notice: Claude Code 2.1.117 at /home/<you>/.bun/bin/claude has no PostToolBatch hook …`
      line and `claude: added <Event> role=status` for the three status events, with no
      `role=dispatcher` line; the new `settings.json` holds only the three `mast-notify.sh` groups.
      Repeat with a stub that fails — `printf '#!/bin/sh\nexit 1\n' > ~/.bun/bin/claude`, then
-     `rm ~/.mast/.setup-v15` again and relaunch: `claude: … --version is unreadable`,
+     `rm ~/.mast/.setup-v16` again and relaunch: `claude: … --version is unreadable`,
      `notice: cannot read the version of Claude Code at …`, and still no `role=dispatcher` line.
      Then delete the stub (and `~/.bun` if you created it) and
      `mv /tmp/mast-claude-settings.json ~/.claude/settings.json`; no rerun is needed.
-   - **An agent installed after v15.** Install Codex or `agy` on a distro whose v15 run happened
-     without it, or simulate one with `rm ~/.mast/.setup-v15-codex` (`-agy`), and relaunch.
-     `setup.log` shows `setup v15 exists; running only the missing agent steps`,
+   - **An agent installed after v16.** Install Codex or `agy` on a distro whose v16 run happened
+     without it, or simulate one with `rm ~/.mast/.setup-v16-codex` (`-agy`), and relaunch.
+     `setup.log` shows `setup v16 exists; running only the missing agent steps`,
      `codex: added <Event>` for the seven events (`codex: wired <Event>` when simulated) or
      `agy: added mast` (`agy: wired mast`), then `codex hooks: step done` or
      `agy hooks: step done`, and no `claude:`, `codex: notify` or `codex agents:` line. A Codex
      first installed this way has no `notify` line and no AGENTS.md block, so it shows no idle
      before its hooks are trusted and records no resume hint: before running items 3, 10 and 13 on
-     it, `rm ~/.mast/.setup-v15` and relaunch, which adds both.
+     it, `rm ~/.mast/.setup-v16` and relaunch, which adds both.
    - **Exit 3.** `cp -L ~/.codex/hooks.json /tmp/mast-codex-hooks.json`,
-     `printf '{"$schema": "x"}\n' > ~/.codex/hooks.json`, `rm ~/.mast/.setup-v15-codex` and
+     `printf '{"$schema": "x"}\n' > ~/.codex/hooks.json`, `rm ~/.mast/.setup-v16-codex` and
      relaunch. `setup.log` shows `codex: result=failed` with `unknown top-level key` in its
      reason, `codex hooks: refused (exit 3)` and
-     `notice: Codex hooks were not installed, and mast will not retry until you edit ~/.codex/hooks.json and run rm ~/.mast/.setup-v15-codex; …`;
-     the file still reads `{"$schema": "x"}`, and `~/.mast/.setup-v15-codex` exists again.
+     `notice: Codex hooks were not installed, and mast will not retry until you edit ~/.codex/hooks.json and run rm ~/.mast/.setup-v16-codex; …`;
+     the file still reads `{"$schema": "x"}`, and `~/.mast/.setup-v16-codex` exists again.
      Relaunch: `setup.log` gains no line. `cp /tmp/mast-codex-hooks.json ~/.codex/hooks.json`,
-     `rm ~/.mast/.setup-v15-codex` and relaunch: `codex: wired <Event>` for the seven events and
+     `rm ~/.mast/.setup-v16-codex` and relaunch: `codex: wired <Event>` for the seven events and
      `codex hooks: step done`. For Antigravity CLI the same with
      `cp -L ~/.gemini/config/hooks.json /tmp/mast-agy-hooks.json`, `{"other": 5}` and
-     `.setup-v15-agy`: `agy: result=failed` naming the `other` hook, `agy hooks: refused (exit 3)`,
+     `.setup-v16-agy`: `agy: result=failed` naming the `other` hook, `agy hooks: refused (exit 3)`,
      and `agy: wired mast` after the restore.
-   - **Opt-out markers.** `touch ~/.mast/no-codex-hooks`, `rm ~/.mast/.setup-v15-codex` and
+   - **Opt-out markers.** `touch ~/.mast/no-codex-hooks`, `rm ~/.mast/.setup-v16-codex` and
      relaunch: `setup.log` shows `codex hooks: ~/.mast/no-codex-hooks exists; skipped`, and the
-     sub-marker exists again. The same with `no-agy-hooks` and `.setup-v15-agy`:
+     sub-marker exists again. The same with `no-agy-hooks` and `.setup-v16-agy`:
      `agy hooks: ~/.mast/no-agy-hooks exists; skipped`. Delete the opt-out marker afterwards.
 3. **Codex trust.**
    - The next Codex launch shows **Hooks need review**. Choose *Continue without trusting*: no
@@ -2483,11 +2483,11 @@ original back with `cp -p /tmp/mast-entry.orig "$f"` before timing anything in i
      whether the prompt returns each time.
    - *Trust all and continue*: the hooks keep running after restarting Codex and mast.
    - Before trusting, Codex's `notify` still reports idle at the end of a turn (a Codex first
-     installed after v15 needs the full run first — item 2, *An agent installed after v15*).
+     installed after v16 needs the full run first — item 2, *An agent installed after v16*).
    - **`features.hooks = false`** (needs Python 3.11 or later for `tomllib`; with an older
      `python3` no notice is expected). `cp -L ~/.codex/config.toml /tmp/mast-codex-config.toml`,
      set `hooks = false` under `[features]`, note `stat -L -c %Y ~/.codex/config.toml`,
-     `rm ~/.mast/.setup-v15-codex` and relaunch: `setup.log` shows
+     `rm ~/.mast/.setup-v16-codex` and relaunch: `setup.log` shows
      `codex: hooks-feature=disabled key=hooks` and
      `[mast] setup: hooks disabled in config; mast hooks will not run (… sets features.hooks = false)`,
      and `stat` prints the same value. Copy the backup back.
@@ -2502,7 +2502,7 @@ original back with `cp -p /tmp/mast-entry.orig "$f"` before timing anything in i
      command = "true"
      ```
 
-     to `config.toml`, `rm ~/.mast/.setup-v15-codex` and relaunch: `setup.log` shows
+     to `config.toml`, `rm ~/.mast/.setup-v16-codex` and relaunch: `setup.log` shows
      `codex: inline-hooks events=Stop`, the `[mast] setup: Codex hooks are configured inline in …`
      notice and `codex: result=skipped-inline-hooks`; `~/.codex/hooks.json` does not exist, and
      the sub-marker exists again. Start Codex: it prints no warning about hooks in both places
@@ -2576,7 +2576,7 @@ original back with `cp -p /tmp/mast-entry.orig "$f"` before timing anything in i
      rerun: restart Codex and let it request approvals; none raises needs input, and right after
      a request `tab-<id>.diag` reads
      `approvals_reviewer is auto_review in ~/.codex/config.toml; needsInput disabled`. Notice:
-     `rm ~/.mast/.setup-v15-codex` and relaunch mast: `setup.log` shows
+     `rm ~/.mast/.setup-v16-codex` and relaunch mast: `setup.log` shows
      `codex: approvals-reviewer=auto_review` and the
      `[mast] setup: approvals_reviewer is auto_review in …` notice. Copy the backup back.
    - `touch ~/.mast/codex-needs-input-off`: no needs input either, running and idle intact, and
@@ -2611,7 +2611,7 @@ original back with `cp -p /tmp/mast-entry.orig "$f"` before timing anything in i
 13. **Resume hints.**
     - `~/.mast/resume/tab-<id>` stays exactly `codex resume <id>` or `claude --resume <id>` for
       the session you ran; an `agy` session leaves it unchanged. The Codex hint needs the
-      `notify` line (item 2, *An agent installed after v15*).
+      `notify` line (item 2, *An agent installed after v16*).
     - A Codex temporary thread still leaves the previous hint in place (§10 v0.3.29).
 14. **Lifecycle.**
     - Closing a needs-input tab, closing its pane, and a failed respawn each leave the other
@@ -2792,11 +2792,11 @@ away from being undone.
    rule, so delete it by hand: `Remove-NetFirewallRule -DisplayName "winmux remote (LAN)"`.
 
 9. **Verify, then delete.** Launch `mast`, then check:
-   - `~/.mast/setup.log` ends with `setup v11 complete` (`setup v15 complete` from setup v15), and
+   - `~/.mast/setup.log` ends with `setup v11 complete` (`setup v16 complete` from setup v16), and
      `~/.mast/bin` holds `mast`, `mast-notify.sh`, `mast-codex-notify.sh`, `mast-send.sh`,
      `mast-open`.
    - `~/.claude/settings.json` has exactly the **three** `mast-notify.sh` hooks mast writes and no
-     `winmux-notify.sh` (from setup v15 it also has eight `mast-claude-hook.sh` dispatcher hooks,
+     `winmux-notify.sh` (from setup v16 it also has eight `mast-claude-hook.sh` dispatcher hooks,
      unless `setup.log` has a notice that approval tracking was not wired — a Claude Code version,
      or Python below 3.8 — which leaves none, or a `claude: respected <Event>` line, which leaves
      none for that event); `~/.codex/config.toml` has one
@@ -3051,13 +3051,13 @@ checks remain pending; compilation and automated tests do not replace field veri
    and read the process cache without issuing another network check. A full app restart
    permits one new check.
 
-## 16. OpenCode default TUI integration (setup v15 / ADR-0027)
+## 16. OpenCode default TUI integration (setup v16 / ADR-0027)
 
 These field checks are pending. Linux automated gates test the generated plugin and
 shell wrapper, but do not verify a live Windows mast tab or a PC restart.
 
-1. Launch mast after the setup v15 change in a distro with OpenCode 1.18.31. Confirm
-   `~/.mast/.setup-v15`, exactly one global `mast.js` under the effective
+1. Launch mast after the setup v16 change in a distro with OpenCode 1.18.31. Confirm
+   `~/.mast/.setup-v16`, exactly one global `mast.js` under the effective
    `$XDG_CONFIG_HOME/opencode/plugins/` (default `~/.config/opencode/plugins/`), and a
    new OpenCode process started after provisioning. Check `~/.mast/setup.log` for
    conflicts. A pre-existing `mast.js` must remain byte-for-byte unchanged.

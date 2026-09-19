@@ -41,7 +41,7 @@
 // 동작하지만 F2 를 뺀 나머지가 전부 modifier 조합이라 이름 타이핑과 충돌하지
 // 않는다 (편집 중 F2 는 편집을 다시 시작할 뿐이다).
 
-import { shortcutLabel } from "../../shared/keys";
+import { shortcutBadge, shortcutLabel } from "../../shared/keys";
 import {
   dropBefore,
   hasRunningTerminals,
@@ -89,6 +89,7 @@ interface CardNodes {
   /** 이름 인라인 편집 입력 — 평시 hidden, F2 편집 중에만 name 과 자리를 바꾼다. */
   rename: HTMLInputElement;
   dot: HTMLSpanElement;
+  close: HTMLButtonElement;
   status: HTMLDivElement;
   path: HTMLDivElement;
   model: WorkspaceCardModel;
@@ -147,6 +148,8 @@ export class Sidebar {
     newBtn.type = "button";
     newBtn.className = "sidebar-new";
     newBtn.textContent = "+ New workspace";
+    // 문자 명령이므로 Shift 표시가 함께 붙는다 (shortcutBadge — 실제 판정이 Alt+Shift).
+    newBtn.dataset.altShortcut = shortcutBadge("newWorkspace");
     // 단축키 표기는 shared/keys.ts 의 shortcutLabel 단일 소스에서 받는다 (표류 방지).
     newBtn.title = `New workspace from the current directory (${shortcutLabel("newWorkspace")})`;
     newBtn.addEventListener("click", () => this.onNewWorkspace());
@@ -213,7 +216,7 @@ export class Sidebar {
       // 편집 가드가 사라진 노드를 가리키지 않게 한다 (파일 상단 편집 상태 가드).
       this.editing = null;
       this.cardNodes.clear();
-      const nodes = model.map((m) => this.card(m));
+      const nodes = model.map((m, i) => this.card(m, i + 1));
       for (const n of nodes) this.cardNodes.set(n.model.workspace, n);
       this.cardsEl.replaceChildren(...nodes.map((n) => n.root));
     } else {
@@ -293,9 +296,12 @@ export class Sidebar {
   /** 카드 DOM 조립 — 값에 따라 있다 없다 하는 행(경로·집계 dot)도 노드는
    *  항상 만들고 hidden 으로만 토글한다. 노드 존재 자체가 변하면 그 카드의
    *  자식이 갈아치워져 in-place 패치의 의미가 없어지기 때문이다. */
-  private card(model: WorkspaceCardModel): CardNodes {
+  private card(model: WorkspaceCardModel, ordinal: number): CardNodes {
     const el = document.createElement("div");
     el.className = "ws-card";
+    // ordinal 배지에 Shift 가 없는 것은 실제 키(`Alt+1`~`9`)가 shift 를 요구하지
+    // 않기 때문이다 — 문자 명령 배지(shortcutBadge)와의 차이가 곧 안내다.
+    if (ordinal <= 9) el.dataset.altShortcut = String(ordinal);
 
     const head = document.createElement("div");
     head.className = "ws-card-head";
@@ -349,7 +355,7 @@ export class Sidebar {
 
     el.append(head, status, path);
 
-    const nodes: CardNodes = { root: el, name, rename, dot, status, path, model };
+    const nodes: CardNodes = { root: el, name, rename, dot, close, status, path, model };
     this.applyCard(nodes, model);
 
     el.addEventListener("pointerdown", (ev) => this.onCardPointerDown(ev, nodes));
@@ -494,6 +500,8 @@ export class Sidebar {
   private applyCard(nodes: CardNodes, model: WorkspaceCardModel): void {
     nodes.model = model;
     nodes.root.classList.toggle("active", model.active);
+    if (model.active) nodes.close.dataset.altShortcut = shortcutBadge("closeWorkspace");
+    else delete nodes.close.dataset.altShortcut;
 
     setText(nodes.name, model.name);
     nodes.name.title = model.name; // 잘린 이름의 툴팁

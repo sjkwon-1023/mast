@@ -112,11 +112,17 @@ export function runNavAction(context: NavigationContext, action: KeyAction): voi
     void context.dispatchUI({ type: "createTab", pane: ws.activePane, tab });
     return;
   }
-  if (action.type === "splitPane") {
+  if (action.type === "splitPane" || action.type === "splitPaneAuto") {
+    const rect = action.type === "splitPaneAuto"
+      ? context.paneRects().find((item) => item.pane === ws.activePane)
+      : undefined;
+    const direction = action.type === "splitPane"
+      ? action.direction
+      : rect !== undefined && rect.w >= rect.h ? "horizontal" : "vertical";
     void context.dispatchUI({
       type: "splitPane",
       pane: ws.activePane,
-      direction: action.direction,
+      direction,
       tab: { type: "terminal", cwd: paneTerminalCwd(pane) },
     });
     return;

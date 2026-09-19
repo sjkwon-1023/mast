@@ -15,7 +15,7 @@ import tempfile
 MAX_BYTES = 1024 * 1024
 DEFAULT_PORT = 7331
 LANGUAGES = ["css", "html", "javascript", "json", "python", "rust", "toml", "typescript"]
-KEYS = {"fontFamily", "fontSize", "highlightLanguages", "log", "remote", "remote.port"}
+KEYS = {"fontFamily", "fontSize", "highlightLanguages", "log", "remote", "remote.port", "showTabIds"}
 DEFAULTS = {
     "fontFamily": "terminal: Consolas, 'Cascadia Mono', monospace; viewers: monospace",
     "fontSize": "terminal: 13px; viewers: 12px",
@@ -23,6 +23,7 @@ DEFAULTS = {
     "log": False,
     "remote": False,
     "remote.port": "none while remote is off; set remote defaults to 7331",
+    "showTabIds": True,
 }
 HELP = """usage:
   mast config                         show saved overrides, defaults and help
@@ -31,11 +32,13 @@ HELP = """usage:
   mast config set fontSize <6-72>
   mast config set highlightLanguages '["python","rust"]'
   mast config set log <true|false>
+  mast config set showTabIds <true|false>
   mast config set remote [true|false] [--port <1024-65535>]
   mast config set remote.port <1024-65535>
   mast config reset <key>              remove an override; reset remote disables it
 
 set remote enables port 7331 unless --port is given. false cannot take a port.
+showTabIds defaults to true; set it to false to hide the #id badges on tab titles.
 Changes require a full mast restart, which ends running terminal processes.
 Ctrl+Shift+R only reloads the window. No command restarts mast automatically.
 """
@@ -56,6 +59,8 @@ def validate(data):
         integer(data["fontSize"], 6, 72, "fontSize")
     if data.get("log") is not None and type(data["log"]) is not bool:
         raise ValueError("log must be true or false")
+    if data.get("showTabIds") is not None and type(data["showTabIds"]) is not bool:
+        raise ValueError("showTabIds must be true or false")
     languages = data.get("highlightLanguages")
     if languages is not None and (
         not isinstance(languages, list)
@@ -152,7 +157,7 @@ def mutation(args):
         raise ValueError(f"set {key} requires exactly one value")
     text = values[0]
     value = (number(text) if key in ("fontSize", "remote.port") else
-             boolean(text) if key == "log" else
+             boolean(text) if key in ("log", "showTabIds") else
              parse(text) if key == "highlightLanguages" else text)
     # null은 파일에서는 미설정으로 읽지만, CLI는 reset으로 의도를 명시한다.
     if key == "highlightLanguages" and not isinstance(value, list):

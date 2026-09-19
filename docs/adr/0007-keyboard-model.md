@@ -99,3 +99,19 @@ Codex's question UI require field verification with v0.3.30.
 - Splitter resize is mouse-drag only; there is no keyboard equivalent for the drag handle.
 - The `ev.key` layout assumption (decision 7) is checked only on the layouts this developer
   runs; revisit if a non-US layout ever becomes a supported target.
+
+### 2026-09-17: add Alt aliases and automatic splitting
+
+Keep the existing Ctrl bindings except `Ctrl+Shift+E`, which is removed. Add `Alt+1`–`9`
+for workspace ordinals, `Alt+Shift+[`/`]` for workspace cycling, and `Alt+Shift+T/B/W/N/Q`
+for tab and workspace operations. `Ctrl+Shift+D` still splits top/bottom; `Alt+Shift+D`
+chooses left/right when the active pane is at least as wide as it is tall, otherwise
+top/bottom. The choice is made once at the key press and does not change on resize.
+The left/right header button remains available without a shortcut. Pane focus, tab
+cycling, copy/paste, zoom, and reload bindings are unchanged.
+
+The new aliases intercept Alt combinations that previously reached the PTY. After Alt
+has been held for 1.314 seconds, buttons show Shift plus their letter and sidebar cards show workspace
+ordinals. A small guide names Alt commands without a matching button. Tooltips show only
+Alt bindings; the retained Ctrl bindings are documented but hidden in the app. Releasing Alt,
+losing window focus, or hiding the page clears the guide.

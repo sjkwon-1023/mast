@@ -12,6 +12,7 @@ import {
   paneInDirection,
   paneTerminalCwd,
   pathBasename,
+  shortcutBadge,
   shortcutLabel,
   workspaceAtOrdinal,
 } from "./keys";
@@ -22,13 +23,27 @@ function spec(over: Partial<KeySpec> & { key: string }): KeySpec {
   return { ctrl: false, alt: false, shift: false, isComposing: false, ...over };
 }
 
+/** 문자 단축키 전량 — 표시(shortcutLabel·shortcutBadge)와 판정의 정합 테스트가
+ *  같은 목록을 본다 (키를 늘리면 여기 한 곳만 고친다). */
+const SHORTCUT_IDS = [
+  "closeTab",
+  "newTerminalTab",
+  "newFolderTab",
+  "newWorkspace",
+  "prevWorkspace",
+  "nextWorkspace",
+  "closeWorkspace",
+] as const;
+
 describe("keyAction", () => {
-  it("Ctrl+1~9 는 1-based 워크스페이스 ordinal 로 매핑된다", () => {
+  it("Ctrl/Alt+1~9 는 1-based 워크스페이스 ordinal 로 매핑된다", () => {
     for (let n = 1; n <= 9; n += 1) {
-      expect(keyAction(spec({ key: String(n), ctrl: true }))).toEqual({
-        type: "switchWorkspace",
-        ordinal: n,
-      });
+      for (const modifier of [{ ctrl: true }, { alt: true }]) {
+        expect(keyAction(spec({ key: String(n), ...modifier }))).toEqual({
+          type: "switchWorkspace",
+          ordinal: n,
+        });
+      }
     }
   });
 
@@ -95,10 +110,7 @@ describe("keyAction", () => {
       type: "splitPane",
       direction: "vertical",
     });
-    expect(keyAction(spec({ key: "E", ctrl: true, shift: true }))).toEqual({
-      type: "splitPane",
-      direction: "horizontal",
-    });
+    expect(keyAction(spec({ key: "E", ctrl: true, shift: true }))).toBeNull();
     expect(keyAction(spec({ key: "N", ctrl: true, shift: true }))).toEqual({
       type: "newWorkspaceHere",
     });
@@ -113,6 +125,18 @@ describe("keyAction", () => {
     expect(keyAction(spec({ key: "Q", ctrl: true, shift: true }))).toEqual({
       type: "closeWorkspace",
     });
+  });
+
+  it("Alt+Shift 는 생성·닫기·워크스페이스 순환의 별칭이며 D는 자동 분할이다", () => {
+    for (const key of ["W", "T", "B", "N", "Q", "[", "]"]) {
+      expect(keyAction(spec({ key, alt: true, shift: true }))).toEqual(
+        keyAction(spec({ key, ctrl: true, shift: true })),
+      );
+    }
+    expect(keyAction(spec({ key: "D", alt: true, shift: true }))).toEqual({ type: "splitPaneAuto" });
+    expect(keyAction(spec({ key: "E", alt: true, shift: true }))).toBeNull();
+    expect(keyAction(spec({ key: "{", alt: true, shift: true }))).toEqual({ type: "cycleWorkspace", delta: -1 });
+    expect(keyAction(spec({ key: "}", alt: true, shift: true }))).toEqual({ type: "cycleWorkspace", delta: 1 });
   });
 
   it("Ctrl+Shift+[ / ] 는 shift 결과 문자({ })로 와도 같은 동작이다", () => {
@@ -155,7 +179,7 @@ describe("keyAction", () => {
     expect(keyAction(spec({ key: "v", ctrl: true, shift: true }))).toBeNull();
   });
 
-  it("Ctrl+Shift+<문자> 는 Alt 가 섞이거나 Shift 가 빠지면 매칭되지 않는다", () => {
+  it("Ctrl+Alt 혼합이나 Shift 없는 문자 조합은 매칭되지 않는다", () => {
     // plain Ctrl 조합은 셸 소유다 (Ctrl+W 단어 삭제·Ctrl+D EOF·Ctrl+Q 흐름 제어 XON).
     expect(keyAction(spec({ key: "w", ctrl: true }))).toBeNull();
     expect(keyAction(spec({ key: "d", ctrl: true }))).toBeNull();
@@ -226,43 +250,45 @@ describe("keyAction", () => {
 });
 
 describe("shortcutLabel", () => {
-  const ids = [
-    "closeTab",
-    "newTerminalTab",
-    "newFolderTab",
-    "splitTopBottom",
-    "splitLeftRight",
-    "newWorkspace",
-    "prevWorkspace",
-    "nextWorkspace",
-    "closeWorkspace",
-  ] as const;
-
-  it("툴팁 라벨은 Ctrl+Shift+<대문자> 형식이다", () => {
-    expect(shortcutLabel("closeTab")).toBe("Ctrl+Shift+W");
-    expect(shortcutLabel("newTerminalTab")).toBe("Ctrl+Shift+T");
-    expect(shortcutLabel("newFolderTab")).toBe("Ctrl+Shift+B");
-    expect(shortcutLabel("splitTopBottom")).toBe("Ctrl+Shift+D");
-    expect(shortcutLabel("splitLeftRight")).toBe("Ctrl+Shift+E");
-    expect(shortcutLabel("newWorkspace")).toBe("Ctrl+Shift+N");
-    expect(shortcutLabel("closeWorkspace")).toBe("Ctrl+Shift+Q");
+  it("툴팁 라벨에는 Alt 단축키만 보인다", () => {
+    expect(shortcutLabel("closeTab")).toBe("Alt+Shift+W");
+    expect(shortcutLabel("newTerminalTab")).toBe("Alt+Shift+T");
+    expect(shortcutLabel("newFolderTab")).toBe("Alt+Shift+B");
+    expect(shortcutLabel("newWorkspace")).toBe("Alt+Shift+N");
+    expect(shortcutLabel("closeWorkspace")).toBe("Alt+Shift+Q");
     // 문자가 아닌 키는 대문자 변환이 항등이다 — 표기가 그대로 나간다.
-    expect(shortcutLabel("prevWorkspace")).toBe("Ctrl+Shift+[");
-    expect(shortcutLabel("nextWorkspace")).toBe("Ctrl+Shift+]");
+    expect(shortcutLabel("prevWorkspace")).toBe("Alt+Shift+[");
+    expect(shortcutLabel("nextWorkspace")).toBe("Alt+Shift+]");
   });
 
   it("라벨이 가리키는 키를 실제로 누르면 keyAction 이 매칭된다 — 표시·판정 표류 방지", () => {
-    for (const id of ids) {
+    for (const id of SHORTCUT_IDS) {
       const label = shortcutLabel(id);
-      const key = label.slice("Ctrl+Shift+".length);
-      expect(label.startsWith("Ctrl+Shift+")).toBe(true);
-      expect(keyAction(spec({ key, ctrl: true, shift: true }))).not.toBeNull();
+      const key = label.slice("Alt+Shift+".length);
+      expect(label.startsWith("Alt+Shift+")).toBe(true);
+      expect(keyAction(spec({ key, alt: true, shift: true }))).not.toBeNull();
     }
   });
 
   it("라벨은 서로 겹치지 않는다 — 한 키에 두 동작이 붙지 않는다", () => {
-    const labels = ids.map((id) => shortcutLabel(id));
+    const labels = SHORTCUT_IDS.map((id) => shortcutLabel(id));
     expect(new Set(labels).size).toBe(labels.length);
+  });
+});
+
+describe("shortcutBadge", () => {
+  it("문자 명령 배지는 Shift 표시를 포함한다 — 실제 판정이 Shift 를 요구한다", () => {
+    for (const id of SHORTCUT_IDS) {
+      const badge = shortcutBadge(id);
+      expect(badge.startsWith("⇧")).toBe(true);
+      const key = badge.slice(1);
+      // 배지의 키를 Shift 와 함께 눌러야 매칭되고, Shift 없이는 매칭되지 않는다 —
+      // 배지가 약속하는 것과 판정이 정확히 같다.
+      expect(keyAction(spec({ key, alt: true, shift: true }))).not.toBeNull();
+      expect(keyAction(spec({ key, alt: true }))).toBeNull();
+      // 표기 문자(대소문자)는 라벨과 같은 표에서 나온다.
+      expect(shortcutLabel(id).endsWith(key)).toBe(true);
+    }
   });
 });
 

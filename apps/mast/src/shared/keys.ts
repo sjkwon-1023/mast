@@ -14,17 +14,17 @@
 //
 // | 키 | 동작 | 가로채는 곳 |
 // |---|---|---|
-// | `Ctrl+1`~`Ctrl+9` | 워크스페이스 전환 (사이드바 순서 1-based) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
+// | `Ctrl+1`~`9` / `Alt+1`~`9` | 워크스페이스 전환 (사이드바 순서 1-based) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+Shift+↑` `Ctrl+Shift+↓` `Ctrl+Shift+←` `Ctrl+Shift+→` | pane 포커스 이동 (기하학적 인접) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 활성 pane 의 탭 순환 (다음/이전, 끝에서 순환) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
-// | `Ctrl+Shift+W` | 활성 pane 의 활성 탭 닫기 (뷰어 탭 포함) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
-// | `Ctrl+Shift+T` | 활성 pane 에 새 터미널 탭 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
-// | `Ctrl+Shift+B` | 활성 pane 에 새 폴더 탐색 탭 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+W` / `Alt+Shift+W` | 활성 pane 의 활성 탭 닫기 (뷰어 탭 포함) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+T` / `Alt+Shift+T` | 활성 pane 에 새 터미널 탭 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+B` / `Alt+Shift+B` | 활성 pane 에 새 폴더 탐색 탭 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+Shift+D` | 활성 pane 상하 분할 + 터미널 탭 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
-// | `Ctrl+Shift+E` | 활성 pane 좌우 분할 + 터미널 탭 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
-// | `Ctrl+Shift+N` | 새 워크스페이스 — 활성 터미널의 현재 경로로 즉시 생성 (임의 폴더는 사이드바 + 버튼의 픽커) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
-// | `Ctrl+Shift+[` / `Ctrl+Shift+]` | 이전/다음 워크스페이스 (사이드바 순서, 끝에서 순환) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
-// | `Ctrl+Shift+Q` | 활성 워크스페이스 닫기 (실행 중인 터미널 세션이 있으면 confirm — 사이드바 × 버튼과 같은 경로) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
+// | `Alt+Shift+D` | 활성 pane 의 긴 축으로 자동 분할 + 터미널 탭 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+N` / `Alt+Shift+N` | 새 워크스페이스 — 활성 터미널의 현재 경로로 즉시 생성 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+[` / `]`, `Alt+Shift+[` / `]` | 이전/다음 워크스페이스 (사이드바 순서, 끝에서 순환) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+Q` / `Alt+Shift+Q` | 활성 워크스페이스 닫기 (실행 중인 터미널 세션이 있으면 confirm) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+=` / `Ctrl++` | 터미널 **+ 뷰어** 글꼴 확대 (세션 한정 — settings.json 은 그대로) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+-` | 터미널 **+ 뷰어** 글꼴 축소 (세션 한정) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+0` | 터미널·뷰어 글꼴 크기를 각자의 settings.json 기준값으로 리셋 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
@@ -39,8 +39,8 @@
 // | `PgUp` / `PgDn` (textViewer 포커스 중에만) | 행높이 배수 페이지 스크롤 | features/viewers/text/view.ts 뷰 내부 keydown |
 // | `↑↓ Home End PgUp PgDn Enter Backspace` (folderBrowser 포커스 중에만) | 목록 선택 이동·열기·상위 이동 | features/viewers/folder/view.ts 뷰 내부 keydown |
 //
-// modifier 규약: 앱 전역 단축키는 **`F2` 하나를 제외하고 전부 `Ctrl+Shift`
-// 계열**이다. plain `Ctrl` 조합은 셸 소유로 남긴다 — `Ctrl+W` 는 bash 의 단어
+// modifier 규약: 앱 전역 단축키는 `Ctrl+Shift` 와 `Alt+Shift` 별칭을 쓴다.
+// plain `Ctrl` 조합은 아래 명시한 예외 외에 셸 소유로 남긴다 — `Ctrl+W` 는 bash 의 단어
 // 삭제, `Ctrl+D` 는 EOF, `Ctrl+E` 는 행 끝 이동이라 뺏으면 터미널을 망가뜨린다.
 // `Ctrl+Shift+C` · `Ctrl+Shift+V` 는 복사·붙여넣기 관례라 절대 배정하지 않고
 // (features/terminal/view.ts 소유), `Ctrl+Shift+R` 은 리로드(app/main.ts 소유)라 여기서 판정하지
@@ -61,7 +61,7 @@
 // 자리라 여기 남긴다 — 이름 변경에는 동급의 관례 대체 키가 없다. 되돌린다면
 // 이 표와 CTRL_SHIFT_KEYS 를 함께 고치면 된다 (판정·표시 단일 소스).
 //
-// shift 규약: shift 를 받는 조합은 `Ctrl+Shift+Tab` · 위 `Ctrl+Shift+<문자>` 9종 ·
+// shift 규약: shift 를 받는 조합은 `Ctrl+Shift+Tab` · 위에 명시한 문자 조합 ·
 // pane 이동의 `Ctrl+Shift+방향키` · 확대 키의 `+`(US 배열에서 `Shift+=` 로 오는 문자)뿐이다.
 // `Ctrl+Shift+1`·`Alt+Shift+←` 같은 변형은 판정 대상이 아니다(null) —
 // shift 는 레이아웃에 따라 다른 문자를 만들 수 있어 보수적으로 목록에 명시된
@@ -98,6 +98,7 @@ export type KeyAction =
   | { type: "newTab"; kind: "terminal" | "folderBrowser" }
   /** 활성 pane 분할 + 새 터미널 탭 (원자 SplitPane — 헤더 분할 아이콘과 동일). */
   | { type: "splitPane"; direction: SplitDirection }
+  | { type: "splitPaneAuto" }
   /** 사이드바 순서로 이전/다음 워크스페이스 (끝에서 순환) — 대상 해석은 글루. */
   | { type: "cycleWorkspace"; delta: 1 | -1 }
   /** 활성 터미널의 현재 경로로 새 워크스페이스를 즉시 만든다 (대화상자 없음 —
@@ -130,19 +131,17 @@ const ARROW_DIRS: Record<string, PaneDirection | undefined> = {
  *  아니라 줌 리셋이다. 아래 줌 블록이 먼저 판정한다). */
 const DIGIT_KEY = /^[1-9]$/;
 
-/** `Ctrl+Shift+<문자>` 단축키의 식별자 — 툴팁이 라벨을 요청할 때 쓰는 키다. */
+/** 문자 단축키의 식별자 — 툴팁이 라벨을 요청할 때 쓰는 키다. */
 export type ShortcutId =
   | "closeTab"
   | "newTerminalTab"
   | "newFolderTab"
-  | "splitTopBottom"
-  | "splitLeftRight"
   | "newWorkspace"
   | "prevWorkspace"
   | "nextWorkspace"
   | "closeWorkspace";
 
-/** `Ctrl+Shift+<문자>` 단축키 표 (canonical) — 판정(keyAction)과 표시
+/** 문자 단축키 표 (canonical) — 판정(keyAction)과 표시
  *  (shortcutLabel)가 같은 표를 읽으므로 버튼 툴팁이 실제 키와 어긋날 수 없다.
  *  letter 는 소문자 기준이고 매칭은 대소문자를 무시한다 (Shift 가 눌린 keydown 은
  *  `ev.key` 가 대문자로 온다).
@@ -160,10 +159,6 @@ const CTRL_SHIFT_KEYS: Record<
   closeTab: { letter: "w", action: () => ({ type: "closeTab" }) },
   newTerminalTab: { letter: "t", action: () => ({ type: "newTab", kind: "terminal" }) },
   newFolderTab: { letter: "b", action: () => ({ type: "newTab", kind: "folderBrowser" }) },
-  // 방향 규약은 features/workspace/split-layout.ts 상단 — "vertical" = 세로 나열(상/하),
-  // "horizontal" = 가로 나열(좌|우). 헤더의 ⊟/◫ 아이콘과 같은 값을 보낸다.
-  splitTopBottom: { letter: "d", action: () => ({ type: "splitPane", direction: "vertical" }) },
-  splitLeftRight: { letter: "e", action: () => ({ type: "splitPane", direction: "horizontal" }) },
   newWorkspace: { letter: "n", action: () => ({ type: "newWorkspaceHere" }) },
   prevWorkspace: {
     letter: "[",
@@ -181,7 +176,20 @@ const CTRL_SHIFT_KEYS: Record<
 /** 버튼 툴팁에 붙일 단축키 표기 — 표시 문자열의 **단일 소스**다. UI 는 이 함수를
  *  거치지 않고 단축키를 하드코딩하지 않는다 (키를 바꿔도 툴팁이 따라온다). */
 export function shortcutLabel(id: ShortcutId): string {
-  return `Ctrl+Shift+${CTRL_SHIFT_KEYS[id].letter.toUpperCase()}`;
+  const key = CTRL_SHIFT_KEYS[id].letter.toUpperCase();
+  return `Alt+Shift+${key}`;
+}
+
+/** Alt 를 누른 동안 버튼·카드 위에 뜨는 배지 문구 — 표시의 두 번째 소스가 생기지
+ *  않게 표(CTRL_SHIFT_KEYS)에서 같은 문자를 꺼낸다.
+ *
+ *  배지가 `⇧` 를 함께 쓰는 이유: 이 명령들의 실제 판정은 `Alt` 만으로는 닿지 않고
+ *  Shift 까지 요구한다 (keyAction 의 `spec.shift` 조건). 배지가 맨 문자만 보이면
+ *  Alt 를 누른 사용자가 그대로 눌렀을 때 아무 일도 일어나지 않아, 안내가 실제 키
+ *  동작과 어긋난다. 워크스페이스 ordinal(`Alt+1`~`9`)에는 Shift 가 필요 없으므로
+ *  그 배지들은 숫자 그대로다 (sidebar.ts). */
+export function shortcutBadge(id: ShortcutId): string {
+  return `⇧${CTRL_SHIFT_KEYS[id].letter.toUpperCase()}`;
 }
 
 /** pane 의 표시 탭이 터미널이면 그 cwd — OSC 7 이 배선돼 있으면 마지막 프롬프트 시점의
@@ -222,13 +230,15 @@ export function keyAction(spec: KeySpec): KeyAction | null {
   if (spec.ctrl && !spec.alt && spec.key === "Tab") {
     return { type: "cycleTab", delta: spec.shift ? -1 : 1 };
   }
-  if (spec.ctrl && spec.shift && !spec.alt) {
+  if ((spec.ctrl !== spec.alt) && spec.shift) {
     const dir = ARROW_DIRS[spec.key];
-    if (dir !== undefined) return { type: "focusPane", dir };
+    if (spec.ctrl && dir !== undefined) return { type: "focusPane", dir };
     // Shift 가 눌린 keydown 의 key 는 대문자라 소문자로 접어 비교한다. 표에 없는
     // 조합(`Ctrl+Shift+C`/`V` 복사·붙여넣기, `Ctrl+Shift+R` 리로드)은 여기서
     // 걸리지 않고 각자의 소유자에게 그대로 흘러간다.
     const letter = spec.key.toLowerCase();
+    if (spec.alt && letter === "d") return { type: "splitPaneAuto" };
+    if (spec.ctrl && letter === "d") return { type: "splitPane", direction: "vertical" };
     for (const def of Object.values(CTRL_SHIFT_KEYS)) {
       if (def.letter === letter || def.shifted === letter) return def.action();
     }
@@ -252,7 +262,7 @@ export function keyAction(spec: KeySpec): KeyAction | null {
   if (spec.key === "F2" && !spec.ctrl && !spec.alt) {
     return { type: "renameWorkspace" };
   }
-  if (spec.ctrl && !spec.alt && DIGIT_KEY.test(spec.key)) {
+  if ((spec.ctrl !== spec.alt) && DIGIT_KEY.test(spec.key)) {
     return { type: "switchWorkspace", ordinal: Number(spec.key) };
   }
   return null;

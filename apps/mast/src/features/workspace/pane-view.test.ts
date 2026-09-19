@@ -12,12 +12,15 @@
 // happy-dom 은 이 파일 전용 환경이다 (상단 @vitest-environment) — 나머지 프론트
 // 테스트는 계속 DOM 없는 node 환경에서 돈다.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { PaneView, exitedNoticeText } from "./pane-view";
 import type { SendController, ViewRegistry, ViewerRegistry } from "./pane-view";
+import { applyTabIdSettings } from "./tab-id-settings";
 import type { VisibleViewer } from "./view-reconcile";
 import type { ViewerKind, ViewerView } from "../viewers/viewer-view";
+import { shortcutBadge } from "../../shared/keys";
+import type { UiSettings } from "../../infrastructure/backend";
 import type {
   AgentStatus,
   Command,
@@ -27,6 +30,18 @@ import type {
   Tab,
   TerminalStatus,
 } from "../../shared/types";
+
+/** 설정 이펙트가 파일 밖으로 새지 않게 하는 최소 UiSettings — ID 표시 기본값은 true. */
+function idSettings(showTabIds: boolean | null): UiSettings {
+  return {
+    fontFamily: null,
+    fontSize: null,
+    highlightLanguages: null,
+    log: null,
+    remote: null,
+    showTabIds,
+  };
+}
 
 function terminalTab(
   id: number,
@@ -335,6 +350,112 @@ describe("PaneView tab strip rendering", () => {
   });
 });
 
+// 탭 ID 배지 — 각 탭의 안정 Tab.id 를 제목 옆에 보여 준다 (`mast ls` 의 TAB 열과
+// `mast send '#<id>'` 가 받는 주소). 설정이 끄면 통째로 걷히고, 제목 패치·재조립·
+// 재정렬을 지나도 ID 는 자기 탭에 붙어 있어야 한다 (노드 키가 곧 ID 라 어긋나면
+// 곧바로 드러난다).
+describe("PaneView tab id badges", () => {
+  // 모듈 상태는 파일 밖으로도 남는다 — 각 테스트 뒤 기본값(표시)으로 되돌린다.
+  afterEach(() => applyTabIdSettings(idSettings(null)));
+
+  it("shows the stable id on every tab, active or not", () => {
+    applyTabIdSettings(idSettings(true));
+    const { view, tabs } = mount();
+    view.update(pane(THREE, 11), true, null, null);
+
+    const after = tabs();
+    expect(after.map((t) => child(t, ".tab-id").textContent)).toEqual(["#10", "#11", "#12"]);
+    for (const tab of after) expect(child(tab, ".tab-id").hidden).toBe(false);
+    expect(child(after[1], ".tab-id").title).toBe("Tab #11");
+  });
+
+  it("keeps each id on its own tab across a title patch and strip rebuilds", () => {
+    const { view, tabs } = mount();
+    view.update(pane(THREE, 10), true, null, null);
+    const before = tabs();
+    const idNode = child(before[1], ".tab-id").firstChild;
+
+    // 제목 패치 — 노드는 그대로, ID 도 그대로 (제목 변경이 ID 를 흔들지 않는다).
+    view.update(
+      pane([terminalTab(10), terminalTab(11, { title: "claude — mast" }), terminalTab(12)], 10),
+      true,
+      null,
+      null,
+    );
+    expect(tabs()[1]).toBe(before[1]);
+    expect(child(tabs()[1], ".tab-id").firstChild).toBe(idNode);
+    expect(child(tabs()[1], ".tab-id").textContent).toBe("#11");
+
+    // 탭 제거(재조립) — 남은 탭이 각자의 ID 를 단다 (새 노드가 옛 ID 를 물려받지 않는다).
+    view.update(pane([terminalTab(10), terminalTab(12)], 10), true, null, null);
+    expect(tabs().map((t) => child(t, ".tab-id").textContent)).toEqual(["#10", "#12"]);
+
+    // 재정렬(rebuild 경로) — ID 는 위치가 아니라 탭을 따라간다.
+    view.update(pane([terminalTab(12), terminalTab(10)], 12), true, null, null);
+    expect(tabs().map((t) => child(t, ".tab-id").textContent)).toEqual(["#12", "#10"]);
+  });
+
+  // 병합 접점 고정: needsInput 배지(#37)와 탭 ID 배지(#40)는 같은 탭 버튼 안에서 각자
+  // 노드를 갖고, 한쪽 상태 변화가 in-place 패치와 재조립을 지나도 다른 쪽을 잃지 않는다.
+  it("keeps the needsInput badge and the id badge together through a patch and a rebuild", () => {
+    const { view, tabs } = mount();
+    view.update(pane([terminalTab(10), terminalTab(11)], 10), true, null, null);
+    const before = tabs();
+    const idNode = child(before[1], ".tab-id");
+    const needsInputNode = child(before[1], ".tab-needs-input");
+
+    // 상태 패치 — 두 노드가 그대로 남고 각자만 갱신된다.
+    view.update(
+      pane([terminalTab(10), terminalTab(11, { agentStatus: "needsInput" })], 10),
+      true,
+      null,
+      null,
+    );
+    const patched = tabs();
+    expect(patched[1]).toBe(before[1]);
+    expect(child(patched[1], ".tab-id")).toBe(idNode);
+    expect(child(patched[1], ".tab-needs-input")).toBe(needsInputNode);
+    expect(idNode.textContent).toBe("#11");
+    expect(needsInputNode.hidden).toBe(false);
+
+    // 동일 모델(skip) — DOM 무접촉이라 두 배지 노드가 그대로 남는다.
+    view.update(
+      pane([terminalTab(10), terminalTab(11, { agentStatus: "needsInput" })], 10),
+      true,
+      null,
+      null,
+    );
+    expect(tabs()[1]).toBe(before[1]);
+    expect(child(tabs()[1], ".tab-id")).toBe(idNode);
+    expect(child(tabs()[1], ".tab-needs-input")).toBe(needsInputNode);
+
+    // 재정렬(rebuild) — 새 노드에도 두 배지가 함께 실린다.
+    view.update(
+      pane([terminalTab(11, { agentStatus: "needsInput" }), terminalTab(10)], 11),
+      true,
+      null,
+      null,
+    );
+    const rebuilt = tabs();
+    expect(rebuilt.map((t) => child(t, ".tab-id").textContent)).toEqual(["#11", "#10"]);
+    expect(child(rebuilt[0], ".tab-needs-input").hidden).toBe(false);
+    expect(child(rebuilt[1], ".tab-needs-input").hidden).toBe(true);
+  });
+
+  it("hides the ids in place when showTabIds is false", () => {
+    applyTabIdSettings(idSettings(false));
+    const { view, tabs } = mount();
+    view.update(pane(THREE, 10), true, null, null);
+
+    // 자리를 차지하지 않도록 hidden 으로 걷는다 (자식이 들락날락하지는 않는다).
+    expect(tabs()).toHaveLength(3);
+    for (const tab of tabs()) {
+      expect(child(tab, ".tab-id").hidden).toBe(true);
+      expect(child(tab, ".tab-id").textContent).toBe("");
+    }
+  });
+});
+
 describe("PaneView unread badge", () => {
   it("stays hidden while no tab has an unread notification", () => {
     const { view, badge } = mount();
@@ -581,6 +702,24 @@ describe("PaneView header buttons", () => {
     expect(leftRight.innerHTML).not.toBe(topBottom.innerHTML);
     expect(leftRight.querySelector("path")?.getAttribute("d")).toContain("v10.5");
     expect(topBottom.querySelector("path")?.getAttribute("d")).toContain("h10.5");
+  });
+
+  // Alt 배지 — 문자 명령은 실제 판정이 Alt+Shift 라 배지에도 Shift 표시가 붙어야
+  // 안내와 키 동작이 어긋나지 않는다 (shortcutBadge). 단축키가 없는 분할 버튼은
+  // 배지도 없다 (제거된 Ctrl+Shift+E 를 되살리지 않는다).
+  it("badges letter shortcuts with the Shift marker and leaves the split buttons bare", () => {
+    const { view, tabs, headerButton } = mount();
+    view.update(pane(THREE, 10), true, null, null);
+
+    expect(headerButton("New terminal tab").dataset.altShortcut).toBe(
+      shortcutBadge("newTerminalTab"),
+    );
+    expect(headerButton("New folder browser tab").dataset.altShortcut).toBe(
+      shortcutBadge("newFolderTab"),
+    );
+    expect(child(tabs()[0], ".tab-close").dataset.altShortcut).toBe(shortcutBadge("closeTab"));
+    expect(headerButton("Split left/right").dataset.altShortcut).toBeUndefined();
+    expect(headerButton("Split top/bottom").dataset.altShortcut).toBeUndefined();
   });
 
   // 새 셸은 이 pane 의 셸이 있는 곳에서 — 세 버튼 모두 표시 탭의 cwd 를 넘긴다.
