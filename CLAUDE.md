@@ -119,7 +119,16 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   still sees the pre-wipe offset — and hands that offset to the v0.3.24 restore machinery
   unchanged; a pane at the bottom is left alone, and a position the reprint no longer has is
   refused to the bottom as before. ADR-0019 amendment (v0.3.26); verification: WINDOWS-BUILD §10
-  v0.3.26.
+  v0.3.26. **Follow-up 2026-09-20** (unreleased): the place was still lost whenever the
+  *automatic* WebView reload ran — the reset supervisor reloads after 600 s hidden, after the
+  idle limit, and on a workspace switch when the memory watchdog has a fire pending — because
+  the memory lived only in the JS context the reload throws away. `ScrollMemory` now mirrors to
+  `sessionStorage` (one integer per tab; `take` refuses an entry whose PTY session no longer
+  matches, so a respawn never inherits the old shell's position) and `WorkspaceView` captures
+  every live view's offset on `pagehide`. Ctrl+Shift+R now keeps the place too; only app exit does
+  not. F5 is sent to the terminal and does not reload mast.
+  ADR-0019 amendment (2026-09-20). Verification: field-only — whether `pagehide` fires on the
+  supervisor's reloads is the assumption to check.
 
 - **1MiB-replay workspace switch is ~236ms with visible flicker** (ADR-0004) — candidates:
   smaller replay cap, progressive replay, hide-until-parsed. Since v0.3.15 the replay

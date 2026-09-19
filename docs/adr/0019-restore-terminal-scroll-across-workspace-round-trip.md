@@ -118,6 +118,9 @@ from a different build; field confirmation is requested as part of the verificat
    decision 4) come back with no memory and therefore at the bottom, exactly as before this
    change. Persisting across those would mean writing scroll positions to `state.json`, which
    is a different contract (and a wrong one — the replay a reloaded app attaches to has moved on).
+   **(Superseded by the 2026-09-20 amendment: the boundary moves to the page session —
+   sessionStorage, not `state.json` — because the automatic WebView reload is not a user
+   gesture and was dropping the place on its own.)**
 
 4. **The position is applied after the replay, again on every parsed chunk while the restore is
    pending, and once more when the output the nudge provokes goes quiet.** The post-replay
@@ -200,6 +203,8 @@ from a different build; field confirmation is requested as part of the verificat
   `@xterm/xterm`.
 - **After F5 or the idle webview reload the position is gone** (decision 3). The user-visible
   rule is "a workspace round-trip keeps your place; a reload does not".
+  **(Superseded by the 2026-09-20 amendment — a reload keeps the place too; only the end of the
+  page session, i.e. app exit, does not. Mast sends F5 to the terminal; Ctrl+Shift+R reloads.)**
 - **~192 KB of replay per round-trip remains unaddressed.** Decision 6 keeps the two-step nudge,
   so a Codex tab spends about 19% of its 1 MiB replay window on each resize reprint and five or
   six round-trips fill it with them. The cheaper half of the fix — one resize instead of two —
@@ -305,3 +310,54 @@ decision 3 of this ADR prefers a pending offset over the buffer when a tab is di
 and a restore is now pending for up to two seconds after *every* reprint, so leaving a workspace
 in that window remembers the pre-wipe offset even if the restore had been refused and the pane
 was in fact at the bottom — the same priority as before, reached more often.
+
+## Amendment (2026-09-20) — the place survives the automatic reload
+
+Decision 3 drew the boundary at the WebView lifetime: an F5 or the idle webview reload came back
+with no memory and therefore at the bottom. The field report disagrees with the second half, and
+the trigger is not F5 at all: the reset supervisor reloads the WebView on its own — after
+`MAST_RESET_HIDDEN_SECS` (600 s) hidden, after `MAST_RESET_IDLE_SECS` without input, and on a
+workspace switch when the memory watchdog has a fire pending (`workspace_switch` is that "safe
+moment") — so "switching workspaces" and "coming back to the window" both silently dropped the
+user's place, with no reload gesture anywhere in the story. Nothing in the restore machinery was
+wrong: the value it needs had died with the JS context before the new page could ask for it.
+
+1. **The memory moves to `sessionStorage`.** `ScrollMemory` keeps its map but mirrors it to one
+   JSON key (`mast:scroll-memory`), so the next page in the same WebView session starts with the
+   positions the previous one had. That is the narrowest store that spans a reload: sessionStorage
+   is tied to the page session — it survives a reload and ends with the WebView (app exit) — and it
+   holds one integer per tab, so no transcript, no `state.json`, and no model or IPC change. The
+   write is a synchronous `pagehide`-time snapshot of what the views answer; the read is the same
+   one-shot `take` the round-trip already used.
+
+2. **The live panes are captured on `pagehide`.** The reconcile remembers a tab's offset when it
+   disposes the view (a workspace leave), but a reload disposes nothing — the context is thrown
+   away — so the tabs that were on screen had no moment to be remembered. `WorkspaceView` listens
+   for `pagehide`, the browser navigation event expected before the context dies, and hands every
+   live view's offset to the memory. A pane captured mid-restore answers with its pending value,
+   exactly as the dispose path does (decision 3).
+
+3. **An entry is only good for the tab *and* the PTY session it was remembered from.** `take`
+   takes the tab's current session and refuses (and drops) a mismatch. That covers a respawn —
+   `ensureView`'s session-changed branch no longer leaves a fresh shell's position to
+   `restoreTargetLine`'s refusal — and it is the second line of defence if a platform ever lets
+   sessionStorage outlive the WebView: a stale entry cannot land on the same tab id in a later run
+   once the session ids differ. Validation stays strict on load (version 1, integer session and
+   positive-integer offset per entry); a corrupt file is dropped whole and rewritten on the next
+   remember.
+
+4. **Everything downstream is unchanged.** The stored position is still a bottom-relative line
+   count; the refusal-to-bottom rule, the per-chunk re-application during a reprint, the settle
+   window and all three cancel signals behave exactly as decisions 2–5 and the v0.3.26 amendment
+   describe. The one user-visible rule that changes is decision 3's last sentence: **a reload keeps
+   the place too** (Ctrl+Shift+R and the reset supervisor's reload are expected to go through
+   `pagehide`; F5 is passed to the terminal); only the end of the page session — app exit — does not.
+
+**Accepted limits.** A renderer discarded and restored by the platform *without* an unload event
+(OS memory pressure, a WebView2 crash recovery) still loses the on-screen panes' positions — the
+write happens in `pagehide`, and there is no other moment at which the context can be read. Whether
+`pagehide` fires on the automatic reloads in WebView2 is the assumption that needs the field check:
+the first thing to look at after a lost position is whether `mast:scroll-memory` is in the page's
+sessionStorage right after the reload — absent means the capture never ran, and the fix belongs in
+the capture trigger rather than in the restore machinery. The store is also deliberately not shared
+between windows or app runs; nothing here persists into `state.json` or across a relaunch.

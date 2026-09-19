@@ -16,8 +16,10 @@
 //
 // 터미널 스크롤 기억 (ADR-0019): 워크스페이스를 떠나 dispose 되는 터미널 뷰의
 // 스크롤 위치(하단 기준 줄 수)를 탭별로 들고 있다가, 돌아와 뷰를 새로 만들 때
-// 1회성으로 넘긴다. WebView 수명 한정이다 — F5·자동 리로드 뒤에는 기억이 없고,
-// 그것이 "같은 WebView 수명"의 자연스러운 경계다.
+// 1회성으로 넘긴다. 경계는 **페이지 세션**이다 (ADR-0019 개정 2026-09-20) —
+// 위치는 sessionStorage 에도 남아 자동 리로드(hidden·워치독)를 넘기고, 리로드
+// 직전 살아 있던 탭들은 pagehide 에서 쟁긴다 (captureLiveScroll). 앱(=WebView)
+// 종료는 넘기지 못한다.
 //
 // 뷰어 뷰 수명 (21단계): 시맨틱이 반대라(활성 탭만 마운트 — features/viewers/viewer-view.ts)
 // 병렬 레지스트리 viewerViews 를 두고 planViewerSync 로 집행한다. 두 레지스트리의
@@ -198,7 +200,24 @@ export class WorkspaceView {
     private readonly tracer: SwitchTracer,
     /** 상태 라인 위임 (17단계) — send-mode 프롬프트·에러 표면화. */
     private readonly sendStatus: SendStatus,
-  ) {}
+  ) {
+    window.addEventListener("pagehide", this.captureLiveScroll);
+  }
+
+  /** 리로드 직전에 살아 있는 뷰들의 스크롤 위치를 기억으로 넘긴다 (ADR-0019
+   *  개정). 자동 리로드·Ctrl+Shift+R 는 리컨실의 dispose 를 거치지 않고 JS 컨텍스트를
+   *  버리므로, 여기서 동기적으로 읽어 두지 않으면 그 탭들의 위치는 함께 사라진다.
+   *  이미 dispose 된 탭의 위치는 리컨실이 이미 기억해 뒀다. */
+  private readonly captureLiveScroll = (): void => {
+    const snapshot = this.lastSnapshot;
+    if (snapshot === null) return;
+    const existing = existingTabIds(snapshot);
+    for (const [tab, view] of this.views) {
+      if (!existing.has(tab)) continue;
+      const offset = view.rememberedScrollOffset();
+      if (offset !== null) this.scrollMemory.remember(tab, view.session, offset);
+    }
+  };
 
   /** send-mode 상태 → UI 동기화: rootEl 클래스(커서·하이라이트), 상태 라인
    *  프롬프트(활성 동안 유지·해제 시 복원), Esc capture 설치/해제. */
@@ -312,7 +331,7 @@ export class WorkspaceView {
         // 스크롤 위치를 기억한다 (ADR-0019). 사라진 탭(닫힘)은 기억하지 않는다.
         if (existing.has(tab)) {
           const offset = view.rememberedScrollOffset();
-          if (offset !== null) this.scrollMemory.remember(tab, offset);
+          if (offset !== null) this.scrollMemory.remember(tab, view.session, offset);
         }
       } catch (err) {
         console.error("scroll offset capture failed", tab, err);
@@ -493,12 +512,13 @@ export class WorkspaceView {
     if (this.tracer.markAttachStart(tab, performance.now())) {
       onTraceReplayDone = (bytes) => this.tracer.markReplayDone(tab, bytes, performance.now());
     }
-    // 스크롤 기억은 1회성이다 (ADR-0019 — take 가 꺼내면서 지운다).
+    // 스크롤 기억은 1회성이다 (ADR-0019 — take 가 꺼내면서 지운다). 세션이
+    // 다르면 꺼내지 않고 버린다: respawn·리로드를 넘어온 다른 셸의 위치다.
     const created = new TerminalView(
       parent,
       session,
       onTraceReplayDone,
-      this.scrollMemory.take(tab),
+      this.scrollMemory.take(tab, session),
     );
     this.views.set(tab, created);
     created.attach().catch((err) => {
