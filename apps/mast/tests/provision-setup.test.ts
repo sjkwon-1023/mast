@@ -77,6 +77,7 @@ const INSTALLED_FROM_REPO: [name: string, executable: boolean][] = [
   ["mast-claude-hook.sh", true],
   ["mast-codex-hook.sh", true],
   ["mast-agy-hook.sh", true],
+  ["mast-opencode-plugin.js", false],
 ];
 
 const NOTIFY_CMD = '"$HOME/.mast/bin/mast-notify.sh"';
@@ -280,10 +281,16 @@ class Distro {
     return this;
   }
 
-  // Codex·Antigravity CLI 가 설치된 distro 의 모양. 설치 스크립트는 이 디렉터리로 설치 여부를 판단한다.
+  // curl 설치본의 자리. OpenCode 플러그인 단계는 이 실행 파일의 존재만 보고 설치한다 (버전 확인 없음).
+  withOpencode(): this {
+    this.executable(this.path(".opencode", "bin", "opencode"), "#!/bin/sh\nexit 0\n");
+    return this;
+  }
+
+  // Codex·Antigravity CLI·OpenCode 가 설치된 distro 의 모양. 설치 스크립트는 이 디렉터리로 설치 여부를 판단한다.
   withAgents(versions: Partial<Record<Agent, string>> = {}): this {
     this.agent("claude", versions.claude ?? "2.1.270 (Claude Code)");
-    return this.withCodex(versions.codex).withAgy(versions.agy);
+    return this.withOpencode().withCodex(versions.codex).withAgy(versions.agy);
   }
 
   run(): Run {
@@ -503,6 +510,32 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
       "codex: notify already runs mast-codex-notify.sh",
       "codex: added Interrupt",
     ]) {
+      expect(log).toContain(line);
+    }
+  });
+
+  // v0.3.32 로 나간 main 의 setup v14 는 OpenCode 플러그인만 더한 버전이라 Claude 사용자에게는 상태 훅만
+  // 깔린 채 끝났다. 이 브랜치의 훅이 main 과 같은 14 를 쓰면 그 마커에 막혀 영영 재실행되지 않으므로,
+  // 옛 v14 마커가 새 실행을 막지 않고 디스패처 행이 깔리는지 고정한다.
+  it("upgrades a v14 install that had Claude only: the dispatcher rows are added and the new marker written", () => {
+    const distro = new Distro();
+    distro.agent("claude", "2.1.270 (Claude Code)");
+    distro.write(distro.path(".mast", ".setup-v14"), "");
+    distro.write(distro.claudeSettings(), fileText(V13_SETTINGS));
+
+    const run = distro.run();
+
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toEqual([]);
+    expect(existsSync(distro.path(".mast", ".setup-v14"))).toBe(true);
+    expect(distro.marker()).toBe(true);
+    expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_WITH_DISPATCHER);
+    expect(existsSync(distro.codexHooks())).toBe(false);
+    expect(existsSync(distro.agyHooks())).toBe(false);
+    const log = distro.log();
+    expect(log).toContain(FULL_RUN_LOG);
+    for (const line of ["claude: narrowed Notification", "claude: added SessionStart role=dispatcher", "claude: added Stop role=dispatcher"]) {
       expect(log).toContain(line);
     }
   });

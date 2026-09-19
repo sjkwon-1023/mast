@@ -27,7 +27,7 @@ with the tool call it guards, happen entirely in the WSL-side scripts this docum
 
 ## Automatic provisioning
 
-**mast auto-provisions this on first run per distro (`~/.mast/.setup-v14`); this
+**mast auto-provisions this on first run per distro (`~/.mast/.setup-v15`); this
 document remains the contract and the manual path.**
 
 On launch the app streams a setup script into `wsl.exe [-d <distro>] -- bash -s` for every
@@ -96,12 +96,12 @@ A full run, in order:
 
 | Marker | Written when | To run it again |
 |---|---|---|
-| `~/.mast/.setup-v14` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v14` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
-| `~/.mast/.setup-v14-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v14-codex` reruns that step alone |
-| `~/.mast/.setup-v14-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v14-agy` reruns that step alone |
+| `~/.mast/.setup-v15` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v15` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
+| `~/.mast/.setup-v15-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v15-codex` reruns that step alone |
+| `~/.mast/.setup-v15-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v15-agy` reruns that step alone |
 
 With the main marker in place, a launch still runs an agent step whose directory exists and
-whose sub-marker does not — which is how a Codex or Antigravity CLI installed after setup v14
+whose sub-marker does not — which is how a Codex or Antigravity CLI installed after setup v15
 gets its hooks without waiting for the next version. That run uses the files already in
 `~/.mast/bin` (if one is missing it falls back to a full run), checks for `python3` again and,
 for Codex, resolves the dispatcher interpreter again; it adds no `notify` line, no AGENTS.md
@@ -120,8 +120,8 @@ When a run fails:
 - A file that is not writable or is a dangling symlink, and for Codex a `config.toml` with inline
   hooks, is **skipped** with a notice and counts as finished: the sub-marker is written — for
   Claude Code, whose merge is part of steps 1–11, the main marker — so no launch retries it. Once
-  the cause is fixed, `rm ~/.mast/.setup-v14-codex` (or `-agy`; for Claude Code
-  `rm ~/.mast/.setup-v14`) wires the hooks, or add the notice's snippet by hand.
+  the cause is fixed, `rm ~/.mast/.setup-v15-codex` (or `-agy`; for Claude Code
+  `rm ~/.mast/.setup-v15`) wires the hooks, or add the notice's snippet by hand.
 - A Codex or Antigravity CLI hooks file whose **content** the merge cannot handle is refused
   with exit 3: the file is left untouched and the sub-marker **is** written, because a rerun
   would refuse it the same way. The notice names the problem and says to edit the file and
@@ -155,8 +155,8 @@ that setup could not write somewhere — `cannot install …`, `cannot create �
 | When | The notice says |
 |---|---|
 | No `python3` | Install it, or wire the hooks by hand from this document |
-| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v14` (`rm ~/.mast/.setup-v14-codex` when only the Codex step ran) |
-| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v14` |
+| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v15` (`rm ~/.mast/.setup-v15-codex` when only the Codex step ran) |
+| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v15` |
 | A Codex install older than a hook feature mast relies on | Its path, and each missing feature ([version limits](#codex-version-limits)) |
 | Codex hooks were written | How to trust them — the wording follows the Codex version |
 | `config.toml` has inline `[hooks]` tables, `features.hooks = false`, `approvals_reviewer = "auto_review"`, or a stale `[hooks.state]` entry | What mast did not do, and why |
@@ -200,7 +200,7 @@ A version that cannot be read means different things per agent: Claude Code fail
 | `Stop` | `""` | `"$HOME/.mast/bin/mast-claude-hook.sh"` | dispatcher: session inactive, clear its root approvals |
 
 The three status rows are what mast has wired since stage 18. The eight dispatcher rows arrived
-with setup v14 and are left out (`--no-dispatcher`) without Python 3.8+, or when a Claude Code
+with setup v15 and are left out (`--no-dispatcher`) without Python 3.8+, or when a Claude Code
 install is older than 2.1.118 or reports no readable version. The literal file is under
 [Example settings.json](#example-settingsjson), and what the dispatcher rows do under
 [Claude Code approval tracking](#claude-code-approval-tracking--the-dispatcher-rows).
@@ -694,7 +694,7 @@ exit 0
 
 ## Example settings.json
 
-What setup v14 writes into a `~/.claude/settings.json` that had no hooks. A hand install uses
+What setup v15 writes into a `~/.claude/settings.json` that had no hooks. A hand install uses
 the same paths: the dispatcher entry point looks for the dispatcher and for
 `~/.mast/bin/mast-python` under `~/.mast/bin`.
 
@@ -906,7 +906,7 @@ them — and `mast-codex-notify.sh` runs it in `codex-notify` mode. Its source i
 
 ## Claude Code approval tracking — the dispatcher rows
 
-Before setup v14, a Claude Code tab that asked for approval stayed at `needs input` until the
+Before setup v15, a Claude Code tab that asked for approval stayed at `needs input` until the
 turn's `Stop`, however quickly you approved: no status hook fires in between. Reporting
 `running` on every tool result would be wrong the other way. Claude Code runs subagents in the
 background by default, and their tool results would clear a prompt that the main agent — or
@@ -990,12 +990,13 @@ The other dispatcher events (`SessionStart` with its `source`, `PermissionReques
 ## Resume hint — `~/.mast/resume/tab-<id>`
 
 A restart respawns every terminal tab as a **fresh login shell**: the layout comes back, but
-the agent session that was running in the tab does not, and its id is nowhere on screen. Both
-agents hand mast an id when they report — Claude Code's hook stdin JSON carries `.session_id`,
-Codex's notify payload carries `thread-id` — so each records it per tab and the next shell in
-that tab offers it back. The writers are `mast-notify.sh` (on every Claude Code status hook) and
-`mast-codex-notify.sh`. **The hook dispatcher never writes or reads a hint**, and Antigravity CLI
-records none — the reader below has no form for it.
+the agent session that was running in the tab does not, and its id is nowhere on screen. Each
+agent hands mast a confirmed id when it reports — Claude Code's hook stdin JSON carries
+`.session_id`, Codex's notify payload carries `thread-id`, and the OpenCode plugin sees session
+events. The writers are `mast-notify.sh` (on every Claude Code status hook),
+`mast-codex-notify.sh` and the OpenCode plugin; each records it per tab and the next shell in
+that tab offers it back. **The hook dispatcher never writes or reads a hint**, and Antigravity
+CLI records none — the reader below has no form for it.
 
 **This is a hint, never an action.** The recorded command is put in front of the user in two
 places and run by neither of them.
@@ -1003,10 +1004,10 @@ places and run by neither of them.
 | Field | Contract |
 |---|---|
 | Path | `~/.mast/resume/tab-<id>`, where `<id>` is the writer's `MAST_TAB` — the tab's stable id, which survives a restart, so the file and the tab that gets the hint are the same tab. |
-| Line 1 | The resume command: `claude --resume 11111111-2222-3333-4444-555555555555` or `codex resume 019ff5e6-d08e-7013-9cec-105030994d8d`. The reader takes **only this line**. |
+| Line 1 | The resume command: `claude --resume <id>`, `codex resume <id>`, or `opencode --session <id>`. The reader takes **only this line**. |
 | Line 2 | Epoch seconds at the time of writing. Recorded for diagnosis; **nothing reads it** — see freshness below. |
-| Written when | An invocation has both a non-empty `MAST_TAB` and an id matching `^[A-Za-z0-9_-]+$` — Claude Code's `.session_id`, Codex's `thread-id` (`thread_id` is accepted too). Codex additionally requires its saved session metadata to show a resumable top-level session (`resumable` below). |
-| Not written when | The tab has no `MAST_TAB` (a tab without per-tab history), `jq` is missing, the payload does not parse or carries no id, or the id is not a plain token. For Codex, also for every ownership other than `resumable` — a top-level session from another source, a temporary thread, a subagent or internal session, metadata that cannot be read — and for a `codex exec` nested in another agent's turn. For Claude Code, also when stdin is a TTY (the script run by hand, so no JSON is read at all). |
+| Written when | An invocation has both a non-empty `MAST_TAB` and an id matching `^[A-Za-z0-9_-]+$` — Claude Code's `.session_id`, Codex's `thread-id` (`thread_id` is accepted too), or OpenCode's confirmed root session id. Codex additionally requires its saved session metadata to show a resumable top-level session (`resumable` below). OpenCode records a root at creation or its first observed activity, before idle. |
+| Not written when | The tab has no `MAST_TAB` (a tab without per-tab history), the payload does not parse or carries no id, or the id is not a plain token. Claude Code additionally needs parsable hook JSON and `jq`, and writes nothing when stdin is a TTY (the script run by hand, so no JSON is read at all). For Codex, also for every ownership other than `resumable` — a top-level session from another source, a temporary thread, a subagent or internal session, metadata that cannot be read — and for a `codex exec` nested in another agent's turn. For OpenCode, sessions with `parentID` are rejected, and the prior hint is preserved when the session lookup fails. |
 | Atomicity | Written to `<path>.tmp.<pid>` and `mv`d into place, so a concurrent reader sees either the old file or the new one, never a half-written line. The pid suffix keeps two writers firing at once in the same tab from sharing a temp name. |
 | Failure | Swallowed. Every step is guarded and the writer still exits 0 — a resume hint must never cost a notification, let alone the session. |
 
@@ -1030,7 +1031,8 @@ cannot swallow is the hint `printf` failing to write to the pane's own tty, whic
 state a usable tab is in.)
 
 **Both sides check the shape.** The writer guards the id's charset, and the reader accepts
-only two exact forms — `claude --resume <token>` and `codex resume <token>`, where `<token>`
+only three exact forms — `claude --resume <token>`, `codex resume <token>`, and
+`opencode --session <token>`, where `<token>`
 is `[A-Za-z0-9_-]+` — dropping the hint silently otherwise, so a substituted file cannot
 become a surface for luring an ↑+Enter into running something else. That reader list is a
 **whitelist**: wiring a third agent means adding its form there as well, or its hint is
@@ -1053,7 +1055,7 @@ deletes the tab's history ([ADR-0013](../../docs/adr/0013-retiring-a-closed-tab.
 
 Codex's `notify` program is run once per completed turn (`agent-turn-complete`) and receives
 the payload as a single JSON object appended as the **final argv element** — not on stdin.
-Since setup v14 it is no longer Codex's only signal: the [hooks](#codex-hooks--codexhooksjson)
+Since setup v15 it is no longer Codex's only signal: the [hooks](#codex-hooks--codexhooksjson)
 report running, needs input and idle as they happen. `notify` stays for what the hooks cannot
 do — the resume hint — and as a gated fallback idle. `~/.mast/bin/mast-codex-notify.sh` is that
 program; its source is the `provision.rs` heredoc, and this section is its contract. Given `$1`:
@@ -1116,7 +1118,7 @@ or a catch-up summary's `notify` fires in the same tab. The first rule that matc
 
 1. `MAST_TAB` missing or not decimal → nothing.
 2. `~/.mast/no-codex-hooks` exists → `idle` straight away, without reading hook state (the
-   behavior before setup v14).
+   behavior before setup v15).
 3. `CLAUDECODE` set, or `CODEX_THREAD_ID` set to another thread → nothing.
 4. Under the tab's hook-state lock (3 s):
    - the payload does not parse, or lacks `thread-id` or `turn-id` → `idle` (fail open);
@@ -1143,9 +1145,37 @@ into an escape sequence written to a terminal. An embedded BEL would end the OSC
 whatever followed to the terminal as input, and xterm treats U+009C as the end of the sequence
 too.
 
+### The OpenCode half — global `mast.js` plugin
+
+Setup v15 installs one global plugin at `$XDG_CONFIG_HOME/opencode/plugins/mast.js` (or
+`~/.config/opencode/plugins/mast.js` when `XDG_CONFIG_HOME` is unset). It detects the
+standard curl installation at `~/.opencode/bin/opencode` even when the non-interactive
+setup shell cannot see the installer's interactive PATH export. It does not install a
+second copy in a project or `~/.opencode`. The canonical plugin source is
+`scripts/wsl/mast-opencode-plugin.js`; provisioning embeds that source. A pre-existing
+`mast.js` without mast's matching ownership digest is left untouched. An edited managed
+file is likewise preserved. Setup logs the conflict in `~/.mast/setup.log`.
+
+For the default OpenCode 1.18.31 TUI, `session.status` busy/retry maps to
+`mast:running`, `permission.asked` and `question.asked` map to `mast:needsInput`,
+replies map back to `mast:running`, and root `session.idle` maps to `mast:idle`.
+Repeated busy events are coalesced. Child idle does not idle the tab or replace the
+resume hint. The plugin delegates OSC emission to the existing `mast-notify.sh` with
+stdin closed and Bun shell echo disabled, so it neither waits for TUI input nor prints
+shell output into the TUI. The plugin event callback does not throw into OpenCode's bus.
+
+The hint is written at the first confirmed root event, so a restart during the first
+turn can offer `opencode --session <id>`. The plugin checks `parentID` on session
+metadata; when it first sees an existing session through a status event, it queries
+that session through OpenCode's client before writing. The reader's whitelist accepts
+only the exact `opencode --session <token>` form. Reopening an OpenCode session from a
+different cwd and notification delivery through a real Windows mast tab remain field
+checks in `docs/WINDOWS-BUILD.md`. `--pure`, server modes (`serve`, `web`, `attach`),
+`opencode2`, and CLI guidance for OpenCode agents are outside this integration.
+
 ## Codex hooks — `~/.codex/hooks.json`
 
-Setup v14 gives Codex live status: `running` when a prompt is submitted or a tool call finishes,
+Setup v15 gives Codex live status: `running` when a prompt is submitted or a tool call finishes,
 `needs input` while an approval dialog is open, `idle` when a turn stops or is interrupted.
 The `notify` line above stays wired alongside.
 
@@ -1492,11 +1522,11 @@ PROMPT_COMMAND="__mast_osc${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
    therefore has a tty, so it only takes step 1 — its purpose is to see whether the delivery
    path itself is alive.
 2. Read `~/.mast/setup.log`: each merged row (`added`, `wired`, `migrated`, `narrowed`) and
-   every notice is there, and the markers `~/.mast/.setup-v14`, `.setup-v14-codex` and
-   `.setup-v14-agy` show which steps finished.
+   every notice is there, and the markers `~/.mast/.setup-v15`, `.setup-v15-codex` and
+   `.setup-v15-agy` show which steps finished.
 3. Then run each agent inside a mast terminal and confirm that its hooks update the tab's badge
    and dot, the pane badge, and the sidebar status and preview. The field checklist is
-   `docs/WINDOWS-BUILD.md` §10, "v0.3.32 — Agent state signals verification (setup v14)". A
+   `docs/WINDOWS-BUILD.md` §10, "v0.3.32 — Agent state signals verification (setup v15)". A
    synthetic check has to reset first and give the second token its own flush window —
    `sleep 5; mast-notify.sh mast:idle x; sleep 0.2; mast-notify.sh mast:needsInput y` — because
    the needs-input onset fires only on a transition, and two tokens within 100 ms collapse into

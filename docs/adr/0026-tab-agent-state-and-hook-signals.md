@@ -232,7 +232,7 @@ Needs input still comes only from `Notification`. The dispatcher adds the releas
 **Hooks** are appended to `~/.codex/hooks.json`. Every handler is the same fixed, argument-less
 command `"$HOME/.mast/bin/mast-codex-hook.sh"` with no `matcher` key (which matches everything),
 so the script can change without re-trust. Matcher, timeout, `async` and command are all inputs
-to Codex's trust hash, so this table is frozen from setup v14 on.
+to Codex's trust hash, so this table is frozen from setup v15 on.
 
 | Event | Mode | Timeout |
 |---|---|---|
@@ -327,7 +327,7 @@ is `rejected` with both ids present. The body is the first line of `last-assista
 
 - The target matcher is `permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|quota_auto_resume_stale|worker_permission_prompt`.
   `idle_prompt` is out. `worker_permission_prompt` is not in Claude Code's documented list; it is
-  the agent-teams permission request in the 2.1.270 bundle. Fixing the list in setup v14 avoids a
+  the agent-teams permission request in the 2.1.270 bundle. Fixing the list in setup v15 avoids a
   second migration of the same user-owned value later.
 - **Path migration runs first**: a `UserPromptSubmit`, `Notification` or `Stop` handler whose
   leading word is another copy of `mast-notify.sh` (the manual install path the contract document
@@ -344,7 +344,7 @@ is `rejected` with both ids present. The body is the first line of `last-assista
 - A `PostToolUse` or `PostToolUseFailure` that already runs the user's own `mast-notify.sh` is
   respected: no dispatcher row is added there, and a notice says approvals are then unpaired.
 
-### 7. Provisioning owns existence, the user owns content (setup v14)
+### 7. Provisioning owns existence, the user owns content (setup v15)
 
 - **Embedded files.** `mast-hooks-merge.py`, `mast-agent-hook.py`, `mast-claude-hook.sh`,
   `mast-codex-hook.sh` and `mast-agy-hook.sh` are tracked under `scripts/wsl/`, embedded with
@@ -400,16 +400,16 @@ is `rejected` with both ids present. The body is the first line of `last-assista
   decoder: case-insensitive field names, last value wins, `null` counts as absent, `command` or
   `prompt` types, 32-bit timeouts. The step is skipped when `~/.gemini/antigravity-cli` is absent
   (no marker) or `~/.mast/no-agy-hooks` exists (sub-marker), and needs only the helper's Python.
-- **Markers.** `.setup-v14` is the main marker; `.setup-v14-codex` and `.setup-v14-agy` record the
+- **Markers.** `.setup-v15` is the main marker; `.setup-v15-codex` and `.setup-v15-agy` record the
   agent steps. A launch exits at once only when the main marker exists and every present agent
   directory has its sub-marker. With the main marker present and the files the agent steps and
   their hooks run installed (`mast-hooks-merge.py`, `mast-agent-hook.py`, `mast-codex-hook.sh`,
-  `mast-agy-hook.sh`, `mast-notify.sh`), a launch runs only the pending agent steps — so an agent installed after v14 gets its hooks without
+  `mast-agy-hook.sh`, `mast-notify.sh`), a launch runs only the pending agent steps — so an agent installed after v15 gets its hooks without
   the full install re-adding a Codex notify line, `AGENTS.md` block or Claude rows the user removed.
   A missing hook file sends the launch through the full install. An agent step that fails on I/O
   no longer withholds the main marker; only its sub-marker is missing, so the next launch reruns
   that step alone. The exit-3 and agent-only Python notices therefore name the sub-marker
-  (`rm ~/.mast/.setup-v14-codex`); removing the main marker reruns the full install.
+  (`rm ~/.mast/.setup-v15-codex`); removing the main marker reruns the full install.
 - **Version gates.** No login or interactive shell is started: an interactive bash ignores
   `SIGTERM` past its timeout, stops on `SIGTTIN` when the caller has a terminal, and rc files can
   read stdin, start children that hold the output pipe, or have side effects. Instead a fixed
@@ -531,7 +531,7 @@ is `rejected` with both ids present. The body is the first line of `last-assista
   unchanged, because `last_activity_ms` moves; the 1.5 s running dedup limits that. Latency
   targets (sync handler p95 under 50 ms on WSL2, under 100 ms added per tool call) are field
   measurements, not yet taken.
-- **User files.** The first v14 run re-serializes every Claude user's `settings.json` through
+- **User files.** The first v15 run re-serializes every Claude user's `settings.json` through
   `json.dump(indent=2)`, which can reformat it; the meaning changes only in appended groups,
   migrated paths and a dict-identical Notification group. The re-read before replace is not a full
   compare-and-swap against Claude Code's own writes.
@@ -580,9 +580,9 @@ is `rejected` with both ids present. The body is the first line of `last-assista
 - A Codex TUI attached to a shared app-server daemon runs hooks with the daemon's environment and
   terminal, so signals are missing or land on the tab that started the daemon.
 - The trust notice follows the lowest installed version: with 0.128 and 0.154 both present no
-  notice is printed, although 0.154 prompts on launch by itself. A Codex installed after v14 gets
+  notice is printed, although 0.154 prompts on launch by itself. A Codex installed after v15 gets
   only `hooks.json`; its notify line and `AGENTS.md` block wait for the next setup version or
-  `rm ~/.mast/.setup-v14`.
+  `rm ~/.mast/.setup-v15`.
 
 **Claude Code**
 
@@ -617,7 +617,7 @@ is `rejected` with both ids present. The body is the first line of `last-assista
 - The in-session `/resume` picker also sends source `resume`; resuming the session that is running,
   while one of its subagent dialogs is open, would clear that wait (unverified).
 - Claude Code before 2.1.118, or any copy whose version cannot be read, gets status rows only until
-  it is updated and `rm ~/.mast/.setup-v14` is run.
+  it is updated and `rm ~/.mast/.setup-v15` is run.
 
 **Antigravity CLI**
 
@@ -638,8 +638,8 @@ is `rejected` with both ids present. The body is the first line of `last-assista
 - Without `python3` a full install stops at step 5 before the marker, so every launch reruns it and
   repeats the notice. Persistent failures in the Codex notify step (6) or the `AGENTS.md` step (6b),
   such as a `config.toml` that is not UTF-8, exit before the marker too, which reruns the full
-  install every launch and never reaches the agent-hook steps. Both loops predate v14. A `python3`
-  removed after v14 completes makes pending agent steps retry, with their notice, every launch.
+  install every launch and never reaches the agent-hook steps. Both loops predate v15. A `python3`
+  removed after v15 completes makes pending agent steps retry, with their notice, every launch.
 - In rare permission states — an unwritable `setup.log`, a blocked `mast-python.tmp` — bash's own
   error lines reach the notices ahead of mast's message.
 - A synchronous hook that lands after the tab-close `rm` can recreate the tab's lock (and state or

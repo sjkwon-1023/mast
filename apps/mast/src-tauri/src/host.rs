@@ -237,6 +237,8 @@ fn bash_argv(history_tab: Option<u64>, cwd: Option<&str>) -> Vec<String> {
              expr \"x$cmd\" : 'xclaude --resume [A-Za-z0-9_-][A-Za-z0-9_-]*$' >/dev/null || cmd= ;; \
              'codex resume '*) \
              expr \"x$cmd\" : 'xcodex resume [A-Za-z0-9_-][A-Za-z0-9_-]*$' >/dev/null || cmd= ;; \
+             'opencode --session '*) \
+             expr \"x$cmd\" : 'xopencode --session [A-Za-z0-9_-][A-Za-z0-9_-]*$' >/dev/null || cmd= ;; \
              *) cmd= ;; esac \
              && if [ -n \"$cmd\" ]; then \
              printf '%s\\n' \"$cmd\" >> \"$HOME/.mast/history/tab-{tab}\"; \
@@ -599,6 +601,8 @@ mod tests {
             script.contains(r#"RESUME="$HOME/.mast/resume/tab-7""#),
             "{script}"
         );
+        assert!(script.contains("'opencode --session '*"), "{script}");
+        assert!(script.contains("xopencode --session [A-Za-z0-9_-]"), "{script}");
         assert!(script.contains(r#"PATH="$HOME/.mast/bin:$PATH""#), "{script}");
         assert!(script.contains("MAST_TAB=7"), "{script}");
     }

@@ -364,17 +364,17 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 
 #### Agent integration — hooks, notify, resume, the `mast` CLI
 
-- **Agent coverage beyond Claude Code and Codex — Antigravity CLI landed 2026-09-15 for
-  running/idle; opencode not started** (user request 2026-08-15). Both reuse the
+- **Agent coverage beyond Claude Code and Codex — Antigravity CLI and OpenCode landed; the
+  branch merged both** (user request 2026-08-15). All four agents reuse the
   `mast:running` / `mast:needsInput` / `mast:idle` tokens **unchanged**: nothing in
   `mast-core` (`osc.rs`, `notify.rs`) or the front-end (`features/notifications/chime.ts`, `app/main.ts`) is
   agent-specific. The work is provisioning — a step in `provision.rs`'s `SETUP_SCRIPT`, a mode in
-  `scripts/wsl/mast-hooks-merge.py` (where the merge rules live) and a hook script under
+  `scripts/wsl/mast-hooks-merge.py` (where the merge rules live) and a hook script or plugin under
   `scripts/wsl/` embedded through `EMBEDDED_FILES` — plus a `SETUP_VERSION` bump, a
   resume-command entry in `host.rs::bash_argv`'s whitelist when the agent has one (today
-  `claude --resume` and `codex resume` only), and a matching section in
+  `claude --resume`, `codex resume` and `opencode --session`), and a matching section in
   `scripts/wsl/claude-hook-example.md`.
-  - **Antigravity CLI — landed** (v0.3.32, setup v14, [ADR-0026](docs/adr/0026-tab-agent-state-and-hook-signals.md)
+  - **Antigravity CLI — landed** (v0.3.32, setup v15, [ADR-0026](docs/adr/0026-tab-agent-state-and-hook-signals.md)
     decision 8; field verification pending). Only the **CLI** is in scope: the IDE's agents do
     not run in a mast tab, so there is no pts to emit into and no tab to attribute a toast to.
     `mast-hooks-merge.py agy` adds one named hook `"mast"` to the global
@@ -396,20 +396,16 @@ it carries, so read it before reopening the same question. Nothing here blocks t
     field round: Esc cancellation and its `terminationReason`, a `Stop` with `fullyIdle: false`,
     the skip-permissions and remote-control paths, hooks.json hot reload. Hook delivery has been
     in flux across versions, so a field check must name the CLI version it passed on.
-  - **opencode** (not started): it has **no shell-command hook at all** — extension is TypeScript/JS
-    plugins under `.opencode/plugins/` (project) or `~/.config/opencode/plugins/` (global), a
-    default-exported async function returning an event-hook object. The mapping is the better
-    of the two (`session.idle → mast:idle`, `permission.asked → mast:needsInput`,
-    `permission.replied → mast:running` covers all three states where Antigravity covers
-    two), and the plugin context hands over Bun's `$` shell, so it can call
-    `~/.mast/bin/mast-notify.sh` verbatim — no third notify script. The blocker is **tty
-    attribution**: opencode plugins run in the server process with no controlling terminal,
-    so `mast_emit` would always fall through to its ancestor-pts walk, and it is unverified
-    whether that server sits in the tab's ancestor chain at all — or whether one server is
-    shared across tabs, in which case a needsInput toast lands on the wrong tab or nowhere.
-    Answer that before writing any provisioning. Writing a plugin file is also a different
-    discipline from the "never rewrite an existing key" rule the Claude/Codex halves follow:
-    a plugin file we create is ours to upgrade, one that already exists is not.
+  - **OpenCode default TUI status and resume hints — landed 2026-09-16** (setup v14;
+    [ADR-0027](docs/adr/0027-opencode-plugin-status-and-resume.md)). OpenCode 1.18.31
+    runs its default TUI server and plugin as a Worker in the tab process, with the tab's
+    pts and `MAST_TAB` inherited. A single global plugin emits the existing three mast
+    statuses through `mast-notify.sh` and records confirmed root session IDs for the
+    restart shell's `opencode --session <id>` hint. The installer owns only plugin bytes
+    matching its recorded digest; an existing user file is left untouched. The Windows
+    TUI, toast, and restart checks remain pending in `docs/WINDOWS-BUILD.md`. `--pure`,
+    server modes, the beta `opencode2` binary, and an agent-facing mast CLI guide remain
+    outside this integration.
 
 - **Agent-facing pane-send channel** — **landed 2026-08-11 as a shell CLI**, not MCP (user
   decision: MCP is heavy, and it is a v2 browser-surface question instead). `mast send`
@@ -439,7 +435,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   fixed by `--exec` in v0.3.3 and field-confirmed.
 
 - **Agent state is per tab and driven by the agents' hooks — landed 2026-09-15** (v0.3.32,
-  setup v14; Windows field verification pending). Three defects at once: Codex only ever reported
+  setup v15; Windows field verification pending). Three defects at once: Codex only ever reported
   idle (legacy `notify` was its one signal); a single workspace status slot with an
   `agent_status_source` let a sibling's idle hide a running tab, a closed tab reset live ones and a
   second waiting tab go unannounced; and Claude Code sat at needs input from an approval until
@@ -471,7 +467,7 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   coverage entry above. **Provisioning** (`mast-hooks-merge.py`, Python 3.6): symlink-preserving
   atomic writes with a re-read before replace, snippet notices for read-only or dangling targets,
   exit 3 for deterministic content refusals with `~/.mast/no-codex-hooks` / `no-agy-hooks`
-  opt-outs, sub-markers `.setup-v14-codex` / `.setup-v14-agy` so an agent installed later runs only
+  opt-outs, sub-markers `.setup-v15-codex` / `.setup-v15-agy` so an agent installed later runs only
   its own step, and version gates over fixed install locations where the lowest copy decides —
   Claude Code below 2.1.118 or unreadable gets status rows only, Codex notices at
   0.124/0.129/0.131/0.133/0.148/0.150, agy below 1.1.10. A 173 KB script made `run()` tolerate
