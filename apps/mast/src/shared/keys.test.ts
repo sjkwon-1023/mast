@@ -376,6 +376,8 @@ describe("activeTerminalCwd / pathBasename", () => {
               kind: { type: "terminal", ptySession: 5, status: { type: "running" }, cwd },
               notification: "none",
               lastActivityMs: null,
+              agentStatus: "idle",
+              lastAgentMessage: null,
             },
           ],
           activeTab: 10,
@@ -384,7 +386,6 @@ describe("activeTerminalCwd / pathBasename", () => {
       activePane: 1,
       agentStatus: "idle",
       lastAgentMessage: null,
-      agentStatusSource: undefined,
     };
   }
 
@@ -409,6 +410,8 @@ describe("activeTerminalCwd / pathBasename", () => {
           kind: { type: "folderBrowser", path: "/home/dev/proj" },
           notification: "none",
           lastActivityMs: null,
+          agentStatus: "idle",
+          lastAgentMessage: null,
         },
       ],
       activeTab: 10,

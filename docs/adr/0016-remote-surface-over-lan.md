@@ -349,3 +349,46 @@ not a silent timeout.
 Not implemented. This amendment records the direction and the contract sketch; no code changed
 with it. The field checklist (both phone platforms, the admin-console step, the away-from-home
 case) belongs in WINDOWS-BUILD §10 with the implementation.
+
+## Amendment (2026-09-19) — ownership moves only on a successful PTY resize
+
+The 2026-09-17 lease amendment said "every transition and the PTY call it makes happen under
+the existing `master` guard". That was necessary but not sufficient: the guard kept two racing
+callers from interleaving, while a **failed** `master.resize` (ioctl error, or a master that is
+alive but no longer answering) still moved ownership first. The result was the split state the
+amendment was meant to prevent, in a form the guard cannot see — owner mobile with the PTY at
+the desktop size (or the reverse), which suppresses every desktop resize until the lease lapses.
+
+1. **A claim or a release transfers ownership only after `master.resize` returns `Ok`.**
+   `resize_mobile` keeps its previous lease value when the apply fails, so the desktop's
+   resizes are not suppressed and the phone can press *Mobile* again; `release_mobile_size`
+   keeps the mobile lease when the restore fails, so a later release (or the next lapsed-lease
+   heartbeat) retries instead of leaving the PTY narrow with a desktop owner. The lapsed-lease
+   restore in `renew_mobile_lease` and the desktop `resize` path likewise clear the expired
+   record only after an apply succeeds — the next poll (or the next desktop resize) retries,
+   where before a failed restore was handed to "the next desktop resize" that may never come.
+2. **Only a successful resize reply writes the owner into the phone's lifetime state.**
+   The button paint used to be the reply's only effect, so a *Back*/*pagehide* between the
+   reply and the next poll skipped the release and parked the desktop on the narrow layout
+   until the lease lapsed. The reply's owner is now stored where the dispose/pagehide path
+   reads it; the reply's cols/rows are deliberately **not** stored — the screen instance's
+   geometry still comes from the next `/screen` meta, which is what keeps `needsRecreate`
+   honest.
+3. **Leaving during an in-flight claim still hands the size back.** If the page goes away
+   while a `mode=mobile` request is on the wire, the successful reply is answered with the
+   same `keepalive` `mode=desktop` the ordinary dispose path sends. A release that fails is
+   not recorded as a success: the local owner stays mobile, so a later leave retries, and the
+   30 s lease remains the net. A page restored from the back-forward cache is alive again:
+   `pageshow` clears the leaving flag, or its next *Mobile* press would be handed back the
+   moment it succeeded.
+4. **A screen reply cannot undo a newer resize reply.** Each successful resize bumps a
+   request-ordering stamp; a poll whose request predates the stamp keeps the local owner
+   instead of applying the stale `X-Mast-Size-Owner` it carries. Size, session and reset
+   fields are unaffected, and the next poll restores server truth.
+
+Verification: the failure branches run on the dev host with a test-only resize-failure
+injection point in `PtySession` (`cargo test -p mast-core`, four cases: failed claim, failed
+release, failed lapsed restore, failed desktop resize) plus the existing unix PTY integration suite; the phone
+lifecycle is locked by `npx vitest run src/remote/tab-view.test.ts` (success-then-Back,
+in-flight leave, failed keepalive, stale poll). Field items 5–7 of WINDOWS-BUILD §10
+"Phone-controlled PTY size" cover what only a real phone and TUI can answer.

@@ -1,6 +1,6 @@
 //! 구조 변경 명령을 실행한다. revision 증가와 최종 불변식 검사는 dispatch가 맡는다.
 
-use super::events::reset_agent_source;
+use super::events::recompute_agent_summary;
 use super::tabs::{path_title, validate_viewer_path, PreparedTab};
 use super::{unknown, Command, CommandError, CommandOutput, Dispatcher};
 use crate::model::{
@@ -64,7 +64,6 @@ impl Dispatcher {
                     active_pane: pane,
                     agent_status: AgentStatus::Idle,
                     last_agent_message: None,
-                    agent_status_source: None,
                 });
                 self.state.active_workspace = Some(workspace);
                 Ok(CommandOutput::WorkspaceCreated {
@@ -230,11 +229,7 @@ impl Dispatcher {
                     return Err(CommandError::LastPane);
                 }
                 let removed = collapse_pane(&mut self.state.workspaces[wi], pane);
-                for tab in &removed.tabs {
-                    // 사라지는 탭이 워크스페이스 상태의 출처면 Idle 로 되돌린다
-                    // (pane 하나에 여러 탭이 있을 수 있어 제거되는 탭 전부 확인).
-                    reset_agent_source(&mut self.state.workspaces[wi], tab.id);
-                }
+                recompute_agent_summary(&mut self.state.workspaces[wi]);
                 let distro = self.state.workspaces[wi].distro.clone();
                 self.retire_tabs(distro.as_deref(), removed.tabs.iter());
                 Ok(CommandOutput::Done)
@@ -305,8 +300,7 @@ impl Dispatcher {
                     let collapsed = collapse_pane(ws, pane);
                     debug_assert!(collapsed.tabs.is_empty(), "빈 pane 만 collapse 대상");
                 }
-                // 닫힌 탭이 워크스페이스 상태의 출처면 Idle 로 되돌린다.
-                reset_agent_source(ws, tab);
+                recompute_agent_summary(ws);
                 let distro = ws.distro.clone();
                 self.retire_tabs(distro.as_deref(), std::iter::once(&removed));
                 Ok(CommandOutput::Done)

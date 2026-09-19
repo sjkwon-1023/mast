@@ -41,12 +41,10 @@ export interface Workspace {
    *  조회는 String(paneId) 로 한다. */
   panes: Record<string, Pane>;
   activePane: PaneId;
+  /** 탭들의 agentStatus·lastAgentMessage 에서 코어가 재계산해 저장하는 파생값이다.
+   *  사이드바와 폰 목록이 워크스페이스 단위로 읽으므로 스냅샷에 남아 있다. */
   agentStatus: AgentStatus;
   lastAgentMessage: string | null;
-  /** agentStatus 를 마지막으로 기록한 탭 (18단계 needsInput 우선 규칙의 주체).
-   *  코어가 `skip_serializing_if = "Option::is_none"` 이라 None 이면 JSON 에서
-   *  키 자체가 빠진다 — 그래서 `| null` 이 아니라 optional 이다 (fixture 무변경). */
-  agentStatusSource?: TabId;
 }
 
 export type AgentStatus = "running" | "needsInput" | "idle";
@@ -82,6 +80,8 @@ export interface Tab {
   kind: TabKind;
   notification: NotificationState;
   lastActivityMs: number | null;
+  agentStatus: AgentStatus;
+  lastAgentMessage: string | null;
 }
 
 /** 탭 종류별 상태 — internal tag "type".

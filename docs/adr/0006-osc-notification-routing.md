@@ -1,7 +1,16 @@
 # ADR-0006: Stage 18 — OSC notification routing, snapshot coalescing, keyed reconcile
 
-- Status: accepted
+- Status: accepted; superseded in part by [ADR-0026](0026-tab-agent-state-and-hook-signals.md)
 - Date: 2026-08-10 (stage landed 2026-08-09)
+
+**Superseded in part by [ADR-0026](0026-tab-agent-state-and-hook-signals.md)** (2026-09-15):
+agent status and message now live on the emitting tab, and the workspace fields are derived from
+its tabs. Replaced: decision 4 in full (`agent_status_source`, the needsInput priority rule and
+the shared reset helper); decision 3's target — a `mast:<status>` token sets the tab's
+`agent_status`, not the workspace's, while the token contract and status-neutral OSC 9 stand; and
+decision 1's reason that session-id application order is acceptable, which now rests on the
+per-tab derivation (the merge cell itself stands). Extended: decision 7 also resets each tab's
+agent status and message. Decisions 2, 5, 6 and 8–10 stand. The body below is left as written.
 
 ## Context
 

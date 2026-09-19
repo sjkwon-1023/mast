@@ -70,10 +70,24 @@ export class TabView {
   /** 크기 변경 요청이 날아가 있는 동안 true — 버튼 연타가 resize 요청을 겹쳐
    *  보내지 않게 한다 (서버는 멱등이지만 왕복마다 화면이 다시 만들어질 수 있다). */
   private sizeBusy = false;
+  /** 페이지가 사라지는 중(`dispose` 또는 `pagehide`) — 그 뒤에 도착한 크기 요청의
+   *  성공을 여기서 되돌려야 하는지 가른다 (성공 직후 이탈·진행 중 이탈 모두). */
+  private left = false;
+  /** 성공한 크기 요청이 소유자를 바꾼 횟수. 그보다 먼저 나간 화면 폴의 응답은
+   *  이미 옛 소유자를 싣고 있다 — 그 값으로 현재 소유자를 되돌리지 않는다
+   *  (`poll` 의 요청 시점 캡처). */
+  private ownerEpoch = 0;
   /** 페이지가 사라지는 중(`pagehide`) — dispose 를 타지 않는 종료라 따로 듣는다.
    *  브라우저가 탭을 닫거나 앱을 스와이프해 없애는 경로가 여기로 온다. */
   private readonly onPageHide = (): void => {
+    this.left = true;
     if (this.state.sizeOwner === "mobile") this.releaseSizeOnLeave();
+  };
+  /** bfcache 복원(`pageshow`) — 떠남 표시를 내린다. 표시가 남으면 되살아난 페이지의
+   *  새 주장이 성공하는 즉시 되돌려져 폰이 소유를 가질 수 없다 (이 리스너는 로드
+   *  뒤에 붙으므로 정상 로드의 pageshow 는 듣지 않는다). */
+  private readonly onPageShow = (): void => {
+    this.left = false;
   };
 
   private term: Terminal | null = null;
@@ -181,6 +195,7 @@ export class TabView {
     this.setInputEnabled(false);
     this.paintSizeMode(this.state.sizeOwner);
     window.addEventListener("pagehide", this.onPageHide);
+    window.addEventListener("pageshow", this.onPageShow);
 
     this.schedule = new PollSchedule({
       intervalMs: POLL_INTERVAL_MS,
@@ -214,11 +229,15 @@ export class TabView {
   }
 
   dispose(): void {
+    // 떠남을 먼저 표시한다 — 해제 판정은 지금 상태만 보므로, 날아가 있는 주장이
+    // 이 뒤에 성공하면 sendSize 의 이탈 분기가 그 주장을 되돌린다.
+    this.left = true;
     // 탭을 떠나면 폰이 소유한 크기를 즉시 돌려준다 — 리스 만료(30초)를 기다리는
     // 동안 데스크톱이 좁은 화면에 갇혀 있을 이유가 없다. keepalive 라 페이지가
     // 사라지는 중에도 요청이 나가고, 실패해도 리스가 결국 정리한다.
     if (this.state.sizeOwner === "mobile") this.releaseSizeOnLeave();
     window.removeEventListener("pagehide", this.onPageHide);
+    window.removeEventListener("pageshow", this.onPageShow);
     this.schedule.stop();
     this.queue.clear();
     this.destroyTerminal();
@@ -322,20 +341,37 @@ export class TabView {
     this.sizeBusy = true;
     try {
       const reply = await postResize(this.options.tab, session, mode, size);
-      // 서버가 적용했다고 말한 소유자로 곧바로 칠한다 — 다음 폴(2초)까지 버튼이
-      // 눌린 채로 있지 않게. 실제 크기·소유자는 다음 meta 가 다시 확인해 준다.
+      // 서버가 적용했다고 답한 소유자를 버튼 페인트에만 쓰지 않고 **수명 상태에도**
+      // 반영한다 — 그러지 않으면 다음 폴(2초) 전에 Back/pagehide 로 떠날 때 이미
+      // 폰 소유인데도 해제 요청이 나가지 않아 데스크톱이 리스 만료까지 좁은 채로
+      // 남는다. 화면 인스턴스의 cols/rows 는 건드리지 않는다: 실제 격자는 다음
+      // 폴의 meta 가 정한다 (먼저 바꾸면 needsRecreate 판정이 어긋난다).
+      this.state = { ...this.state, sizeOwner: reply.owner };
+      this.ownerEpoch += 1;
+      if (this.left) {
+        // 요청이 날아가 있는 사이 페이지를 떠났다 — 방금 성공한 주장을 여기서
+        // 되돌린다. 해제 요청이 실패해도 성공으로 속이지 않는다: 소유자 상태는
+        // 서버 응답으로만 바뀌고, 최종 안전망은 리스 만료다.
+        if (reply.owner === "mobile") this.releaseSizeOnLeave();
+        return;
+      }
+      // 다음 폴(2초)까지 버튼이 눌린 채로 있지 않게. 실제 크기·소유자는 다음
+      // meta 가 다시 확인해 준다.
       this.paintSizeMode(reply.owner);
       this.setNotice(null);
       this.schedule.pollNow();
     } catch (error) {
-      this.handleSizeError(error);
+      // 페이지가 이미 떠났으면 안내를 띄울 표면이 없다 — 실패를 화면에 남기지
+      // 않고 리스 만료에 맡긴다.
+      if (!this.left) this.handleSizeError(error);
     } finally {
       this.sizeBusy = false;
     }
   }
 
   /** 탭을 떠나며 보내는 해제 — 실패해도 조용하다 (리스가 최종 안전망이고, 그
-   *  사이 사용자가 보는 화면이 없다). */
+   *  사이 사용자가 보는 화면이 없다). 성공으로 속이지도 않는다: 여기서 소유권
+   *  상태를 바꾸지 않으므로 실패한 해제는 다음 이탈·다음 폴에서 다시 시도된다. */
   private releaseSizeOnLeave(): void {
     const session = this.state.session;
     if (session === null) return;
@@ -350,11 +386,14 @@ export class TabView {
   }
 
   private async poll(generation: number): Promise<void> {
+    // 이 요청이 나가기 전에 성공한 크기 변경이 있는지는 요청 시점으로 판정한다 —
+    // 응답이 그 뒤에 도착해도 그 응답의 소유자는 이미 옛 값이다 (apply).
+    const ownerEpoch = this.ownerEpoch;
     try {
       const reply = await fetchScreen(this.options.tab, screenQuery(this.state));
       // 늦게 도착한 이전 세대의 응답은 지금 화면과 무관하다.
       if (!this.schedule.isCurrent(generation)) return;
-      this.apply(reply);
+      this.apply(reply, ownerEpoch);
       this.setNotice(null);
     } catch (error) {
       if (!this.schedule.isCurrent(generation)) return;
@@ -362,8 +401,14 @@ export class TabView {
     }
   }
 
-  private apply(reply: ScreenReply): void {
-    const { meta, bytes } = reply;
+  private apply(reply: ScreenReply, ownerEpoch: number): void {
+    const { bytes } = reply;
+    // 이 응답이 나간 뒤에 성공한 크기 변경이 있으면 소유자만 로컬 값을 지킨다 —
+    // 서버도 그 변경으로 소유자가 바뀌었는데, 그 전에 만들어진 이 응답으로
+    // 되돌리면 폰이 이미 소유 중인데 버튼·이탈 해제가 데스크톱으로 판단한다.
+    // 크기·세션은 그대로 응답을 따르고, 소유자는 다음 폴이 다시 확인해 준다.
+    const meta =
+      ownerEpoch === this.ownerEpoch ? reply.meta : { ...reply.meta, sizeOwner: this.state.sizeOwner };
     if (this.state.phase === "full") {
       // 서버 계약상 `since` 없는 요청의 응답은 항상 reset 이다. 아니면 화면을
       // 세울 수 없으므로 상태를 그대로 두고 다음 폴에서 다시 요청한다.

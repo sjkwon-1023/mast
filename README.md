@@ -43,8 +43,9 @@ and WSL2.
 - **Split panes** — split either way, drag to resize, `Ctrl+Shift`+arrows to move focus. A new pane or tab
   opens in the directory the pane's shell is in.
 - **Tabs inside panes** — every pane has its own tab strip; background tabs stay alive.
-- **Agent status and notifications** — Claude Code and Codex report running / needs input / idle to
-  the sidebar, and a Windows toast fires when one starts waiting.
+- **Agent status and notifications** — Claude Code and Codex report running / needs input / idle
+  for each tab, and Antigravity CLI reports running / idle. The sidebar card shows the most urgent
+  tab, the waiting tab gets its own badge, and a Windows toast names the tab that starts waiting.
 - **Agent-to-agent communication** — `mast ls` discovers tabs and `mast send '#<id>' 'text'`
   sends input to another agent or shell in the same workspace (`-l` pre-fills without submitting).
 - **Viewer tabs** — folder browser, text viewer and Markdown viewer for files inside WSL.
@@ -72,8 +73,10 @@ and WebView2 (normally included with Windows 11).
 1. **Prepare WSL2.** If needed, run `wsl --install` in administrator PowerShell, restart Windows,
    then open Ubuntu and create your Linux user account.
    [WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install).
-2. **Prepare your agents.** Install Claude Code or Codex inside WSL before first launching mast.
-   On Ubuntu, install the integration helpers with `sudo apt install python3 jq coreutils`.
+2. **Prepare your agents.** Install Claude Code, Codex or Antigravity CLI inside WSL before first
+   launching mast. On Ubuntu, install the integration helpers with
+   `sudo apt install python3 jq coreutils`; Claude Code approval tracking and every Codex hook
+   need Python 3.8 or later.
    Agents are optional if you only want Bash terminals.
 3. **Download and run.** Get `mast-x64.exe` or `mast-arm64.exe` from the
    [latest release](https://github.com/sjkwon-1023/mast/releases/latest) and run it — no installer.
@@ -81,7 +84,20 @@ and WebView2 (normally included with Windows 11).
    **More info** → **Run anyway**.
 
 mast opens your default WSL distribution and automatically sets up agent integration on first
-launch. [Integration details and manual setup](./scripts/wsl/claude-hook-example.md).
+launch. Anything it could not set up, and what to do about it, is written to `~/.mast/setup.log`.
+
+- **Claude Code** needs nothing more. With Python 3.8+ and Claude Code 2.1.118 or later, a tab
+  that asked for approval shows running again as soon as the approved tool finishes.
+- **Codex** needs one step from you. mast installs its hooks in `~/.codex/hooks.json` (always
+  `~/.codex`; a custom `CODEX_HOME` is not followed), and Codex runs none of them until you trust
+  them in the **Hooks need review** prompt at its next launch. Until you do, that prompt returns
+  on every Codex launch. To decline for good, create `~/.mast/no-codex-hooks` and delete mast's
+  entries from that file. With a Python older than 3.8 mast installs no Codex hooks, and a Codex
+  tab reports only idle, at the end of each turn; without python3 at all, setup stops before
+  wiring any agent and prints a notice.
+- **Antigravity CLI** reports running and idle only: it has no hook for a pending approval.
+
+[Integration details and manual setup](./scripts/wsl/claude-hook-example.md).
 
 The sidebar shows your installed version. Once per app launch, mast checks GitHub for a newer
 stable release in the background. **Update available** opens the release page; downloading,

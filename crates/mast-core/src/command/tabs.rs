@@ -1,7 +1,8 @@
 //! 상태 변이 전 탭 준비, 터미널 재스폰과 영구 탭 자원 해제를 담당한다.
 
+use super::events::clear_tab_agent;
 use super::{unknown, CommandError, Dispatcher, NewTab, ShellSpawnReq};
-use crate::model::{NotificationState, Tab, TabId, TabKind, TerminalStatus};
+use crate::model::{AgentStatus, NotificationState, Tab, TabId, TabKind, TerminalStatus};
 use crate::session::SessionId;
 
 impl Dispatcher {
@@ -100,6 +101,8 @@ impl Dispatcher {
                 Err(err)
             }
         };
+        // 성공이든 강등이든 이전 세션의 에이전트가 남긴 상태는 새 셸의 것이 아니다.
+        clear_tab_agent(&mut self.state.workspaces[wi], tab);
         self.state.revision += 1;
         for ws in &self.state.workspaces {
             ws.debug_assert_invariants();
@@ -257,6 +260,9 @@ fn terminal_tab(id: TabId, session: SessionId, cwd: Option<String>) -> Tab {
         },
         notification: NotificationState::None,
         last_activity_ms: None,
+        agent_status: AgentStatus::Idle,
+        last_agent_message: None,
+        last_agent_message_seq: None,
     }
 }
 
@@ -269,6 +275,9 @@ fn viewer_tab(id: TabId, title: String, kind: TabKind) -> Tab {
         kind,
         notification: NotificationState::None,
         last_activity_ms: None,
+        agent_status: AgentStatus::Idle,
+        last_agent_message: None,
+        last_agent_message_seq: None,
     }
 }
 

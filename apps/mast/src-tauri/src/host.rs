@@ -515,12 +515,13 @@ fn release_tab_files(tabs: &[TabId], distro: Option<&str>) {
     }
 }
 
-/// 삭제 스크립트 본문. 탭 하나가 남기는 파일은 셋이다 — 탭별 `HISTFILE`, resume
-/// 힌트, 그리고 훅이 쓰다 만 힌트 임시 파일(`tab-<id>.tmp.<pid>`).
+/// 삭제 스크립트 본문. 탭 하나가 남기는 파일은 탭별 `HISTFILE`, resume 힌트, 에이전트 훅
+/// 디스패처의 상태·lock·진단 파일(`~/.mast/agent-hooks/`), 그리고 쓰다 죽은 프로세스가 남긴
+/// 임시 파일(`<파일>.tmp.<pid>`)이다.
 ///
 /// 탭 id 는 10진수 `u64` 라 셸 메타문자가 될 수 없다 — 그대로 박아도 안전하다.
 /// `.tmp.*` 만 따옴표 밖에 두어 glob 이 살아 있고, 매치가 없으면 그 리터럴이 그대로
-/// 남는데 `rm -f` 는 없는 파일에 침묵한다 (그래서 없는 파일 셋도 조용히 지나간다).
+/// 남는데 `rm -f` 는 없는 파일에 침묵한다 (그래서 없는 파일도 조용히 지나간다).
 #[cfg(windows)]
 fn release_script(tabs: &[TabId]) -> String {
     let mut script = String::from("rm -f --");
@@ -528,6 +529,9 @@ fn release_script(tabs: &[TabId]) -> String {
         let id = tab.0;
         script.push_str(&format!(
             r#" "$HOME/.mast/history/tab-{id}" "$HOME/.mast/resume/tab-{id}" "$HOME/.mast/resume/tab-{id}".tmp.*"#
+        ));
+        script.push_str(&format!(
+            r#" "$HOME/.mast/agent-hooks/tab-{id}.json" "$HOME/.mast/agent-hooks/tab-{id}.lock" "$HOME/.mast/agent-hooks/tab-{id}.diag" "$HOME/.mast/agent-hooks/tab-{id}.json".tmp.* "$HOME/.mast/agent-hooks/tab-{id}.diag".tmp.*"#
         ));
     }
     script
@@ -646,7 +650,7 @@ mod tests {
         );
     }
 
-    /// 닫힌 탭 정리 스크립트 — 탭마다 세 자리(history·resume·resume 임시)를 지우고,
+    /// 닫힌 탭 정리 스크립트 — 탭마다 history·resume·에이전트 훅 파일과 그 임시 파일을 지우고,
     /// 여러 탭이 한 번의 `rm` 으로 들어간다 (SessionHost::release_tabs 의 배치 계약).
     /// 닫힌 탭 정리 스크립트는 통짜로 비교한다 — 짧고 거의 변하지 않는 데다, 여기서
     /// 틀리면 남의 파일을 지우거나 아무것도 못 지운다. `$HOME` 이 따옴표 안에서
@@ -654,10 +658,18 @@ mod tests {
     /// 접두사로 쓸어 담으면 탭 1 을 지울 때 탭 12·13 이 함께 사라진다), 탭 둘이 `rm`
     /// 하나로 묶이는지가 한 번에 걸린다.
     #[test]
-    fn release_script_removes_all_three_per_tab_files_in_one_rm() {
+    fn release_script_removes_every_per_tab_file_in_one_rm() {
         assert_eq!(
             release_script(&[TabId(7), TabId(12)]),
-            r#"rm -f -- "$HOME/.mast/history/tab-7" "$HOME/.mast/resume/tab-7" "$HOME/.mast/resume/tab-7".tmp.* "$HOME/.mast/history/tab-12" "$HOME/.mast/resume/tab-12" "$HOME/.mast/resume/tab-12".tmp.*"#
+            concat!(
+                r#"rm -f --"#,
+                r#" "$HOME/.mast/history/tab-7" "$HOME/.mast/resume/tab-7" "$HOME/.mast/resume/tab-7".tmp.*"#,
+                r#" "$HOME/.mast/agent-hooks/tab-7.json" "$HOME/.mast/agent-hooks/tab-7.lock" "$HOME/.mast/agent-hooks/tab-7.diag""#,
+                r#" "$HOME/.mast/agent-hooks/tab-7.json".tmp.* "$HOME/.mast/agent-hooks/tab-7.diag".tmp.*"#,
+                r#" "$HOME/.mast/history/tab-12" "$HOME/.mast/resume/tab-12" "$HOME/.mast/resume/tab-12".tmp.*"#,
+                r#" "$HOME/.mast/agent-hooks/tab-12.json" "$HOME/.mast/agent-hooks/tab-12.lock" "$HOME/.mast/agent-hooks/tab-12.diag""#,
+                r#" "$HOME/.mast/agent-hooks/tab-12.json".tmp.* "$HOME/.mast/agent-hooks/tab-12.diag".tmp.*"#,
+            )
         );
     }
 }

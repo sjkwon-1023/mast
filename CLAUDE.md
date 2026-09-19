@@ -21,8 +21,8 @@ artifacts build on `workflow_dispatch`. **Remaining: stage 23**, ARM64 device te
 Every decision behind those stages lives in `docs/adr/`: stack adoption (0001),
 stage-10 architecture (0002), split/tab UI (0003), lifecycle + persistence + reset with
 the hard-won ConPTY findings (0004), inter-pane text passing and its UI retirement
-(0005), OSC notification routing (0006), the keyboard model and the canonical
-interception list (0007), viewer tabs (0008). Stage 19 (git branch display) is deferred
+(0005), OSC notification routing (0006; agent state per tab since 0026), the keyboard
+model and the canonical interception list (0007), viewer tabs (0008). Stage 19 (git branch display) is deferred
 to v2 with `git_branch`/`git_dirty` reserved on the model.
 
 Every release through **v0.3.8 is field-verified** (2026-08-13 round): the toast pipeline
@@ -364,27 +364,39 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 
 #### Agent integration — hooks, notify, resume, the `mast` CLI
 
-- **Agent coverage beyond Claude Code and Codex** (user request 2026-08-15).
-  OpenCode's default TUI integration is recorded below; Antigravity CLI remains open.
-  All agents reuse the `mast:running` / `mast:needsInput` / `mast:idle` tokens and
-  `mast-notify.sh` unchanged. Neither `mast-core` nor the frontend contains
-  agent-specific routing.
-  - **Antigravity**: only the **CLI** is in scope. The IDE's agents do not run in a mast
-    tab, so there is no pts to emit into and no tab to attribute a toast to. The CLI's hooks
-    are near-isomorphic to Claude Code's — `hooks.json` under `.agents/` per workspace or
-    `~/.gemini/config/` globally, the same `{"matcher": …, "hooks": [{"type": "command",
-    "command": …, "timeout": …}]}` shape, payload on stdin — so the Claude half's Python
-    merge is the template rather than new machinery. The gap is the **event mapping**: the
-    documented events are `PreToolUse` / `PostToolUse` / `PreInvocation` / `PostInvocation` /
-    `Stop`, so `Stop → mast:idle` is obvious, but there is **no `Notification` equivalent
-    to carry `mast:needsInput`** — the one state the toast exists for. Until that is
-    answered the integration is idle-only, which is half the feature. Payload keys are
-    camelCase (`conversationId`, `transcriptPath`, `terminationReason`, `fullyIdle`); unlike
-    Codex no snake-case fallback is in evidence. Version risk: hook delivery has been in flux
-    (a field report of `Stop`/`PostToolUse` never firing on IDE 1.107.0, later addressed by
-    running hooks.json hooks ahead of the built-in termination checks), so a field check must
-    name the CLI version it passed on.
-  - **OpenCode default TUI status and resume hints — landed in this branch** (setup v14;
+- **Agent coverage beyond Claude Code and Codex — Antigravity CLI and OpenCode landed; the
+  branch merged both** (user request 2026-08-15). All four agents reuse the
+  `mast:running` / `mast:needsInput` / `mast:idle` tokens **unchanged**: nothing in
+  `mast-core` (`osc.rs`, `notify.rs`) or the front-end (`features/notifications/chime.ts`, `app/main.ts`) is
+  agent-specific. The work is provisioning — a step in `provision.rs`'s `SETUP_SCRIPT`, a mode in
+  `scripts/wsl/mast-hooks-merge.py` (where the merge rules live) and a hook script or plugin under
+  `scripts/wsl/` embedded through `EMBEDDED_FILES` — plus a `SETUP_VERSION` bump, a
+  resume-command entry in `host.rs::bash_argv`'s whitelist when the agent has one (today
+  `claude --resume`, `codex resume` and `opencode --session`), and a matching section in
+  `scripts/wsl/claude-hook-example.md`.
+  - **Antigravity CLI — landed** (v0.3.32, setup v15, [ADR-0026](docs/adr/0026-tab-agent-state-and-hook-signals.md)
+    decision 8; field verification pending). Only the **CLI** is in scope: the IDE's agents do
+    not run in a mast tab, so there is no pts to emit into and no tab to attribute a toast to.
+    `mast-hooks-merge.py agy` adds one named hook `"mast"` to the global
+    `~/.gemini/config/hooks.json` (top-level keys are hook names, `PreInvocation`/`Stop` take
+    flat handler arrays, and there is no Codex-style trust step): `PreInvocation` runs
+    `mast-agy-hook.sh running` → `mast:running`, `Stop` runs `… idle` → `mast:idle` with the
+    first line of `finalModelOutput` (else `done`). agy payloads carry no event name, hence the
+    argument; handler stdout must parse as a JSON object, so the script prints exactly `{}`; it
+    emits nothing outside a mast tab or when Claude Code or Codex started agy in the same tab.
+    An identical `"mast"` is wired, an identical one with `enabled: false` is the user's opt-out,
+    a different one is left alone with a notice, and any hook agy would reject is exit 3 — agy
+    drops the whole file when one hook fails. Skipped without `~/.gemini/antigravity-cli` or
+    with `~/.mast/no-agy-hooks`; before 1.1.10 `Stop` hooks never run (notice). **Still open**:
+    **needs input** — the hook events have no `Notification`/`PermissionRequest` equivalent, so
+    a tab waiting for an approval shows running. The candidate is `tool_confirmation_pending` in
+    the `statusLine` script input, not taken because `statusLine` is a single user-owned setting
+    whose re-invocation timing is unverified (`PreToolUse` must return a decision and a failure
+    denies the tool). **No resume hint** — no `host.rs` whitelist entry. Unverified until the
+    field round: Esc cancellation and its `terminationReason`, a `Stop` with `fullyIdle: false`,
+    the skip-permissions and remote-control paths, hooks.json hot reload. Hook delivery has been
+    in flux across versions, so a field check must name the CLI version it passed on.
+  - **OpenCode default TUI status and resume hints — landed 2026-09-16** (setup v14;
     [ADR-0027](docs/adr/0027-opencode-plugin-status-and-resume.md)). OpenCode 1.18.31
     runs its default TUI server and plugin as a Worker in the tab process, with the tab's
     pts and `MAST_TAB` inherited. A single global plugin emits the existing three mast
@@ -421,6 +433,55 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   read its own history (hint line still shows, ↑ would not). Informational: the
   2026-08-12 field failure was NOT this — it was the `wsl.exe --` double evaluation,
   fixed by `--exec` in v0.3.3 and field-confirmed.
+
+- **Agent state is per tab and driven by the agents' hooks — landed 2026-09-15** (v0.3.32,
+  setup v15; Windows field verification pending). Three defects at once: Codex only ever reported
+  idle (legacy `notify` was its one signal); a single workspace status slot with an
+  `agent_status_source` let a sibling's idle hide a running tab, a closed tab reset live ones and a
+  second waiting tab go unannounced; and Claude Code sat at needs input from an approval until
+  `Stop`, while the `""` Notification matcher turned `idle_prompt` into needs input a minute after
+  every turn. The token contract and the agent-agnostic core are unchanged; no screen, title or
+  process detection. **Core**: `Tab` carries `agent_status`/`last_agent_message`, and the
+  workspace fields are a stored derivation — the most urgent tab; the preview is the newest
+  message among waiting tabs while the workspace waits, the newest overall otherwise; recency is a
+  per-OSC-batch sequence, not the clock, ties to the smaller tab id. `validate()` is untouched and
+  `PERSIST_VERSION` stays 1. **Dispatcher**: `~/.mast/bin/mast-agent-hook.py` (Python 3.8, run
+  from argument-less entry points through the interpreter recorded in `~/.mast/bin/mast-python`)
+  keeps a flock'd, bounded `~/.mast/agent-hooks/tab-<id>.json` (deleted on tab close, ADR-0013)
+  and writes OSC 777 itself — a blocking write with a deadline and a BEL so no unterminated OSC
+  eats agent output, stdout always empty, exit 0 (only `codex-notify` exits 1, when it died before
+  trying to write, so the notify script can fall back to its own idle). *Claude*: `PermissionRequest` records a
+  wait keyed by session, scope and canonical input; `PostToolUse`/`PostToolUseFailure` release it
+  and emit running once none remain; `PostToolBatch`, `SubagentStop`, root prompts, `Stop` and
+  `SessionStart` (startup/resume only) clear waits by rule; the Notification matcher is narrowed to
+  six needs-input types by a dict-identical self-migration. *Codex*: seven hooks appended to
+  `~/.codex/hooks.json` with one fixed command so trust keys and hashes stay stable (never
+  `config.toml`, no `trusted_hash` writes); they do nothing until the user trusts them in Codex.
+  Sync `PreToolUse` records the call, async `PermissionRequest` raises needs input only if that
+  call is still unfinished after a 2 s hold-off, `PostToolUse` releases, `Stop` goes idle with the
+  last answer as the body and `Interrupt` with `interrupted` (both needs input instead while a
+  subagent's approval is still shown), `SubagentStop` cleans up. `mast-codex-notify.sh` keeps its
+  line and resume hint but hands the idle to the dispatcher's `codex-notify` judgement
+  (resumable/confirmed/rejected/unknown ownership; handled, late, nested and previous-session
+  notifies are dropped, a rejected one never falls back). *Antigravity CLI*: running/idle, see the
+  coverage entry above. **Provisioning** (`mast-hooks-merge.py`, Python 3.6): symlink-preserving
+  atomic writes with a re-read before replace, snippet notices for read-only or dangling targets,
+  exit 3 for deterministic content refusals with `~/.mast/no-codex-hooks` / `no-agy-hooks`
+  opt-outs, sub-markers `.setup-v15-codex` / `.setup-v15-agy` so an agent installed later runs only
+  its own step, and version gates over fixed install locations where the lowest copy decides —
+  Claude Code below 2.1.118 or unreadable gets status rows only, Codex notices at
+  0.124/0.129/0.131/0.133/0.148/0.150, agy below 1.1.10. A 173 KB script made `run()` tolerate
+  `BrokenPipe` when a marker lets bash stop reading early. Decisions, rejected alternatives and the
+  full limits list: [ADR-0026](docs/adr/0026-tab-agent-state-and-hook-signals.md). Verification:
+  WINDOWS-BUILD §10 v0.3.32 — **not yet run**. **Open, most consequential first**: Codex needs
+  input is a timing heuristic — an auto-approved call running past 2 s toasts, an approved long
+  command shows needs input while it runs, any denial or an approved call that then fails holds
+  needs input until the turn ends (a subagent's until it stops), and an aborted subagent approval
+  sticks for the session; Claude's feedbackless denial leaves needs input or
+  running until the next prompt, and every root prompt's status-row running (task-notification
+  wakeups included) replaces a subagent dialog's needs input; Antigravity has no needs input; the
+  per-tool-call hook latency targets (p95 under 100 ms added) are unmeasured; and no Python 3.6
+  interpreter, `wsl.exe` relay or Windows-only glue test has run against this change.
 
 - **`mast send` submitted to shells but not to TUI agents — fixed 2026-08-22** (found in
   the field 2026-08-15, v0.3.11). `cmd_send` appended **LF** (`printf '%s\n' "$text"`, the CLI
@@ -553,6 +614,27 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   stays as the onset engine, minus its now-meaningless `chime` derived field — a **contract
   change**: `NeedsInputOnset` is `{ onsets, next }`.
 
+- **needsInput onset, toasts and badges are per tab — landed 2026-09-15** (v0.3.32; Windows
+  field verification pending). Agent state moved onto the tab (ADR-0026; see *Agent state is per
+  tab* under Agent integration), and the onset followed: `detectNeedsInputOnset(prev, workspaces)`
+  now keys `prev`/`next` by `TabId` and returns `onsets: TabOnset[]` with
+  `TabOnset = { workspaceId, tabId }` — a **contract change** from workspace ids. The rules are the
+  same (the first snapshot of a WebView lifetime is the baseline, a repeat is silent, vanished tabs
+  drop out), but a second tab starting to wait in an already-waiting workspace now fires, where the
+  workspace-level check saw no change. Suppression is unchanged — focused window **and** active
+  workspace — and a hidden tab in the active workspace relies on its badge. `needsInputToasts`
+  sends **one toast per tab**, never merged per workspace: title `mast — <workspace> · <tab
+  title>`, body the first line of **that tab's** `lastAgentMessage` (fallback `agent needs your
+  input`), never the derived workspace message, which may be another tab's question.
+  `notify_toast` gained `log_label`, and `toast.log` records `ok label="<workspace> #<tab id>"`
+  instead of the title: tab titles arrive over OSC 0/2 carrying task text and paths, which the log
+  already keeps out by never recording the body. Tab buttons get a `!` needs-input badge distinct
+  from the unread dot (unread clears when the tab is viewed, needs input on the agent's next
+  token); the node always exists and toggles `hidden`, and `sameTabButton` compares the flag so a
+  status-only change patches in place. The pane dot lights for either and takes a `needs-input`
+  class. The sidebar and the phone read the derived workspace fields and did not change.
+  Verification: WINDOWS-BUILD §10 v0.3.32.
+
 #### Phone remote surface
 
 - **Secure pairing over Tailscale — decided 2026-09-17, not started.** The *Pair phone* dialog
@@ -575,28 +657,37 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   in the dock: *Mobile* measures the visible output area's character grid once and shrinks the
   tab's real PTY to it (the TUI redraws on SIGWINCH), *Desktop* hands the size back to the
   desktop pane. Ownership lives in `PtySession` (`SizeOwner` + a 30 s lease; every transition
-  and PTY call under the master guard). The desktop's own `resize` path — fit, zoom, attach
+  and PTY call under the master guard), and **transfers only after `master.resize` returns
+  `Ok`** — a failed claim/release (and the lapsed-lease restore in `renew_mobile_lease`) keeps
+  the previous state so the retry is real, instead of suppressing every desktop resize with
+  the PTY at the wrong size. The desktop's own `resize` path — fit, zoom, attach
   nudge — is **suppressed but recorded** while the phone owns, so *Desktop* restores the
   *current* pane size rather than a value captured at claim time, and the keyboard never feeds
   the size (measured only on the press; no viewport listener). A token-matched `/screen` poll
   is the lease heartbeat, so a phone that vanishes is cleaned up by lease lapse (next poll or
   next desktop resize); leaving the tab or `pagehide` returns it immediately with a
-  `keepalive` request. Wire contract, cleanup rules and accepted costs (the desktop shows the
-  narrow layout while the phone looks; an absent phone with an untouched desktop stays narrow
-  until its next resize): [ADR-0016](docs/adr/0016-remote-surface-over-lan.md) amendment
-  (2026-09-17). Verification: WINDOWS-BUILD §10 "Phone-controlled PTY size" — field-only.
+  `keepalive` request, and that includes leaving **during** an in-flight claim (the late
+  success is answered with the same release) or right after one (the reply's owner is written
+  into the phone's own lifetime state, so no poll has to land first). A failed keepalive
+  release is not recorded as success, and a screen reply whose request predates a successful
+  claim cannot undo its owner. Wire contract, cleanup rules and accepted costs (the desktop
+  shows the narrow layout while the phone looks; an absent phone with an untouched desktop
+  stays narrow until its next resize): [ADR-0016](docs/adr/0016-remote-surface-over-lan.md)
+  amendment (2026-09-17, refined 2026-09-19). Verification: WINDOWS-BUILD §10
+  "Phone-controlled PTY size" — field-only, plus the injected resize-failure unit tests in
+  `cargo test -p mast-core`.
   **Still open**: a fixed-grid mode with horizontal scroll/pinch zoom, if reading turns out
   not to be the main use.
 
 - **needsInput dot on the phone list — landed 2026-09-17** (user request). The phone has no
-  alarm, so the workspace list's tab rows now carry a warn `●` on the tab waiting for input
-  (the workspace card's `needs input` badge stays as the workspace-level signal). It derives
-  the target from the current workspace summary — `agentStatus` + `agentStatusSource` — so it
-  is the one-tab approximation: two waiting tabs in one workspace show only the latest one.
-  When tab-level `agentStatus` lands (agent-state-signals) the derivation becomes that field.
-  `signatureOf` includes the source id, or a stale dot would stay on the old row when the
-  waiting tab changes without a status change. Verification: WINDOWS-BUILD §10 "Phone
-  needsInput dot" — field-only (a real waiting agent on a real phone).
+  alarm, so the workspace list's tab rows carry a warn `●` on every tab that is waiting for
+  input, read from **that tab's** `agentStatus` (the workspace card's `needs input` badge
+  stays as the workspace-level derivation). Two waiting tabs in one workspace both show a
+  dot, and a released tab loses only its own — the one-tab approximation this entry described
+  ended when agent state moved per tab (2026-09-15/0026). `signatureOf` includes each tab's
+  status, or a stale dot would stay on the old row when the workspace's derived status does
+  not change. Verification: WINDOWS-BUILD §10 "Phone needsInput dot" — field-only (a real
+  waiting agent on a real phone).
 
 - **Image attach from the phone — backlog (user decision 2026-09-08)**. The phone composer is a
   plain textarea, so a pasted image goes nowhere, and no channel exists to hand one to the agent in
@@ -932,8 +1023,8 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 
 - **The chime is gone but its class is not** — `features/notifications/chime.ts` still exports `Chime`,
   `installChimeUnlock` and `AudioContextFactory`, and nothing outside its own tests imports
-  them (v0.3.7 removed the chime itself; `app/main.ts` takes only `detectNeedsInputOnset` /
-  `needsInputToastTargets` from that module). Dead code with a live test surface, so deleting it
+  them (v0.3.7 removed the chime itself; `app/main.ts` takes only `detectNeedsInputOnset`,
+  `needsInputToastTargets` and `needsInputToasts` from that module). Dead code with a live test surface, so deleting it
   is its own small change — noticed during the 2026-08-22 log cleanup, which is why three of the
   surviving `console.debug` lines sit in code that never runs.
 

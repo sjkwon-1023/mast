@@ -55,6 +55,37 @@ async function until(check: () => boolean, what: string, timeoutMs = 3000): Prom
   }
 }
 
+type FetchImpl = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+/** 직접 만든 fetch 구현으로 뷰를 띄운다 — 지연 응답·이탈 사례가 기본 스텁의
+ *  즉시 응답으로는 재현되지 않아서다. */
+async function mountWith(impl: FetchImpl): Promise<TabView> {
+  window.localStorage.setItem("mast.remoteToken", "test-token");
+  vi.stubGlobal("fetch", vi.fn(impl));
+  const mounted = new TabView({ tab: TAB, title: "t", onBack: () => undefined });
+  document.body.append(mounted.root);
+  const textarea = mounted.root.querySelector("textarea") as HTMLTextAreaElement;
+  expect(textarea.disabled).toBe(true);
+  mounted.start();
+  await until(() => !textarea.disabled, "input to become enabled");
+  return mounted;
+}
+
+/** resolve/reject 를 밖에서 쥐는 promise — "요청 진행 중 이탈" 을 만들 때 쓴다. */
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("TabView first frame", () => {
   const posts: string[] = [];
   const resizes: { url: string; keepalive: boolean }[] = [];
@@ -71,36 +102,25 @@ describe("TabView first frame", () => {
   });
 
   async function mount(screen: string, owner = "desktop"): Promise<TabView> {
-    window.localStorage.setItem("mast.remoteToken", "test-token");
     // 서버처럼 소유자를 기억한다 — resize 가 소유자를 바꾸면 다음 폴의 화면 응답도
     // 바뀐 소유자를 싣는다 (그래야 낙관적 페인트를 폴이 되돌리지 않는다).
     let ownerNow = owner;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        if (url.includes("/screen")) return screenResponse(url, screen, ownerNow);
-        if (url.includes("/resize")) {
-          const mode = new URL(url, "http://mast").searchParams.get("mode");
-          ownerNow = mode === "mobile" ? "mobile" : "desktop";
-          resizes.push({ url, keepalive: init?.keepalive === true });
-          return resizeResponse(ownerNow);
-        }
-        if (url.includes("/input")) {
-          posts.push(String(init?.body));
-          return { ok: true, status: 204, headers: new Headers() } as unknown as Response;
-        }
-        throw new Error(`unexpected request ${url}`);
-      }),
-    );
-
-    const mounted = new TabView({ tab: TAB, title: "t", onBack: () => undefined });
+    const mounted = await mountWith(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/screen")) return screenResponse(url, screen, ownerNow);
+      if (url.includes("/resize")) {
+        const mode = new URL(url, "http://mast").searchParams.get("mode");
+        ownerNow = mode === "mobile" ? "mobile" : "desktop";
+        resizes.push({ url, keepalive: init?.keepalive === true });
+        return resizeResponse(ownerNow);
+      }
+      if (url.includes("/input")) {
+        posts.push(String(init?.body));
+        return { ok: true, status: 204, headers: new Headers() } as unknown as Response;
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
     view = mounted;
-    document.body.append(mounted.root);
-    const textarea = mounted.root.querySelector("textarea") as HTMLTextAreaElement;
-    expect(textarea.disabled).toBe(true);
-    mounted.start();
-    await until(() => !textarea.disabled, "input to become enabled");
     return mounted;
   }
 
@@ -313,5 +333,147 @@ describe("TabView first frame", () => {
     await until(() => resizes.length === 1, "a release to be posted on pagehide");
     expect(resizes[0].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
     expect(resizes[0].keepalive).toBe(true);
+  });
+
+  it("a claim that succeeds right before Back is handed back at once", async () => {
+    // 폴을 멈춰 소유자를 되돌리지 못하게 한다 — 주장 성공이 수명 상태에 반영되지
+    // 않으면 dispose 가 해제를 보내지 않는다 (예전에는 다음 폴까지 기다렸다).
+    const mounted = await mount(SCREEN);
+    mounted.setVisible(false);
+    stubPhoneMetrics();
+    const buttons = modeButtons(mounted);
+    buttons.mobile.click();
+    await until(
+      () => buttons.mobile.getAttribute("aria-pressed") === "true",
+      "the claim to be applied",
+    );
+
+    mounted.dispose();
+    await until(() => resizes.length === 2, "the release on dispose");
+    expect(resizes[1].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+    expect(resizes[1].keepalive).toBe(true);
+    view = null;
+  });
+
+  it("leaving while a claim is in flight releases it once the claim succeeds", async () => {
+    const claim = deferred<Response>();
+    const mounted = await mountWith(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/screen")) return screenResponse(url, SCREEN, "desktop");
+      if (url.includes("/resize")) {
+        const mode = new URL(url, "http://mast").searchParams.get("mode");
+        resizes.push({ url, keepalive: init?.keepalive === true });
+        if (mode === "mobile") return claim.promise;
+        return resizeResponse("desktop");
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    view = mounted;
+    mounted.setVisible(false);
+    stubPhoneMetrics();
+    modeButtons(mounted).mobile.click();
+    await until(() => resizes.length === 1, "the claim to be sent");
+
+    // 요청이 진행 중인 상태로 떠난다 — 응답이 성공하면 그 자리에서 되돌려야 한다.
+    mounted.dispose();
+    expect(resizes.length).toBe(1);
+    claim.resolve(resizeResponse("mobile"));
+    await until(() => resizes.length === 2, "the release after the late claim");
+    expect(resizes[1].url).toBe("/api/tabs/7/resize?session=4242:7&mode=desktop");
+    expect(resizes[1].keepalive).toBe(true);
+    view = null;
+  });
+
+  it("a failed keepalive release is not treated as success", async () => {
+    // 해제 요청이 네트워크 오류로 실패한다 — 성공으로 속이면(소유권을 데스크톱으로
+    // 바꾸면) 다음 이탈에서 아무 요청도 나가지 않는다.
+    let releaseFailures = 0;
+    const mounted = await mountWith(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/screen")) return screenResponse(url, SCREEN, "desktop");
+      if (url.includes("/resize")) {
+        const mode = new URL(url, "http://mast").searchParams.get("mode");
+        resizes.push({ url, keepalive: init?.keepalive === true });
+        if (mode === "mobile") return resizeResponse("mobile");
+        releaseFailures += 1;
+        throw new TypeError("network down");
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    view = mounted;
+    mounted.setVisible(false);
+    stubPhoneMetrics();
+    const buttons = modeButtons(mounted);
+    buttons.mobile.click();
+    await until(
+      () => buttons.mobile.getAttribute("aria-pressed") === "true",
+      "the claim to be applied",
+    );
+
+    window.dispatchEvent(new Event("pagehide"));
+    await until(() => resizes.length === 2, "the release on pagehide");
+    // 실패한 해제는 소유권을 바꾸지 않는다 — 다시 이탈하면 재시도된다.
+    mounted.dispose();
+    await until(() => resizes.length === 3, "the retried release on dispose");
+    expect(resizes[2].keepalive).toBe(true);
+    expect(releaseFailures).toBe(2);
+    view = null;
+  });
+
+  it("a page restored from the back-forward cache can claim the size again", async () => {
+    // pagehide 뒤 bfcache 에서 되살아난 페이지 — 이탈 표시가 남아 있으면 새 주장이
+    // 성공하는 즉시 되돌려져(keepalive 해제) 폰이 소유를 가질 수 없다.
+    const mounted = await mount(SCREEN, "mobile");
+    window.dispatchEvent(new Event("pagehide"));
+    await until(() => resizes.length === 1, "the release on pagehide");
+
+    window.dispatchEvent(new Event("pageshow"));
+    stubPhoneMetrics();
+    const buttons = modeButtons(mounted);
+    buttons.mobile.click();
+    await until(() => resizes.length === 2, "the re-claim after restore");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(buttons.mobile.getAttribute("aria-pressed")).toBe("true");
+    expect(resizes.length).toBe(2);
+  });
+
+  it("a screen reply requested before a successful claim does not undo its owner", async () => {
+    // 폴 하나가 날아가 있는 동안 Mobile 이 성공한다 — 그 폴의 응답(옛 소유자)이
+    // 늦게 도착해도 폰 소유를 데스크톱으로 되돌리면, 버튼도 이탈 해제도 틀린다.
+    const stalePoll = deferred<Response>();
+    let screenCalls = 0;
+    const mounted = await mountWith(async (input) => {
+      const url = String(input);
+      if (url.includes("/screen")) {
+        screenCalls += 1;
+        if (screenCalls === 1) return screenResponse(url, SCREEN, "desktop");
+        if (screenCalls === 2) return stalePoll.promise;
+        return new Promise<Response>(() => undefined); // 이후 폴은 영영 오지 않는다
+      }
+      if (url.includes("/resize")) {
+        resizes.push({ url, keepalive: false });
+        return resizeResponse("mobile");
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    view = mounted;
+    stubPhoneMetrics();
+
+    // 폴 하나를 띄운다 — 숨겼다 보이면 즉시 발사된다.
+    mounted.setVisible(false);
+    mounted.setVisible(true);
+    await until(() => screenCalls === 2, "the poll to be in flight");
+
+    const buttons = modeButtons(mounted);
+    buttons.mobile.click();
+    await until(
+      () => buttons.mobile.getAttribute("aria-pressed") === "true",
+      "the claim to be applied",
+    );
+
+    stalePoll.resolve(screenResponse("/screen?since=1&session=4242:7", SCREEN, "desktop"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(buttons.mobile.getAttribute("aria-pressed")).toBe("true");
+    expect(buttons.desktop.getAttribute("aria-pressed")).toBe("false");
   });
 });
