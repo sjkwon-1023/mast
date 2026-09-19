@@ -10,7 +10,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { shortcutLabel } from "../../shared/keys";
+import { shortcutBadge, shortcutLabel } from "../../shared/keys";
 import { LATEST_RELEASE_URL, Sidebar } from "./sidebar";
 import type {
   AgentStatus,
@@ -248,6 +248,26 @@ describe("Sidebar rendering", () => {
       "ws 3",
     ]);
     expect(after[0]).not.toBe(before[0]);
+  });
+
+  // Alt 를 누른 동안 뜨는 배지 (shortcutBadge) — 문자 명령은 실제 판정이 Alt+Shift 라
+  // 배지에도 Shift 표시가 붙어야 안내와 키 동작이 어긋나지 않는다. ordinal 은
+  // `Alt+1`~`9` 그대로라 Shift 가 없다.
+  it("badges character shortcuts with Shift and leaves ordinals as bare digits", () => {
+    const { sidebar, cards } = mount();
+    sidebar.render(snapshot(1, THREE, 1));
+
+    const newBtn = document.querySelector<HTMLElement>(".sidebar-new");
+    if (newBtn === null) throw new Error("missing .sidebar-new");
+    expect(newBtn.dataset.altShortcut).toBe(shortcutBadge("newWorkspace"));
+
+    const after = cards();
+    expect(after.map((c) => c.dataset.altShortcut)).toEqual(["1", "2", "3"]);
+    // × 배지는 활성 카드에만 — 닫기는 문자 명령이라 Shift 표시가 붙는다.
+    expect(child(after[0], ".ws-card-close").dataset.altShortcut).toBe(
+      shortcutBadge("closeWorkspace"),
+    );
+    expect(child(after[1], ".ws-card-close").dataset.altShortcut).toBeUndefined();
   });
 });
 

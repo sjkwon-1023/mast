@@ -166,6 +166,11 @@ export interface UiSettings {
   /** 런타임 로그 파일을 켤지. null·false 는 꺼진 것이고, 그때 프론트는 로그를
    *  **부르지 않을 뿐 아니라 진단 리스너를 설치조차 하지 않는다** (infrastructure/logging.ts). */
   log: boolean | null;
+  /** 탭 제목 옆에 그 탭의 안정 `Tab.id`(`#12` — `mast ls`/`mast send '#<id>'` 의
+   *  주소)를 보여 줄지. **null(키 없음)은 표시가 기본값**이라 프론트가 true 로
+   *  해석하고, `false` 만 숨긴다 — 기본값이 "켜짐"인 이유는 이 배지가 그 주소를
+   *  화면에서 읽을 수 있는 유일한 표면이라서다. 부팅 때 한 번만 반영된다. */
+  showTabIds: boolean | null;
   /** LAN 원격 표면. **키가 있으면 켜진 것**이고 port 는 필수다 — 백엔드가
    *  1024~65535 밖을 fontSize 와 같은 자리에서 reject 한다. null 은 미설정이고
    *  그때는 리스너·스레드·토큰 파일이 아예 생기지 않는다. */

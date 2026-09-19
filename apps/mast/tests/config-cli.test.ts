@@ -127,6 +127,7 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("mast config set remote");
+    expect(result.stdout).toContain("mast config set showTabIds");
     expect(result.stdout).toContain("reset <key>");
     expect(result.stdout).not.toMatch(/\x1b/);
     expect(exported.status).toBe(0);
@@ -144,6 +145,7 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
     expect(result.stdout).toContain("future");
     expect(result.stdout).toContain(path);
     expect(result.stdout).toContain("Built-in defaults");
+    expect(result.stdout).toContain("showTabIds");
     expect(result.stdout).toContain("usage:");
     expect(result.stdout).toContain("not running state");
   });
@@ -159,14 +161,31 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
     expectSuccess(invoke(["set", "fontFamily", "Consolas, 'Cascadia Mono', monospace"], path));
     expectSuccess(invoke(["set", "fontSize", "24"], path));
     expectSuccess(invoke(["set", "log", "true"], path));
+    expectSuccess(invoke(["set", "showTabIds", "false"], path));
     expectSuccess(invoke(["set", "highlightLanguages", '["python","rust"]'], path));
     const saved = readSettings(path);
     expect(saved.fontFamily).toBe("Consolas, 'Cascadia Mono', monospace");
     expect(saved.fontSize).toBe(24);
     expect(saved.log).toBe(true);
+    expect(saved.showTabIds).toBe(false);
     expect(saved.highlightLanguages).toEqual(["python", "rust"]);
     expect(saved.future).toEqual({ keep: [1, "two"] });
     expect(saved.remote).toEqual({ port: 7331, futurePortSetting: { keep: true } });
+  });
+
+  it("round-trips showTabIds through get and reset without touching other keys", () => {
+    const path = fixture();
+    writeSettings(path, { future: "keep", showTabIds: true });
+    expectSuccess(invoke(["set", "showTabIds", "false"], path));
+    expect(readSettings(path)).toEqual({ future: "keep", showTabIds: false });
+
+    const queried = invoke(["get", "showTabIds"], path);
+    expectSuccess(queried);
+    expect(queried.stdout).toContain('"saved": false');
+    expect(queried.stdout).toContain('"default": true');
+
+    expectSuccess(invoke(["reset", "showTabIds"], path));
+    expect(readSettings(path)).toEqual({ future: "keep" });
   });
 
   it("uses explicit remote default, custom ports, remote.port, and false removal", () => {
@@ -210,6 +229,7 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
       '{"remote": {"future": true}}',
       '{"highlightLanguages": ["pyton"]}',
       '{"fontFamily": "   "}',
+      '{"showTabIds": "yes"}',
       '{"future": NaN}',
       '{"future": 1e999}',
       '{"remote": {"port": 7331, "port": 7444}}',
@@ -233,11 +253,13 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
       fontSize: null,
       highlightLanguages: null,
       log: null,
+      showTabIds: null,
       remote: null,
       future: "keep",
     });
     expectFailure(invoke(["set", "fontSize", "5"], path));
     expectFailure(invoke(["set", "log", "yes"], path));
+    expectFailure(invoke(["set", "showTabIds", "yes"], path));
     expectFailure(invoke(["set", "highlightLanguages", '["go"]'], path));
     expect(readSettings(path).future).toBe("keep");
 
@@ -343,7 +365,9 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
     const source = readFileSync(resolve(dirname(HELPER), "../../apps/mast/src-tauri/src/provision.rs"), "utf8");
     const raw = source.split('const SETUP_SCRIPT: &str = r###"')[1]?.split('"###;')[0];
     expect(raw).toBeDefined();
-    const expanded = raw!.replaceAll("@SETUP_VERSION@", "14")
+    const version = source.match(/const SETUP_VERSION: u32 = (\d+);/)?.[1];
+    expect(version).toBeDefined();
+    const expanded = raw!.replaceAll("@SETUP_VERSION@", version!)
       .replace("@CONFIG_HELPER@", () => readFileSync(HELPER, "utf8"))
       .replace("@OPENCODE_PLUGIN@", () => readFileSync(resolve(dirname(HELPER), "mast-opencode-plugin.js"), "utf8").trimEnd());
     expect(spawnSync("bash", ["-n", "-c", expanded], { encoding: "utf8", timeout: 5_000 }).status).toBe(0);

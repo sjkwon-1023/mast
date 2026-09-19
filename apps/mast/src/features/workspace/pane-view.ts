@@ -45,9 +45,10 @@
 // 이고, placeholder 는 둘 다 없을 때만 뜬다 (동시 표시 금지).
 
 import { respawnTab } from "../../infrastructure/backend";
-import { paneTerminalCwd, shortcutLabel } from "../../shared/keys";
+import { paneTerminalCwd, shortcutBadge, shortcutLabel } from "../../shared/keys";
 import type { ShortcutId } from "../../shared/keys";
 import { paneUnread, sameTabButton, tabStripModel, tabStripPlan } from "./tab-strip-model";
+import { tabIdsVisible } from "./tab-id-settings";
 import type { TabButtonModel } from "./tab-strip-model";
 import type { TerminalView } from "../terminal/view";
 import type { ViewerView } from "../viewers/viewer-view";
@@ -113,6 +114,8 @@ export interface SendController {
 interface TabNodes {
   root: HTMLElement;
   title: HTMLSpanElement;
+  /** 안정 Tab.id 배지 (`#12`) — showTabIds 가 끄면 hidden. */
+  id: HTMLSpanElement;
   dot: HTMLSpanElement;
   exited: HTMLSpanElement;
   notStarted: HTMLSpanElement;
@@ -385,14 +388,14 @@ export class PaneView {
         type: "createTab",
         pane: this.paneId,
         tab: { type: "terminal", cwd: paneTerminalCwd(this.pane) },
-      }), "T"),
+      }), shortcutBadge("newTerminalTab")),
       // 폴더 탐색 탭 (21단계) — path null 이면 워크스페이스 rootPath, 그것도
       // 없으면 "/" 로 코어가 해석한다 (terminal 의 cwd 와 대칭).
       this.svgButton(SVG_FOLDER, withShortcut("New folder browser tab", "newFolderTab"), () => ({
         type: "createTab",
         pane: this.paneId,
         tab: { type: "folderBrowser", path: null },
-      }), "B"),
+      }), shortcutBadge("newFolderTab")),
       // Changes 는 pane 셸의 cwd 가 아니라 워크스페이스 루트에서 여는 전역
       // 작업 목록이다. path null 은 코어가 워크스페이스 rootPath 로 해석한다.
       this.svgButton(SVG_CHANGES, "New changes viewer tab", () => ({
@@ -574,6 +577,13 @@ export class PaneView {
     const title = document.createElement("span");
     title.className = "tab-title";
 
+    // 탭의 안정 ID — `mast ls` 의 TAB 열과 `mast send '#<id>'` 가 받는 그 주소다.
+    // 모델이 이미 들고 있는 Tab.id(model.tab)를 그대로 옮기며, 여기서 새로 만들지
+    // 않는다. 노드 수명 = 탭 id 라 클로저로 굳혀도 안전하다 (applyTab 주석 참조).
+    const id = document.createElement("span");
+    id.className = "tab-id";
+    id.title = `Tab #${model.tab}`;
+
     // dot·exited 배지는 값에 따라 있다 없다 하지만 노드는 항상 만들고 hidden
     // 으로만 토글한다 — 자식이 들락날락하면 in-place 패치의 의미가 없어진다.
     const dot = document.createElement("span");
@@ -600,7 +610,7 @@ export class PaneView {
     // 활성 탭의 × 에서만 둘이 같은 대상이다. 툴팁은 그래도 모든 탭에 같은
     // 문구를 단다 (탭마다 다른 툴팁이 더 헷갈린다).
     close.title = withShortcut("Close tab", "closeTab");
-    close.dataset.altShortcut = "W";
+    close.dataset.altShortcut = shortcutBadge("closeTab");
     close.addEventListener("click", (ev) => {
       ev.stopPropagation(); // 탭 활성화 클릭과 분리
       // tab id 는 이 노드의 키라 패치로도 변하지 않는다 — 클로저로 안전하다
@@ -608,9 +618,9 @@ export class PaneView {
       void this.dispatch({ type: "closeTab", tab: model.tab });
     });
 
-    el.append(title, dot, exited, notStarted, close);
+    el.append(title, id, dot, exited, notStarted, close);
 
-    const nodes: TabNodes = { root: el, title, dot, exited, notStarted, model };
+    const nodes: TabNodes = { root: el, title, id, dot, exited, notStarted, model };
     this.applyTab(nodes, model);
 
     el.addEventListener("click", () => this.onTabClick(nodes.model));
@@ -626,6 +636,11 @@ export class PaneView {
     nodes.root.title = model.title; // 잘린 제목의 툴팁
 
     setText(nodes.title, model.title);
+    // ID 배지 — 부팅 때 한 번 정해진 설정이라 렌더 중 변하지 않는다. 꺼져 있으면
+    // 텍스트도 비우고 hidden 으로 자리까지 걷는다 (노드는 상주 — 위 dot 규율).
+    const idText = tabIdsVisible() ? `#${model.tab}` : "";
+    setText(nodes.id, idText);
+    nodes.id.hidden = idText === "";
     nodes.dot.hidden = !model.notification;
     nodes.exited.hidden = !model.exited;
     nodes.notStarted.hidden = !model.notStarted;

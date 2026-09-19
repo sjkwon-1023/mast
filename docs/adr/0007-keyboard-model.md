@@ -111,7 +111,7 @@ The left/right header button remains available without a shortcut. Pane focus, t
 cycling, copy/paste, zoom, and reload bindings are unchanged.
 
 The new aliases intercept Alt combinations that previously reached the PTY. After Alt
-has been held for 1.314 seconds, buttons show their letter and sidebar cards show workspace
+has been held for 1.314 seconds, buttons show Shift plus their letter and sidebar cards show workspace
 ordinals. A small guide names Alt commands without a matching button. Tooltips show only
 Alt bindings; the retained Ctrl bindings are documented but hidden in the app. Releasing Alt,
 losing window focus, or hiding the page clears the guide.

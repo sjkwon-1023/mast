@@ -41,7 +41,7 @@
 // 동작하지만 F2 를 뺀 나머지가 전부 modifier 조합이라 이름 타이핑과 충돌하지
 // 않는다 (편집 중 F2 는 편집을 다시 시작할 뿐이다).
 
-import { shortcutLabel } from "../../shared/keys";
+import { shortcutBadge, shortcutLabel } from "../../shared/keys";
 import {
   dropBefore,
   hasRunningTerminals,
@@ -148,7 +148,8 @@ export class Sidebar {
     newBtn.type = "button";
     newBtn.className = "sidebar-new";
     newBtn.textContent = "+ New workspace";
-    newBtn.dataset.altShortcut = "N";
+    // 문자 명령이므로 Shift 표시가 함께 붙는다 (shortcutBadge — 실제 판정이 Alt+Shift).
+    newBtn.dataset.altShortcut = shortcutBadge("newWorkspace");
     // 단축키 표기는 shared/keys.ts 의 shortcutLabel 단일 소스에서 받는다 (표류 방지).
     newBtn.title = `New workspace from the current directory (${shortcutLabel("newWorkspace")})`;
     newBtn.addEventListener("click", () => this.onNewWorkspace());
@@ -298,6 +299,8 @@ export class Sidebar {
   private card(model: WorkspaceCardModel, ordinal: number): CardNodes {
     const el = document.createElement("div");
     el.className = "ws-card";
+    // ordinal 배지에 Shift 가 없는 것은 실제 키(`Alt+1`~`9`)가 shift 를 요구하지
+    // 않기 때문이다 — 문자 명령 배지(shortcutBadge)와의 차이가 곧 안내다.
     if (ordinal <= 9) el.dataset.altShortcut = String(ordinal);
 
     const head = document.createElement("div");
@@ -497,7 +500,7 @@ export class Sidebar {
   private applyCard(nodes: CardNodes, model: WorkspaceCardModel): void {
     nodes.model = model;
     nodes.root.classList.toggle("active", model.active);
-    if (model.active) nodes.close.dataset.altShortcut = "Q";
+    if (model.active) nodes.close.dataset.altShortcut = shortcutBadge("closeWorkspace");
     else delete nodes.close.dataset.altShortcut;
 
     setText(nodes.name, model.name);

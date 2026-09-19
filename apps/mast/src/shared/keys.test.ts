@@ -12,6 +12,7 @@ import {
   paneInDirection,
   paneTerminalCwd,
   pathBasename,
+  shortcutBadge,
   shortcutLabel,
   workspaceAtOrdinal,
 } from "./keys";
@@ -21,6 +22,18 @@ import type { Pane, Workspace } from "./types";
 function spec(over: Partial<KeySpec> & { key: string }): KeySpec {
   return { ctrl: false, alt: false, shift: false, isComposing: false, ...over };
 }
+
+/** 문자 단축키 전량 — 표시(shortcutLabel·shortcutBadge)와 판정의 정합 테스트가
+ *  같은 목록을 본다 (키를 늘리면 여기 한 곳만 고친다). */
+const SHORTCUT_IDS = [
+  "closeTab",
+  "newTerminalTab",
+  "newFolderTab",
+  "newWorkspace",
+  "prevWorkspace",
+  "nextWorkspace",
+  "closeWorkspace",
+] as const;
 
 describe("keyAction", () => {
   it("Ctrl/Alt+1~9 는 1-based 워크스페이스 ordinal 로 매핑된다", () => {
@@ -237,16 +250,6 @@ describe("keyAction", () => {
 });
 
 describe("shortcutLabel", () => {
-  const ids = [
-    "closeTab",
-    "newTerminalTab",
-    "newFolderTab",
-    "newWorkspace",
-    "prevWorkspace",
-    "nextWorkspace",
-    "closeWorkspace",
-  ] as const;
-
   it("툴팁 라벨에는 Alt 단축키만 보인다", () => {
     expect(shortcutLabel("closeTab")).toBe("Alt+Shift+W");
     expect(shortcutLabel("newTerminalTab")).toBe("Alt+Shift+T");
@@ -259,7 +262,7 @@ describe("shortcutLabel", () => {
   });
 
   it("라벨이 가리키는 키를 실제로 누르면 keyAction 이 매칭된다 — 표시·판정 표류 방지", () => {
-    for (const id of ids) {
+    for (const id of SHORTCUT_IDS) {
       const label = shortcutLabel(id);
       const key = label.slice("Alt+Shift+".length);
       expect(label.startsWith("Alt+Shift+")).toBe(true);
@@ -268,8 +271,24 @@ describe("shortcutLabel", () => {
   });
 
   it("라벨은 서로 겹치지 않는다 — 한 키에 두 동작이 붙지 않는다", () => {
-    const labels = ids.map((id) => shortcutLabel(id));
+    const labels = SHORTCUT_IDS.map((id) => shortcutLabel(id));
     expect(new Set(labels).size).toBe(labels.length);
+  });
+});
+
+describe("shortcutBadge", () => {
+  it("문자 명령 배지는 Shift 표시를 포함한다 — 실제 판정이 Shift 를 요구한다", () => {
+    for (const id of SHORTCUT_IDS) {
+      const badge = shortcutBadge(id);
+      expect(badge.startsWith("⇧")).toBe(true);
+      const key = badge.slice(1);
+      // 배지의 키를 Shift 와 함께 눌러야 매칭되고, Shift 없이는 매칭되지 않는다 —
+      // 배지가 약속하는 것과 판정이 정확히 같다.
+      expect(keyAction(spec({ key, alt: true, shift: true }))).not.toBeNull();
+      expect(keyAction(spec({ key, alt: true }))).toBeNull();
+      // 표기 문자(대소문자)는 라벨과 같은 표에서 나온다.
+      expect(shortcutLabel(id).endsWith(key)).toBe(true);
+    }
   });
 });
 

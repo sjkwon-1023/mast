@@ -305,7 +305,8 @@ body {
 }
 
 /* Alt 를 잠깐 누르면 새 단축키의 마지막 키만 버튼 위에 띄운다.
-   배지는 레이아웃을 밀지 않고, 버튼 클릭도 가로채지 않는다. */
+   배지는 레이아웃을 밀지 않고, 버튼 클릭도 가로채지 않는다. 문자 명령 배지는
+   Shift 표시(⇧)를 포함하므로 두 글자가 들어갈 폭을 준다 (shortcutBadge). */
 .shortcut-guide [data-alt-shortcut] {
   position: relative;
 }
@@ -323,17 +324,18 @@ body {
   background: var(--bg-panel);
   color: var(--fg);
   font: 700 11px/1 system-ui, sans-serif;
+  white-space: nowrap;
   pointer-events: none;
 }
 
 .shortcut-guide .sidebar-new::after {
   inset: 2px 6px 2px auto;
-  width: 20px;
+  width: 24px;
 }
 
 .shortcut-guide .ws-card::after {
   inset: 4px 27px auto auto;
-  width: 18px;
+  width: 24px;
   height: 17px;
 }
 
@@ -613,6 +615,15 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 탭의 안정 ID (`#12` — mast ls/send 의 주소). 제목과 같은 계열의 흐린 색으로
+   두어 제목 스캔을 방해하지 않으면서도 주소를 읽을 수 있게 한다. 탭이 exited 라
+   제목이 한 번 더 흐려져도 ID 는 남는다 (주소는 상태와 무관하다). */
+.tab-id {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .tab.exited .tab-title {

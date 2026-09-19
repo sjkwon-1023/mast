@@ -180,6 +180,18 @@ export function shortcutLabel(id: ShortcutId): string {
   return `Alt+Shift+${key}`;
 }
 
+/** Alt 를 누른 동안 버튼·카드 위에 뜨는 배지 문구 — 표시의 두 번째 소스가 생기지
+ *  않게 표(CTRL_SHIFT_KEYS)에서 같은 문자를 꺼낸다.
+ *
+ *  배지가 `⇧` 를 함께 쓰는 이유: 이 명령들의 실제 판정은 `Alt` 만으로는 닿지 않고
+ *  Shift 까지 요구한다 (keyAction 의 `spec.shift` 조건). 배지가 맨 문자만 보이면
+ *  Alt 를 누른 사용자가 그대로 눌렀을 때 아무 일도 일어나지 않아, 안내가 실제 키
+ *  동작과 어긋난다. 워크스페이스 ordinal(`Alt+1`~`9`)에는 Shift 가 필요 없으므로
+ *  그 배지들은 숫자 그대로다 (sidebar.ts). */
+export function shortcutBadge(id: ShortcutId): string {
+  return `⇧${CTRL_SHIFT_KEYS[id].letter.toUpperCase()}`;
+}
+
 /** pane 의 표시 탭이 터미널이면 그 cwd — OSC 7 이 배선돼 있으면 마지막 프롬프트 시점의
  *  경로(ADR-0011), 아니면 스폰 시점 경로 — 뷰어·빈 pane 이면 null. null 은 NewTab 의
  *  "워크스페이스 rootPath" 기본값과 같은 뜻이라 그대로 넘길 수 있다. 새 터미널 탭·분할이

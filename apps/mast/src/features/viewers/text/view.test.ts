@@ -863,6 +863,7 @@ describe("TextView 하이라이트 적용", () => {
       highlightLanguages,
       log: null,
       remote: null,
+      showTabIds: null,
     };
   }
 
@@ -1005,6 +1006,7 @@ describe("TextView 행 격자와 설정 글꼴", () => {
       highlightLanguages: null,
       log: null,
       remote: null,
+      showTabIds: null,
     });
     document.body.replaceChildren();
   });
@@ -1019,6 +1021,7 @@ describe("TextView 행 격자와 설정 글꼴", () => {
       highlightLanguages: null,
       log: null,
       remote: null,
+      showTabIds: null,
     });
   });
 
@@ -1050,6 +1053,7 @@ describe("TextView 행 격자와 설정 글꼴", () => {
       highlightLanguages: null,
       log: null,
       remote: null,
+      showTabIds: null,
     });
     const view = await mounted("one\ntwo\nthree\n", 3);
     const lineHeight = lineHeightForFontSize(24);
