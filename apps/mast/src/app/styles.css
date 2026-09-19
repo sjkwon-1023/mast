@@ -975,8 +975,8 @@ body {
 }
 
 /* ── 뷰어 탭 — markdownViewer (21단계 청크 D) ─────────────────────────
-   folderBrowser·textViewer 와 같은 세로 스택(배너 + 본문). 본문만 산문이라 읽기
-   폭을 제한하고 줄간격을 조금 넓힌다 — 그 이상의 타이포그래피는 두지 않는다
+   folderBrowser·textViewer 와 같은 세로 스택(배너 + 본문). 본문은 pane 폭을
+   사용하고 줄간격을 조금 넓힌다 — 그 이상의 타이포그래피는 두지 않는다
    (뷰어이지 문서 뷰 제품이 아니다). 스크롤 컨테이너의 scrollTop(px)이 모델의
    scrollTop 시맨틱 그대로다. */
 
@@ -1014,7 +1014,6 @@ body {
    유지돼야 하고, 13px 로 못박으면 code 만 커지고 산문은 그대로 남아 문서가 깨져
    보인다. 기본값에서는 12+1 = 13px 로 종전과 같다. 헤딩은 em 이라 따라온다. */
 .markdown-body {
-  max-width: 80ch;
   padding: 8px 12px;
   font-size: calc(var(--viewer-font-size, 12px) + 1px);
   line-height: 1.55;
