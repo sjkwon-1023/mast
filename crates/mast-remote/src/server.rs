@@ -179,7 +179,7 @@ pub(crate) fn log_line(sink: &LogFn, message: String) {
 }
 
 /// 약한 대체값(시각·pid)은 두지 않는다 — 세션 토큰의 추측 불가능성이 곧 입력 보호다.
-fn random_epoch() -> std::io::Result<u64> {
+pub(crate) fn random_epoch() -> std::io::Result<u64> {
     let mut raw = [0u8; 8];
     getrandom::fill(&mut raw)
         .map_err(|err| std::io::Error::other(format!("CSPRNG unavailable: {err}")))?;
@@ -397,12 +397,12 @@ fn dispatch(
     target: Route,
 ) -> Response {
     match target {
-        Route::State => handlers::state(&ctx.dispatcher),
+        Route::State => handlers::http_state(&ctx.dispatcher),
         Route::Screen {
             tab,
             since,
             session,
-        } => handlers::screen(
+        } => handlers::http_screen(
             &ctx.dispatcher,
             &ctx.sessions,
             ctx.epoch,
@@ -415,11 +415,7 @@ fn dispatch(
             &ctx.log,
         ),
         Route::Input { tab, session } => input(stream, ctx, inbound, tab, session.as_deref()),
-        Route::Resize {
-            tab,
-            session,
-            mode,
-        } => resize(ctx, tab, session.as_deref(), mode),
+        Route::Resize { tab, session, mode } => resize(ctx, tab, session.as_deref(), mode),
         Route::Static { key } => handlers::static_asset(&ctx.assets, &key),
         // ③ 에서 이미 응답한 갈래다.
         Route::NotFound | Route::BadRequest => not_found(),
@@ -432,16 +428,11 @@ fn dispatch(
 /// 아니면 입력과 같은 409 다 — 탭이 respawn 됐는데 옛 화면의 버튼을 누른 경우이고,
 /// 그 요청으로 새 셸의 크기를 바꿀 근거가 없다.
 fn resize(ctx: &ServerCtx, tab: u64, session: Option<&str>, mode: ResizeMode) -> Response {
-    let session = match handlers::resolve_session(
-        &ctx.dispatcher,
-        &ctx.sessions,
-        ctx.epoch,
-        tab,
-        session,
-    ) {
-        Ok(session) => session,
-        Err(response) => return response,
-    };
+    let session =
+        match handlers::resolve_session(&ctx.dispatcher, &ctx.sessions, ctx.epoch, tab, session) {
+            Ok(session) => session,
+            Err(error) => return Response::error(error.status(), error.reason(), error.message()),
+        };
     handlers::resize(&session, mode, ctx.mobile_lease, &ctx.log)
 }
 
@@ -484,23 +475,23 @@ fn input(
         return Response::error(413, "Content Too Large", "body too large");
     }
 
-    let session = match handlers::resolve_session(
-        &ctx.dispatcher,
-        &ctx.sessions,
-        ctx.epoch,
-        tab,
-        session,
-    ) {
-        Ok(session) => session,
-        Err(response) => return response,
-    };
+    let session =
+        match handlers::resolve_session(&ctx.dispatcher, &ctx.sessions, ctx.epoch, tab, session) {
+            Ok(session) => session,
+            Err(error) => {
+                return Response::error(error.status(), error.reason(), error.message());
+            }
+        };
 
     let Some(body) = read_body(stream, buf, head_len, length, deadline) else {
         // 선언한 길이가 다 오지 않았다 — 반쪽짜리 입력을 PTY 에 쓰지 않는다.
         return Response::error(400, "Bad Request", "incomplete body");
     };
 
-    handlers::write_input(&session, &body, &ctx.log)
+    match handlers::write_input(&session, &body, &ctx.log) {
+        Ok(()) => Response::ok_empty(),
+        Err(message) => Response::error(500, "Internal Server Error", message),
+    }
 }
 
 /// 헤드와 같은 read 에 딸려온 바이트(`buf[head_len..]`)부터 이어서 정확히 `length`

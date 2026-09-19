@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && vite build --config vite.remote.config.ts",
+    "build": "tsc && vite build && vite build --config vite.remote.config.ts && vite build --config vite.secure-remote.config.ts",
+    "audit:secure-remote": "node scripts/audit-secure-remote-bundle.mjs dist-secure-remote",
+    "audit:secure-remote:self-test": "node scripts/audit-secure-remote-bundle.mjs --self-test",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run"

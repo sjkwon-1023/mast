@@ -7,7 +7,9 @@
 // 넣지 않는다 — 전부 `textContent` 다 (list-view.ts).
 
 import { parseSizeOwner, parseScreenMeta } from "./protocol";
-import type { ScreenMeta, ScreenQuery, SizeOwner } from "./protocol";
+import type { ScreenQuery, SizeOwner } from "./protocol";
+import { RemoteError } from "./transport";
+import type { RemoteTransport, ScreenReply } from "./transport";
 import type { StateSnapshot, TabId } from "../shared/types";
 
 const TOKEN_KEY = "mast.remoteToken";
@@ -39,20 +41,12 @@ export function clearToken(): void {
   }
 }
 
-/** 폴링 스케줄이 401·429 를 이 값으로 읽는다. */
-export class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
+/** 폴링 스케줄이 401·429 를 이 값으로 읽는다 — 판정은 공유 `RemoteError` 로 통일했다. */
+export class HttpError extends RemoteError {
+  constructor(status: number, message: string) {
+    super(status, message);
     this.name = "HttpError";
   }
-}
-
-export interface ScreenReply {
-  meta: ScreenMeta;
-  bytes: Uint8Array;
 }
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
@@ -129,3 +123,10 @@ export async function postResize(
   if (owner === null) throw new Error("resize reply has malformed headers");
   return { owner };
 }
+/** 공유 UI(`app.ts`·`tab-view.ts`)에 넣는 Local HTTP 구현. */
+export const httpTransport: RemoteTransport = {
+  fetchState,
+  fetchScreen,
+  postInput,
+  postResize,
+};

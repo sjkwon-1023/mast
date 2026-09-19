@@ -92,7 +92,7 @@ function mount(): {
   dispatched: Command[];
   /** 폴더 선택 흐름은 main.ts 소유라 사이드바는 콜백만 부른다. */
   newWorkspaceCalls: () => number;
-  /** "Pair phone" 버튼 — 원격 표면이 떠 있을 때만 보인다. */
+  /** "Pair phone" 버튼 — 설정·원격 표면 상태와 무관하게 항상 보인다. */
   pairBtn: () => HTMLButtonElement;
   pairingCalls: () => number;
   version: () => HTMLSpanElement;
@@ -573,15 +573,16 @@ describe("Sidebar drag reordering", () => {
 });
 
 describe("Sidebar pairing button", () => {
-  it("stays hidden until the remote surface is on", () => {
-    const { sidebar, pairBtn, pairingCalls } = mount();
-    expect(pairBtn().hidden).toBe(true);
-    sidebar.setRemoteEnabled(true);
+  it("is always visible, regardless of the remote surface state", () => {
+    const { pairBtn, pairingCalls } = mount();
+
+    // Local HTTP 가 꺼져 있어도(설정 없음·부팅 실패) 버튼은 보인다 — 다이얼로그가
+    // 설정 안내와 Secure Remote 를 제공하므로 감추면 기능이 없다는 신호가 된다.
     expect(pairBtn().hidden).toBe(false);
+    expect(pairBtn().textContent).toBe("Pair phone");
+
     pairBtn().click();
     expect(pairingCalls()).toBe(1);
-    sidebar.setRemoteEnabled(false);
-    expect(pairBtn().hidden).toBe(true);
   });
 });
 
