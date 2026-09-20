@@ -5,6 +5,9 @@ description: List the panes mast has open, and send text or a command into anoth
 
 # mast — put a command into another pane
 
+This bundled skill is overwritten on app startup and by `mast skill-load`.
+For custom instructions, create a separate skill with a different name.
+
 Inside a mast terminal `$MAST` is set and the `mast` command is on `PATH`. It delivers
 text straight into **another pane's stdin**, exactly as if it had been typed there, even when
 that tab is not the one on screen.

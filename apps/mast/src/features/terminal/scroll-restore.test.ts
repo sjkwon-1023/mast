@@ -134,6 +134,31 @@ describe("리로드 스크롤 복원", () => {
     view.dispose();
   });
 
+  it("resume 재인쇄 중 뷰포트가 맨 위에 걸려도 초기 하단을 유지한다", async () => {
+    const view = await reloadedView();
+    h.channel.onmessage?.(frame(0, reprint(300)));
+    await sleep(30);
+    // ED 3 직후 지연된 뷰포트 동기화가 스크롤 래치를 남기는 상태를 재현한다.
+    // 실제 사용자 입력은 없으므로 재인쇄가 안정되면 하단이어야 한다.
+    termOf(view).scrollLines(-viewportOf(view).baseY);
+    expect(viewportOf(view).viewportY).toBe(0);
+    await sleep(350);
+    expect(viewportOf(view).viewportY).toBe(viewportOf(view).baseY);
+    expect(view.rememberedScrollOffset()).toBeNull();
+    view.dispose();
+  });
+
+  it("resume 중 사용자가 스크롤하면 하단 추적을 취소한다", async () => {
+    const view = await reloadedView();
+    h.channel.onmessage?.(frame(0, reprint(300)));
+    await sleep(30);
+    view.root.dispatchEvent(new Event("wheel"));
+    termOf(view).scrollLines(-20);
+    await sleep(350);
+    expect(viewportOf(view).viewportY).toBe(viewportOf(view).baseY - 20);
+    view.dispose();
+  });
+
   it("스크롤백 wipe 는 사용자가 올려 둔 자리를 지킨다", async () => {
     // ADR-0019 v0.3.26 개정의 경로를 실제 브라우저 빌드로 잠근다: 사용자 래치가
     // 걸린 채 ED 3 가 오면, 훅이 지워지기 전 위치를 읽어 복원하지 않는 한 pane 은

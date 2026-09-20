@@ -306,9 +306,9 @@ describe("scrollbackWipeRestoreOffset", () => {
     ).toBeNull();
   });
 
-  it("맨 아래를 보고 있었으면 아무 것도 하지 않는다 — 이미 출력을 따라간다", () => {
-    expect(scrollbackWipeRestoreOffset(null, false, true, "normal", 1008, 1008)).toBeNull();
-    expect(scrollbackWipeRestoreOffset(null, false, true, "normal", 0, 0)).toBeNull();
+  it("맨 아래도 재인쇄 동안 하단을 유지하도록 0을 반환한다", () => {
+    expect(scrollbackWipeRestoreOffset(null, false, true, "normal", 1008, 1008)).toBe(0);
+    expect(scrollbackWipeRestoreOffset(null, false, true, "normal", 0, 0)).toBe(0);
   });
 });
 

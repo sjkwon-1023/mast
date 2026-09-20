@@ -676,3 +676,25 @@ Field: WINDOWS-BUILD §10 v0.3.32 — upgrade from v13, Codex trust, two tabs an
 approvals, denials and background subagents, Codex transitions, auto-approval and denial timings,
 Antigravity CLI turns, lifecycle cleanup, and cost and terminal-artifact measurements. **Not yet
 run**; no item is recorded as passed.
+
+## 개정: 번들 스킬 갱신 (2026-09-20)
+
+`mast` 사용법은 짧은 영어 스킬로 제공한다. `scripts/wsl/skills/`의 원본을
+`include_str!`로 앱에 포함해 설치 코드의 본문 중복을 제거한다.
+
+설치 버전 18부터 앱 시작 시 훅 마커와 무관하게 기본 스킬을 덮어쓴다.
+사용자 지시에 따라 개인 수정 감지와 `.mast-installed` 비교를 제거한다.
+기본 스킬에도 덮어쓰기 정책을 안내하고, 개인 지침은 다른 이름의 스킬로 만들도록 한다.
+스킬 디렉터리나 파일이 심볼릭 링크면 링크 자체를 교체하며 링크 대상에는 쓰지 않는다.
+기존 `.mast-installed`는 제거한다. 이후 스킬 본문만 바꿀 때는 설치 버전을
+올릴 필요가 없으며, 기존 훅 opt-out을 되살리지 않는다.
+
+`mast skill-load`는 앱이 마지막으로 배포한 자체 완결형 설치기를 실행한다.
+네트워크·Python·실행 중인 앱을 요구하지 않는다. 새 에이전트 설치나 파일 누락을
+수동으로 복구할 때 사용한다. 지원 경로는 기존과 같다:
+Claude/OpenCode의 `~/.claude/skills`, 존재하는 Codex의 `~/.codex/skills`,
+Antigravity CLI가 있을 때의 `~/.gemini/config/skills`.
+에이전트가 새 스킬을 발견하려면 세션을 다시 시작해야 한다.
+
+검증: 실제 bash 설치에서 원본 포함, 마커가 있는 상태의 수정본 덮어쓰기,
+링크 대상 파일 보존, 훅 opt-out 보존, 수동 누락 복구, 잘못된 인자 거부.
