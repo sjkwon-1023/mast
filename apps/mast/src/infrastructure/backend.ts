@@ -123,6 +123,10 @@ export function getDiagnostics(): Promise<Diagnostics> {
   return invoke<Diagnostics>("get_diagnostics");
 }
 
+export function getResetEnabled(): Promise<boolean> {
+  return invoke<boolean>("get_reset_enabled");
+}
+
 /** 활동 핑 (16단계 C-3) — throttled 사용자 입력 신호. `visible` 은
  *  visibilitychange 보조 신호(즉시), 순수 활동 핑은 null. 백엔드 자동 리셋
  *  정책의 idle·hidden 타이머를 재무장한다. */

@@ -35,3 +35,15 @@ export class ActivityPing {
     this.send(visible);
   }
 }
+
+export function installActivityPing(enabled: boolean, send: ActivitySender): void {
+  if (!enabled) return;
+  const ping = new ActivityPing(send);
+  const onActivity = () => ping.activity(performance.now());
+  window.addEventListener("wheel", onActivity, { capture: true, passive: true });
+  window.addEventListener("mousedown", onActivity, { capture: true });
+  window.addEventListener("keydown", onActivity, { capture: true });
+  document.addEventListener("visibilitychange", () => {
+    ping.visibility(document.visibilityState === "visible", performance.now());
+  });
+}

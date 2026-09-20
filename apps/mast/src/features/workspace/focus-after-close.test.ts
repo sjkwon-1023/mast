@@ -20,14 +20,18 @@ function setup(): HTMLElement {
   return root;
 }
 describe('tab close focus ordering', () => {
-  it('focuses the remaining folder when its snapshot arrived before the command response', () => {
+  it('focuses the remaining folder when its snapshot arrived before the command response', async () => {
     const root = setup();
     view.render(snapshot(false));
     view.render(snapshot(true, 2));
     view.requestFocus({ kind: 'activePane', after: { type: 'closeTab', tab: 3 } });
-    expect(document.activeElement).toBe(root.querySelector('.folder-list'));
+    await vi.waitFor(() => {
+      const folder = root.querySelector('.folder-list');
+      expect(folder).not.toBeNull();
+      expect(document.activeElement).toBe(folder);
+    });
   });
-  it('waits through unrelated renders instead of focusing the tab about to close', () => {
+  it('waits through unrelated renders instead of focusing the tab about to close', async () => {
     const root = setup();
     view.render(snapshot(false));
     const outside = document.createElement('input'); document.body.append(outside); outside.focus();
@@ -35,6 +39,10 @@ describe('tab close focus ordering', () => {
     for (let i = 2; i <= 6; i++) view.render(snapshot(false, i));
     expect(document.activeElement).toBe(outside);
     view.render(snapshot(true, 7));
-    expect(document.activeElement).toBe(root.querySelector('.folder-list'));
+    await vi.waitFor(() => {
+      const folder = root.querySelector('.folder-list');
+      expect(folder).not.toBeNull();
+      expect(document.activeElement).toBe(folder);
+    });
   });
 });

@@ -348,6 +348,7 @@ fn main() {
             commands::get_stats,
             // 백엔드 자원 그림 + 방금 돈 정합성 검사 (ADR-0018) — 사람이 부를 때만 돈다.
             diagnostics::get_diagnostics,
+            commands::get_reset_enabled,
             commands::user_activity,
             commands::reset_ui,
             // settings.json 의 UI 설정 (터미널 폰트) — 부팅당 1회, 설정 UI 는 없다.

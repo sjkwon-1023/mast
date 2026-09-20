@@ -335,6 +335,11 @@ pub fn ack_output(state: State<'_, AppState>, id: SessionId, n: usize) -> Result
     Ok(())
 }
 
+#[tauri::command]
+pub fn get_reset_enabled(state: State<'_, AppState>) -> bool {
+    state.reset.enabled()
+}
+
 /// 프론트 활동 핑 (계획 16단계 C-2/C-3) — throttled 사용자 입력 신호
 /// (wheel/mousedown/keydown, 10초당 1회) + `document.visibilitychange` 보조 신호.
 /// `visible` 이 Some 이면 visibility 전이도 함께 반영한다. 순수 열람(스크롤백
