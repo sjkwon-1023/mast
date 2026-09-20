@@ -4,12 +4,14 @@
 // 요청 ID 는 단조 증가, 응답은 하나씩. 실기기(Chrome + 실제 QUIC + LAN 권한) 검증은
 // 이 테스트로 대신할 수 없다 — 그 사실은 결과 보고에 적혀 있다.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { RemoteError, TransportClosedError } from "../remote/transport";
 import { FrameDecoder } from "./frames";
 import { base64urlDecode, base64urlEncode } from "./base64url";
 import {
+  ConnectTimeoutError,
+  DEFAULT_CONNECT_TIMEOUT_MS,
   DEFAULT_REQUEST_TIMEOUT_MS,
   TRANSPORT_CLOSED_MESSAGE,
   WebTransportClient,
@@ -124,7 +126,7 @@ function frameOf(body: unknown): Uint8Array {
 
 function clientOf(
   server: FakeTransport,
-  extra: { heartbeatMs?: number; requestTimeoutMs?: number } = {},
+  extra: { heartbeatMs?: number; requestTimeoutMs?: number; connectTimeoutMs?: number } = {},
 ) {
   return new WebTransportClient({
     host: "192.168.0.20",
@@ -537,5 +539,89 @@ describe("WebTransportClient", () => {
     client.dispose();
     expect(server.closeCalls).toBe(closeCalls);
     expect(messages.length).toBe(1);
+  });
+});
+
+
+describe("초기 연결 중단", () => {
+  for (const stage of ["connection", "stream"] as const) {
+    for (const stop of ["timeout", "closed", "dispose"] as const) {
+      it(`${stage} 대기 중 ${stop}이면 종료하고 늦은 완료로 인증하지 않는다`, async () => {
+        vi.useFakeTimers();
+        const server = new FakeTransport();
+        let resume!: () => void;
+        const held = new Promise<void>((resolve) => { resume = resolve; });
+        if (stage === "connection") {
+          Object.defineProperty(server, "ready", { value: held });
+        } else {
+          const createStream = server.createBidirectionalStream.bind(server);
+          server.createBidirectionalStream = async () => {
+            await held;
+            return createStream();
+          };
+        }
+        const client = clientOf(server);
+        try {
+          const connecting = client.connect();
+          const failure = expect(connecting).rejects.toBeInstanceOf(
+            stop === "timeout" ? ConnectTimeoutError : TransportClosedError,
+          );
+          await vi.advanceTimersByTimeAsync(0);
+          if (stop === "timeout") await vi.advanceTimersByTimeAsync(DEFAULT_CONNECT_TIMEOUT_MS);
+          else if (stop === "closed") server.dropConnection();
+          else client.dispose();
+          await failure;
+          if (stop === "timeout") await expect(connecting).rejects.toMatchObject({ stage });
+          expect(server.closedByClient).toBe(true);
+          resume();
+          await vi.advanceTimersByTimeAsync(DEFAULT_CONNECT_TIMEOUT_MS);
+          expect(server.requests).toEqual([]);
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          client.dispose();
+          vi.useRealTimers();
+        }
+      });
+    }
+  }
+
+  it("스트림 생성으로 넘어가도 초기 마감을 새로 시작하지 않는다", async () => {
+    vi.useFakeTimers();
+    const server = new FakeTransport();
+    let ready!: () => void;
+    Object.defineProperty(server, "ready", {
+      value: new Promise<void>((resolve) => { ready = resolve; }),
+    });
+    server.createBidirectionalStream = () => new Promise(() => {});
+    const client = clientOf(server);
+    try {
+      const connecting = client.connect();
+      const failure = expect(connecting).rejects.toMatchObject({
+        name: "ConnectTimeoutError", stage: "stream",
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_CONNECT_TIMEOUT_MS - 1);
+      ready();
+      await vi.advanceTimersByTimeAsync(1);
+      await failure;
+      expect(server.requests).toEqual([]);
+    } finally {
+      client.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("연결 성공 뒤에는 초기 연결 마감이 남지 않는다", async () => {
+    vi.useFakeTimers();
+    const server = new FakeTransport();
+    const client = clientOf(server, { heartbeatMs: 60_000 });
+    try {
+      await client.connect();
+      await vi.advanceTimersByTimeAsync(DEFAULT_CONNECT_TIMEOUT_MS);
+      expect(server.closedByClient).toBe(false);
+      expect(server.requests).toHaveLength(1);
+    } finally {
+      client.dispose();
+      vi.useRealTimers();
+    }
   });
 });

@@ -392,3 +392,19 @@ release, failed lapsed restore, failed desktop resize) plus the existing unix PT
 lifecycle is locked by `npx vitest run src/remote/tab-view.test.ts` (success-then-Back,
 in-flight leave, failed keepalive, stale poll). Field items 5–7 of WINDOWS-BUILD §10
 "Phone-controlled PTY size" cover what only a real phone and TUI can answer.
+
+
+## 2026-09-20 패키지 전용 방화벽 규칙의 허용 오판 수정
+
+실제 PC의 Microsoft Store 인바운드 규칙에는 `PFN`과 `LUOwn` 제한이 있었지만
+기존 수집기는 `ApplicationName`만 읽었다. 빈 경로를 모든 프로그램으로 해석해
+mast의 UDP 허용 규칙이 없어도 `allowed`를 반환하고 허용 버튼을 숨겼다.
+
+`INetFwRule3`의 패키지 ID·로컬 사용자 소유자와 서비스 이름을 함께 수집하고,
+이 범위가 지정된 규칙은 일반 데스크톱 mast에 대한 허용·차단 근거에서 제외한다.
+조회 실패를 빈 값으로 치환하지 않는다. 제한이 없는 모든 프로그램 규칙과
+mast 실행 파일에 대한 규칙은 기존 프로토콜·포트·프로필·주소 판정을 유지한다.
+
+검증은 TCP·UDP 각각에 대해 패키지·소유자·서비스 전용 규칙의 거부와 일반 규칙의
+허용을 확인한다. Windows 네이티브 테스트는 정책에 등록하지 않은 COM 규칙으로
+소유자 범위 수집과 판정을 검증한다. 실제 UAC 및 휴대폰 재연결은 별도 실기 확인이다.

@@ -209,3 +209,17 @@ checks the produced text and references, but its scope is bounded as described i
 - main의 Local HTTP Mobile/Desktop 기능은 선택적 `postResize` 전송 기능으로 유지한다.
   Secure Remote v1에는 resize 요청이 없으므로 해당 버튼을 표시하지 않는다.
   화면 응답의 `sizeOwner`는 실제 PTY 상태를 전달하며 구버전 v1 응답도 읽을 수 있다.
+
+
+## 2026-09-20 초기 연결 무한 대기 수정
+
+- `WebTransport.ready`와 `createBidirectionalStream()`은 하나의 20초 마감을 공유한다.
+  인증 요청부터 적용되던 요청별 마감만으로는 이 단계의 무응답을 끝낼 수 없었다.
+- 브라우저의 연결 종료와 페이지 이탈도 초기 대기를 거부한다. 시간 초과 뒤 늦게
+  완료된 스트림으로 인증하거나 heartbeat를 시작하지 않는다. 성공·실패 모두 초기
+  타이머와 종료 리스너를 해제하며, 인증에는 기존 요청별 20초 마감이 적용된다.
+- 화면은 연결 단계 시간 초과와 스트림 생성 시간 초과를 구분한다. 전자는 같은 LAN,
+  로컬 네트워크 권한과 UDP 방화벽을 안내하고, 후자는 브라우저 호환성 가능성을 안내한다.
+  이 변경은 특정 iOS 버전의 WebTransport 호환성을 보장하지 않는다.
+- 검증: 두 단계 각각의 시간 초과·연결 종료·dispose, 늦은 완료 후 인증 방지,
+  성공 후 초기 타이머 해제를 회귀 테스트로 확인한다.

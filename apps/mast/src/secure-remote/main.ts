@@ -14,7 +14,7 @@ import { fitToVisualViewport, RemoteApp } from "../remote/app";
 import { RemoteError, TransportClosedError } from "../remote/transport";
 import { createMemoryFontPxStore } from "./font-px";
 import { reloadOnPairingHashChange, takePairingFragment } from "./pairing";
-import { WebTransportClient, WebTransportUnsupportedError } from "./transport";
+import { ConnectTimeoutError, WebTransportClient, WebTransportUnsupportedError } from "./transport";
 
 /** 탭 전환에도 살아남고 새로고침에는 초기화되는 글자 크기 (메모리 전용). */
 const fontPx = createMemoryFontPxStore();
@@ -102,6 +102,11 @@ export function destinationText(host: string, port: number): string {
 }
 
 export function connectErrorText(error: unknown): string {
+  if (error instanceof ConnectTimeoutError) {
+    return error.stage === "connection"
+      ? "Connecting to mast timed out. Check that your phone and PC are on the same Wi-Fi, allow local-network access, and check the UDP firewall permission in mast’s Secure Remote screen. Then scan a new QR."
+      : "mast’s connection opened, but the browser did not finish opening a data stream. Scan a new QR to retry. If this repeats, the browser’s WebTransport implementation may be incompatible.";
+  }
   if (error instanceof WebTransportUnsupportedError) {
     return "The browser refused the WebTransport options mast needs — use a recent Chrome or Edge on this phone, then scan the QR again.";
   }

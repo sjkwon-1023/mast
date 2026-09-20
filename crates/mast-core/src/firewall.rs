@@ -93,6 +93,10 @@ pub struct RuleRecord {
     pub protocol: i32,
     pub local_ports: String,
     pub application_name: String,
+    /// 실행 파일 경로가 비어도 패키지·소유자·서비스 제한이 있으면 mast용 규칙이 아니다.
+    pub local_app_package_id: String,
+    pub local_user_owner: String,
+    pub service_name: String,
     pub profiles: i32,
     /// Allow·Block 양쪽이 본다. 원격 주소가 좁게 스코프된 Allow(예: 특정 IP 하나)는
     /// 폰을 들이지 못하는데, 그것을 `allowed` 로 읽으면 대화상자가 버튼까지 감추고
@@ -167,6 +171,9 @@ pub fn judge(target: &Target, rules: &[RuleRecord], all_profiles_off: bool) -> V
 
     let reaches_us = |rule: &RuleRecord| {
         rule.enabled
+            && rule.local_app_package_id.trim().is_empty()
+            && rule.local_user_owner.trim().is_empty()
+            && rule.service_name.trim().is_empty()
             && rule.direction_in
             && target.protocol.covers(rule.protocol)
             && ports_cover(rule.protocol, &rule.local_ports, target.port)

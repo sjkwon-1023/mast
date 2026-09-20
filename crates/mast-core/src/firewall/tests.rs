@@ -30,6 +30,9 @@ fn allowing_rule() -> RuleRecord {
         protocol: PROTOCOL_TCP,
         local_ports: PORT.to_string(),
         application_name: EXE.to_owned(),
+        local_app_package_id: String::new(),
+        local_user_owner: String::new(),
+        service_name: String::new(),
         profiles: PROFILE_PRIVATE,
         remote_addresses: "*".to_owned(),
     }
@@ -471,4 +474,43 @@ fn udp_script_deletes_only_its_own_rule_first() {
 #[test]
 fn udp_script_refuses_a_quoted_path_too() {
     assert!(script_text_for(Protocol::Udp, r#"C:\a"b\mast.exe"#, PORT, false).is_err());
+}
+
+#[test]
+fn restricted_rules_do_not_allow_the_desktop_app() {
+    for protocol in Protocol::ALL {
+        for restriction in ["package", "owner", "service"] {
+            let mut rule = allowing_rule();
+            rule.application_name.clear();
+            rule.protocol = PROTOCOL_ANY;
+            rule.local_ports.clear();
+            match restriction {
+                "package" => rule.local_app_package_id = "S-1-15-2-1234".into(),
+                "owner" => rule.local_user_owner = "S-1-5-21-1234-1001".into(),
+                "service" => rule.service_name = "SomeService".into(),
+                _ => unreachable!(),
+            }
+            let target = Target {
+                protocol,
+                ..target()
+            };
+            assert_eq!(judge(&target, &[rule], false), Verdict::Missing);
+        }
+        let unrestricted = RuleRecord {
+            application_name: String::new(),
+            protocol: PROTOCOL_ANY,
+            ..allowing_rule()
+        };
+        assert_eq!(
+            judge(
+                &Target {
+                    protocol,
+                    ..target()
+                },
+                &[unrestricted],
+                false
+            ),
+            Verdict::Allowed
+        );
+    }
 }

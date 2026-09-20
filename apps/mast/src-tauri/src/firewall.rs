@@ -193,9 +193,10 @@ impl Drop for VariantSlot {
 /// PC 에 규칙이 수백 개 있다).
 #[cfg(windows)]
 fn read_rule(rule: &INetFwRule) -> Option<RuleRecord> {
+    use windows::core::Interface;
     use windows::Win32::Foundation::VARIANT_FALSE;
     use windows::Win32::NetworkManagement::WindowsFirewall::{
-        NET_FW_ACTION_ALLOW, NET_FW_RULE_DIR_IN,
+        INetFwRule3, NET_FW_ACTION_ALLOW, NET_FW_RULE_DIR_IN,
     };
 
     let name = unsafe { rule.Name() }.ok()?.to_string();
@@ -214,6 +215,12 @@ fn read_rule(rule: &INetFwRule) -> Option<RuleRecord> {
     // 읽지 못한 값을 "모든 프로그램"·"모든 포트"로 치면 거짓 `allowed` 가 나온다 —
     // 못 읽은 규칙은 통째로 버리는 쪽이 안전한 방향이다.
     let application_name = unsafe { rule.ApplicationName() }.ok()?.to_string();
+    // UWP 규칙은 ApplicationName이 비어도 패키지·사용자에 한정된다.
+    // 범위를 읽지 못하면 전체 앱 허용으로 간주하지 않고 해당 규칙을 제외한다.
+    let extended: INetFwRule3 = rule.cast().ok()?;
+    let local_app_package_id = unsafe { extended.LocalAppPackageId() }.ok()?.to_string();
+    let local_user_owner = unsafe { extended.LocalUserOwner() }.ok()?.to_string();
+    let service_name = unsafe { rule.ServiceName() }.ok()?.to_string();
     let protocol = unsafe { rule.Protocol() }.ok()?;
     let local_ports = unsafe { rule.LocalPorts() }.ok()?.to_string();
     let profiles = unsafe { rule.Profiles() }.ok()?;
@@ -227,6 +234,9 @@ fn read_rule(rule: &INetFwRule) -> Option<RuleRecord> {
         protocol,
         local_ports,
         application_name,
+        local_app_package_id,
+        local_user_owner,
+        service_name,
         profiles,
         remote_addresses,
     })
@@ -608,5 +618,48 @@ mod tests {
         );
         assert_eq!(status.state, "profileMismatch");
         assert_eq!(status.detail.as_deref(), Some("Private, Public"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn secure_remote_firewall_reads_user_scoped_rule_without_modifying_policy() {
+        use windows::core::{Interface, BSTR};
+        use windows::Win32::Foundation::VARIANT_TRUE;
+        use windows::Win32::NetworkManagement::WindowsFirewall::{
+            INetFwRule, INetFwRule3, NetFwRule, NET_FW_ACTION_ALLOW, NET_FW_RULE_DIR_IN,
+        };
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+
+        let _com = ComScope::enter();
+        // 메모리에만 규칙을 만들고 실제 Windows COM 게터를 검증한다.
+        let rule: INetFwRule =
+            unsafe { CoCreateInstance(&NetFwRule, None, CLSCTX_INPROC_SERVER).unwrap() };
+        unsafe {
+            rule.SetName(&BSTR::from("mast test scoped rule")).unwrap();
+            rule.SetProtocol(17).unwrap();
+            rule.SetLocalPorts(&BSTR::from("7331")).unwrap();
+            rule.SetProfiles(PROFILE_PRIVATE).unwrap();
+            rule.SetDirection(NET_FW_RULE_DIR_IN).unwrap();
+            rule.SetAction(NET_FW_ACTION_ALLOW).unwrap();
+            rule.SetEnabled(VARIANT_TRUE).unwrap();
+            rule.SetRemoteAddresses(&BSTR::from("*")).unwrap();
+        }
+        let target = Target {
+            exe: normalize_exe(EXE),
+            port: PORT,
+            profiles: PROFILE_PRIVATE,
+            protocol: Protocol::Udp,
+        };
+        let unrestricted = read_rule(&rule).expect("일반 규칙을 읽어야 한다");
+        assert_eq!(judge(&target, &[unrestricted], false), Verdict::Allowed);
+        let extended: INetFwRule3 = rule.cast().unwrap();
+        unsafe {
+            extended
+                .SetLocalUserOwner(&BSTR::from("S-1-5-21-1-2-3-1001"))
+                .unwrap();
+        }
+        let restricted = read_rule(&rule).expect("사용자 범위 규칙을 읽어야 한다");
+        assert_eq!(restricted.local_user_owner, "S-1-5-21-1-2-3-1001");
+        assert_eq!(judge(&target, &[restricted], false), Verdict::Missing);
     }
 }
