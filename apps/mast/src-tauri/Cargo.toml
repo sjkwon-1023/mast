@@ -3,7 +3,7 @@
 
 [package]
 name = "mast-app"
-version = "0.3.37"
+version = "0.3.38"
 edition = "2021"
 
 [build-dependencies]
