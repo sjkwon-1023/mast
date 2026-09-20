@@ -104,7 +104,7 @@ const renderer = new Marked({
 /** 마크다운 원문 → 렌더된 HTML 문자열 (순수). 결과에는 raw HTML 도, href 를 가진
  *  앵커도, 외부 리소스 참조도 없다 — 그 사실을 features/viewers/markdown/view.test.ts 가 잠근다. */
 export function renderMarkdown(source: string): string {
-  return renderer.parse(source, { async: false });
+  return renderer.parse(source.replace(/^\uFEFF/, ""), { async: false });
 }
 
 export interface MtimePollerOptions {

@@ -72,6 +72,14 @@ describe('Markdown editing', () => {
     await vi.waitFor(() => expect(editor().hidden).toBe(true));
     expect(document.activeElement).toBe(otherPane);
   });
+  it('renders a UTF-8 BOM file and preserves its BOM when saving', async () => {
+    backend.source = '\uFEFF# Title\n';
+    await edit();
+    expect(view.root.querySelector('h1')?.textContent).toBe('Title');
+    expect(editor().value).toBe('\uFEFF# Title\n');
+    type('\uFEFF# Updated\n'); click('.markdown-save');
+    await vi.waitFor(() => expect(backend.save).toHaveBeenCalledWith(null, '/tmp/note.md', '\uFEFF# Title\n', '\uFEFF# Updated\n'));
+  });
   it('requires confirmation to discard edits and loads the current disk file', async () => {
     await edit(); type('draft'); const confirm = vi.fn(() => false); vi.stubGlobal('confirm', confirm);
     click('.markdown-cancel'); expect(editor().hidden).toBe(false);
