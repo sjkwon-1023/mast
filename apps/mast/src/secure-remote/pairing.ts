@@ -20,7 +20,7 @@ export interface PairingLink {
    *  바인드가 IPv4 라는 것만이 계약이다. */
   host: string;
   port: number;
-  /** SHA-256(DER) 32바이트. 이 연결에만 쓰이고 저장되지 않는다. */
+  /** SHA-256(DER) 32바이트. 이 페어링의 재연결에도 같은 핀을 사용한다. */
   certHash: Uint8Array;
   /** 43자 base64url (CSPRNG 32바이트). */
   token: string;

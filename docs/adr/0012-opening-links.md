@@ -82,3 +82,18 @@ half a feature.
   same "no runtime log file" backlog item applies.
 - The link surface only exists where xterm renders text. Viewer tabs (markdown, text) have their
   own link handling and are untouched by this ADR.
+
+
+## 2026-09-20 OSC 8 링크의 기본 브라우저 연결
+
+Codex가 출력하는 OSC 8 링크는 WebLinksAddon의 일반 URL 감지와 별개다. 기존에는
+xterm 기본 활성화 경로로 들어가 확인 창을 띄운 뒤 `window.open()`을 호출했으므로
+Tauri에서 확인해도 기본 브라우저로 전달되지 않았다.
+
+Terminal의 `linkHandler.activate`와 WebLinksAddon이 같은 콜백을 사용하도록 한다.
+둘 다 기존 HTTP(S)·TUI 마우스 모드 검사를 통과한 URL만 `open_url`에 전달한다.
+백엔드의 스킴 검사와 Windows 기본 브라우저 실행 계약은 유지한다.
+
+검증은 실제 xterm 브라우저 번들에 OSC 8·일반 URL을 출력하고 각 링크 제공자의
+활성화를 실행해 IPC 전달, 기본 경고창·팝업 미사용, 비 HTTP 스킴과 마우스 모드의
+차단을 확인한다. 실제 Windows 기본 브라우저 실행은 실기 확인 대상이다.

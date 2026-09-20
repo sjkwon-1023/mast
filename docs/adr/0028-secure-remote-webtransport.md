@@ -28,6 +28,8 @@ deltas, paste/Enter separation, TUI scroll handling), and duplicating it was not
 
 ## Decisions
 
+2026-09-20의 아래 「인증 기억과 재연결」 변경으로 일회 연결·저장 금지·연결 종료 시 서버 종료 계약을 대체한다.
+
 1. **A separate public static bundle, deployed to GitHub Pages.** The `secure-remote` Vite
    entry builds with base `/mast/` into **`apps/mast/dist-secure-remote`** — deliberately outside
    Tauri's `frontendDist` (`apps/mast/dist`), so Pages-only assets are not embedded in the exe —
@@ -223,3 +225,34 @@ checks the produced text and references, but its scope is bounded as described i
   이 변경은 특정 iOS 버전의 WebTransport 호환성을 보장하지 않는다.
 - 검증: 두 단계 각각의 시간 초과·연결 종료·dispose, 늦은 완료 후 인증 방지,
   성공 후 초기 타이머 해제를 회귀 테스트로 확인한다.
+
+
+## 2026-09-20 인증 기억과 재연결
+
+사용자가 QR 재스캔 없이 휴대폰 새로고침·화면 잠금 후 복귀하기를 요청했다.
+인증 유효기간은 인증서 만료 또는 PC 앱 종료 중 먼저 오는 시점으로 고정한다.
+재연결과 사용 여부로 만료를 연장하지 않는다. 인증서는 전체 유효기간 14일이며,
+시계 오차를 위한 5분의 과거 시작 시각 때문에 발급 후 실제 잔여 기간은 약 14일이다.
+
+- PC는 인증서·개인키·토큰을 메모리에만 둔다. 처음 QR 인증 전에는 기존 120초
+  대기 만료와 취소 규칙을 유지한다. 인증 후 연결이 끊기면 `remembered` 상태로
+  돌아가며 인증서 만료까지 같은 인증의 재접속을 받는다. 앱 종료 시 모두 폐기한다.
+- 동시에 활성화되는 연결은 하나다. 연결 종료 시 슬롯을 반드시 반환한다.
+  인증서 만료는 연결 중에도 서버를 종료한다. 인증 응답의 `expiresAt`은 고정된
+  UNIX 밀리초이며 구형 클라이언트는 추가 필드를 무시할 수 있다.
+- 브라우저는 인증 성공 후 대상 IP·포트·인증서 핀·토큰·만료를 localStorage의
+  `mast.secure-remote.pairing.v1` 한 항목에 저장한다. 새 QR은 이전 저장을 대체한다.
+  저장이 거절되면 기억에 성공한 것으로 표시하지 않는다. 만료·명시적 인증 거절은
+  저장을 지운다. 앱 재시작 뒤 옛 인증서 핀을 새 인증서로 자동 교체하지 않는다.
+- 페이지를 숨기면 연결을 닫고, 복귀·새로고침 시 다시 인증한다. 일시적 실패는
+  화면이 보일 때 5초 간격으로 최대 3회 시도하며, 그 뒤에는 사용자의 새로고침을
+  기다린다. 이전 연결의 입력이나 요청을 재전송하지 않는다.
+- 초기 동작과 달리 같은 오리진의 다른 스크립트가 접근 가능한 localStorage에
+  재사용 가능한 인증을 보관한다. 이는 사용자 요청에 따른 명시적 보안·편의성
+  절충이다. 번들 감사는 localStorage만 허용하고 다른 저장 API·평문 HTTP·외부 자원
+  금지는 유지한다. 저장 키·내용·유효기간은 소스 테스트로 검증한다.
+
+검증: 실제 QUIC 재접속 반복과 슬롯 반환, 유휴 후 인증 유지, 인증 중 고정 만료,
+기존 토큰·인증서 교체 테스트, 브라우저 저장·만료·화면 복귀·늦은 완료·제한된
+재시도·저장 실패 테스트를 수행한다. 실제 iOS 잠금·복귀와 PC 앱 재시작 후
+QR 재인증은 실기 확인 대상이다.

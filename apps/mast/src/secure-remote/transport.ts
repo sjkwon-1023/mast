@@ -4,8 +4,8 @@
 //
 // - **한 번에 하나의 미완료 요청.** 서버가 요청을 순차 처리하므로(conn.rs) 클라이언트도
 //   체인으로 직렬화한다. 입력 순서가 이 체인에 실려 보존된다.
-// - **재연결 없음.** `closed`/EOF/읽기 오류/쓰기 실패는 전부 종료다 — 화면은 재스캔
-//   안내만 띄우고 스스로 다시 연결하지 않는다.
+// - 연결 하나는 종료 후 재사용하지 않는다. session.ts가 새 클라이언트로 재인증하며
+//   이 연결의 입력·미완료 요청은 재전송하지 않는다.
 // - **인증이 먼저.** 첫 프레임은 반드시 `auth` 이고 성공 응답을 받은 뒤에야 화면·입력이
 //   가능하다. 서버 계약과 같은 순서를 클라이언트에서도 강제한다 (그 전에 UI 가 뜨지 않는다).
 //
@@ -106,6 +106,7 @@ const DEFAULT_HEARTBEAT_MS = 10_000;
 
 export class WebTransportClient implements RemoteTransport {
   private readonly options: WebTransportClientOptions;
+  expiresAt: number | null = null;
   private transport: WebTransportLike | null = null;
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -149,7 +150,13 @@ export class WebTransportClient implements RemoteTransport {
       this.writer = stream.writable.getWriter();
       this.reader = stream.readable.getReader();
       void this.readLoop();
-      await this.request({ type: "auth", token: this.options.token });
+      const auth = await this.request({ type: "auth", token: this.options.token });
+      if (auth.expiresAt !== undefined) {
+        if (typeof auth.expiresAt !== "number" || !Number.isSafeInteger(auth.expiresAt) || auth.expiresAt <= Date.now()) {
+          throw new Error("mast returned an invalid pairing expiry");
+        }
+        this.expiresAt = auth.expiresAt;
+      }
       // auth 응답과 `closed` 가 경합했다면 살아 있는 연결처럼 완료하지 않는다 —
       // 여기서 끝내야 호출자가 "연결됨" 화면을 세우지 않는다.
       if (this.closedReason !== null) {

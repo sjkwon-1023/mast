@@ -90,22 +90,21 @@ export class TerminalView {
     this.root.className = "term-host";
     parent.appendChild(this.root);
 
+    const activateLink = (_event: MouseEvent, uri: string): void => {
+      if (!shouldOpenLink(uri, this.term.modes.mouseTrackingMode)) return;
+      void openUrl(uri).catch((err: unknown) => console.error("open_url failed", err));
+    };
+
     this.term = new Terminal({
       scrollback: 5000,
 
       ...terminalViewOptions(),
+      linkHandler: { activate: activateLink },
     });
     this.fitAddon = new FitAddon();
     this.term.loadAddon(this.fitAddon);
 
-    this.term.loadAddon(
-      new WebLinksAddon((_event, uri) => {
-        if (!shouldOpenLink(uri, this.term.modes.mouseTrackingMode)) return;
-        void openUrl(uri).catch((err: unknown) => {
-          console.error("open_url failed", err);
-        });
-      }),
-    );
+    this.term.loadAddon(new WebLinksAddon(activateLink));
 
     // 내장 ED 3 처리 전의 위치를 읽고, false를 반환해 실제 화면 삭제는 xterm에 맡긴다.
     this.term.parser.registerCsiHandler({ final: "J" }, (params) => {

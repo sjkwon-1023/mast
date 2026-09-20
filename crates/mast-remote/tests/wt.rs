@@ -1158,7 +1158,7 @@ async fn a_blocked_write_survives_the_pairing_and_keeps_the_next_input_busy() {
 }
 
 #[tokio::test]
-async fn the_idle_timeout_ends_the_server() {
+async fn the_idle_timeout_keeps_the_pairing_for_reconnection() {
     let mut timeouts = default_timeouts();
     timeouts.idle = Duration::from_millis(300);
     let h = Harness::new(TOKEN, timeouts);
@@ -1167,7 +1167,7 @@ async fn the_idle_timeout_ends_the_server() {
     expect_closed(&mut recv).await;
 
     let deadline = Instant::now() + Duration::from_secs(3);
-    while !h.server().is_finished() {
+    while h.server().state() != SecureRemoteState::Remembered {
         assert!(
             Instant::now() < deadline,
             "server did not finish: {:?}",
@@ -1175,7 +1175,14 @@ async fn the_idle_timeout_ends_the_server() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(h.server().state(), SecureRemoteState::Idle);
+    assert_eq!(h.server().state(), SecureRemoteState::Remembered);
+    assert!(
+        !h.server().cancel(),
+        "닫힌 다이얼로그가 기억한 페어링을 취소하면 안 된다"
+    );
+    let (_session, mut send, mut recv) = authenticate(&h, TOKEN).await;
+    send_json(&mut send, &json!({"v":1,"id":2,"type":"state"})).await;
+    assert_eq!(recv_json(&mut recv).await["ok"], true);
 }
 
 #[tokio::test]
@@ -1232,8 +1239,8 @@ async fn cancel_closes_a_waiting_server_but_not_a_connected_one() {
 }
 
 #[tokio::test]
-async fn a_client_disconnect_during_a_blocked_write_ends_the_server() {
-    let h = Harness::new(TOKEN, default_timeouts());
+async fn a_client_disconnect_during_a_blocked_write_keeps_the_pairing() {
+    let mut h = Harness::new(TOKEN, default_timeouts());
     let (session, mut send, mut recv) = authenticate(&h, TOKEN).await;
     let screen = screen_request(&mut send, &mut recv, 2, h.tab, None).await;
     let token = screen["session"].as_str().unwrap().to_string();
@@ -1276,7 +1283,7 @@ async fn a_client_disconnect_during_a_blocked_write_ends_the_server() {
     drop(session);
 
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !h.server().is_finished() {
+    while h.server().state() != SecureRemoteState::Remembered {
         assert!(
             Instant::now() < deadline,
             "server did not finish after the client vanished: {:?}",
@@ -1284,7 +1291,7 @@ async fn a_client_disconnect_during_a_blocked_write_ends_the_server() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(h.server().state(), SecureRemoteState::Idle);
+    assert_eq!(h.server().state(), SecureRemoteState::Remembered);
     assert!(
         h.logs()
             .iter()
@@ -1292,6 +1299,7 @@ async fn a_client_disconnect_during_a_blocked_write_ends_the_server() {
         "the disconnect path was not taken: {:?}",
         h.logs()
     );
+    h.stop();
     assert_server_socket_released(socket, port);
 }
 
@@ -1919,4 +1927,48 @@ async fn stalled_quic_connections_share_the_global_limit_and_release_slots() {
     let (_session, mut send, mut recv) = authenticate(&h, TOKEN).await;
     send_json(&mut send, &json!({"v": 1, "id": 2, "type": "heartbeat"})).await;
     assert_eq!(recv_json(&mut recv).await["ok"], true);
+}
+
+#[tokio::test]
+async fn remembered_pairing_has_a_fixed_expiry_even_while_connected() {
+    let mut timeouts = default_timeouts();
+    timeouts.lifetime = Duration::from_secs(1);
+    let h = Harness::new(TOKEN, timeouts);
+    let session = connect(&h).await;
+    let (mut send, mut recv) = session.open_bi().await.unwrap();
+    send_json(
+        &mut send,
+        &json!({"v":1,"id":1,"type":"auth","token":TOKEN}),
+    )
+    .await;
+    let auth = recv_json(&mut recv).await;
+    assert_eq!(auth["ok"], true);
+    assert!(auth["expiresAt"].as_u64().unwrap() > 0);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !h.server().is_finished() {
+        assert!(
+            Instant::now() < deadline,
+            "인증서 수명 뒤에도 서버가 남았다"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(h.server().state(), SecureRemoteState::Idle);
+    expect_closed(&mut recv).await;
+}
+
+#[tokio::test]
+async fn repeated_reconnections_release_connection_slots() {
+    let mut timeouts = default_timeouts();
+    timeouts.idle = Duration::from_millis(100);
+    timeouts.wait = Duration::from_millis(500);
+    let h = Harness::new(TOKEN, timeouts);
+    for _ in 0..8 {
+        let (_session, _send, mut recv) = authenticate(&h, TOKEN).await;
+        expect_closed(&mut recv).await;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while h.server().state() != SecureRemoteState::Remembered {
+            assert!(Instant::now() < deadline, "재연결 슬롯이 반환되지 않았다");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
 }

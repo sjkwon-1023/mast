@@ -249,7 +249,7 @@ describe("secureRemoteErrorText", () => {
   it("maps every reject code to a user-readable sentence", () => {
     expect(secureRemoteErrorText({ code: "busy", message: "" })).toContain("already in progress");
     expect(secureRemoteErrorText({ code: "connected", message: "" })).toContain(
-      "already connected",
+      "already remembers",
     );
     expect(secureRemoteErrorText({ code: "stopping", message: "" })).toContain(
       "still shutting down",
@@ -969,6 +969,16 @@ describe("pairing dialog — Secure Remote lifetime", () => {
     dialog.close();
     await vi.advanceTimersByTimeAsync(SECURE_STATUS_POLL_MS * 3);
     expect(statusCalls).toHaveBeenCalledTimes(afterBack);
+  });
+});
+
+describe("기억한 모바일 페어링", () => {
+  it("끊긴 연결을 현재 연결된 것으로 표시하지 않는다", async () => {
+    const dialog = open(fakeBackend({
+      secureRemoteStatus: async () => ({state: "remembered", pairingId: SECURE_ID, reason: null}),
+    }));
+    await flush();
+    expect(required<HTMLElement>(dialog, ".pairing-notice").textContent).toContain("No phone is connected right now");
   });
 });
 

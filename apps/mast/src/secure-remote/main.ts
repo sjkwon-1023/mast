@@ -5,95 +5,101 @@
 // 확인한다, 연결·인증이 끝나면 공유 UI(`remote/app.ts`)에 transport 를 넣어 준다,
 // 그리고 연결의 수명을 관리한다 — 대상 host 를 화면에 드러내고, 같은 탭에서 새 QR
 // 이 열리면 전체 reload 로 새로 시작하며, 페이지를 떠날 때 연결을 닫는다.
-// 토큰·hash 는 메모리에만 있고(저장 없음), `/api` 나 평문 HTTP 로 가는 경로도 없다 —
+// 인증된 페어링은 브라우저에 만료 시각과 함께 저장한다. 평문 HTTP 경로는 없다 —
 // 네트워크는 전부 `WebTransportClient` 안에 있다.
 
 import "../remote/remote.css";
+import { RememberedSession } from "./session";
+import { forgetPairing, readRememberedPairing, PairingStorageError } from "./remembered";
 
 import { fitToVisualViewport, RemoteApp } from "../remote/app";
 import { RemoteError, TransportClosedError } from "../remote/transport";
 import { createMemoryFontPxStore } from "./font-px";
 import { reloadOnPairingHashChange, takePairingFragment } from "./pairing";
-import { ConnectTimeoutError, WebTransportClient, WebTransportUnsupportedError } from "./transport";
+import { ConnectTimeoutError, WebTransportUnsupportedError } from "./transport";
 
-/** 탭 전환에도 살아남고 새로고침에는 초기화되는 글자 크기 (메모리 전용). */
 const fontPx = createMemoryFontPxStore();
-
-/** 연결 하나에 대응하는 클라이언트. pagehide 리스너가 이 하나만 보게 해, start 가
- *  다시 돌아도(새 QR 로 페이지가 다시 로드되기 전의 창) 핸들러가 겹치지 않는다. */
-let client: WebTransportClient | null = null;
-
-/** 새 QR 로 떠나는 중인가. 언로드 직후의 늦은 비동기 연속이 옛 문서의 DOM 을
- *  덮지 않게 한다 — 화면은 어차피 사라지지만, 마지막 프레임이 새 페이지의 첫
- *  인상을 흔들지 않도록 쓰기를 막는다. */
+let session: RememberedSession | null = null;
+let app: RemoteApp | null = null;
 let leaving = false;
 
-// 페이지를 떠나면 연결을 우리 쪽에서 닫는다 — 서버가 유휴 30초를 기다리지 않는다.
-window.addEventListener("pagehide", () => client?.dispose());
+function disposeApp(): void {
+  app?.dispose();
+  app = null;
+}
 
-// 같은 탭에서 새 QR 주소를 열면 문서가 다시 로드되지 않고 fragment 만 바뀐다
-// (same-document 이동). 그대로 두면 새 토큰이 주소에 남고 연결도 시작되지 않으므로,
-// fragment 를 지우지 않은 채 전체 reload 를 요청한다 — 새 문서의 start() 가 QR 을
-// 처음부터 읽고, 언로드의 pagehide 가 이전 연결을 닫는다.
+window.addEventListener("pagehide", () => {
+  leaving = true;
+  disposeApp();
+  session?.setVisible(false);
+});
+window.addEventListener("pageshow", () => {
+  leaving = false;
+  session?.setVisible(!document.hidden);
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) disposeApp();
+  session?.setVisible(!document.hidden && !leaving);
+});
 reloadOnPairingHashChange(window, () => {
   leaving = true;
+  session?.dispose();
   window.location.reload();
 });
 
 const root = document.getElementById("app");
 if (root !== null) {
   fitToVisualViewport(root);
-  void start(root);
+  start(root);
 }
 
-async function start(root: HTMLElement): Promise<void> {
-  const pairing = takePairingFragment(window.location, window.history);
-  if (!pairing.ok) {
-    showNotice(
-      root,
-      "Scan the pairing QR in mast",
-      pairing.reason === "invalid"
-        ? "That link was not a valid mast pairing code. Open the sidebar, press “Connect mobile”, choose Secure Remote, and scan the fresh QR."
-        : "Open the sidebar in mast on your PC, press “Connect mobile”, choose Secure Remote, and scan the QR with this phone.",
-    );
-    return;
-  }
-
-  if (typeof WebTransport !== "function") {
-    showNotice(
-      root,
-      "This browser has no WebTransport",
-      "Secure Remote needs WebTransport with certificate pinning — use a recent Chrome or Edge on this phone, then scan the QR again.",
-    );
-    return;
-  }
-
-  client = new WebTransportClient({
-    host: pairing.link.host,
-    port: pairing.link.port,
-    certHash: pairing.link.certHash,
-    token: pairing.link.token,
-  });
-
-  showNotice(
-    root,
-    "Connecting to mast…",
-    `Destination ${destinationText(pairing.link.host, pairing.link.port)}. If the browser asks for permission to access your local network, allow it for this page.`,
-  );
+function start(root: HTMLElement): void {
+  const scanned = takePairingFragment(window.location, window.history);
+  let storage: Storage;
+  let saved;
   try {
-    await client.connect();
-  } catch (error) {
-    if (leaving) return;
-    showNotice(root, "Could not connect to mast", connectErrorText(error));
+    storage = window.localStorage;
+    if (scanned.ok || scanned.reason === "invalid") forgetPairing(storage);
+    saved = readRememberedPairing(storage);
+  } catch {
+    showNotice(root, "Could not remember this phone", "Allow storage for this site, then scan the pairing QR again.");
     return;
   }
-  if (leaving) return;
-  new RemoteApp({
-    root,
-    transport: client,
-    fontPx,
-    destination: destinationText(pairing.link.host, pairing.link.port),
-  }).start();
+  const link = scanned.ok ? scanned.link : saved?.link;
+  if (link === undefined) {
+    showNotice(root, "Scan the pairing QR in mast",
+      "Open the sidebar in mast on your PC, press “Connect mobile”, choose Secure Remote, and scan the QR with this phone.");
+    return;
+  }
+  if (typeof WebTransport !== "function") {
+    showNotice(root, "This browser has no WebTransport", "Use a browser with WebTransport and certificate pinning support, then scan the QR again.");
+    return;
+  }
+  session = new RememberedSession({
+    link,
+    expiresAt: scanned.ok ? null : saved!.expiresAt,
+    storage,
+    onConnecting: () => {
+      disposeApp();
+      showNotice(root, "Connecting to mast…", `Destination ${destinationText(link.host, link.port)}. Allow local-network access if the browser asks.`);
+    },
+    onConnected: (client) => {
+      if (leaving) return;
+      app = new RemoteApp({ root, transport: client, fontPx, destination: destinationText(link.host, link.port) });
+      app.start();
+    },
+    onDisconnected: (error, retrying) => {
+      disposeApp();
+      showNotice(root, retrying ? "Reconnecting to mast…" : "Could not connect to mast",
+        retrying ? "The connection was interrupted. Reconnecting without resending input…"
+          : `${connectErrorText(error)} If mast was restarted, scan a new QR; otherwise refresh to retry.`);
+    },
+    onExpired: () => {
+      disposeApp();
+      showNotice(root, "Pairing expired", "The certificate expired or mast ended this pairing. Scan a new QR in Connect mobile.");
+    },
+  });
+  session.setVisible(!document.hidden);
 }
 
 /** 연결 대상 표시 — 사용자가 어느 호스트로 붙는지 항상 볼 수 있게 한다. */
@@ -102,6 +108,7 @@ export function destinationText(host: string, port: number): string {
 }
 
 export function connectErrorText(error: unknown): string {
+  if (error instanceof PairingStorageError) return error.message;
   if (error instanceof ConnectTimeoutError) {
     return error.stage === "connection"
       ? "Connecting to mast timed out. Check that your phone and PC are on the same Wi-Fi, allow local-network access, and check the UDP firewall permission in mast’s Secure Remote screen. Then scan a new QR."
@@ -118,7 +125,7 @@ export function connectErrorText(error: unknown): string {
       case 401:
         return "Not authorized — scan the pairing QR in mast again.";
       case 409:
-        return "Another phone is already connected. End that phone session (close the mast page there), then start a new pairing in mast and scan the new QR.";
+        return "Another phone or tab is already connected. Close that mast page, then refresh this page to reconnect. Restart mast and scan a new QR to replace the pairing.";
       case 429:
         return "Too many attempts — wait a minute and scan the QR again.";
       case 503:

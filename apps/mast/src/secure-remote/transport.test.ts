@@ -625,3 +625,31 @@ describe("초기 연결 중단", () => {
     }
   });
 });
+
+
+describe("인증 응답의 고정 만료", () => {
+  it("서버가 보낸 만료를 재연결 저장용으로 전달한다", async () => {
+    const server = new FakeTransport();
+    server.auto = false;
+    const client = clientOf(server);
+    const connecting = client.connect();
+    await until(() => server.requests.length === 1, "auth");
+    const expiresAt = Date.now() + 60_000;
+    server.respond({v: 1, id: 1, ok: true, expiresAt});
+    await connecting;
+    expect(client.expiresAt).toBe(expiresAt);
+    client.dispose();
+  });
+
+  it("이미 만료된 인증 응답은 연결 성공으로 표시하지 않는다", async () => {
+    const server = new FakeTransport();
+    server.auto = false;
+    const client = clientOf(server);
+    const connecting = client.connect();
+    const rejected = expect(connecting).rejects.toThrow("invalid pairing expiry");
+    await until(() => server.requests.length === 1, "auth");
+    server.respond({v: 1, id: 1, ok: true, expiresAt: Date.now() - 1});
+    await rejected;
+    expect(server.closedByClient).toBe(true);
+  });
+});

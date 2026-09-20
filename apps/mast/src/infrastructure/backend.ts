@@ -281,6 +281,7 @@ export type SecureRemoteState =
   | "starting"
   | "waiting"
   | "connected"
+  | "remembered"
   | "stopping"
   | "failed";
 

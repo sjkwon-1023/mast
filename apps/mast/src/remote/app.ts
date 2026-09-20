@@ -31,6 +31,9 @@ export class RemoteApp {
    *  응답도 이 값을 지우거나 새 폴링·탭 화면을 만들 수 없다. */
   private closedMessage: string | null = null;
 
+  private readonly visibility = () => this.applyVisibility();
+  private unsubscribeClosed: (() => void) | undefined;
+
   constructor(private readonly options: RemoteAppOptions) {
     this.destinationEl =
       options.destination === undefined ? null : destinationBar(options.destination);
@@ -46,10 +49,10 @@ export class RemoteApp {
         );
       },
     });
-    document.addEventListener("visibilitychange", () => this.applyVisibility());
+    document.addEventListener("visibilitychange", this.visibility);
     // 연결 종료는 목록 화면에도 남긴다 — 탭에서 Back 으로 나온 사용자가 빈 화면을
     // 만나지 않게. 재연결은 하지 않는다.
-    options.transport.onClosed?.((message) => this.handleClosed(message));
+    this.unsubscribeClosed = options.transport.onClosed?.((message) => this.handleClosed(message));
   }
 
   start(): void {
@@ -61,6 +64,15 @@ export class RemoteApp {
     }
     this.listSchedule.start();
     this.applyVisibility();
+  }
+
+  dispose(): void {
+    this.closedMessage = "Disconnected";
+    this.listSchedule.stop();
+    this.tabView?.dispose();
+    this.tabView = null;
+    this.unsubscribeClosed?.();
+    document.removeEventListener("visibilitychange", this.visibility);
   }
 
   /** 종료는 한 방향뿐이다 — 늦게 도착하는 응답이 이 상태를 되돌리지 못한다. */

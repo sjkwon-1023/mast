@@ -14,10 +14,10 @@ describe("connectErrorText", () => {
     expect(connectErrorText(new ConnectTimeoutError("connection"))).toContain("UDP firewall");
     expect(connectErrorText(new ConnectTimeoutError("stream"))).toContain("data stream");
   });
-  it("maps 409 to ending the phone session and making a fresh pairing", () => {
+  it("maps 409 to closing the other page and reconnecting", () => {
     const text = connectErrorText(new RemoteError(409, "a phone is already connected"));
-    expect(text).toContain("End that phone session");
-    expect(text).toContain("new pairing");
+    expect(text).toContain("Close that mast page");
+    expect(text).toContain("refresh this page");
     // 존재하지 않는 데스크톱 disconnect 조작을 지시하지 않는다.
     expect(text).not.toContain("Close it in mast");
     // 첫 세션이 끝나면 이전 QR 은 유효하지 않다 — 같은 QR 재스캔을 지시하지 않는다.

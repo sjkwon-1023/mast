@@ -2,7 +2,7 @@
 // Secure Remote 폰 번들 감사 — CI 게이트가 **실제 산출물**을 본다.
 //
 // 검사 대상은 `apps/mast/dist-secure-remote`(vite.secure-remote.config.ts 의 산출물)뿐이다.
-// 소스나 주석은 보지 않는다 — "이 번들에는 외부 자원 참조도, storage 접근도, 평문 HTTP
+// 소스나 주석은 보지 않는다 — "이 번들에는 외부 자원 참조도, 허용하지 않은 storage 접근도, 평문 HTTP
 // 경로도 없다"는 계약은 소스가 아니라 GitHub Pages 가 배포하는 바이트에 걸려 있기
 // 때문이다. 네트워크도 타지 않는다.
 //
@@ -15,11 +15,12 @@
 //   CSP           — index.html 의 CSP meta 가 아래 REQUIRED_CSP 와 **정확히** 같은지 본다.
 //                   존재 여부만 보면 `default-src *` 같은 약화를 통과시킨다.
 //   sourcemap     — `.map` 파일이나 `sourceMappingURL` 참조가 있으면 실패한다.
-//   storage       — localStorage·sessionStorage·indexedDB·document.cookie·caches·navigator.storage.
+//   storage       — sessionStorage·indexedDB·document.cookie·caches·navigator.storage 금지.
+//                   인증된 페어링 한 건의 localStorage 사용은 소스 테스트로 검증한다.
 //   plaintext     — `http://`, `fetch(`, `XMLHttpRequest`, `sendBeacon`, `/api/` (HTTP 로의 fallback).
 //
 // storage·plaintext 는 **문자열 마커 검사**다: 리터럴 형태와 인접 문자열 리터럴 연결
-// (`"local" + "Storage"`)까지만 펴 보고, 템플릿 보간·변수 조립 같은 임의 난독화는
+// (`"session" + "Storage"`)까지만 펴 보고, 템플릿 보간·변수 조립 같은 임의 난독화는
 // 해독하지 않는다. 그래서 "임의 난독화가 불가능하다"는 증명이 아니며, 더 넓은 보증은
 // 소스 리뷰 몫이다 — 이 한계는 출력과 ADR-0028 에 함께 적혀 있다.
 //
@@ -57,9 +58,8 @@ const JS_EXTENSIONS = new Set([".js", ".mjs"]);
 const REQUIRED_CSP =
   "default-src 'none'; script-src 'self'; style-src 'self'; connect-src https:; base-uri 'none'; form-action 'none'";
 
-/** 브라우저 저장소 API — 이 번들은 전부 페이지 메모리만 쓴다. */
+/** 인증된 페어링 한 건의 localStorage만 허용한다. 다른 저장 경로는 사용하지 않는다. */
 const STORAGE_MARKERS = [
-  "localStorage",
   "sessionStorage",
   "indexedDB",
   "document.cookie",
@@ -191,8 +191,8 @@ function checkReferenceValues(values, label, root, relativeBase, failures) {
   }
 }
 
-/** 인접한 문자열 리터럴 연결(`"local" + "Storage"`)만 펴는 유계 변환. 따옴표류와 그
- *  사이의 `+` 를 지우므로 `globalThis["local"+"Storage"]` 가 `localStorage` 로 드러난다.
+/** 인접한 문자열 리터럴 연결(`"session" + "Storage"`)만 펴는 유계 변환. 따옴표류와 그
+ *  사이의 `+` 를 지우므로 `globalThis["session"+"Storage"]` 가 `sessionStorage` 로 드러난다.
  *  템플릿 보간(`${…}`)·변수 조립은 이 변환의 범위가 아니다 (모듈 헤더의 한계). */
 function foldConcatenatedLiterals(text) {
   return text.replace(/(["'`])\s*\+\s*(["'`])/g, "$1$2").replace(/["'`]/g, "");
@@ -305,9 +305,9 @@ function writeFixture(dir) {
 const TAMPERS = [
   ["sourcemap comment", "sourcemap reference", (dir) => writeFileSync(join(dir, "assets", "app.js"), FIXTURE_JS + "//# sourceMappingURL=app.js.map\n")],
   ["sourcemap file", "sourcemap file present", (dir) => writeFileSync(join(dir, "assets", "app.js.map"), "{}\n")],
-  ["storage localStorage", 'storage API "localStorage"', (dir) => writeFileSync(join(dir, "assets", "app.js"), FIXTURE_JS + "localStorage.setItem('t', '1');\n")],
+  ["storage sessionStorage", 'storage API "sessionStorage"', (dir) => writeFileSync(join(dir, "assets", "app.js"), FIXTURE_JS + "sessionStorage.setItem('t', '1');\n")],
   ["storage indexedDB", 'storage API "indexedDB"', (dir) => writeFileSync(join(dir, "assets", "app.js"), FIXTURE_JS + "indexedDB.open('t');\n")],
-  ["storage computed concat", 'concealed storage API "localStorage"', (dir) => writeFileSync(join(dir, "assets", "app.js"), FIXTURE_JS + 'globalThis["local"+"Storage"].setItem("t", "1");\n')],
+  ["storage computed concat", 'concealed storage API "sessionStorage"', (dir) => writeFileSync(join(dir, "assets", "app.js"), FIXTURE_JS + 'globalThis["session"+"Storage"].setItem("t", "1");\n')],
   ["plaintext fetch", 'plaintext/HTTP fallback marker "fetch("', (dir) => writeFileSync(join(dir, "assets", "app.js"), FIXTURE_JS + "fetch('/api/state');\n")],
   ["plaintext http", 'plaintext/HTTP fallback marker "http://"', (dir) => writeFileSync(join(dir, "assets", "app.js"), FIXTURE_JS + "const plain = 'http://10.0.0.1:7331';\n")],
   ["plaintext computed concat", 'concealed plaintext/HTTP fallback marker "http://"', (dir) => writeFileSync(join(dir, "assets", "app.js"), FIXTURE_JS + 'const plain = "ht" + "tp://10.0.0.1:7331";\n')],
@@ -374,7 +374,7 @@ function main(argv) {
     return 1;
   }
   console.log(
-    `PASS secure-remote bundle audit: ${dir} (base + resolved references, exact CSP, no sourcemaps, no storage/HTTP markers in text)`,
+    `PASS secure-remote bundle audit: ${dir} (base + resolved references, exact CSP, no sourcemaps, no disallowed storage/HTTP markers in text)`,
   );
   return 0;
 }
