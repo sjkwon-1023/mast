@@ -116,6 +116,9 @@ jobs:
       # 제품이 도는 Windows 에서 실제로 도는 것은 라이브러리 단위 테스트와 HTTP 서버
       # 통합 테스트, 그리고 글루의 `secure_remote` 테스트(실제 UDP 바인드·해제와 방화벽
       # 판정)다. ARM64 바이너리는 이 러너에서 실행할 수 없어 x64 에서만 돈다.
+      - name: Markdown save tests (x64 Windows, native)
+        run: cargo test -p mast-core --target x86_64-pc-windows-msvc document::tests
+
       - name: Secure remote crate tests (x64 Windows, native)
         run: cargo test -p mast-remote --target x86_64-pc-windows-msvc
 

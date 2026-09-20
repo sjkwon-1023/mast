@@ -3293,3 +3293,19 @@ heartbeats every 10 seconds.
 
 Record the phone OS, browser and version, the Windows build, and which steps passed. Steps that
 could not be run stay *not verified*.
+
+
+### v0.3.34 추가 수동 검증: pane 이동·폴더 탐색·마크다운 편집
+
+아래 항목은 자동 테스트와 별도로 실제 Windows/WSL에서 확인한다. 아직 실기 검증하지 않았다.
+
+- 분할된 터미널·폴더·마크다운 pane에서 Alt+Shift+네 방향키로 인접 pane을 이동한다.
+- 폴더 탭 옆의 다른 탭을 Alt+Shift+W로 닫고, 클릭 없이 위·아래 방향키로 항목을 선택한다.
+- 폴더에서 왼쪽 방향키로 상위 경로, 오른쪽 방향키로 선택된 하위 폴더를 연다.
+  파일과 `..`에서 오른쪽 방향키는 아무것도 열지 않는다.
+- WSL의 UTF-8 마크다운을 Edit로 수정하고 Ctrl+S/Save로 저장한다.
+  CRLF·BOM 및 실제 파일 권한이 보존되는지 확인한다.
+- 편집 중 다른 탭·워크스페이스를 다녀오거나 Ctrl+Shift+R 및 자동 WebView 리로드가
+  발생해도 편집 내용이 복원된다. 저장 도중 탭을 왕복하고 다시 수정·저장한다.
+- 외부 편집기로 같은 파일을 변경한 뒤 저장하면 덮어쓰기를 거부하고 편집 내용이 남는다.
+- Cancel, 탭·pane·워크스페이스 닫기, 앱 종료의 미저장 확인에서 취소하면 내용이 유지된다.

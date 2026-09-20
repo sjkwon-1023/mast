@@ -1,3 +1,4 @@
+import { closingMarkdownDrafts, discardMarkdownDraft, hasMarkdownDrafts } from "../features/viewers/markdown/drafts";
 import { installNavKeys } from "./navigation/actions";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -70,7 +71,7 @@ function installReloadKey(): void {
     (ev) => {
       if (ev.ctrlKey && ev.shiftKey && !ev.altKey && ev.code === "KeyR") {
         ev.preventDefault();
-        location.reload();
+        if (!hasMarkdownDrafts() || window.confirm("Reload with unsaved Markdown edits? Drafts will be restored from this session.")) location.reload();
       }
     },
     { capture: true },
@@ -158,6 +159,9 @@ class App {
     installShortcutGuide();
     installActivityPing();
     this.installWindowFocus();
+    await getCurrentWindow().onCloseRequested((event) => {
+      if (hasMarkdownDrafts() && !window.confirm("Quit mast and discard unsaved Markdown edits?")) event.preventDefault();
+    });
 
     initWindowVisibility().catch((err: unknown) => {
       console.error("window visibility listen failed", err);
@@ -278,14 +282,17 @@ class App {
 
   private async dispatchUI(cmd: Command): Promise<CommandOutput | null> {
     let traceToken: number | null = null;
-    if (cmd.type === "switchWorkspace") {
-      const active = this.store.snapshot?.state.activeWorkspace ?? null;
-      if (active !== cmd.workspace) {
-        traceToken = this.tracer.begin(cmd.workspace, performance.now());
-      }
-    }
     try {
+      const closingDrafts = closingMarkdownDrafts(cmd, this.store.snapshot);
+      if (closingDrafts.length > 0 && !window.confirm("Close and discard unsaved Markdown edits?")) return null;
+      if (cmd.type === "switchWorkspace") {
+        const active = this.store.snapshot?.state.activeWorkspace ?? null;
+        if (active !== cmd.workspace) {
+          traceToken = this.tracer.begin(cmd.workspace, performance.now());
+        }
+      }
       const out = await dispatch(cmd);
+      for (const tab of closingDrafts) discardMarkdownDraft(tab);
       this.clearError();
       this.compensateFocus(cmd, out);
       return out;
@@ -325,7 +332,7 @@ class App {
       cmd.type === "closeWorkspace" ||
       cmd.type === "switchWorkspace"
     ) {
-      this.wsView.requestFocus({ kind: "activePane" });
+      this.wsView.requestFocus({ kind: "activePane", after: cmd });
     }
   }
 

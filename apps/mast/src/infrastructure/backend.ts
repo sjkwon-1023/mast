@@ -506,3 +506,7 @@ export function onStateChanged(
 ): Promise<UnlistenFn> {
   return listen<StateSnapshot>("state-changed", (event) => handler(event.payload));
 }
+
+export function fsSaveMarkdown(distro: string | null, path: string, expected: string, content: string): Promise<void> {
+  return invoke<void>("fs_save_markdown", { distro, path, expected, content });
+}

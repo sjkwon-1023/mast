@@ -367,6 +367,7 @@ fn main() {
             commands::fs_list_dir,
             commands::fs_stat,
             commands::fs_read_chunk,
+            commands::fs_save_markdown,
             git::git_status,
             git::git_diff,
             // 끝난 터미널 탭의 기록 바이트 (ADR-0018) — 기록 뷰가 마운트 때 1회.

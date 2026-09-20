@@ -154,6 +154,7 @@ export function moveSelection(index: number, count: number, move: SelectionMove)
 export type FolderKeyAction =
   | { type: "move"; move: SelectionMove }
   | { type: "open" }
+  | { type: "child" }
   | { type: "parent" };
 
 const MOVE_KEYS: Record<string, SelectionMove | undefined> = {
@@ -178,7 +179,8 @@ export function folderKeyAction(spec: KeySpec): FolderKeyAction | null {
   const move = MOVE_KEYS[spec.key];
   if (move !== undefined) return { type: "move", move };
   if (spec.key === "Enter") return { type: "open" };
-  if (spec.key === "Backspace") return { type: "parent" };
+  if (spec.key === "ArrowRight") return { type: "child" };
+  if (spec.key === "Backspace" || spec.key === "ArrowLeft") return { type: "parent" };
   return null;
 }
 
@@ -362,6 +364,11 @@ export class FolderView implements ViewerView {
           this.openRow(this.rows[this.selected]);
         }
         return;
+      case "child": {
+        const row = this.rows[this.selected];
+        if (row?.isDir && !row.parent) this.openRow(row);
+        return;
+      }
       case "parent":
         this.navigateParent();
         return;

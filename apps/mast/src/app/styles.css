@@ -1516,3 +1516,32 @@ body {
   color: var(--warn);
   font-size: 9px;
 }
+
+
+.markdown-toolbar {
+  display: flex;
+  gap: 6px;
+  padding: 5px 8px;
+  flex-shrink: 0;
+}
+
+.markdown-editor {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  padding: 12px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--viewer-font-family, monospace);
+  font-size: var(--viewer-font-size, 12px);
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+.markdown-editor[hidden],
+.markdown-scroll[hidden],
+.markdown-toolbar button[hidden] {
+  display: none;
+}

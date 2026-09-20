@@ -40,7 +40,7 @@ and WSL2.
 
 ## Features
 
-- **Split panes** — split either way, drag to resize, `Ctrl+Shift`+arrows to move focus. A new pane or tab
+- **Split panes** — split either way, drag to resize, `Ctrl/Alt+Shift`+arrows to move focus. A new pane or tab
   opens in the directory the pane's shell is in.
 - **Tabs inside panes** — every pane has its own tab strip; background tabs stay alive.
 - **Agent status and notifications** — Claude Code and Codex report running / needs input / idle
@@ -152,7 +152,7 @@ Most app shortcuts use `Ctrl+Shift` or `Alt+Shift`; unlisted keys go to the PTY.
 |---|---|
 | `Ctrl+1` … `Ctrl+9` / `Alt+1` … `Alt+9` | Switch workspace by sidebar position |
 | `Ctrl+Shift+[` / `]` or `Alt+Shift+[` / `]` | Cycle workspaces |
-| `Ctrl+Shift+↑ ↓ ← →` | Move focus to the adjacent pane |
+| `Ctrl/Alt+Shift+↑ ↓ ← →` | Move focus to the adjacent pane |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Cycle tabs in the active pane |
 | `Ctrl+Shift+T` / `Alt+Shift+T` | New terminal tab |
 | `Ctrl+Shift+B` / `Alt+Shift+B` | New folder browser tab |
