@@ -29,6 +29,7 @@ import {
   isCopySelectionKey,
   copyTerminalSelection,
   clipboardHasImage,
+  altArrowSequence,
 } from "./interaction";
 import { Channel } from "@tauri-apps/api/core";
 import type { OutputChunk } from "../../infrastructure/backend";
@@ -324,6 +325,15 @@ export class TerminalView {
       if (ev.key === "Enter" && ev.shiftKey && !ev.ctrlKey && !ev.altKey) {
         ev.preventDefault();
         this.enqueueWrite("\x1b\r");
+        return false;
+      }
+      // xterm 의 Alt+방향키→Ctrl+방향키 재작성을 우회해 진짜 Alt 시퀀스를 보낸다 —
+      // Codex 질문 UI 등 Alt+방향키를 쓰는 TUI 가 Ctrl+방향키를 받던 원인이다
+      // (interaction.ts::altArrowSequence 참조). IME 조합 중에는 조합기 소유다.
+      const altArrow = altArrowSequence(ev);
+      if (altArrow !== null) {
+        ev.preventDefault();
+        this.enqueueWrite(altArrow);
         return false;
       }
       if (isCopySelectionKey(ev, this.term.hasSelection())) {

@@ -27,7 +27,7 @@ with the tool call it guards, happen entirely in the WSL-side scripts this docum
 
 ## Automatic provisioning
 
-**mast auto-provisions this on first run per distro (`~/.mast/.setup-v16`); this
+**mast auto-provisions this on first run per distro (`~/.mast/.setup-v17`); this
 document remains the contract and the manual path.**
 
 On launch the app streams a setup script into `wsl.exe [-d <distro>] -- bash -s` for every
@@ -65,8 +65,18 @@ A full run, in order:
    and the entry points `mast-claude-hook.sh`, `mast-codex-hook.sh` and `mast-agy-hook.sh`. The
    commands written into agent config files name only these paths, so replacing the files
    never changes a Codex trust hash.
-7. The `mast-send` skill at `~/.claude/skills/mast-send/SKILL.md` (the agent send and query
-   channels below; source: `scripts/wsl/skills/mast-send/SKILL.md`).
+7. 에이전트 스킬. `mast-send`는 `~/.claude/skills/mast-send/SKILL.md`에 설치한다(아래의
+   에이전트 send·query 채널; 원본: `scripts/wsl/skills/mast-send/SKILL.md`). `mast` 사용법
+   스킬은 `~/.claude/skills/mast/SKILL.md`에 설치한다 — CLI, send 채널, 상태 토큰을 담아
+   에이전트가 안내 없이도 mast가 무엇을 제공하는지 알게 한다(원본:
+   `scripts/wsl/skills/mast/SKILL.md`). `~/.codex/`가 있으면 같은 `mast` 스킬을
+   `~/.codex/skills/mast/SKILL.md`에도, `~/.gemini/antigravity-cli/`가 있으면
+   `~/.gemini/config/skills/mast/SKILL.md`에도 쓴다. OpenCode는 `~/.claude/skills`를 직접
+   읽으므로 자체 사본이 필요 없다. **설치 대상이 심볼릭 링크이거나, 옆의 `.mast-installed`
+   기록과 바이트가 다른 파일이면 notice와 함께 그대로 둔다** — mast는 자기가 쓴 사본만
+   교체한다(새 setup 버전은 그 사본을 갱신하고, 사용자의 파일이나 수정은 절대 건드리지
+   않는다). 에이전트는 세션이 시작될 때 스킬을 읽으므로, 이미 돌고 있던 탭은 새 스킬을
+   보려면 에이전트를 다시 시작해야 한다.
 8. **The `python3` gate.** Every step from here on runs Python — merging into a user's JSON or
    TOML has to preserve every existing value, which rules out text munging. Without `python3`
    the run prints a notice and exits 0 **without writing a marker**, so the next launch retries.
@@ -96,9 +106,9 @@ A full run, in order:
 
 | Marker | Written when | To run it again |
 |---|---|---|
-| `~/.mast/.setup-v16` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v16` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
-| `~/.mast/.setup-v16-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v16-codex` reruns that step alone |
-| `~/.mast/.setup-v16-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v16-agy` reruns that step alone |
+| `~/.mast/.setup-v17` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v17` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
+| `~/.mast/.setup-v17-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v17-codex` reruns that step alone |
+| `~/.mast/.setup-v17-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v17-agy` reruns that step alone |
 
 With the main marker in place, a launch still runs an agent step whose directory exists and
 whose sub-marker does not — which is how a Codex or Antigravity CLI installed after setup v16
@@ -120,8 +130,8 @@ When a run fails:
 - A file that is not writable or is a dangling symlink, and for Codex a `config.toml` with inline
   hooks, is **skipped** with a notice and counts as finished: the sub-marker is written — for
   Claude Code, whose merge is part of steps 1–11, the main marker — so no launch retries it. Once
-  the cause is fixed, `rm ~/.mast/.setup-v16-codex` (or `-agy`; for Claude Code
-  `rm ~/.mast/.setup-v16`) wires the hooks, or add the notice's snippet by hand.
+  the cause is fixed, `rm ~/.mast/.setup-v17-codex` (or `-agy`; for Claude Code
+  `rm ~/.mast/.setup-v17`) wires the hooks, or add the notice's snippet by hand.
 - A Codex or Antigravity CLI hooks file whose **content** the merge cannot handle is refused
   with exit 3: the file is left untouched and the sub-marker **is** written, because a rerun
   would refuse it the same way. The notice names the problem and says to edit the file and
@@ -155,8 +165,8 @@ that setup could not write somewhere — `cannot install …`, `cannot create �
 | When | The notice says |
 |---|---|
 | No `python3` | Install it, or wire the hooks by hand from this document |
-| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v16` (`rm ~/.mast/.setup-v16-codex` when only the Codex step ran) |
-| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v16` |
+| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v17` (`rm ~/.mast/.setup-v17-codex` when only the Codex step ran) |
+| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v17` |
 | A Codex install older than a hook feature mast relies on | Its path, and each missing feature ([version limits](#codex-version-limits)) |
 | Codex hooks were written | How to trust them — the wording follows the Codex version |
 | `config.toml` has inline `[hooks]` tables, `features.hooks = false`, `approvals_reviewer = "auto_review"`, or a stale `[hooks.state]` entry | What mast did not do, and why |
@@ -1522,8 +1532,8 @@ PROMPT_COMMAND="__mast_osc${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
    therefore has a tty, so it only takes step 1 — its purpose is to see whether the delivery
    path itself is alive.
 2. Read `~/.mast/setup.log`: each merged row (`added`, `wired`, `migrated`, `narrowed`) and
-   every notice is there, and the markers `~/.mast/.setup-v16`, `.setup-v16-codex` and
-   `.setup-v16-agy` show which steps finished.
+   every notice is there, and the markers `~/.mast/.setup-v17`, `.setup-v17-codex` and
+   `.setup-v17-agy` show which steps finished.
 3. Then run each agent inside a mast terminal and confirm that its hooks update the tab's badge
    and dot, the pane badge, and the sidebar status and preview. The field checklist is
    `docs/WINDOWS-BUILD.md` §10, "v0.3.32 — Agent state signals verification (setup v16)". A

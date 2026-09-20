@@ -22,6 +22,33 @@ export function shouldOpenLink(uri: string, mouseTrackingMode: string): boolean 
   }
 }
 
+// Alt+방향키의 실제 시퀀스. xterm 5.5 의 `evaluateKeyboardEvent` 는 Alt+방향키를
+// Ctrl+방향키(`ESC[1;5A` 등)로 바꿔 보내는 HACK 을 갖고 있어(셸 단어 이동 관례),
+// 그대로 두면 TUI 앱은 Alt 대신 Ctrl 을 받는다. 터미널 뷰가 이 판정으로 직접 보낸다.
+// Alt 단독일 때만 값이 있고 수식이 더 붙으면 null 이다 (Ctrl+Alt 는 xterm 이 1;7x 로
+// 정확히 보내고, Alt+Shift 는 window capture 의 pane 이동이 먼저 소비한다).
+// IME 조합 중의 keydown 은 조합기 소유라 건드리지 않는다 (ADR-0007 결정 6).
+export function altArrowSequence(
+  ev: Pick<
+    KeyboardEvent,
+    "key" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey" | "isComposing"
+  >,
+): string | null {
+  if (ev.isComposing || !ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return null;
+  switch (ev.key) {
+    case "ArrowUp":
+      return "\x1b[1;3A";
+    case "ArrowDown":
+      return "\x1b[1;3B";
+    case "ArrowRight":
+      return "\x1b[1;3C";
+    case "ArrowLeft":
+      return "\x1b[1;3D";
+    default:
+      return null;
+  }
+}
+
 // 선택 없는 Ctrl+C는 SIGINT로 통과시킨다. 기록 뷰도 이 판정을 공유한다.
 export function isCopySelectionKey(ev: KeyboardEvent, hasSelection: boolean): boolean {
   if (!ev.ctrlKey || ev.altKey || !hasSelection) return false;

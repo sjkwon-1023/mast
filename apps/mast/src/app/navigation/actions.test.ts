@@ -101,6 +101,46 @@ describe("navigation wiring", () => {
     }
   });
 
+  it("Shift 없는 Alt+방향키는 터미널로 흘려보내고 Alt+Shift+방향키는 pane 이동으로 소비한다", () => {
+    // Alt+방향키 전달 회귀 — nav capture 가 plain Alt+방향키를 소비하면 Codex 등
+    // TUI 의 Alt+Up 이 여기서 죽는다 (판정은 shared/keys.ts::keyAction).
+    const add = vi.spyOn(window, "addEventListener");
+    const host = context();
+    installNavKeys(host);
+    const call = add.mock.calls.find(([type]) => type === "keydown")!;
+    const listener = call[1] as EventListener;
+    const terminal = document.createElement("div");
+    const received = vi.fn();
+    terminal.addEventListener("keydown", received);
+    document.body.append(terminal);
+    try {
+      const plain = new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        altKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      terminal.dispatchEvent(plain);
+      expect(plain.defaultPrevented).toBe(false);
+      expect(received).toHaveBeenCalledOnce();
+
+      const move = new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        altKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      terminal.dispatchEvent(move);
+      expect(move.defaultPrevented).toBe(true);
+      expect(received).toHaveBeenCalledOnce(); // capture 에서 멈춰 터미널에 닿지 않는다
+      expect(host.dispatchUI).not.toHaveBeenCalled(); // 스냅샷 없음 — 조용한 no-op
+    } finally {
+      window.removeEventListener("keydown", listener, { capture: true });
+      terminal.remove();
+    }
+  });
+
   it("consumes recognized keys before the terminal even when the target does not exist", () => {
     const add = vi.spyOn(window, "addEventListener");
     const host = context();
