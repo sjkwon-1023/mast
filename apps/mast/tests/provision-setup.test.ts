@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -28,7 +29,7 @@ const linuxSuite = onLinux ? describe : describe.skip;
 
 // 설치 스크립트와 merge 헬퍼가 쓰는 도구만 PATH 에 둔다. 개발기에 설치된 진짜 claude·codex·agy 가
 // 버전 확인에 잡히면 결과가 기기마다 달라진다.
-const TOOL_NAMES = ["bash", "python3", "date", "mkdir", "cat", "chmod", "mv", "rm", "grep", "awk", "head", "timeout", "env", "readlink"];
+const TOOL_NAMES = ["bash", "python3", "date", "mkdir", "cat", "chmod", "mv", "rm", "grep", "awk", "head", "timeout", "env", "readlink", "mktemp"];
 
 function commandPath(command: string): string {
   const result = spawnSync("/usr/bin/env", ["-i", "PATH=/usr/local/bin:/usr/bin:/bin", "bash", "--noprofile", "--norc", "-c", `command -v ${command}`], {
@@ -461,6 +462,122 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     }
   });
 
+  it("installs the mast usage skill where Claude Code, Codex and Antigravity CLI discover it", () => {
+    const distro = new Distro().withAgents();
+
+    const run = distro.run();
+
+    expect(run.status).toBe(0);
+    expect(run.stderr).toEqual([distro.trustNotice()]);
+    const skill = readFileSync(join(WSL_SCRIPTS, "skills", "mast", "SKILL.md"), "utf8");
+    for (const installed of [
+      distro.path(".claude", "skills", "mast", "SKILL.md"),
+      distro.path(".codex", "skills", "mast", "SKILL.md"),
+      distro.path(".gemini", "config", "skills", "mast", "SKILL.md"),
+    ]) {
+      expect(readFileSync(installed, "utf8")).toBe(skill);
+    }
+    // mast-send 는 같은 가드로 설치된다 — 내용도 레포 사본 그대로다.
+    expect(readFileSync(distro.path(".claude", "skills", "mast-send", "SKILL.md"), "utf8")).toBe(
+      readFileSync(join(WSL_SCRIPTS, "skills", "mast-send", "SKILL.md"), "utf8"),
+    );
+  });
+
+  it("leaves a personal skill file and a symlinked skill directory alone", () => {
+    const distro = new Distro().withAgents();
+    mkdirSync(distro.path(".codex", "skills"), { recursive: true });
+    const personal = distro.write(distro.path("personal", "mast", "SKILL.md"), "# my own mast skill\n");
+    symlinkSync(dirname(personal), distro.path(".codex", "skills", "mast"), "dir");
+    // 우리가 설치한 사본을 사용자가 고친 모양 — 기록과 달라졌으므로 사용자 파일이다.
+    const edited = distro.write(distro.path(".claude", "skills", "mast", "SKILL.md"), "# edited after install\n");
+    distro.write(distro.path(".claude", "skills", "mast", ".mast-installed"), "# originally installed\n");
+
+    const run = distro.run();
+
+    expect(run.status).toBe(0);
+    expect(readFileSync(edited, "utf8")).toBe("# edited after install\n");
+    expect(readFileSync(personal, "utf8")).toBe("# my own mast skill\n");
+    const stderr = run.stderr.join("\n");
+    expect(stderr).toContain(`${distro.path(".claude", "skills", "mast", "SKILL.md")} is not mast's copy`);
+    expect(stderr).toContain(`${distro.path(".codex", "skills", "mast", "SKILL.md")} is a symlink`);
+    expect(distro.log()).toContain("is not mast's copy");
+  });
+
+  // 예전 설치기는 `$dest.tmp`라는 고정 이름에 썼다. 그 자리에 개인 파일로 가는 심볼릭 링크가
+  // 있으면 리다이렉션이 링크를 따라가 개인 파일을 덮어쓰고 SKILL.md 자체도 심볼릭 링크가 됐다
+  // (exit 0 으로). 이제는 mktemp로 이 실행만의 이름을 만들므로 심어 둔 이름은 건드리지 않는다.
+  it("never writes through a planted SKILL.md.tmp or .mast-installed.tmp symlink", () => {
+    const distro = new Distro().withAgents();
+    const skillDir = distro.path(".claude", "skills", "mast");
+    mkdirSync(skillDir, { recursive: true });
+    const plantedSkill = distro.write(distro.path("personal", "planted-skill.md"), "# personal skill\n");
+    const plantedSidecar = distro.write(distro.path("personal", "planted-sidecar.md"), "# personal sidecar\n");
+    symlinkSync(plantedSkill, join(skillDir, "SKILL.md.tmp"));
+    symlinkSync(plantedSidecar, join(skillDir, ".mast-installed.tmp"));
+
+    const run = distro.run();
+
+    expect(run.status).toBe(0);
+    expect(readFileSync(plantedSkill, "utf8")).toBe("# personal skill\n");
+    expect(readFileSync(plantedSidecar, "utf8")).toBe("# personal sidecar\n");
+    const installed = readFileSync(join(WSL_SCRIPTS, "skills", "mast", "SKILL.md"), "utf8");
+    expect(lstatSync(join(skillDir, "SKILL.md")).isSymbolicLink()).toBe(false);
+    expect(lstatSync(join(skillDir, ".mast-installed")).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(skillDir, "SKILL.md"), "utf8")).toBe(installed);
+    expect(readFileSync(join(skillDir, ".mast-installed"), "utf8")).toBe(installed);
+    expect(statSync(join(skillDir, "SKILL.md")).mode & 0o777).toBe(0o644);
+    // 심어 둔 이름 자체는 마스트 소유가 아니므로 지우지 않는다.
+    expect(lstatSync(join(skillDir, "SKILL.md.tmp")).isSymbolicLink()).toBe(true);
+    expect(lstatSync(join(skillDir, ".mast-installed.tmp")).isSymbolicLink()).toBe(true);
+    // 이 실행이 만든 전용 임시 파일은 mv 로 사라지고 남지 않는다.
+    expect(readdirSync(skillDir).filter((name) => name.startsWith(".mast-install."))).toEqual([]);
+  });
+
+  // install_agent_skill 만 따로 떼어 mktemp 실패를 주입한다. set -u 에서 첫 mktemp 가 실패하면
+  // `||` 단락 때문에 tmp_prev 가 대입되지 않는데, 정리용 rm 이 그 이름을 참조하면 unbound
+  // variable 로 죽어 실패 메시지 대신 bash 오류만 남았다. 그 경로를 고정한다.
+  it("reports the failure and exits 1 when mktemp itself fails", () => {
+    const distro = new Distro();
+    const installer = SCRIPT.match(/^install_agent_skill\(\) \{\n[\s\S]*?\n\}\n/m)?.[0];
+    if (!installer) throw new Error("install_agent_skill disappeared from the setup script");
+    const stubDir = join(distro.root, "failing-tools");
+    distro.executable(join(stubDir, "mktemp"), `#!${tools.bash}\nexit 1\n`);
+    const skillDir = distro.path(".claude", "skills", "mast");
+    const harness = distro.write(
+      distro.path("mktemp-failure.sh"),
+      ["set -u", "log() { :; }", "notice() { printf '[mast] setup: %s\\n' \"$*\" >&2; }", installer, `install_agent_skill ${shellQuote(skillDir)} body`, ""].join("\n"),
+    );
+    // 실제 도구는 경로에 두고 mktemp 만 이 스텁이 먼저 잡히게 한다.
+    const path = [...new Set([stubDir, ...Object.values(tools).map((tool) => dirname(tool))])].join(":");
+
+    const run = spawnSync(tools.bash, [harness], { encoding: "utf8", timeout: 10_000, env: { PATH: path } });
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(`[mast] setup: cannot install ${join(skillDir, "SKILL.md")}`);
+    expect(run.stderr).not.toContain("unbound variable");
+    expect(existsSync(join(skillDir, "SKILL.md"))).toBe(false);
+    expect(readdirSync(skillDir).filter((name) => name.startsWith(".mast-install."))).toEqual([]);
+  });
+
+  it("replaces its own outdated copy on a later run, then keeps the user's edit", () => {
+    const distro = new Distro().withAgents();
+    const skillPath = distro.path(".claude", "skills", "mast", "SKILL.md");
+    distro.write(skillPath, "# older mast copy\n");
+    distro.write(distro.path(".claude", "skills", "mast", ".mast-installed"), "# older mast copy\n");
+
+    expect(distro.run().status).toBe(0);
+    const skill = readFileSync(join(WSL_SCRIPTS, "skills", "mast", "SKILL.md"), "utf8");
+    expect(readFileSync(skillPath, "utf8")).toBe(skill);
+
+    // 사용자가 고친 사본은 다음 실행에서도 그대로다 (기록과 달라졌다).
+    writeFileSync(skillPath, "# my edit\n");
+    rmSync(distro.path(".mast", `.setup-v${VERSION}`));
+    const second = distro.run();
+    expect(second.status).toBe(0);
+    expect(readFileSync(skillPath, "utf8")).toBe("# my edit\n");
+    expect(second.stderr.join("\n")).toContain("is not mast's copy");
+  });
+
   it("does nothing once the marker exists, and changes no file when the steps run again", () => {
     const distro = new Distro().withAgents();
     expect(distro.run().status).toBe(0);
@@ -614,9 +731,12 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     if (agent === "codex") distro.withAgy();
     expect(distro.run().status).toBe(0);
     expect(distro.marker()).toBe(true);
-    const untouched = [distro.claudeSettings()];
+    // 이미 깔린 Claude 사본과, codex 케이스에서 함께 깔린 agy 사본은 이 실행이 건드리면 안 된다.
+    const untouched = [distro.claudeSettings(), distro.path(".claude", "skills", "mast", "SKILL.md")];
     // 이미 끝난 Antigravity CLI 단계가 다시 돌면 사용자가 지운 mast 훅이 되살아난다.
-    if (agent === "codex") untouched.push(distro.write(distro.agyHooks(), "{}\n"));
+    if (agent === "codex") {
+      untouched.push(distro.write(distro.agyHooks(), "{}\n"), distro.path(".gemini", "config", "skills", "mast", "SKILL.md"));
+    }
     const kept = untouched.map(fingerprint);
     const before = distro.log();
 
@@ -632,6 +752,14 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(rerunLog).toContain(AGENT_ONLY_LOG);
     expect(rerunLog).toContain(`${agent} hooks: step done`);
     expect(rerunLog).not.toContain(FULL_RUN_LOG);
+
+    // 훅만 도는 실행도 뒤늦게 설치된 에이전트의 mast 스킬은 전체 설치와 같은 바이트로 채운다.
+    const skillDir = agent === "codex" ? distro.path(".codex", "skills", "mast") : distro.path(".gemini", "config", "skills", "mast");
+    const skillPath = join(skillDir, "SKILL.md");
+    expect(readFileSync(skillPath, "utf8")).toBe(readFileSync(join(WSL_SCRIPTS, "skills", "mast", "SKILL.md"), "utf8"));
+    expect(rerunLog).toContain(`skill installed: ${skillPath}`);
+    const installedSkill = fingerprint(skillPath);
+
     // Codex 의 notify 줄과 AGENTS.md 블록은 전체 설치에서만 쓴다.
     if (agent === "codex") {
       expect(readFileSync(distro.path(".codex", "config.toml"), "utf8")).toBe('model = "gpt-5"\n');
@@ -644,6 +772,29 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
     expect(distro.log()).toBe(log);
     expect(distro.calls()).toHaveLength(calls);
+    // 마커가 선 뒤의 재실행은 스킬 파일도 다시 쓰지 않는다.
+    expect(fingerprint(skillPath)).toEqual(installedSkill);
+  });
+
+  it.each(["codex", "agy"] as const)("나중에 설치한 %s의 스킬 설치 실패는 완료 마커를 남기지 않아 재시도한다", (agent) => {
+    const distro = new Distro();
+    distro.agent("claude", "2.1.270 (Claude Code)");
+    expect(distro.run().status).toBe(0);
+    if (agent === "codex") distro.withCodex();
+    else distro.withAgy();
+    const failingTool = join(distro.stubs, "mktemp");
+    distro.executable(failingTool, `#!${tools.bash}\nexit 1\n`);
+    const failed = distro.run();
+    expect(failed.status).toBe(1);
+    expect(failed.stderr.join("\n")).toContain("cannot install");
+    expect(distro.agentMarker(agent)).toBe(false);
+    rmSync(failingTool);
+    expect(distro.run().status).toBe(0);
+    expect(distro.agentMarker(agent)).toBe(true);
+    const skillPath = agent === "codex"
+      ? distro.path(".codex", "skills", "mast", "SKILL.md")
+      : distro.path(".gemini", "config", "skills", "mast", "SKILL.md");
+    expect(readFileSync(skillPath, "utf8")).toBe(readFileSync(join(WSL_SCRIPTS, "skills", "mast", "SKILL.md"), "utf8"));
   });
 
   it("after Antigravity CLI arrives, keeps every opt-out the user made since setup and repeats no earlier notice", () => {

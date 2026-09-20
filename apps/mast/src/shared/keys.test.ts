@@ -76,6 +76,21 @@ describe("keyAction", () => {
     }
   });
 
+  it("Alt+Shift+방향키 4종도 같은 pane 이동이며, Shift 없는 Alt+방향키만 터미널 소유다", () => {
+    // v0.3.30 이후 pane 이동은 Ctrl+Shift 계열이었다가 Alt+Shift 별칭이 붙었다.
+    // plain Alt+방향키는 Codex 등 TUI 의 것이라 절대 매칭되면 안 된다.
+    const dirs = [
+      ["ArrowUp", "up"],
+      ["ArrowDown", "down"],
+      ["ArrowLeft", "left"],
+      ["ArrowRight", "right"],
+    ] as const;
+    for (const [key, dir] of dirs) {
+      expect(keyAction(spec({ key, alt: true, shift: true }))).toEqual({ type: "focusPane", dir });
+      expect(keyAction(spec({ key, alt: true }))).toBeNull();
+    }
+  });
+
   it("Ctrl+Tab 은 다음 탭, Ctrl+Shift+Tab 은 이전 탭이다", () => {
     expect(keyAction(spec({ key: "Tab", ctrl: true }))).toEqual({ type: "cycleTab", delta: 1 });
     expect(keyAction(spec({ key: "Tab", ctrl: true, shift: true }))).toEqual({

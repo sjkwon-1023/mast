@@ -53,4 +53,9 @@ describe("claude-hook-example.md and the provisioned copies", () => {
     const skill = lf(readFileSync(resolve(REPO, "scripts/wsl/skills/mast-send/SKILL.md"), "utf8"));
     expect(skill).toBe(heredocBody("MAST_SKILL_EOF"));
   });
+
+  it("keeps scripts/wsl/skills/mast/SKILL.md byte for byte as the installed skill", () => {
+    const skill = lf(readFileSync(resolve(REPO, "scripts/wsl/skills/mast/SKILL.md"), "utf8"));
+    expect(skill).toBe(heredocBody("MAST_USAGE_SKILL_EOF"));
+  });
 });

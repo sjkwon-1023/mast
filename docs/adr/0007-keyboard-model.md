@@ -128,3 +128,25 @@ Alt+Shift+방향키를 Ctrl+Shift+방향키와 같은 pane 이동으로 처리�
 누락됐다. 포커스 요청에 닫기·전환 명령을 함께 넘기고, 해당 결과가 스냅샷에 반영됐으면
 즉시 복원한다. 결과가 아직 없으면 이후 렌더에서 다시 시도한다. 두 도착 순서를
 실제 WorkspaceView와 폴더 뷰를 사용한 테스트로 검증한다.
+
+## 2026-09-20 개정 (이어서): Alt+방향키를 실제 Alt 시퀀스로 전달
+
+v0.3.30 이 `Alt+방향키`를 터미널에 돌려줬지만, 필드에서 Codex 질문 UI 의 `Alt+Up` 은
+여전히 동작하지 않았다. 판정(`shared/keys.ts`)은 `Alt+방향키`를 통과시키고 window capture 도
+손대지 않는데, xterm 5.5 의 `evaluateKeyboardEvent` 가 non-Mac 에서 Alt+방향키를
+**Ctrl+방향키**(`ESC[1;5A` 등)로 바꿔 보내는 HACK 을 갖고 있기 때문이다(셸 단어 이동 관례).
+PTY 에는 Alt 가 아니라 Ctrl 이 도착한다 — 실패는 가로채기가 아니라 인코딩에 있었다.
+
+터미널 뷰의 `customKeyEventHandler` 가 `Alt` 단독(`Ctrl`·`Shift`·`Meta` 없음, IME 조합 아님)
+방향키를 실제 시퀀스 `ESC[1;3A/B/C/D` 로 직접 보낸다. 판정의 단일 소스는
+`features/terminal/interaction.ts::altArrowSequence` 다. `Alt+Shift+방향키` pane 이동과
+`Ctrl` 계열(`Ctrl+Alt` 포함)은 그대로다. 대가는 셸 쪽에 없음을 확인했다 — bash readline 의
+기본 바인딩은 `\e[1;3C/D`(실제 Alt)와 `\e[1;5C/D`(Ctrl)를 모두 단어 이동에 묶고 있어
+(`bind -p` 로 확인) 단어 이동이 유지된다.
+
+검증: 브라우저 빌드(@xterm/xterm)를 happy-dom 에 띄운
+`apps/mast/src/features/terminal/alt-arrows.test.ts` 가 네 방향 모두 `writeStdin` 에
+`ESC[1;3X` 가 나가는 것과 stock xterm 이 `ESC[1;5X` 를 내는 전제(우회로가 필요해진 이유)를
+함께 잠근다. window capture 는 `apps/mast/src/app/navigation/actions.test.ts` 가
+`Alt+Shift` 소비·plain `Alt` 통과를 실제 DOM 이벤트로 본다. 라이브 WebView2 전달과
+Codex 질문 UI 동작은 필드 확인 대상이다 (WINDOWS-BUILD §10).

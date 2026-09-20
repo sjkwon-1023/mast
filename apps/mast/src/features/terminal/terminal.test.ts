@@ -10,7 +10,7 @@ import {
   scrollbackWipeRestoreOffset,
 } from "./scroll";
 import { clampFontSize } from "../../shared/font-size";
-import { isCopySelectionKey, shouldOpenLink } from "./interaction";
+import { altArrowSequence, isCopySelectionKey, shouldOpenLink } from "./interaction";
 
 describe("clampFontSize", () => {
   it("범위 안의 값은 그대로 통과한다", () => {
@@ -100,6 +100,44 @@ describe("isCopySelectionKey", () => {
     expect(isCopySelectionKey(key({ ctrlKey: true, altKey: true }), true)).toBe(false);
     expect(isCopySelectionKey(key({}), true)).toBe(false);
     expect(isCopySelectionKey(key({ ctrlKey: true, key: "v" }), true)).toBe(false);
+  });
+});
+
+describe("altArrowSequence", () => {
+  // xterm 의 Alt→Ctrl 재작성 우회 판정 — 여기가 틀리면 TUI 는 Alt 대신 Ctrl 을 받는다.
+  const ev = (init: Partial<KeyboardEvent>): KeyboardEvent =>
+    ({
+      key: "ArrowUp",
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      ...init,
+    }) as KeyboardEvent;
+
+  it("Alt 단독 + 방향키 4종은 실제 Alt 시퀀스를 돌려준다", () => {
+    expect(altArrowSequence(ev({ key: "ArrowUp", altKey: true }))).toBe("\x1b[1;3A");
+    expect(altArrowSequence(ev({ key: "ArrowDown", altKey: true }))).toBe("\x1b[1;3B");
+    expect(altArrowSequence(ev({ key: "ArrowRight", altKey: true }))).toBe("\x1b[1;3C");
+    expect(altArrowSequence(ev({ key: "ArrowLeft", altKey: true }))).toBe("\x1b[1;3D");
+  });
+
+  it("수식이 더 붙거나 Alt 가 없으면 null — xterm·pane 이동 소유다", () => {
+    for (const init of [
+      { key: "ArrowUp" },
+      { key: "ArrowUp", shiftKey: true },
+      { key: "ArrowUp", altKey: true, shiftKey: true }, // pane 이동
+      { key: "ArrowUp", altKey: true, ctrlKey: true },
+      { key: "ArrowUp", altKey: true, metaKey: true },
+      { key: "a", altKey: true },
+    ]) {
+      expect(altArrowSequence(ev(init))).toBeNull();
+    }
+  });
+
+  it("IME 조합 중에는 조합기 소유라 가로채지 않는다", () => {
+    expect(altArrowSequence(ev({ key: "ArrowUp", altKey: true, isComposing: true }))).toBeNull();
   });
 });
 
