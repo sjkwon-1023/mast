@@ -279,7 +279,7 @@ export function openPairingDialog(options: PairingDialogOptions = {}): HTMLDialo
   openDialog = dialog;
 
   const heading = document.createElement("h2");
-  heading.textContent = "Pair phone";
+  heading.textContent = "Connect mobile";
 
   const notice = document.createElement("p");
   notice.className = "pairing-notice";

@@ -53,8 +53,8 @@ async function start(root: HTMLElement): Promise<void> {
       root,
       "Scan the pairing QR in mast",
       pairing.reason === "invalid"
-        ? "That link was not a valid mast pairing code. Open the sidebar, press “Pair phone”, choose Secure Remote, and scan the fresh QR."
-        : "Open the sidebar in mast on your PC, press “Pair phone”, choose Secure Remote, and scan the QR with this phone.",
+        ? "That link was not a valid mast pairing code. Open the sidebar, press “Connect mobile”, choose Secure Remote, and scan the fresh QR."
+        : "Open the sidebar in mast on your PC, press “Connect mobile”, choose Secure Remote, and scan the QR with this phone.",
     );
     return;
   }

@@ -92,7 +92,7 @@ function mount(): {
   dispatched: Command[];
   /** 폴더 선택 흐름은 main.ts 소유라 사이드바는 콜백만 부른다. */
   newWorkspaceCalls: () => number;
-  /** "Pair phone" 버튼 — 설정·원격 표면 상태와 무관하게 항상 보인다. */
+  /** "Connect mobile" 버튼 — 설정·원격 표면 상태와 무관하게 항상 보인다. */
   pairBtn: () => HTMLButtonElement;
   pairingCalls: () => number;
   version: () => HTMLSpanElement;
@@ -579,7 +579,7 @@ describe("Sidebar pairing button", () => {
     // Local HTTP 가 꺼져 있어도(설정 없음·부팅 실패) 버튼은 보인다 — 다이얼로그가
     // 설정 안내와 Secure Remote 를 제공하므로 감추면 기능이 없다는 신호가 된다.
     expect(pairBtn().hidden).toBe(false);
-    expect(pairBtn().textContent).toBe("Pair phone");
+    expect(pairBtn().textContent).toBe("Connect mobile");
 
     pairBtn().click();
     expect(pairingCalls()).toBe(1);
