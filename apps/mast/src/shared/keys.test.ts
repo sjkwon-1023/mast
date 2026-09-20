@@ -90,9 +90,8 @@ describe("keyAction", () => {
     expect(keyAction(spec({ key: "ArrowLeft", alt: true, isComposing: true }))).toBeNull();
   });
 
-  it("목록 밖의 Ctrl+Shift+숫자·Alt+Shift+방향키는 null", () => {
+  it("목록 밖의 Ctrl+Shift+숫자는 null", () => {
     expect(keyAction(spec({ key: "1", ctrl: true, shift: true }))).toBeNull();
-    expect(keyAction(spec({ key: "ArrowRight", alt: true, shift: true }))).toBeNull();
   });
 
   it("Ctrl+Shift+<문자> 9종은 각 전역 단축키로 매핑된다", () => {
@@ -450,5 +449,13 @@ describe("activeTerminalCwd / pathBasename", () => {
     expect(pathBasename("/home/dev/proj")).toBe("proj");
     expect(pathBasename("/home/dev/proj/")).toBe("proj");
     expect(pathBasename("/")).toBe("/");
+  });
+});
+
+
+describe("Alt+Shift pane navigation", () => {
+  it.each([['ArrowUp', 'up'], ['ArrowDown', 'down'], ['ArrowLeft', 'left'], ['ArrowRight', 'right']])('%s focuses the adjacent pane', (key, dir) => {
+    expect(keyAction(spec({ key, alt: true, shift: true }))).toEqual({ type: 'focusPane', dir });
+    expect(keyAction(spec({ key, alt: true, shift: true, isComposing: true }))).toBeNull();
   });
 });

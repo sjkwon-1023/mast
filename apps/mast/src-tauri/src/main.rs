@@ -37,6 +37,9 @@ mod provision;
 mod remote;
 mod reset_supervisor;
 mod router;
+// Secure Remote(WebTransport) 수명 관리와 UDP 7331 방화벽 글루 — Local HTTP(`remote`)와
+// 별개 표면이며, 부팅에는 리스너를 열지 않고 managed state 만 만든다.
+mod secure_remote;
 mod sink;
 mod state;
 mod update;
@@ -47,12 +50,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::{Emitter, Manager};
 use mast_core::command::{Command, Dispatcher, NewTab, RegistryAudit};
 use mast_core::model::{AppState as CoreState, TabId, TabKind};
 use mast_core::persist::{self, FreshReason, LoadOutcome, Saver};
 use mast_core::record::RecordStore;
 use mast_core::session::SessionManager;
+use tauri::{Emitter, Manager};
 
 /// Saver debounce 창 — 연속 변이를 1회 기록으로 합친다. 크래시 시 마지막 기록
 /// 이후 ≤500ms 의 변이 유실은 MVP 수용 (계획 B-1).
@@ -193,6 +196,7 @@ fn main() {
             // 원격 표면은 `AppState` 와 같은 `SessionManager` 를 읽는다 — 아래 manage
             // 가 소유권을 가져가므로 그 전에 핸들을 하나 더 잡아 둔다.
             let sessions_for_remote = Arc::clone(&sessions);
+            let sessions_for_secure_remote = Arc::clone(&sessions);
 
             // manage 를 재스폰보다 먼저 (ADR-0016 결정 8) — 재스폰된 세션의 on_exit 은
             // try_state 로 관리 상태를 찾으므로, 스폰이 먼저면 그 사이 exit
@@ -264,6 +268,14 @@ fn main() {
                 &handle,
                 Arc::clone(&dispatcher),
                 sessions_for_remote,
+            ));
+            // Secure Remote 매니저는 **열지 않은 채로** manage 만 된다: 앱 수명 동안
+            // `InputWriter` 하나를 소유하고, UDP 리스너·인증서는 페어링을 시작할 때만
+            // 생긴다 (`secure_remote` 모듈 doc). Local HTTP 와 독립이라 꺼져 있어도
+            // 커맨드는 항상 응답한다.
+            app.manage(secure_remote::SecureRemoteManager::new(
+                Arc::clone(&dispatcher),
+                sessions_for_secure_remote,
             ));
             update::init(&handle);
             Ok(())
@@ -355,6 +367,7 @@ fn main() {
             commands::fs_list_dir,
             commands::fs_stat,
             commands::fs_read_chunk,
+            commands::fs_save_markdown,
             git::git_status,
             git::git_diff,
             // 끝난 터미널 탭의 기록 바이트 (ADR-0018) — 기록 뷰가 마운트 때 1회.
@@ -367,11 +380,26 @@ fn main() {
             // 대화상자를 열 때, 적용은 사용자가 누를 때만 — 둘 다 자동으로 돌지 않는다.
             remote::remote_firewall_status,
             remote::remote_firewall_allow,
+            // Secure Remote(WebTransport) 수명과 UDP 7331 방화벽 (계획 청크 2).
+            secure_remote::secure_remote_start,
+            secure_remote::secure_remote_cancel,
+            secure_remote::secure_remote_status,
+            secure_remote::secure_remote_firewall_status,
+            secure_remote::secure_remote_firewall_allow,
         ])
         .build(tauri::generate_context!())
         .expect("error while building mast")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                // Secure Remote 서버가 살아 있으면 여기서 내린다 — UDP 리스너와 런타임
+                // 스레드를 남기지 않는다. 정지 신호 뒤 `stop()` 은 거절 task 를 기다리지
+                // 않고(런타임 drop 과 함께 취소) 정상 경로는 CONNECTION_CLOSE flush 250ms
+                // 안에 끝나지만, current_thread 런타임이 동기 `Dispatcher` 호출 구간을
+                // 끝내야 정지 신호를 보므로 그 lock 대기가 더해질 수 있다 — 250ms 는
+                // 상한이 아니다. 페어링이 없으면 no-op 이라 아래 flush 순서에 영향이 없다.
+                if let Some(managed) = app.try_state::<secure_remote::SecureRemoteManager>() {
+                    managed.shutdown();
+                }
                 // 종료 직전 대기분 flush — debounce 창(≤500ms) 안의 마지막 변이가
                 // 정상 종료에서 유실되지 않게 한다 (크래시 유실은 계획상 수용).
                 match app.try_state::<state::AppState>() {

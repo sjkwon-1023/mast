@@ -248,6 +248,7 @@ describe("styles.css 의 뷰어 글꼴 계약", () => {
         ".folder-row-size",
         ".markdown-body",
         ".markdown-body code",
+        ".markdown-editor",
         ".changes-file",
         ".changes-diff",
       ]),

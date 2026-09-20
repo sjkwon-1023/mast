@@ -115,3 +115,16 @@ has been held for 1.314 seconds, buttons show Shift plus their letter and sideba
 ordinals. A small guide names Alt commands without a matching button. Tooltips show only
 Alt bindings; the retained Ctrl bindings are documented but hidden in the app. Releasing Alt,
 losing window focus, or hiding the page clears the guide.
+
+
+## 2026-09-20 개정: Alt pane 이동과 닫기 후 포커스
+
+Alt+Shift+방향키를 Ctrl+Shift+방향키와 같은 pane 이동으로 처리한다.
+기존 코드는 문자 단축키에만 Alt 별칭을 허용해 방향키가 터미널로 전달됐다.
+파일 탐색기에서는 왼쪽 방향키가 상위 경로로, 오른쪽 방향키가 선택된 폴더로 이동한다.
+오른쪽 방향키는 파일이나 `..` 항목을 열지 않는다. Enter와 Backspace는 기존 동작을 유지한다.
+
+닫기 명령의 응답보다 상태 스냅샷이 먼저 도착하면 다음 렌더가 없어서 포커스 복원이
+누락됐다. 포커스 요청에 닫기·전환 명령을 함께 넘기고, 해당 결과가 스냅샷에 반영됐으면
+즉시 복원한다. 결과가 아직 없으면 이후 렌더에서 다시 시도한다. 두 도착 순서를
+실제 WorkspaceView와 폴더 뷰를 사용한 테스트로 검증한다.

@@ -50,6 +50,13 @@ Evergreen runtime ships with Windows 11 and most updated Windows 10 installs alr
 separate install step is usually unnecessary. If `npm run tauri dev` fails complaining about a
 missing WebView2 runtime, install the "Evergreen Bootstrapper" from the link above.
 
+Some crates compile C as part of their build — the TLS stack `ring` (secure remote transport,
+ADR-0028) is the one to know about. For the **x64** target the Visual Studio C++ toolchain above
+supplies the compiler, so the normal gates work on a machine with the "Desktop development with
+C++" workload. For the **ARM64** target the same build script looks for `clang` on `PATH`;
+without it even a check fails with `failed to find tool "clang"` (the Rust target alone is not
+enough). CI's `windows-gates` job runs on an image that has both toolchains.
+
 ### Node.js LTS
 
 Install a current Node.js **LTS** release (from [nodejs.org](https://nodejs.org/) or
@@ -2750,16 +2757,37 @@ ARM64 Windows:
 Cross-compiled ARM64 binaries can only be *built* here — running them and doing the actual
 Spike verification (ConPTY OSC passthrough, IME, RAM) requires real ARM64 hardware (or an
 ARM64 VM), since this machine cannot execute ARM64 Windows binaries. `crates/mast-core` itself
-has no target-specific code (it's checked against `x86_64-pc-windows-msvc` in the WSL-side gate
-per spike-plan.md section 5), so the ARM64-specific risk surface is `portable-pty`'s ConPTY
+has no target-specific code, so the ARM64-specific risk surface is `portable-pty`'s ConPTY
 backend and Tauri/WebView2, not `mast-core`.
 
 ### CI artifacts (stage 22) and device testing (stage 23)
 
-Since stage 22, `.github/workflows/ci.yml` runs the full gate set (including
-`cargo clippy --workspace --all-targets --target aarch64-pc-windows-msvc` — check-family
-commands never link, so this needs no MSVC libraries and also runs on the Linux dev host)
-on every push, and builds **release artifacts for both targets** on a manual
+Since the secure remote transport landed (2026-09), the Windows-target gates run in the
+`windows-gates` job on a `windows-latest` runner for every PR and for pushes to `main` or a
+`v*` tag (a feature-branch push alone does not trigger them): x64 and ARM64
+`cargo clippy --workspace --all-targets -- -D warnings`, the x64 workspace `check`, and — since
+the Secure Remote work — x64 **native runtime tests** (`cargo test -p mast-remote` plus the
+glue's `secure_remote` tests, which bind and release real UDP sockets on Windows). They no
+longer run on the Linux dev host by default: a native TLS dependency's C build script (ring)
+needs an MSVC C toolchain even for check-family commands, and the ARM64 target additionally
+needs `clang` (section 1).
+
+From inside WSL the same x64 Windows commands can still be run through Windows interop when a
+local check is wanted before pushing:
+
+```sh
+WSLENV=CARGO_INCREMENTAL CARGO_INCREMENTAL=0 \
+  /mnt/c/Users/<you>/.cargo/bin/cargo.exe clippy --workspace --all-targets \
+  --target x86_64-pc-windows-msvc -- -D warnings
+```
+
+WSL does not pass its environment to the Windows process, and this repository lives on the 9P
+path from Windows, where rustc's incremental session lock cannot be created unless
+`CARGO_INCREMENTAL=0` reaches the Windows side — that is what `WSLENV` carries here. The ARM64
+target is not available from this dev host (no `clang`), so its compile check is CI's job, not
+a local claim.
+
+`.github/workflows/ci.yml` also builds **release artifacts for both targets** on a manual
 `workflow_dispatch` (GitHub → Actions → CI → Run workflow) or a `v*` tag: download
 `mast-aarch64-pc-windows-msvc` from the run's artifacts for the ARM64 device. A `v*` tag
 additionally attaches `mast-x64.exe` / `mast-arm64.exe` to a GitHub Release — the
@@ -3150,3 +3178,134 @@ shell wrapper, but do not verify a live Windows mast tab or a PC restart.
 6. Edit the managed plugin, rerun provisioning with a new setup marker, and confirm
    the edited bytes remain untouched with a conflict in the setup log. Restore a
    matching managed version and confirm a later setup update can replace it.
+
+## 17. Secure Remote verification (ADR-0028)
+
+Status: **Windows + real-device field verification pending.** The Linux test suite, the Windows
+target compile gates and the GitHub Pages deployment are separate evidence; none of them marks
+this checklist complete, and a failure below is a real defect, not a test-environment artifact.
+Use a phone with Chrome or Edge on the same Wi-Fi as the PC. Run `Pair phone` → `Secure Remote`
+for every step unless stated otherwise.
+
+Bounds the steps below assume (ADR-0028): UDP 7331 waits at most 120 seconds for a scan; at most
+four unauthenticated QUIC connections exist at once, at most two from one IP; a stalled rejection
+is cut after 2 seconds; the whole pre-auth phase (CONNECT response → first stream → first `auth`
+frame) shares one 10-second deadline; one frame read/write or input write is bounded at 15
+seconds; an authenticated connection is torn down after 30 seconds without a request or
+heartbeat; the phone gives each request 20 seconds before it closes the connection itself and
+heartbeats every 10 seconds.
+
+1. **QR on the device.** Scan the QR with the phone camera. The page must load from
+   `https://sjkwon-1023.github.io/mast/`, ask for local-network permission if the browser
+   prompts, and show the terminal only after the certificate pin is accepted. While it
+   connects, the page must name the destination it is opening (`<host>:<port>` from the QR),
+   and that line stays above the tab list and terminal afterwards — it is the only place the
+   user can see which PC the phone attached to. The address bar must lose its `#…` fragment
+   immediately, for valid and invalid links alike. In the phone browser's storage inspector
+   (Chrome DevTools → Application), confirm that mast stores nothing: the one-time token and
+   the certificate hash must appear in no local storage, session storage, cookie or IndexedDB
+   entry. This checks the page, not the whole origin — unrelated entries the browser or the
+   hosting site already had are out of scope. Do not screenshot or copy the QR contents into
+   logs.
+2. **Hash mismatch fails closed.** Decode the QR to text, change a **middle** character of the
+   `cert` value (keep the 43-character base64url length), and open that URL in the phone's
+   Chrome. Change a middle character, not the last one: 43 base64url characters carry 32 bytes
+   with two spare bits, so an arbitrary last character can make the string a non-canonical
+   encoding that the strict fragment parser rejects as an *invalid link* before TLS is ever
+   reached, which would read as a false field failure. The connection must fail at the TLS step
+   — no terminal screen, an explicit connection-error notice — rather than connect or fall back
+   to plain HTTP.
+3. **Wrong token fails, right token passes.** Repeat step 2 changing a middle character of
+   `token` instead: the page must reach the server and then report *Not authorized — scan the
+   pairing QR in mast again.* Scanning the untouched QR from the dialog must connect — judge the
+   connection by the phone's terminal screen, its continued polling, and the live UDP 7331
+   endpoint, not by the dialog alone. The dialog's Secure Remote screen polls the pairing status
+   every 2 seconds: once the phone authenticates, the QR and URL must be removed from the screen
+   and the connected notice shown in their place (its pairing stays up until that connection
+   ends). If the phone had already authenticated, *Back* must leave that connection alone
+   (cancelling a connected pairing is refused). *Back* runs one status query for the choice
+   screen, so the connected notice appears only if the connection was reported at that moment:
+   the choice screen does not keep polling (only the Secure Remote screen polls every 2 s), so
+   a connection that starts or ends while it stays open is not reflected until *Back* is
+   pressed again — that is the current behaviour, not a defect for this checklist. If
+   authentication has not won by the time *Back* is pressed, that pairing is cancelled instead,
+   the phone shows the *scan a new QR* notice, and no connected notice appears — expected. More than ten failures from one IP within a minute
+   must be rate-limited (the page reports too many attempts), and a second phone must be refused
+   while one is connected.
+4. **Input and output.** In the paired tab, read a running agent's screen, send a line and see
+   the output appear without a refresh; if a full-screen TUI is open, scroll it with the ▲/▼
+   overlay buttons (not the page's own scrollbar). Press Stop/Esc and confirm the intended
+   bytes arrive. When the input slot is busy (send while an earlier blocked write is pending)
+   the page must restore the typed text and say the request was temporarily refused, not
+   silently drop it — the server gives one input write 15 seconds and the phone gives each
+   request 20 seconds, so a blocked write surfaces as a temporary refusal inside that bound,
+   not as a page that never answers. Losing the phone's Wi-Fi for longer than 30 seconds must
+   end the pairing and produce the *scan a new QR* notice, never a silent frozen screen.
+5. **Refresh means re-scan.** Reload the page on the phone. It must show the *scan the pairing
+   QR* notice and must not auto-reconnect. The previous connection teardown must complete, and
+   a fresh QR from the dialog must connect again with a new token.
+6. **Disconnect closes UDP 7331.** With a pairing waiting or connected, run on Windows in
+   PowerShell:
+
+   ```powershell
+   Get-NetUDPEndpoint -LocalPort 7331 | Select-Object LocalAddress,LocalPort,OwningProcess
+   netstat -ano -p udp | findstr :7331
+   ```
+
+   Close the phone page (or select *Back/Close* in the dialog for a waiting QR). The Secure
+   Remote screen's 2-second status poll must switch to *This pairing is closed — go Back and
+   start a new one.* with the QR and URL removed, and the listener must actually be gone:
+   within a few seconds the UDP endpoint must disappear from both commands. An idle phone that
+   stops sending requests and heartbeats for 30 seconds must be torn down the same way. Then
+   start *Secure Remote* again: a new QR must bind UDP 7331, and the previous pairing's URL
+   must no longer connect (its certificate and token are gone).
+7. **UDP firewall is separate from TCP.** With Windows Firewall enabled, the dialog's Secure
+   Remote firewall line must name the state for UDP 7331. Press **Allow in Windows Firewall**:
+   exactly one UAC prompt must appear, and only from that click. Then verify the rule and its
+   protocol in two commands — `Profile` lives on the rule object, and `Get-NetFirewallPortFilter`
+   does not show it:
+
+   ```powershell
+   Get-NetFirewallRule -DisplayName 'mast secure remote (LAN)' |
+     Select-Object DisplayName,Enabled,Profile,Direction,Action
+   Get-NetFirewallRule -DisplayName 'mast secure remote (LAN)' | Get-NetFirewallPortFilter
+   ```
+
+   The rule must be an enabled inbound Allow on `Domain, Private` profiles, and the port filter
+   must be UDP 7331. The TCP rule `mast remote (LAN)` must be untouched.
+8. **Local HTTP regression.** Enable Local HTTP (`"remote"` in `settings.json`), pair a phone
+   over it, and hold that session. Start Secure Remote on the same PC and use it at the same
+   time: TCP and UDP 7331 must coexist, each QR must pair to its own mode, and the Local HTTP
+   screen/polling, token file and firewall state must be unchanged. Closing Secure Remote must
+   not disturb the Local HTTP session.
+9. **Browser and boundary failures.** With a browser (or version) that has no `WebTransport`
+   global, the page must show its explicit notice (*This browser has no WebTransport*) rather
+   than a blank page. A browser that has `WebTransport` but does not understand
+   `serverCertificateHashes` will not fail at construction: unknown WebIDL dictionary members
+   are ignored silently, so that option has no effect and the failure appears later as a
+   generic *Could not connect to mast* at the TLS step — there is no distinct "cannot pin"
+   error to expect. In both cases the network panel must show no plain-HTTP or `/api` fallback
+   attempt. Record the browser and version used; do not assume a given browser lacks the APIs.
+   With Wi-Fi off and mobile data on, the page must still load from GitHub Pages but fail to
+   reach the PC (no cloud relay), while the same page on the home Wi-Fi connects. Reaching the
+   PC from outside the LAN requires the separate path named in the dialog (VPN, Tailscale or
+   port forwarding); mast must not present any such path as already configured.
+
+Record the phone OS, browser and version, the Windows build, and which steps passed. Steps that
+could not be run stay *not verified*.
+
+
+### v0.3.34 추가 수동 검증: pane 이동·폴더 탐색·마크다운 편집
+
+아래 항목은 자동 테스트와 별도로 실제 Windows/WSL에서 확인한다. 아직 실기 검증하지 않았다.
+
+- 분할된 터미널·폴더·마크다운 pane에서 Alt+Shift+네 방향키로 인접 pane을 이동한다.
+- 폴더 탭 옆의 다른 탭을 Alt+Shift+W로 닫고, 클릭 없이 위·아래 방향키로 항목을 선택한다.
+- 폴더에서 왼쪽 방향키로 상위 경로, 오른쪽 방향키로 선택된 하위 폴더를 연다.
+  파일과 `..`에서 오른쪽 방향키는 아무것도 열지 않는다.
+- WSL의 UTF-8 마크다운을 Edit로 수정하고 Ctrl+S/Save로 저장한다.
+  CRLF·BOM 및 실제 파일 권한이 보존되는지 확인한다.
+- 편집 중 다른 탭·워크스페이스를 다녀오거나 Ctrl+Shift+R 및 자동 WebView 리로드가
+  발생해도 편집 내용이 복원된다. 저장 도중 탭을 왕복하고 다시 수정·저장한다.
+- 외부 편집기로 같은 파일을 변경한 뒤 저장하면 덮어쓰기를 거부하고 편집 내용이 남는다.
+- Cancel, 탭·pane·워크스페이스 닫기, 앱 종료의 미저장 확인에서 취소하면 내용이 유지된다.

@@ -1,3 +1,4 @@
+import { closingMarkdownDrafts, discardMarkdownDraft, hasMarkdownDrafts } from "../features/viewers/markdown/drafts";
 import { installNavKeys } from "./navigation/actions";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -70,7 +71,7 @@ function installReloadKey(): void {
     (ev) => {
       if (ev.ctrlKey && ev.shiftKey && !ev.altKey && ev.code === "KeyR") {
         ev.preventDefault();
-        location.reload();
+        if (!hasMarkdownDrafts() || window.confirm("Reload with unsaved Markdown edits? Drafts will be restored from this session.")) location.reload();
       }
     },
     { capture: true },
@@ -158,6 +159,9 @@ class App {
     installShortcutGuide();
     installActivityPing();
     this.installWindowFocus();
+    await getCurrentWindow().onCloseRequested((event) => {
+      if (hasMarkdownDrafts() && !window.confirm("Quit mast and discard unsaved Markdown edits?")) event.preventDefault();
+    });
 
     initWindowVisibility().catch((err: unknown) => {
       console.error("window visibility listen failed", err);
@@ -198,10 +202,11 @@ class App {
   private async initRemote(): Promise<void> {
     try {
       const status = await remoteStatus();
+      // Local HTTP 서버가 실패로 떠 있으면 알린다. "Pair phone" 버튼은 이 상태와
+      // 무관하게 항상 보인다 — 꺼져 있으면 다이얼로그가 설정·Secure Remote 안내를 한다.
       if (status.state === "failed") {
         this.showError(status.reason ?? "remote surface failed to start");
       }
-      this.sidebar.setRemoteEnabled(status.state === "on");
     } catch (err) {
       console.error("remote_status failed", err);
     }
@@ -277,14 +282,17 @@ class App {
 
   private async dispatchUI(cmd: Command): Promise<CommandOutput | null> {
     let traceToken: number | null = null;
-    if (cmd.type === "switchWorkspace") {
-      const active = this.store.snapshot?.state.activeWorkspace ?? null;
-      if (active !== cmd.workspace) {
-        traceToken = this.tracer.begin(cmd.workspace, performance.now());
-      }
-    }
     try {
+      const closingDrafts = closingMarkdownDrafts(cmd, this.store.snapshot);
+      if (closingDrafts.length > 0 && !window.confirm("Close and discard unsaved Markdown edits?")) return null;
+      if (cmd.type === "switchWorkspace") {
+        const active = this.store.snapshot?.state.activeWorkspace ?? null;
+        if (active !== cmd.workspace) {
+          traceToken = this.tracer.begin(cmd.workspace, performance.now());
+        }
+      }
       const out = await dispatch(cmd);
+      for (const tab of closingDrafts) discardMarkdownDraft(tab);
       this.clearError();
       this.compensateFocus(cmd, out);
       return out;
@@ -324,7 +332,7 @@ class App {
       cmd.type === "closeWorkspace" ||
       cmd.type === "switchWorkspace"
     ) {
-      this.wsView.requestFocus({ kind: "activePane" });
+      this.wsView.requestFocus({ kind: "activePane", after: cmd });
     }
   }
 

@@ -40,7 +40,7 @@ and WSL2.
 
 ## Features
 
-- **Split panes** — split either way, drag to resize, `Ctrl+Shift`+arrows to move focus. A new pane or tab
+- **Split panes** — split either way, drag to resize, `Ctrl/Alt+Shift`+arrows to move focus. A new pane or tab
   opens in the directory the pane's shell is in.
 - **Tabs inside panes** — every pane has its own tab strip; background tabs stay alive.
 - **Agent status and notifications** — Claude Code and Codex report running / needs input / idle
@@ -54,14 +54,32 @@ and WSL2.
   and limits each diff to 512 KiB. Git and GNU `timeout` must be installed in that WSL distro.
 - **Phone terminal control (opt-in)** — pair by QR, then read output, scroll a full-screen TUI,
   or send input to an agent CLI or a regular Bash shell. It is not limited to agent prompts.
-  **Local-network use only:** your PC and phone must be on the same trusted LAN, typically
-  the same home router. The PC can use Ethernet while the phone uses Wi-Fi. Mobile data
-  (4G/5G) or an unrelated Wi-Fi network does not connect through mast; there is no cloud relay.
-  Guest Wi-Fi or client isolation can block access even on the same router.
-  Off by default; plain HTTP, not for public internet exposure or port forwarding — see
-  [`docs/SETTINGS.md`](./docs/SETTINGS.md). If
-  the phone cannot connect, the pairing dialog says whether Windows Firewall allows the app and
-  writes the rule for you behind one UAC prompt.
+  *Pair phone* always offers two working modes and a disabled `Tailscale — Coming later` entry:
+  - **Local HTTP** — the original mode, off by default. Turn it on with the `"remote"` key in
+    `settings.json`; it serves plain HTTP on your LAN and the pairing token lives in the phone
+    browser's local storage. It is not hardened for public internet exposure — keep it on
+    your own network.
+  - **Secure Remote** — no setting to enable: the dialog opens a UDP 7331 listener only while it
+    shows the QR (at most two minutes if it is never scanned) and closes it when the single
+    authenticated connection ends or goes quiet for 30 seconds. The phone loads a public HTTPS
+    page from GitHub Pages, shows which `host:port` it is opening, and connects straight to the
+    PC over WebTransport, pinning the SHA-256 fingerprint of the certificate issued for that
+    pairing. The token and fingerprint stay in page memory and are never stored, so reloading
+    requires a fresh QR; the dialog removes the QR and URL once the phone connects or the
+    pairing ends, so a dead QR is never shown as live. Recent Chrome or Edge are the initial
+    phone test targets; a real-device WebTransport connection has not yet been verified. A
+    browser without WebTransport shows an explicit error; one that ignores the
+    certificate-pinning option fails later at TLS with a connection error, never a silent
+    fallback to plain HTTP.
+
+  Both QRs carry this PC's **LAN address**, and mast opens no path beyond your own network —
+  there is no cloud relay. For the QR to work as generated, your PC and phone must be on the
+  same trusted LAN, typically the same home router; mobile data (4G/5G) or an unrelated Wi-Fi
+  network reaches the PC only through a separate path you set up yourself — VPN, Tailscale or
+  port forwarding — never automatically. Guest Wi-Fi or client isolation can block access even
+  on the same router. If the phone cannot connect, the pairing dialog says whether Windows
+  Firewall allows the app — TCP for Local HTTP, UDP 7331 for Secure Remote — and offers to
+  write that rule behind one UAC prompt. See [`docs/SETTINGS.md`](./docs/SETTINGS.md).
 - **Layout persistence** — workspaces, splits and tabs come back, each shell respawned where it was,
   and a tab that was running an agent returns with its resume command one `Up` away.
 
@@ -110,9 +128,9 @@ Run these commands in a mast Bash pane:
 ```sh
 mast config
 mast config set fontSize 15
-mast config set remote                  # enable phone access on port 7331
+mast config set remote                  # enable Local HTTP phone access on port 7331
 mast config set remote --port 7441      # enable it on a different port
-mast config set remote false            # disable phone access
+mast config set remote false            # disable Local HTTP phone access
 mast config reset fontSize              # restore the built-in font sizes
 ```
 
@@ -121,7 +139,9 @@ Changes are saved to `%AppData%\app.mast.desktop\settings.json` and require a **
 processes. No command restarts the app automatically. The CLI needs Python 3, WSL Windows interop,
 PowerShell and access to the Windows drive. You can still edit the JSON file manually.
 
-Phone access stays off until you enable it. Every key is optional, invalid settings are rejected,
+The `remote` key controls the **Local HTTP** mode only. **Secure Remote** has no setting: it is
+started and stopped from the *Pair phone* dialog, and its listener exists only for one pairing.
+Local HTTP stays off until you enable it. Every key is optional, invalid settings are rejected,
 and unknown existing keys are preserved. Full reference: [`docs/SETTINGS.md`](./docs/SETTINGS.md).
 
 ## Keyboard shortcuts
@@ -132,7 +152,7 @@ Most app shortcuts use `Ctrl+Shift` or `Alt+Shift`; unlisted keys go to the PTY.
 |---|---|
 | `Ctrl+1` … `Ctrl+9` / `Alt+1` … `Alt+9` | Switch workspace by sidebar position |
 | `Ctrl+Shift+[` / `]` or `Alt+Shift+[` / `]` | Cycle workspaces |
-| `Ctrl+Shift+↑ ↓ ← →` | Move focus to the adjacent pane |
+| `Ctrl/Alt+Shift+↑ ↓ ← →` | Move focus to the adjacent pane |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Cycle tabs in the active pane |
 | `Ctrl+Shift+T` / `Alt+Shift+T` | New terminal tab |
 | `Ctrl+Shift+B` / `Alt+Shift+B` | New folder browser tab |

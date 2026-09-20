@@ -971,6 +971,21 @@ pub async fn fs_read_chunk(
     Ok(Response::new(bytes))
 }
 
+#[tauri::command]
+pub async fn fs_save_markdown(
+    distro: Option<String>,
+    path: String,
+    expected: String,
+    content: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let target = host_path(distro, &path)?;
+        mast_core::document::save_markdown(&target, &expected, &content)
+    })
+    .await
+    .map_err(|err| format!("fs_save_markdown task join failed: {err}"))?
+}
+
 /// 블로킹 디렉터리 열거 — fs 순서 그대로, 상한 초과분은 잘라낸다.
 fn list_dir(root: &Path) -> Result<DirListing, String> {
     let iter =

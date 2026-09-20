@@ -215,8 +215,8 @@ describe("folderKeyAction", () => {
   });
 
   it("returns null for keys it does not own", () => {
-    expect(folderKeyAction(key("ArrowLeft"))).toBeNull();
-    expect(folderKeyAction(key("ArrowRight"))).toBeNull();
+    expect(folderKeyAction(key("ArrowLeft"))).toEqual({ type: "parent" });
+    expect(folderKeyAction(key("ArrowRight"))).toEqual({ type: "child" });
     expect(folderKeyAction(key("a"))).toBeNull();
     expect(folderKeyAction(key("Tab"))).toBeNull();
     expect(folderKeyAction(key("Escape"))).toBeNull();

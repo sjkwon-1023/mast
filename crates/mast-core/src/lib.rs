@@ -19,6 +19,7 @@
 pub mod capture;
 pub mod command;
 pub mod deadline;
+pub mod document;
 pub mod firewall;
 pub(crate) mod flow;
 pub mod git;

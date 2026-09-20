@@ -14,8 +14,8 @@ its removal).
 **MVP stages 10–22 are complete and Windows-verified**: checkpoint 2 passed 2026-08-09
 (three field defects fixed the same day) and its re-verification round passed in full
 2026-08-10. The manual checklists in `docs/WINDOWS-BUILD.md` sections 6–10 stay as
-regression references. Stage 22 (CI) is live — the gates run on every push, x64 + ARM64
-artifacts build on `workflow_dispatch`. **Remaining: stage 23**, ARM64 device testing
+regression references. Stage 22 (CI) is live — the gates run on every PR and on pushes to
+`main` or a `v*` tag, x64 + ARM64 artifacts build on `workflow_dispatch`. **Remaining: stage 23**, ARM64 device testing
 (`docs/WINDOWS-BUILD.md` §11), which awaits hardware.
 
 Every decision behind those stages lives in `docs/adr/`: stack adoption (0001),
@@ -715,6 +715,41 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   files need a lifetime — delete-on-close next to the tab's history files (ADR-0013) is the
   natural rule. Not started.
 
+- **Secure Remote — landed 2026-09-18** ([ADR-0028](docs/adr/0028-secure-remote-webtransport.md)).
+  *Pair phone* now opens with three entries — Local HTTP, Secure Remote, and a disabled
+  Tailscale (`Coming later`) — and Secure Remote adds a second, independent phone mode without
+  changing ADR-0016's Local HTTP key, token file or TCP flow. Selecting it generates an
+  in-memory ECDSA P-256 certificate and a fresh token, binds UDP 7331 for at most 120 seconds of
+  QR wait, and serves exactly one authenticated WebTransport connection; disconnect or 30 s of
+  silence tears the endpoint, TLS state and key down, and nothing is ever written to disk.
+  Unauthenticated connections are capped at 4 overall and 2 per IP, every pre-auth failure is
+  counted per IP (more than 10 in a minute blocks that IP for a minute), the whole pre-auth
+  phase shares one 10 s deadline, a stalled CONNECT rejection is cut after 2 s, frame I/O and a
+  blocked input write are bounded at 15 s, and the phone gives each request 20 s. The phone
+  loads the static bundle deployed at `https://sjkwon-1023.github.io/mast/` (gh-pages root,
+  verified 200 on 2026-09-18; the published bundle predates the follow-up fixes and is
+  redeployed from `apps/mast/dist-secure-remote` once the code chunks land — CI audits that
+  artifact for the exact CSP, resolved `/mast/` references and sourcemaps, and scans for
+  storage/HTTP markers as a bounded literal check, not a proof against obfuscation),
+  receives the LAN address,
+  port, certificate SHA-256 and one-time token in the URL fragment, deletes the fragment
+  immediately, shows the destination `host:port` it is opening, and keeps everything in page
+  memory — so a reload means re-scanning and the bundle carries no storage or HTTP-API path.
+  The dialog polls the pairing every 2 s and removes the QR and URL once the phone connects or
+  the pairing ends, so a dead QR is never shown as live. Recent Chrome/Edge are the initial
+  phone test targets, but no real-device WebTransport connection has yet been verified; a
+  browser that silently ignores the unknown `serverCertificateHashes` option fails later at TLS
+  rather than at construction, so capability is judged by the actual connection result, not the
+  browser name, and the page may need Local Network Access permission. A closed transport asks
+  for a new QR instead of reconnecting or falling back to HTTP. The phone UI is the shared
+  ADR-0016 shell with the transport injected; input goes through the app-lifetime
+  `InputWriter` coordinator, so a blocked PTY write is refused with 503 `input busy` rather than
+  queued per pairing. The UDP firewall rule (`mast secure remote (LAN)`, domain/private only,
+  UAC only from the user's click) is separate from the TCP rule. Linux integration tests are
+  green; the Windows UAC/firewall and real-phone checks are pending in
+  `docs/WINDOWS-BUILD.md` §17, and the x64 native runtime tests (`mast-remote` plus the glue's
+  `secure_remote` tests) and the ARM64 compile check are CI's `windows-gates` job.
+
 - **Arrow keys and a refresh button on the phone — landed 2026-09-12** (v0.3.26). The key bar
   gained ↑/↓/←/→ next to Stop/Esc — `protocol.ts::encodeInput` already encoded both arrow forms
   (plain and DECCKM) for the desktop, so this only wires up the missing buttons. The new ↻
@@ -811,8 +846,11 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   copy the state directory and item 9's checklist never asks whether *Pair phone* is still
   there. The app then came up with every setting at its default, and the failure was silent by
   design: a missing file is `Ok(default)` (`commands.rs::read_ui_settings`) and a missing
-  `remote` key is `RemoteState::Off` (`remote.rs`), so the button was simply absent with no
-  error on any surface. The ask is that the app **write** the file with its defaults when it is
+  `remote` key is `RemoteState::Off` (`remote.rs`), so nothing said the key was gone — at the
+  time the *Pair phone* button itself was hidden too. **Superseded 2026-09-18**: the button is
+  now always visible (ADR-0028's mode dialog offers Secure Remote independently of the `remote`
+  key, and the Local HTTP screen names the off state), so its absence is no longer a diagnostic
+  for this failure. The ask is that the app **write** the file with its defaults when it is
   absent — settings become an artifact the user can see and edit rather than one they have to
   know to create — and that those defaults be the remote surface **on** (a default port) with
   `"log": false`.
@@ -1069,23 +1107,30 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 export PATH="$HOME/.local/node/bin:$HOME/.cargo/bin:$PATH"
 cargo test -p mast-core
 cargo test -p mast-remote
-cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
-cargo clippy --workspace --all-targets --target aarch64-pc-windows-msvc -- -D warnings
-cargo check --workspace --target x86_64-pc-windows-msvc
 cd apps/spike && npm run build && npx vitest run
-cd apps/mast && npm run build && npx vitest run
+cd apps/mast && npm run build && npm run audit:secure-remote && npm run audit:secure-remote:self-test && npx vitest run
 ```
 
-The ARM64 clippy works on the Linux dev host because check-family commands never link —
-no MSVC import libraries needed (계획 v2 section 13: x64 + ARM64 from day one). CI
-(`.github/workflows/ci.yml`) runs the same gates on every push and builds x64 + ARM64
-release artifacts on `workflow_dispatch` or a `v*` tag (kept off the per-push path —
-Windows runners bill at 2x).
+The Windows-target gates are **CI's `windows-gates` job**, on a `windows-latest` runner for
+every PR and for pushes to `main` or a `v*` tag: x64 and ARM64 clippy (`--all-targets
+-- -D warnings`), the x64 workspace `check`, and x64 native test runs (`cargo test -p
+mast-remote` plus the glue's `secure_remote` tests, which bind and release real UDP sockets).
+They no longer run on the Linux dev host by
+default: a dependency's C build script (ring, since the secure remote transport landed) needs an
+MSVC C toolchain even for check-family commands, so the old Linux cross compile — which needed
+only `llvm-rc` on PATH for tauri's resource embedding — stopped working when that dependency
+landed. A local x64 run through Windows interop still works
+(`WSLENV=CARGO_INCREMENTAL CARGO_INCREMENTAL=0 /mnt/c/Users/<you>/.cargo/bin/cargo.exe …`):
+`WSLENV` has to carry `CARGO_INCREMENTAL=0`, because WSL does not pass its environment into the
+Windows process and rustc's incremental session lock cannot be created on the
+Windows-visible 9P path without it. ARM64 additionally needs `clang` for ring's build script and
+is **CI-only on this machine** — not a local green. `windows-artifacts` builds the x64 + ARM64
+release artifacts and attaches them to a GitHub Release on `workflow_dispatch` or a `v*` tag;
+the trigger is narrow because a release build per push is not needed, not because of runner
+billing (standard Windows runners are free for public repositories).
 
-- `src-tauri` cannot compile for the Linux host (no webkit2gtk) — the Windows-target
-  check/clippy IS the compile gate for the glue. It needs `llvm-rc` on PATH; the
-  sudo-free setup (apt-get download + dpkg -x into `~/.local/llvm`) is in README
-  "Development".
+- `src-tauri` cannot compile for the Linux host (no webkit2gtk) — the `windows-gates` job
+  IS the compile gate for the glue.
 - Windows build/run and the manual verification flow: `docs/WINDOWS-BUILD.md`.
 - The app spawns `wsl.exe [-d $MAST_DISTRO] -- bash -l` on Windows, `$SHELL -l` on Unix.
 

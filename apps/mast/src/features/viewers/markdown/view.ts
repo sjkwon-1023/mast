@@ -1,3 +1,4 @@
+import { markdownDraft, keepMarkdownDraft, discardMarkdownDraft, markdownSaved, onMarkdownSaved } from "./drafts";
 // markdownViewer 탭의 뷰 — 마크다운 파일을 렌더해 보여주고, 활성인 동안
 // 2초 주기 mtime 폴링으로 라이브 리로드한다.
 //
@@ -11,8 +12,8 @@
 //    ③ 이미지는 placeholder 텍스트로 바꾼다 — 렌더 결과에 원격 로드도 실행
 //    가능한 URL 도 남지 않는다. 판정은 순수 함수 renderMarkdown 이라 vitest 로
 //    잠근다.
-// 2. **뷰어이지 에디터가 아니다** — 편집 affordance 가 없고, 2MiB 를 넘는 파일은
-//    렌더를 거부하고 "open as text"(같은 경로의 textViewer 탭 생성) 안내만 준다.
+// 2. UTF-8 마크다운에 한해 원문 편집·저장을 제공한다. 2MiB 를 넘는 파일은
+//    렌더·편집을 거부하고 "open as text" 안내만 준다.
 //    마크다운 렌더는 파일 전체를 문자열로 올려야 해서 textViewer 의 윈도우 전략
 //    (메모리 상주 = 창 1개)이 성립하지 않기 때문이다.
 // 3. **폴링 수명 = 뷰 수명** (계획 21단계). 뷰어 뷰는 활성 탭일 때만 마운트되므로
@@ -39,7 +40,7 @@
 import { Marked } from "marked";
 
 import type { TimerHost } from "../../terminal/ack-batcher";
-import { fsReadChunk, fsStat } from "../../../infrastructure/backend";
+import { fsReadChunk, fsStat, fsSaveMarkdown } from "../../../infrastructure/backend";
 import { ScrollSettle, SCROLL_SETTLE_MS, shouldAdoptScroll } from "../viewer-scroll";
 import { registerViewerFontTarget, unregisterViewerFontTarget } from "../viewer-font";
 import type { ViewerFontTarget } from "../viewer-font";
@@ -103,7 +104,7 @@ const renderer = new Marked({
 /** 마크다운 원문 → 렌더된 HTML 문자열 (순수). 결과에는 raw HTML 도, href 를 가진
  *  앵커도, 외부 리소스 참조도 없다 — 그 사실을 features/viewers/markdown/view.test.ts 가 잠근다. */
 export function renderMarkdown(source: string): string {
-  return renderer.parse(source, { async: false });
+  return renderer.parse(source.replace(/^\uFEFF/, ""), { async: false });
 }
 
 export interface MtimePollerOptions {
@@ -256,6 +257,14 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
   /** 창 숨김 전이 구독 해제 — dispose 에서 반드시 부른다 (구독자 수명 = 뷰 수명). */
   private readonly unsubscribeWindow: () => void;
 
+  private readonly unsubscribeSaved: () => void;
+  private readonly editButton: HTMLButtonElement;
+  private readonly saveButton: HTMLButtonElement;
+  private readonly cancelButton: HTMLButtonElement;
+  private readonly editor: HTMLTextAreaElement;
+  private source: string | null = null;
+  private editing = false;
+  private saving = false;
   private path: string;
   private disposed = false;
   /** in-flight 로드 토큰 — 늦게 도착한 이전 로드가 현재 화면을 덮지 않게 한다. */
@@ -304,7 +313,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     this.scrollEl = document.createElement("div");
     this.scrollEl.className = "markdown-scroll";
     // 스크롤 컨테이너 자체를 focus 대상으로 둔다 — 방향키·PgUp/PgDn 스크롤이
-    // 브라우저 기본 동작으로 붙는다 (뷰어지 에디터가 아니므로 자체 키 처리 없음).
+    // 미리보기에서는 브라우저 기본 동작으로 붙는다.
     // Tab 순서에는 넣지 않는다 (프로그램적 focus 전용).
     this.scrollEl.tabIndex = -1;
     this.scrollEl.addEventListener("scroll", this.onScroll);
@@ -316,7 +325,35 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     this.bodyEl.addEventListener("click", this.onBodyClick);
     this.scrollEl.append(this.bodyEl);
 
-    this.root.append(this.bannerEl, this.scrollEl);
+    const toolbar = document.createElement("div");
+    toolbar.className = "markdown-toolbar";
+    const button = (label: string, className: string, action: () => void): HTMLButtonElement => {
+      const element = document.createElement("button");
+      element.type = "button";
+      element.className = className;
+      element.textContent = label;
+      element.addEventListener("click", action);
+      toolbar.append(element);
+      return element;
+    };
+    this.editButton = button("Edit", "markdown-edit", () => this.beginEdit());
+    this.editButton.disabled = true;
+    this.saveButton = button("Save", "markdown-save", () => void this.save());
+    this.cancelButton = button("Cancel", "markdown-cancel", () => this.cancelEdit());
+    this.saveButton.hidden = this.cancelButton.hidden = true;
+    this.editor = document.createElement("textarea");
+    this.editor.className = "markdown-editor";
+    this.editor.setAttribute("aria-label", "Markdown source");
+    this.editor.spellcheck = false;
+    this.editor.hidden = true;
+    this.editor.addEventListener("input", () => this.rememberDraft());
+    this.editor.addEventListener("keydown", (event) => {
+      if (!event.isComposing && event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void this.save();
+      }
+    });
+    this.root.append(toolbar, this.bannerEl, this.scrollEl, this.editor);
     parent.appendChild(this.root);
 
     this.poller = new MtimePoller(
@@ -327,7 +364,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
         timers,
         // 두 신호의 OR — WebView2 는 최소화에 visibilitychange 를 주지 않고,
         // 창 신호는 탭 숨김 같은 문서 레벨 사건을 모른다 (파일 상단 계약 3).
-        isHidden: () => document.hidden || isWindowHidden(),
+        isHidden: () => this.editing || document.hidden || isWindowHidden(),
       },
     );
     // 두 신호 모두 재개 트리거다 — sync() 가 현재 isHidden 을 다시 읽어 무장/
@@ -337,7 +374,90 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     // 해제는 dispose 가 짝으로 맡는다.
     registerViewerFontTarget(this);
 
+    this.unsubscribeSaved = onMarkdownSaved((tab, content) => {
+      if (tab === this.tab) this.source = content;
+    });
+    try {
+      const draft = markdownDraft(this.tab);
+      if (draft && draft.path === this.path && draft.distro === this.distro) {
+        this.source = draft.base;
+        this.beginEdit(draft.text, false);
+      } else this.load(false);
+    } catch (error) {
+      this.setBanner(`Cannot restore draft: ${describeError(error)}`, true);
+    }
+  }
+
+  private beginEdit(text?: string, focus = true): void {
+    if (this.source === null || this.saving) return;
+    this.editing = true;
+    ++this.loadToken;
+    this.poller.sync();
+    this.editor.value = text ?? this.source;
+    this.editor.hidden = false;
+    this.scrollEl.hidden = true;
+    this.editButton.hidden = true;
+    this.saveButton.hidden = this.cancelButton.hidden = false;
+    this.setBanner("Editing — Ctrl+S to save. Unsaved edits survive tab switches and WebView reloads.", false);
+    if (focus) this.editor.focus();
+  }
+
+  private rememberDraft(): void {
+    if (this.source === null) return;
+    const previous = markdownDraft(this.tab);
+    try {
+      const base = previous?.base ?? this.source;
+      if (this.editor.value === base.replace(/\r\n/g, "\n")) discardMarkdownDraft(this.tab);
+      else keepMarkdownDraft(this.tab, { path: this.path, distro: this.distro, base, text: this.editor.value });
+    } catch (error) {
+      this.editor.value = previous?.text ?? this.source;
+      this.setBanner(`This change was not accepted because draft backup failed. Save existing edits before continuing: ${describeError(error)}`, true);
+    }
+  }
+
+  private async save(): Promise<void> {
+    if (!this.editing || this.saving || this.source === null) return;
+    const draft = markdownDraft(this.tab);
+    const base = draft?.base ?? this.source;
+    const text = this.editor.value;
+    const content = base.includes("\r\n") && !base.replace(/\r\n/g, "").includes("\n")
+      ? text.replace(/\r?\n/g, "\r\n") : text;
+    this.saving = true;
+    let written = false;
+    this.editor.disabled = this.saveButton.disabled = this.cancelButton.disabled = true;
+    try {
+      await fsSaveMarkdown(this.distro, this.path, base, content);
+      written = true;
+      this.source = content;
+      markdownSaved(this.tab, text, content);
+      if (this.disposed) return;
+      this.endEdit();
+      this.load(true);
+    } catch (error) {
+      if (!this.disposed) this.setBanner(`${written ? "File saved, but draft cleanup failed" : "Could not save"}: ${describeError(error)}`, true);
+    } finally {
+      this.saving = false;
+      this.editor.disabled = this.saveButton.disabled = this.cancelButton.disabled = false;
+    }
+  }
+
+  private cancelEdit(): void {
+    if (this.saving) return;
+    if (markdownDraft(this.tab) && !window.confirm("Discard unsaved Markdown edits?")) return;
+    discardMarkdownDraft(this.tab);
+    this.endEdit();
     this.load(false);
+  }
+
+  private endEdit(): void {
+    const hadFocus = this.root.contains(document.activeElement);
+    this.editing = false;
+    this.editor.hidden = true;
+    this.scrollEl.hidden = false;
+    this.editButton.hidden = false;
+    this.saveButton.hidden = this.cancelButton.hidden = true;
+    if (hadFocus) this.scrollEl.focus();
+    this.poller.sync();
   }
 
   /** 줌 직전 — 지금 보고 있는 자리를 문서 안 **상대 위치**로 붙든다 (파일 상단
@@ -407,7 +527,8 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
   }
 
   focus(): void {
-    this.scrollEl.focus();
+    if (this.editing) this.editor.focus();
+    else this.scrollEl.focus();
   }
 
   dispose(): void {
@@ -416,6 +537,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     this.poller.dispose();
     document.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.unsubscribeWindow();
+    this.unsubscribeSaved();
     unregisterViewerFontTarget(this);
     this.settle.dispose();
     this.scrollEl.removeEventListener("scroll", this.onScroll);
@@ -447,6 +569,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
   /** 파일을 읽어 렌더한다. `live` 는 폴링이 부른 재로드다 — 2초마다 "loading…"
    *  이 깜빡이지 않게 배너를 건드리지 않는다 (스크롤 보존 판정은 showHtml 몫). */
   private load(live: boolean): void {
+    if (this.editing) return;
     const token = ++this.loadToken;
     if (!live) this.setBanner("loading…", false);
     this.loadDocument(token).catch((err: unknown) => {
@@ -478,7 +601,9 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
 
     const buffer = await fsReadChunk(this.distro, this.path, 0, stat.size);
     if (this.disposed || token !== this.loadToken) return;
-    const source = new TextDecoder().decode(buffer);
+    const source = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer);
+    this.source = source;
+    this.editButton.disabled = false;
 
     this.setBanner(null, false);
     this.showHtml(renderMarkdown(source));
@@ -503,6 +628,8 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
 
   /** 2MiB 초과 — 렌더를 거부하고 textViewer 로 여는 길만 준다 (파일 상단 계약 2). */
   private renderTooLarge(size: number): void {
+    this.source = null;
+    this.editButton.disabled = true;
     this.setBanner(
       `not rendered: ${formatMiB(size)} exceeds the ${formatMiB(MARKDOWN_MAX_BYTES)} markdown limit`,
       true,

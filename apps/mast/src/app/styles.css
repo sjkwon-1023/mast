@@ -363,8 +363,8 @@ body {
   pointer-events: none;
 }
 
-/* "Pair phone" — 원격 표면이 떠 있을 때만 사이드바 푸터에 나타난다
-   (main.ts 가 remote_status 로 판정, sidebar.ts setRemoteEnabled). */
+/* "Pair phone" — 설정·원격 표면 상태와 무관하게 항상 사이드바 푸터에 있다
+   (다이얼로그가 Local HTTP 설정 안내와 Secure Remote 를 함께 제공한다). */
 .sidebar-pair {
   width: 100%;
   margin-top: 4px;
@@ -486,6 +486,93 @@ body {
 
 .pairing-allow:hover {
   border-color: var(--accent);
+}
+
+/* 모드 선택 화면 — Local HTTP / Secure Remote / Tailscale. Tailscale 은 disabled
+   로 남겨 "추후 제공"을 숨기지 않는다 (연결된 것처럼 가장하지 않는다). */
+.pairing-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.pairing-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pairing-mode:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.pairing-mode:disabled {
+  color: var(--fg-muted);
+  cursor: default;
+}
+
+.pairing-mode-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pairing-mode-desc {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.pairing-back {
+  width: 100%;
+  padding: 4px 6px;
+  margin-top: 4px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pairing-back:hover {
+  border-color: var(--accent);
+}
+
+/* 연결된 폰이 남긴 수명 안내와 Secure Remote 설명 — 비밀이 아니라 동작 설명이다. */
+.pairing-notice {
+  margin: 0 0 12px;
+  padding: 6px 8px;
+  color: var(--fg);
+  background: rgb(255 255 255 / 6%);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.pairing-secure-note {
+  margin: 0 0 12px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+/* start 성공 뒤 서버가 정하는 사건(대기·폰 연결·만료·실패)을 그대로 보여 주는 줄. */
+.pairing-secure-status {
+  margin: 0 0 12px;
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.pairing-error {
+  margin: 0 0 12px;
+  color: var(--error, #f66);
+  font-size: 12px;
 }
 
 /* ── split tree (11단계) ─────────────────────────────────────────────
@@ -1428,4 +1515,33 @@ body {
 .pane-dot.needs-input {
   color: var(--warn);
   font-size: 9px;
+}
+
+
+.markdown-toolbar {
+  display: flex;
+  gap: 6px;
+  padding: 5px 8px;
+  flex-shrink: 0;
+}
+
+.markdown-editor {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  padding: 12px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--viewer-font-family, monospace);
+  font-size: var(--viewer-font-size, 12px);
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+.markdown-editor[hidden],
+.markdown-scroll[hidden],
+.markdown-toolbar button[hidden] {
+  display: none;
 }

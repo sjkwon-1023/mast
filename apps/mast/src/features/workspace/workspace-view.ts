@@ -86,7 +86,7 @@ export type FocusRequest =
   | { kind: "pane"; pane: PaneId }
   /** 렌더 시점의 활성 워크스페이스 activePane — CloseTab/ClosePane 처럼 "닫힌 뒤
    *  어디가 남는지"를 스냅샷이 알려줘야 하는 보상에 쓴다. */
-  | { kind: "activePane" };
+  | { kind: "activePane"; after?: Extract<Command, { type: "closeTab" | "closePane" | "closeWorkspace" | "switchWorkspace" }> };
 
 /** 상태 라인 접근 계약 (17단계) — 구현·소유자는 main.App 이다. 지속 프롬프트
  *  (setPrompt)는 one-shot 에러(flashError)와 별개 슬롯이다: send-mode 활성 동안
@@ -423,12 +423,9 @@ export class WorkspaceView {
     // rendersLeft 3: 명령 결과 스냅샷보다 앞선 무관 이벤트 렌더가 1~2개 끼어도
     // 보상이 살아남고, 정말 stale 한 요청(대상 탭이 닫힘)은 몇 렌더 안에 폐기된다.
     this.pendingFocus = { req, rendersLeft: 3 };
-    // activePane 류는 즉시 해소하지 않는다 (리뷰 finding) — invoke 응답이 명령의
-    // 스냅샷보다 먼저 처리되는 순서에서는 lastSnapshot 이 아직 명령 이전 상태라,
-    // 전환 전 워크스페이스의 activePane 을 focus 하고 보상을 소진해 버린다.
-    // 대상이 명시된 tab/pane 류만 즉시 시도한다 (그 대상은 stale 스냅샷에서도
-    // 동일 객체다).
-    if (req.kind !== "activePane") this.tryResolveFocus(false);
+    // 명령의 결과가 스냅샷에 반영됐는지 확인할 수 있으면 즉시 시도한다.
+    // 응답보다 렌더가 먼저 끝난 경우 다음 렌더가 없어도 포커스를 복원한다.
+    if (req.kind !== "activePane" || req.after !== undefined) this.tryResolveFocus(false);
   }
 
   /** 현재 렌더된 pane 들의 화면 기하 (20단계) — 키보드 pane 이동(Ctrl+Shift+방향키)의
@@ -456,6 +453,7 @@ export class WorkspaceView {
       this.pendingFocus = null;
       return;
     }
+    if (pending.req.kind === "activePane" && pending.req.after !== undefined) return;
     if (atRender && --pending.rendersLeft <= 0) this.pendingFocus = null;
   }
 
@@ -467,6 +465,13 @@ export class WorkspaceView {
    *  중간 상태는 planViewSync 의 dispose 가 닫는다 (view-reconcile 상단). */
   private focusTarget(req: FocusRequest): TerminalView | ViewerView | null {
     if (req.kind === "activePane") {
+      const state = this.lastSnapshot?.state;
+      if (!state) return null;
+      const after = req.after;
+      if (after?.type === "switchWorkspace" && state.activeWorkspace !== after.workspace) return null;
+      if (after?.type === "closeWorkspace" && state.workspaces.some((ws) => ws.id === after.workspace)) return null;
+      if (after?.type === "closePane" && state.workspaces.some((ws) => ws.panes[String(after.pane)])) return null;
+      if (after?.type === "closeTab" && state.workspaces.some((ws) => Object.values(ws.panes).some((pane) => pane.tabs.some((tab) => tab.id === after.tab)))) return null;
       const ws = this.lastSnapshot === null ? null : activeWorkspace(this.lastSnapshot);
       if (ws === null) return null;
       return this.focusTarget({ kind: "pane", pane: ws.activePane });

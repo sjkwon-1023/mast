@@ -15,7 +15,7 @@
 // | 키 | 동작 | 가로채는 곳 |
 // |---|---|---|
 // | `Ctrl+1`~`9` / `Alt+1`~`9` | 워크스페이스 전환 (사이드바 순서 1-based) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
-// | `Ctrl+Shift+↑` `Ctrl+Shift+↓` `Ctrl+Shift+←` `Ctrl+Shift+→` | pane 포커스 이동 (기하학적 인접) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
+// | `Ctrl/Alt+Shift+↑/↓/←/→` | pane 포커스 이동 (기하학적 인접) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 활성 pane 의 탭 순환 (다음/이전, 끝에서 순환) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+Shift+W` / `Alt+Shift+W` | 활성 pane 의 활성 탭 닫기 (뷰어 탭 포함) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+Shift+T` / `Alt+Shift+T` | 활성 pane 에 새 터미널 탭 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
@@ -62,8 +62,8 @@
 // 이 표와 CTRL_SHIFT_KEYS 를 함께 고치면 된다 (판정·표시 단일 소스).
 //
 // shift 규약: shift 를 받는 조합은 `Ctrl+Shift+Tab` · 위에 명시한 문자 조합 ·
-// pane 이동의 `Ctrl+Shift+방향키` · 확대 키의 `+`(US 배열에서 `Shift+=` 로 오는 문자)뿐이다.
-// `Ctrl+Shift+1`·`Alt+Shift+←` 같은 변형은 판정 대상이 아니다(null) —
+// pane 이동의 `Ctrl/Alt+Shift+방향키` · 확대 키의 `+`(US 배열에서 `Shift+=` 로 오는 문자)뿐이다.
+// `Ctrl+Shift+1` 같은 변형은 판정 대상이 아니다(null) —
 // shift 는 레이아웃에 따라 다른 문자를 만들 수 있어 보수적으로 목록에 명시된
 // 조합만 가로챈다. `[`·`]` 는 그 예외를 정면으로 만나는 자리라 표기 문자와
 // **shift 결과 문자**(`{`·`}`)를 둘 다 매칭한다 (아래 CTRL_SHIFT_KEYS 참조).
@@ -232,7 +232,7 @@ export function keyAction(spec: KeySpec): KeyAction | null {
   }
   if ((spec.ctrl !== spec.alt) && spec.shift) {
     const dir = ARROW_DIRS[spec.key];
-    if (spec.ctrl && dir !== undefined) return { type: "focusPane", dir };
+    if (dir !== undefined) return { type: "focusPane", dir };
     // Shift 가 눌린 keydown 의 key 는 대문자라 소문자로 접어 비교한다. 표에 없는
     // 조합(`Ctrl+Shift+C`/`V` 복사·붙여넣기, `Ctrl+Shift+R` 리로드)은 여기서
     // 걸리지 않고 각자의 소유자에게 그대로 흘러간다.

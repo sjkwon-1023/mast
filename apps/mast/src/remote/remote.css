@@ -43,6 +43,29 @@ body {
   /* 높이는 main.ts 가 보이는 뷰포트에 맞춰 덮어쓴다. */
   height: 100%;
   overflow: hidden;
+  /* 연결 대상 표시 줄이 있으면 화면이 남은 높이를 나눠 쓴다. */
+  display: flex;
+  flex-direction: column;
+}
+
+.destination {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  overflow: hidden;
+  color: var(--fg-muted);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+/* flex 자식은 min-height: 0 이 없으면 내용 높이 아래로 줄지 않는다 — 그러면
+   .destination 이 붙었을 때 화면 아래(입력칸)가 뷰포트 밖으로 밀린다. */
+#app > .screen {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .screen {
@@ -92,6 +115,44 @@ body {
   color: var(--danger);
   background: #2d2323;
   font-size: 13px;
+}
+
+/* 배달이 불확실한 입력의 경고 — "보내지 않았다"(빨강)와 색으로도 갈라 둔다.
+   두 경우에 사용자가 할 일이 다르기 때문이다: 하나는 다시 보내면 되지만,
+   다른 하나는 화면을 먼저 확인해야 한다. */
+.notice-warn {
+  color: #e5c07b;
+  background: #2d2a23;
+}
+
+/* 연결이 끊긴 뒤 입력칸으로 돌아가지 못한 원문의 자리. 읽기 전용 textarea 라
+   폰에서도 선택·복사할 수 있다 — 저장소에는 아무것도 남기지 않는다. */
+.recovery {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  background: #2b2b23;
+  border-bottom: 1px solid var(--border);
+}
+
+.recovery-label {
+  margin-bottom: 4px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.recovery-text {
+  display: block;
+  width: 100%;
+  max-height: 20vh;
+  margin-top: 4px;
+  padding: 6px 8px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 14px;
+  resize: none;
 }
 
 .list {

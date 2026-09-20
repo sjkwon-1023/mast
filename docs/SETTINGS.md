@@ -139,9 +139,11 @@ across a restart, a rename and changes to the tab strip, so an address stays val
 `false` are the only values; JSON `null` counts as unset, as it does for the other keys, and any
 other type is an error. Read once at boot.
 
-## `remote`
+## `remote` (Local HTTP)
 
-Lets a phone on the same Wi-Fi read a tab and send it input.
+Lets a phone on the same Wi-Fi read a tab and send it input. **This key controls the Local HTTP
+mode only**; the separate Secure Remote mode has no setting and is described in its own section
+below.
 
 ```json
 "remote": { "port": 7331 }
@@ -156,20 +158,81 @@ is **1024 to 65535**.
 
 Changing this takes a restart, like `log`.
 
-Pair a phone from the sidebar's *Pair phone* QR. The pairing token arrives in the URL fragment
-and is kept in the phone browser's local storage, so a new browser — or a cleared one — needs
-a fresh QR. The same dialog says whether Windows Firewall lets this exe receive on the port —
-the allow rule is bound to the exe's path, so a moved or renamed exe loses it — and offers to
-write the rule behind one UAC prompt; it never opens the port on a public network.
+Pair a phone from the sidebar's *Pair phone* QR, choosing **Local HTTP**. The pairing token
+arrives in the URL fragment and is kept in the phone browser's local storage, so a new browser —
+or a cleared one — needs a fresh QR. The same dialog says whether Windows Firewall lets this exe
+receive on the port — the allow rule is bound to the exe's path, so a moved or renamed exe loses
+it — and offers to write the rule behind one UAC prompt; it never opens the port on a public
+network.
 
 This is **plain HTTP on your own LAN**, off by default, and deliberately not hardened for a
 hostile network. The accepted limits are recorded in
 [ADR-0016](./adr/0016-remote-surface-over-lan.md).
 
+## Secure Remote
+
+A second phone mode, always available from *Pair phone* → **Secure Remote**. It needs no
+`settings.json` key and no restart: nothing exists until you select it, and everything is torn
+down when the pairing or its connection ends.
+
+- **Lifetime.** Selecting it creates a new self-signed certificate in memory, binds **UDP 7331**,
+  and shows a QR. Unscanned, the QR waits up to two minutes; closing the dialog with no
+  authenticated phone closes the listener immediately. Exactly **one** phone can be connected.
+  When that connection ends (the phone closes the page, the network drops, or 30 seconds pass
+  without a request or heartbeat), the endpoint, the TLS state and the private key are released,
+  and the next pairing gets a new token and a new QR. The dialog polls the pairing every two
+  seconds: once the phone connects — or the pairing expires, fails or ends — the QR and URL are
+  removed from the screen, so a dead QR is never left on display.
+- **How it connects.** The phone opens the public HTTPS page at
+  `https://sjkwon-1023.github.io/mast/`, reads the IPv4 address, port and one-time token from the
+  QR's URL fragment, and opens WebTransport to this PC's UDP port; it shows the `host:port` it
+  is opening and keeps that line visible afterwards, so a QR naming another machine is visible
+  before any input goes anywhere. The QR's SHA-256 fingerprint pins the pairing certificate for
+  that connection only — it is **not** added to the browser's trust store. The page removes the
+  fragment from the address bar as soon as it loads. The page's origin is public and shared by
+  every GitHub Pages site on that account; it narrows what a browser lets the page reach, but
+  the one-time token — not the origin — is what authorizes this connection.
+- **Nothing is stored on the phone.** The token and fingerprint live in page memory only — not in
+  local storage, session storage, cookies or IndexedDB — so reloading the page does not
+  reconnect: scan a fresh QR from mast. Reopening the dialog also discards the old QR.
+- **Browsers.** Recent Chrome or Edge are the initial phone test targets, but no real-phone
+  browser has yet been verified. A browser without `WebTransport` shows an explicit error. A
+  browser that has `WebTransport` but does not know `serverCertificateHashes` does not fail when
+  the connection is constructed — unknown options are ignored silently — so the failure appears
+  later at the TLS step as a plain connection error; there is no separate "cannot pin" message.
+  The browser may ask for permission to access your local network; allow it for the page.
+- **Firewall.** The listener is UDP 7331, independent of Local HTTP's TCP port (the two can run
+  side by side, and the app's fixed secure port does not silently fall back to another one). The
+  dialog shows whether Windows Firewall currently allows this exe on UDP 7331 and offers
+  **Allow in Windows Firewall**, which writes a rule named `mast secure remote (LAN)` — UDP only,
+  `domain,private` profiles only — behind one UAC prompt. The prompt appears only when you press
+  that button; opening the dialog or creating a QR never elevates. A port conflict with another
+  program is reported as an explicit failure.
+- **Reach.** Each QR carries this PC's **LAN IPv4 address**, so pairing as generated works on
+  the same network, and mast opens no path of its own beyond it — no cloud relay, no automatic
+  VPN or port forwarding. Reaching this PC from outside the network requires a separate path
+  you set up yourself — VPN, Tailscale or port forwarding — and mast neither creates nor
+  configures one.
+- **Failures.** A tampered or stale certificate fingerprint makes the browser refuse the
+  connection at the TLS step; a wrong token is rejected as *Not authorized*; a second phone is
+  told another phone is connected; a cancelled or already-finished pairing tells the page to
+  scan a new QR. Unauthenticated connections are capped at four at a time (two from one address), a
+  stalled rejection is cut after two seconds, the whole authentication step shares a ten-second
+  deadline, a frame or input write that stalls for fifteen seconds is refused, and the phone
+  times a request out after twenty seconds. More than ten failures from one address within a
+  minute blocks that address for a minute. If the phone cannot connect at all, check the UDP
+  firewall state in the dialog, confirm both devices are on the same Wi-Fi, and allow the
+  local-network permission prompt.
+
+Secure Remote does not change Local HTTP: its token file, `remote` setting and TCP firewall rule
+stay as they were. Decisions and limits are recorded in
+[ADR-0028](./adr/0028-secure-remote-webtransport.md); the Windows field checklist is
+`WINDOWS-BUILD.md` §17.
+
 ## What else lives in `%AppData%\app.mast.desktop\`
 
 `settings.json` shares its folder with the files mast writes for itself: `state.json` (the
-workspace layout), `mast.log` and `toast.log`, the remote pairing token — and `records\`.
+workspace layout), `mast.log` and `toast.log`, the Local HTTP pairing token — and `records\`.
 
 `records\tab-<id>.bin` is **the last screen of a terminal tab whose shell has exited**, held so
 the tab can still be read after a restart instead of coming back empty

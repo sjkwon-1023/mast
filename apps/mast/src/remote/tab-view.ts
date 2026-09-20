@@ -13,8 +13,6 @@
 
 import { Terminal } from "@xterm/headless";
 
-import { fetchScreen, HttpError, postInput, postResize } from "./api";
-import type { ScreenReply } from "./api";
 import { ENTER_DELAY_MS, InputQueue } from "./input-queue";
 import type { InputItem } from "./input-queue";
 import { measureMobileSize } from "./mobile-size";
@@ -39,10 +37,11 @@ import {
   trimTrailingBlank,
 } from "./screen-text";
 import type { ScreenRow } from "./screen-text";
+import { isInputWriteTimedOut, RemoteError, TransportClosedError } from "./transport";
+import type { FontPxStore, RemoteTransport, ScreenReply } from "./transport";
 import type { TabId } from "../shared/types";
 
 const POLL_INTERVAL_MS = 2000;
-const FONT_KEY = "mast.remoteFontPx";
 /** 이 거리 안이면 "맨 아래를 보고 있다" — 새 출력이 오면 따라 내려간다. */
 const STICK_TO_BOTTOM_PX = 24;
 /** ▲/▼ 한 번이 보내는 휠 노치 수. TUI 는 대개 노치당 몇 줄씩 움직이므로 다섯이면
@@ -53,6 +52,10 @@ export interface TabViewOptions {
   tab: TabId;
   title: string;
   onBack: () => void;
+  /** 화면·입력 네트워크 — Local HTTP 와 Secure Remote 가 각자의 구현을 넣는다. */
+  transport: RemoteTransport;
+  /** 글자 크기 기억. 없으면 이 화면이 살아 있는 동안만 기억한다 (Secure Remote). */
+  fontPx?: FontPxStore;
 }
 
 export class TabView {
@@ -61,6 +64,10 @@ export class TabView {
   private readonly preEl: HTMLPreElement;
   private readonly scrollKeysEl: HTMLDivElement;
   private readonly noticeEl: HTMLDivElement;
+  /** 입력칸에 넣지 못한 원문을 보이는 자리 — 연결이 끊긴 뒤에는 입력칸이
+   *  비활성이라 `input` 이벤트가 다시 오지 않으므로, 여기 없으면 원문은
+   *  사용자에게서 사라진다. */
+  private readonly recoveryEl: HTMLDivElement;
   private readonly textEl: HTMLTextAreaElement;
   private readonly mobileBtn: HTMLButtonElement;
   private readonly desktopBtn: HTMLButtonElement;
@@ -104,6 +111,13 @@ export class TabView {
   };
 
   private term: Terminal | null = null;
+  /** 연결 종료·dispose 뒤에는 true. `PollSchedule.stop()` 은 세대를 올리지 않으므로
+   *  이것이 없으면 이미 나간 screen 응답과 그 write 콜백이 종료 안내를 지우거나
+   *  입력을 다시 켤 수 있다 — 종료는 한 방향이어야 한다. */
+  private closed = false;
+  /** `dispose()` 로 화면 자체가 사라졌나. `closed` 는 transport 종료에도 서는데,
+   *  그때와 달리 사용자가 떠난 뒤에는 남겨 둘 화면이 없다. */
+  private disposed = false;
   private state = { ...INITIAL_VIEW_STATE };
   /** `term.write` 콜백이 돌았나 — 입력 컨트롤의 활성 조건이다. 프로토콜
    *  단계(`state.phase`)와 다르다: 단계는 응답이 오는 즉시 넘어가야 다음
@@ -113,12 +127,22 @@ export class TabView {
    *  되돌린다. 폰에서 손으로 친 것이라 실패 한 번에 사라지면 다시 칠 수밖에
    *  없다. 인코딩된 `data` 를 되돌릴 수는 없다 (브래킷 시퀀스가 딸려 온다). */
   private pendingPaste: { item: InputItem; text: string } | null = null;
+  /** 전송에 실패했지만 입력칸이 비어 있지 않아 곧바로 되돌리지 못한 원문.
+   *  사용자가 새로 치는 중인 텍스트를 덮어쓰지 않으면서도 실패 원문을 잃지
+   *  않으려고, 입력칸이 비는 순간 되돌린다. */
+  private failedPasteText: string | null = null;
+  /** 배달 불확실 경고가 떠 있나 — 성공한 화면 폴은 2초마다 오므로, 그때마다
+   *  이 경고를 지우면 사용자가 읽고 판단할 시간이 없다. 사용자가 직접 다시
+   *  보내거나 새로고침할 때, 또는 더 강한 오류가 덮을 때만 사라진다. */
+  private stickyNotice = false;
   /** 이 인스턴스가 `ESC[?1006h` 를 봤나. `term.modes` 는 추적 **모드**만 알려 주고
    *  리포트 **인코딩**은 알려 주지 않아서, 파서를 직접 들여다보는 수밖에 없다. */
   private sgrMouse = false;
-  private fontPx = loadFontPx();
+  private fontPx: number;
+  private readonly unsubscribeClosed: (() => void) | null;
 
   constructor(private readonly options: TabViewOptions) {
+    this.fontPx = clampFontPx(options.fontPx?.load() ?? DEFAULT_FONT_PX);
     this.root = document.createElement("div");
     this.root.className = "screen tab-screen";
 
@@ -141,6 +165,16 @@ export class TabView {
     this.noticeEl = document.createElement("div");
     this.noticeEl.className = "notice";
     this.noticeEl.hidden = true;
+
+    this.recoveryEl = document.createElement("div");
+    this.recoveryEl.className = "recovery";
+    this.recoveryEl.hidden = true;
+    const recoveryLabel = document.createElement("div");
+    recoveryLabel.className = "recovery-label";
+    // "보내지 않았다"라고 단정하지 않는다 — 연결 종료로 실패한 입력도 서버에는
+    // 이미 닿았을 수 있다 (입력칸에서 밀려난 원문을 보여 주는 자리일 뿐이다).
+    recoveryLabel.textContent = "Unsaved draft — copy it before leaving:";
+    this.recoveryEl.append(recoveryLabel);
 
     this.outputEl = document.createElement("div");
     this.outputEl.className = "screen-text";
@@ -168,6 +202,7 @@ export class TabView {
     this.textEl.placeholder = "Text to send (empty = Enter)";
     this.textEl.autocapitalize = "off";
     this.textEl.spellcheck = false;
+    this.textEl.addEventListener("input", () => this.restoreFailedTextIfEmpty());
     const send = this.actionButton("Send", "composer-send", () => this.send());
     composer.append(this.textEl, send);
 
@@ -202,9 +237,10 @@ export class TabView {
 
     const dock = document.createElement("div");
     dock.className = "dock";
-    dock.append(modeRow, composer, keys);
+    if (this.options.transport.postResize) dock.append(modeRow);
+    dock.append(composer, keys);
 
-    this.root.append(header, this.noticeEl, screenArea, dock);
+    this.root.append(header, this.noticeEl, this.recoveryEl, screenArea, dock);
     this.setInputEnabled(false);
     this.paintSizeMode(this.state.sizeOwner);
     window.addEventListener("pagehide", this.onPageHide);
@@ -226,11 +262,15 @@ export class TabView {
       onError: (error, item) => this.reportInputError(error, item),
       onIdle: () => {
         this.pendingPaste = null;
+        // 늦은 성공도 종료를 되돌리지 못한다.
+        if (this.closed) return;
         // 방금 보낸 것이 화면에 나타나기까지 폴 간격(2초)을 기다릴 이유가 없다 —
         // 스크롤 버튼은 누른 만큼 화면이 움직여야 다음을 누를지 판단할 수 있다.
         this.schedule.pollNow();
       },
     });
+    this.unsubscribeClosed =
+      options.transport.onClosed?.((message) => this.handleTransportClosed(message)) ?? null;
   }
 
   start(): void {
@@ -252,9 +292,33 @@ export class TabView {
     this.releaseSizeOnLeave();
     window.removeEventListener("pagehide", this.onPageHide);
     window.removeEventListener("pageshow", this.onPageShow);
+    this.disposed = true;
+    this.closed = true;
+    this.unsubscribeClosed?.();
     this.schedule.stop();
     this.queue.clear();
     this.destroyTerminal();
+  }
+
+  /** transport 가 끝났다 — 폴링·입력을 멈추고 안내만 남긴다 (자동 재연결 없음).
+   *  `closed` 를 세우므로 뒤늦게 정착하는 어떤 콜백도 이 상태를 되돌리지 못한다. */
+  private handleTransportClosed(message: string): void {
+    this.closed = true;
+    this.schedule.stop();
+    this.setInputEnabled(false);
+    // 비활성 입력칸의 글자는 폰에서 선택·복사가 되지 않는다 — 입력칸을 비우고
+    // 남아 있는 초안을 전부 읽기 전용 복구 상자로 옮긴다. 대상은 둘: 입력칸에
+    // 남은 새 초안과, 입력칸이 비기를 기다리던 실패 원문(더 오래된 것). 아직
+    // 비행 중인 Send 의 원문은 나중에 도착하는 거절이 그 뒤에 덧붙인다
+    // (`reportInputError` 의 closed 경로). 두 번째 종료 알림은 옮길 것이 없어
+    // 아무것도 복제하지 않는다 — 입력칸은 이미 비었고 보관분도 비었다.
+    const newer = this.textEl.value;
+    const waiting = this.failedPasteText;
+    this.failedPasteText = null;
+    this.textEl.value = "";
+    if (newer !== "") this.keepDraft(newer);
+    if (waiting !== null) this.keepDraft(waiting);
+    this.setNotice(message);
   }
 
   /** 버튼을 눌러도 입력칸의 포커스를 뺏지 않는다 — 폰에서는 포커스가 옮겨 가는 순간
@@ -298,7 +362,7 @@ export class TabView {
 
   private adjustFont(delta: number): void {
     this.fontPx = clampFontPx(this.fontPx + delta);
-    saveFontPx(this.fontPx);
+    this.options.fontPx?.save(this.fontPx);
     this.applyFont();
   }
 
@@ -306,9 +370,20 @@ export class TabView {
     this.preEl.style.fontSize = `${this.fontPx}px`;
   }
 
-  private setNotice(text: string | null): void {
+  /** `tone: "warn"` 은 배달 불확실 경고다 — 화면 폴 성공의 `setNotice(null)` 이
+   *  이 경고만은 지우지 못한다. 다른 안내는 예전처럼 다음 성공 폴이 지운다. */
+  private setNotice(text: string | null, tone: "error" | "warn" = "error"): void {
+    if (text === null && this.stickyNotice) return;
     this.noticeEl.textContent = text ?? "";
     this.noticeEl.hidden = text === null;
+    this.noticeEl.classList.toggle("notice-warn", text !== null && tone === "warn");
+    this.stickyNotice = text !== null && tone === "warn";
+  }
+
+  /** 사용자가 직접 움직였다(새 Send·↻) — 남아 있는 안내를 지운다. */
+  private dismissNotice(): void {
+    this.stickyNotice = false;
+    this.setNotice(null);
   }
 
   private setInputEnabled(enabled: boolean): void {
@@ -351,10 +426,10 @@ export class TabView {
     session: string,
     size?: { cols: number; rows: number },
   ): Promise<void> {
-    if (this.sizeBusy) return;
+    if (this.closed || this.sizeBusy || !this.options.transport.postResize) return;
     this.sizeBusy = true;
     try {
-      const reply = await postResize(this.options.tab, session, mode, size);
+      const reply = await this.options.transport.postResize!(this.options.tab, session, mode, size);
       // 응답이 오는 사이 화면이 다른 셸로 갈렸다면(탭 Restart) 이 응답은 옛 셸의
       // 것이다 — 새 화면의 소유자도 해제 좌표도 이 응답으로 정하지 않는다.
       const stale = this.knownSession !== null && this.knownSession !== session;
@@ -403,13 +478,13 @@ export class TabView {
    *  좌표를 지우므로, 실패한 해제는 다음 이탈·다음 폴에서 다시 시도된다. */
   private releaseSizeOnLeave(): void {
     const session = this.releaseSession;
-    if (session === null) return;
+    if (session === null || !this.options.transport.postResize) return;
     // 보낼 때의 세대를 캡처한다 — 응답이 도착했을 때 세대가 그대로이고 좌표도
     // 같은 세션이어야 이 해제가 지금 좌표를 지울 자격이 있다. bfcache 복원 뒤
     // 같은 세션으로 다시 주장했다면 세대가 달라, 늦은 해제 응답이 새 주장의
     // 좌표를 지우지 않는다 (지우면 다음 이탈이 데스크톱으로 못 되돌린다).
     const epoch = this.releaseEpoch;
-    void postResize(this.options.tab, session, "desktop", undefined, { keepalive: true })
+    void this.options.transport.postResize!(this.options.tab, session, "desktop", undefined, { keepalive: true })
       .then((reply) => {
         if (
           reply.owner === "desktop" &&
@@ -432,13 +507,17 @@ export class TabView {
     // 응답이 그 뒤에 도착해도 그 응답의 소유자는 이미 옛 값이다 (apply).
     const ownerEpoch = this.ownerEpoch;
     try {
-      const reply = await fetchScreen(this.options.tab, screenQuery(this.state));
-      // 늦게 도착한 이전 세대의 응답은 지금 화면과 무관하다.
-      if (!this.schedule.isCurrent(generation)) return;
+      const reply = await this.options.transport.fetchScreen(
+        this.options.tab,
+        screenQuery(this.state),
+      );
+      // 늦게 도착한 이전 세대의 응답은 지금 화면과 무관하다. 종료 뒤에 정착한
+      // 응답도 마찬가지다 — `stop()` 은 세대를 올리지 않는다.
+      if (this.closed || !this.schedule.isCurrent(generation)) return;
       this.apply(reply, ownerEpoch);
       this.setNotice(null);
     } catch (error) {
-      if (!this.schedule.isCurrent(generation)) return;
+      if (this.closed || !this.schedule.isCurrent(generation)) return;
       this.handleScreenError(error);
     }
   }
@@ -509,7 +588,9 @@ export class TabView {
     if (term === null) return;
     const generation = this.schedule.generation;
     term.write(bytes, () => {
-      if (!this.schedule.isCurrent(generation) || this.term !== term) return;
+      // 이 콜백은 macrotask 로 미뤄질 수 있다(WriteBuffer) — 그 사이 종료가 왔다면
+      // render 도, 입력 활성화도 종료 상태를 되돌리지 못하게 한다.
+      if (this.closed || !this.schedule.isCurrent(generation) || this.term !== term) return;
       // 이 콜백은 xterm 의 write 루프 안에서 돈다. 여기서 던지면 루프가 그 항목을
       // 넘기지 못한 채 멈추고 이후의 write 는 영영 처리되지 않는다 — 안내문도 없이
       // 검은 화면만 남는다. 실패는 안내문으로 드러내고 루프는 살려 둔다.
@@ -598,7 +679,18 @@ export class TabView {
   private send(): void {
     const text = this.textEl.value;
     if (text === "") {
-      this.enqueue([{ type: "key", key: "enter" }]);
+      if (this.enqueue([{ type: "key", key: "enter" }]).length === 0) return;
+      // 빈 입력칸의 Send(Enter)도 사용자의 결정이다 — 경고를 치운다.
+      this.dismissNotice();
+      return;
+    }
+    // 앞선 Send 가 아직 in-flight 인데 새 초안을 큐에 넣으면 `pendingPaste` 가 이
+    // 초안으로 덮어써지고, 앞 요청이 실패하는 순간 큐가 뒤 항목을 버려서 두 원문
+    // 중 어느 것도 `reportInputError` 의 item 비교에 걸리지 않는다 — 둘 다 사라진다.
+    // 입력칸을 비우지 않고 기다리라고 알린다: 앞 요청이 정착하면 같은 Send 가 그대로
+    // 동작한다 (성공이면 방금 그 초안이, 실패면 원문 복구 뒤 초안이 남는다).
+    if (this.queue.busy) {
+      this.setNotice("Still sending the previous input — wait a moment, then press Send again.");
       return;
     }
     const items = this.enqueue([
@@ -606,8 +698,15 @@ export class TabView {
       { type: "key", key: "enter" },
     ]);
     if (items.length === 0) return;
+    // 다시 보내는 것은 사용자의 결정이다 — 배달 불확실 경고는 여기서 사라진다.
+    // 이 Send 가 곧바로 같은 타임아웃으로 실패하면 경고는 다시 뜬다.
+    this.dismissNotice();
     this.pendingPaste = { item: items[0], text };
     this.textEl.value = "";
+    // 프로그램이 값을 비우면 DOM `input` 이벤트가 오지 않는다 — 보관해 둔 실패
+    // 원문이 있다면 여기서 직접 되돌려야 한다. 아니면 이 Send 가 성공했을 때
+    // 그 원문은 입력칸이 다시 빌 때까지 영영 보이지 않는다.
+    this.restoreFailedTextIfEmpty();
   }
 
   /** 입력 컨트롤이 아직 비활성이면 빈 배열. 두 번째 이후 항목의 지연이 CR 을
@@ -626,7 +725,7 @@ export class TabView {
   private async sendOne(data: string): Promise<void> {
     const session = this.state.session;
     if (session === null) throw new Error("no session for this tab");
-    await postInput(this.options.tab, session, data);
+    await this.options.transport.postInput(this.options.tab, session, data);
   }
 
   /** 이미 아무것도 없으면 건드리지 않는다 — 실패가 2초마다 반복되는 동안
@@ -644,36 +743,69 @@ export class TabView {
 
   /** 데스크톱 Ctrl+Shift+R(WebView 리로드) 에 대응하는 폰 쪽 동작 — 페이지는
    *  그대로 두고 클라이언트만 다시 동기화한다. `controls` 밖에 있어 화면이
-   *  검거나 오류 notice 상태(입력 비활성)에서도 눌린다. */
+   *  검거나 오류 notice 상태(입력 비활성)에서도 눌린다. 종료 뒤에는 누를 것이
+   *  없다 — 종료 안내를 지우지 않도록 아무 일도 하지 않는다. */
   private refresh(): void {
-    this.setNotice(null);
-    // ↻ 는 화면만 다시 맞춘다 — 서버가 아직 폰을 소유자로 알고 있으면 그 좌표를
-    // 남겨야 새 화면 응답 전에 떠나도 해제가 나간다.
+    if (this.closed) return;
+    // 사용자가 직접 다시 동기화를 골랐다 — 배달 불확실 경고도 여기서 치운다.
+    this.dismissNotice();
     this.resetToFull(true);
     this.schedule.pollNow();
   }
 
+  /** 실패한 Send 원문을 잃지 않게 되돌린다. 입력칸이 비어 있으면 그 자리에,
+   *  사용자가 새로 치는 중이면(덮어쓰면 안 된다) 보관해 두었다가 입력칸이 비는
+   *  순간 되돌린다 — 어느 쪽이든 사용자가 친 텍스트는 그대로 남는다. */
+  private restoreFailedTextIfEmpty(): void {
+    if (this.failedPasteText === null || this.textEl.value !== "") return;
+    this.textEl.value = this.failedPasteText;
+    this.failedPasteText = null;
+  }
+
   private reportInputError(error: unknown, item: InputItem): void {
-    // 실패한 것이 Send 의 텍스트였다면 원문을 입력칸에 되돌린다 — 그 사이
-    // 사용자가 다른 것을 치고 있으면 덮어쓰지 않는다.
+    // 실패한 것이 Send 의 텍스트였다면 원문을 잃지 않게 한다 — 새 입력은
+    // 아래 규칙대로 건드리지 않는다.
     const pending = this.pendingPaste;
     this.pendingPaste = null;
-    if (pending !== null && pending.item === item && this.textEl.value === "") {
-      this.textEl.value = pending.text;
+    const failedText = pending !== null && pending.item === item ? pending.text : null;
+
+    // 종료 뒤 늦게 도착한 실패는 종료 안내를 덮지 않는다. 원문은 복구 영역에
+    // 남긴다 — 입력칸은 이미 비활성이고 `input` 이벤트도 다시 오지 않아,
+    // 보관만 해 두면 사용자에게서 사라진다.
+    if (this.closed) {
+      if (failedText !== null) this.keepDraft(failedText);
+      return;
     }
-    if (error instanceof HttpError) {
+    if (error instanceof TransportClosedError) {
+      // 곧 비활성이 될 입력칸 대신 복구 영역으로 보낸다 — 비활성 입력칸의
+      // 글자는 폰에서 선택·복사가 되지 않는다.
+      if (failedText !== null) this.keepDraft(failedText);
+      this.handleTransportClosed(error.message);
+      return;
+    }
+    if (failedText !== null) {
+      if (this.textEl.value === "") {
+        this.textEl.value = failedText;
+      } else {
+        this.failedPasteText = failedText;
+      }
+    }
+    if (error instanceof RemoteError) {
       this.schedule.noteStatus(error.status);
       // 409 는 이 탭의 셸이 갈렸다는 뜻이다 — 보고 있던 화면이 더는 그 셸이
-      // 아니므로 인스턴스를 접고 다음 폴이 새 스냅샷을 받게 한다.
+      // 아니므로 인스턴스를 접고 다음 폴이 새 스냅샷을 받게 한다. 503(입력 거절)은
+      // 일시적 거절이라 화면을 접지 않는다 — 원문은 위에서 이미 입력칸에 돌아갔다.
       if (error.status === 409) this.resetToFull();
-      this.setNotice(inputErrorText(error.status));
+      // 배달 불확실 경고만 노란 톤으로 — 같은 503 이라도 `input busy`·
+      // `server stopping` 은 "보내지 않았다"이므로 빨간 톤 그대로다.
+      this.setNotice(inputErrorNotice(error), isInputWriteTimedOut(error) ? "warn" : "error");
       return;
     }
     this.setNotice("Could not reach mast — check the connection.");
   }
 
   private handleSizeError(error: unknown): void {
-    if (error instanceof HttpError) {
+    if (error instanceof RemoteError) {
       this.schedule.noteStatus(error.status);
       // 409 는 이 탭의 셸이 갈렸다는 뜻이다 — 화면도 그 셸의 것이 아니므로
       // 입력 실패와 같은 정리(인스턴스 폐기)를 한다.
@@ -684,8 +816,32 @@ export class TabView {
     this.setNotice("Could not resize — check the connection.");
   }
 
+  /** 입력칸에 넣을 수 없는 원문을 화면에 남긴다. 사용자가 화면을 떠난 뒤(dispose)
+   *  에는 남길 곳이 없으므로 아무것도 하지 않는다. */
+  private keepDraft(text: string): void {
+    if (this.disposed) return;
+    this.showRecoveredDraft(text);
+  }
+
+  /** 읽기 전용 textarea 로 남긴다 — 비활성 입력칸과 달리 포커스와 선택이 되어
+   *  폰에서 복사할 수 있다. 어디에도 저장하지 않는다: 입력에는 비밀이 섞일 수
+   *  있고, 이 화면은 떠나는 순간 사라지는 것이 계약이다. */
+  private showRecoveredDraft(text: string): void {
+    const draft = document.createElement("textarea");
+    draft.className = "recovery-text";
+    draft.readOnly = true;
+    draft.rows = 2;
+    draft.value = text;
+    this.recoveryEl.append(draft);
+    this.recoveryEl.hidden = false;
+  }
+
   private handleScreenError(error: unknown): void {
-    if (error instanceof HttpError) {
+    if (error instanceof TransportClosedError) {
+      this.handleTransportClosed(error.message);
+      return;
+    }
+    if (error instanceof RemoteError) {
       this.schedule.noteStatus(error.status);
       // 탭이 사라졌거나 셸이 없다 — 들고 있던 화면은 더는 유효하지 않다.
       if (error.status === 409 || error.status === 404) this.resetToFull();
@@ -695,25 +851,6 @@ export class TabView {
       return;
     }
     this.setNotice("Could not reach mast — retrying.");
-  }
-}
-
-/** localStorage 는 프라이빗 모드·차단 설정에서 접근 자체가 던진다 — 기본 크기로
- *  진행하면 되고 페이지가 죽을 일은 아니다. */
-function loadFontPx(): number {
-  try {
-    const raw = window.localStorage.getItem(FONT_KEY);
-    return raw === null ? DEFAULT_FONT_PX : clampFontPx(Number(raw));
-  } catch {
-    return DEFAULT_FONT_PX;
-  }
-}
-
-function saveFontPx(px: number): void {
-  try {
-    window.localStorage.setItem(FONT_KEY, String(px));
-  } catch {
-    // 저장이 안 되면 이번 세션에만 유효한 크기가 된다 — 조용히 진행한다.
   }
 }
 
@@ -732,6 +869,17 @@ function screenErrorText(status: number): string {
   }
 }
 
+/** 입력 실패 문구. `503 input write timed out` 만 "보냈는지 모른다"로 갈라진다 —
+ *  서버는 그 쓰기를 취소하지 않고 나중에 PTY 에 전달할 수 있는데, 다른 503 처럼
+ *  "보내지지 않았다"고 안내하면 사용자가 곧바로 다시 보내 같은 입력이 두 번 들어간다.
+ *  자동 재전송은 어느 경우에도 없다 — 원문은 입력칸(또는 복구 영역)에 남을 뿐이다. */
+function inputErrorNotice(error: RemoteError): string {
+  if (isInputWriteTimedOut(error)) {
+    return "Delivery is uncertain — the input may still arrive. Check the terminal before sending again.";
+  }
+  return inputErrorText(error.status);
+}
+
 function inputErrorText(status: number): string {
   switch (status) {
     case 401:
@@ -742,6 +890,10 @@ function inputErrorText(status: number): string {
       return "That text is too long to send.";
     case 429:
       return "Too many requests — try again in a minute.";
+    // 서버의 `input busy`·`server stopping` — 세션 교체(409)와 달리 이번 요청만
+    // 거절된 것이다. 같은 페어링에서 다시 보낼 수 있고, 원문은 입력칸에 돌아와 있다.
+    case 503:
+      return "Input was not sent — mast is still busy. Try again in a moment.";
     default:
       return `Input failed (${status}).`;
   }

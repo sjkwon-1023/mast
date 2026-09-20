@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
+tempfile = "3"
 portable-pty = "0.9"
 # 상태 모델·command bus 직렬화 계약용. 하한 1.0.186 = rename_all_fields 필요 버전.
 serde = { version = "1.0.186", features = ["derive"] }
@@ -22,10 +23,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Pipes",
     "Win32_System_Threading",
 ] }
-
-[dev-dependencies]
-# persist 테스트의 임시 디렉터리용
-tempfile = "3"
 
 # Windows ConPTY soak 테스트(`tests/soak_windows.rs`)의 프로세스 리소스 측정 전용.
 # 버전·feature 이름은 `apps/mast/src-tauri` 가 이미 쓰는 것과 같아 그래프에 크레이트가

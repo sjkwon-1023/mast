@@ -1,5 +1,9 @@
 // 워크스페이스 사이드바 — 카드 리스트 + 하단 버튼
-// ("+ New workspace", 그리고 원격 표면이 떠 있을 때만 보이는 "Pair phone").
+// ("+ New workspace", 그리고 페어링 다이얼로그를 여는 "Pair phone").
+//
+// "Pair phone" 은 **설정·부팅 성공 여부와 무관하게 항상 보인다**: Local HTTP 가
+// 꺼져 있어도 Secure Remote 로 페어링할 수 있고, 다이얼로그가 설정 안내를 하므로
+// 버튼을 감추면 기능이 없다는 잘못된 신호만 준다.
 //
 // 렌더 전략 (카드 id 키잉 reconcile): reconcilePlan 의 판정대로
 // skip(무변경, DOM 무접촉) / patch(카드 노드 유지 + 텍스트·클래스만 갱신) /
@@ -25,7 +29,7 @@
 //   Ctrl+Shift+N 으로도 들어오므로 구현을 한곳에 둔다). 이름·경로·배포판을 손으로
 //   치던 인라인 폼은 없앴다 — 경로는 대화상자가, 이름은 폴더명이 정한다.
 // - "Pair phone" = 페어링 다이얼로그 (onPairing 콜백 — app/main.ts 글루 소유).
-//   원격 표면이 실제로 떠 있을 때만 보인다 (setRemoteEnabled).
+//   버튼 표시는 설정·원격 표면 상태와 무관하다 (모듈 상단 주석).
 // - F2 = 활성 카드 이름 인라인 편집 (beginRename — app/main.ts 글루가 부른다).
 //   Enter 확정 = RenameWorkspace dispatch, Esc·blur = 취소.
 //
@@ -133,7 +137,7 @@ export class Sidebar {
      *  Ctrl+Shift+N 과 같은 구현을 탄다). */
     private readonly onNewWorkspace: () => void,
     /** "Pair phone" 버튼 — 페어링 다이얼로그를 여는 것은 main.ts 글루다.
-     *  버튼은 **원격 표면이 실제로 떠 있을 때만** 보인다 (setRemoteEnabled). */
+     *  버튼은 설정·원격 표면 상태와 무관하게 **항상** 보인다. */
     private readonly onPairing: () => void,
     /** 업데이트 릴리스 페이지를 여는 main.ts 글루. */
     private readonly onOpenUpdate: (url: string) => void,
@@ -158,8 +162,7 @@ export class Sidebar {
     this.pairBtn.type = "button";
     this.pairBtn.className = "sidebar-pair";
     this.pairBtn.textContent = "Pair phone";
-    this.pairBtn.title = "Show a QR code that opens this mast on a phone on the same network";
-    this.pairBtn.hidden = true;
+    this.pairBtn.title = "Pair a phone: choose Local HTTP or Secure Remote";
     this.pairBtn.addEventListener("click", () => this.onPairing());
 
     this.versionEl = document.createElement("span");
@@ -190,13 +193,6 @@ export class Sidebar {
     }
     this.updateBtn.hidden = false;
     this.updateBtn.title = `Update available: ${displayVersion(info.newerVersion)}`;
-  }
-
-  /** 원격 표면이 떠 있나 — main.ts 가 부팅 시 remote_status 로 판정해 넘긴다.
-   *  꺼져 있거나 실패했으면 버튼을 아예 감춘다: 누를 수 없는 버튼을 남겨 두면
-   *  그 자체가 기능이 있다는 잘못된 신호다. */
-  setRemoteEnabled(on: boolean): void {
-    this.pairBtn.hidden = !on;
   }
 
   /** 스냅샷 반영 진입점 — store 구독에서 revision 순으로 호출된다. */

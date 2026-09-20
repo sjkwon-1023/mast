@@ -5,8 +5,9 @@
 //! `DropSink` 다 — ack 없이도 세션이 자유 진행하는 성질(코어의
 //! `dropped_sink_keeps_session_free_running`)에 기댄다.
 //!
-//! Windows 타깃 clippy 가 `tests/` 도 린트하므로 이 파일은 **통째로** unix 에 가둔다 —
-//! 함수 단위로 가르면 남는 헬퍼가 dead code 로 잡혀 `-D warnings` 가 빨개진다.
+//! 이 파일은 **통째로** unix 에 가둔다 — 함수 단위로 가르면 남는 헬퍼가 dead code 로
+//! 잡혀 `-D warnings` 가 빨개진다. 그 결과 Windows 타깃 clippy 는 파일 내용을 보지
+//! 못한다. Linux CI 는 테스트를 실행하지만 이 타깃에 clippy 를 돌리지는 않는다.
 #![cfg(unix)]
 
 use std::io::{Read, Write};
@@ -15,9 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use mast_core::command::{
-    Command, CommandOutput, Dispatcher, NewTab, SessionHost, ShellSpawnReq,
-};
+use mast_core::command::{Command, CommandOutput, Dispatcher, NewTab, SessionHost, ShellSpawnReq};
 use mast_core::osc::OscEvent;
 use mast_core::session::{
     Delivery, SessionId, SessionManager, SessionOptions, SessionSink, SpawnSpec,
