@@ -54,21 +54,22 @@ and WSL2.
   and limits each diff to 512 KiB. Git and GNU `timeout` must be installed in that WSL distro.
 - **Phone terminal control (opt-in)** — pair by QR, then read output, scroll a full-screen TUI,
   or send input to an agent CLI or a regular Bash shell. It is not limited to agent prompts.
-  *Pair phone* always offers two working modes and a disabled `Tailscale — Coming later` entry:
+  *Pair phone* always offers two working modes and a disabled `Tailscale — Planned` entry:
   - **Local HTTP** — the original mode, off by default. Turn it on with the `"remote"` key in
     `settings.json`; it serves plain HTTP on your LAN and the pairing token lives in the phone
     browser's local storage. It is not hardened for public internet exposure — keep it on
     your own network.
-  - **Secure Remote** — no setting to enable: the dialog opens a UDP 7331 listener only while it
-    shows the QR (at most two minutes if it is never scanned) and closes it when the single
-    authenticated connection ends or goes quiet for 30 seconds. The phone loads a public HTTPS
-    page from GitHub Pages, shows which `host:port` it is opening, and connects straight to the
-    PC over WebTransport, pinning the SHA-256 fingerprint of the certificate issued for that
-    pairing. The token and fingerprint stay in page memory and are never stored, so reloading
-    requires a fresh QR; the dialog removes the QR and URL once the phone connects or the
-    pairing ends, so a dead QR is never shown as live. Recent Chrome or Edge are the initial
-    phone test targets; a real-device WebTransport connection has not yet been verified. A
-    browser without WebTransport shows an explicit error; one that ignores the
+  - **Secure Remote** — no setting to enable: the dialog opens a UDP 7331 listener while it
+    shows the QR (at most two minutes if it is never scanned). After pairing, one phone can
+    connect at a time until the certificate expires (up to 14 days) or mast exits. The phone
+    loads a public HTTPS page from GitHub Pages, shows which `host:port` it is opening, and
+    connects straight to the PC over WebTransport, pinning the SHA-256 fingerprint of the
+    certificate issued for that pairing. After successful authentication, the phone browser
+    saves the LAN address, token and certificate fingerprint in its local storage until the
+    certificate expires. The page can reconnect after a reload or screen lock while mast keeps
+    running. Closing mast ends the pairing and requires a fresh QR. The dialog removes the QR
+    and URL once the phone connects or the pairing ends, so a dead QR is never shown as live.
+    A browser without WebTransport shows an explicit error; one that ignores the
     certificate-pinning option fails later at TLS with a connection error, never a silent
     fallback to plain HTTP.
 

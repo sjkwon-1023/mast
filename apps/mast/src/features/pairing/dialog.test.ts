@@ -368,7 +368,7 @@ afterEach(() => {
 });
 
 describe("pairing dialog — mode choice", () => {
-  it("shows Local HTTP, Secure Remote and a disabled Tailscale marked Coming later", () => {
+  it("shows Local HTTP, Secure Remote and a disabled Tailscale marked Planned", () => {
     const dialog = open(fakeBackend());
 
     const modes = Array.from(dialog.querySelectorAll<HTMLButtonElement>(".pairing-mode"));
@@ -376,17 +376,15 @@ describe("pairing dialog — mode choice", () => {
     expect(modes[0].disabled).toBe(false);
     expect(modes[1].disabled).toBe(false);
     expect(modes[2].disabled).toBe(true);
-    expect(modes[2].textContent).toContain("Coming later");
+    expect(modes[2].textContent).toContain("Planned. Connect from outside your local network.");
     expect(modes[2].textContent).toContain("Tailscale");
   });
 
-  it("describes Local HTTP as accepting phone input, not read-only", () => {
+  it("limits Local HTTP to trusted networks in its mode description", () => {
     const dialog = open(fakeBackend());
 
-    // 폰 페이지는 remote/api.ts::postInput 으로 입력을 보낸다 — read-only 가 아니다.
     const local = modeButton(dialog, "local").textContent ?? "";
-    expect(local).toContain("input");
-    expect(local.toLowerCase()).not.toContain("read-only");
+    expect(local).toContain("Connect over HTTP. Use on trusted networks only.");
   });
 
   it("describes Secure Remote by its LAN address, not as an absolute internet boundary", () => {
@@ -978,7 +976,7 @@ describe("기억한 모바일 페어링", () => {
       secureRemoteStatus: async () => ({state: "remembered", pairingId: SECURE_ID, reason: null}),
     }));
     await flush();
-    expect(required<HTMLElement>(dialog, ".pairing-notice").textContent).toContain("No phone is connected right now");
+    expect(required<HTMLElement>(dialog, ".pairing-notice").textContent).toBe("No phone is connected right now.");
   });
 });
 
