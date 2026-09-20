@@ -5,7 +5,7 @@ export function scrollOffsetToRemember(
   baseY: number,
   viewportY: number,
 ): number | null {
-  if (pending !== null) return pending;
+  if (pending !== null) return pending > 0 ? pending : null;
   if (bufferType !== "normal") return null;
   const offset = baseY - viewportY;
   return offset > 0 ? offset : null;
@@ -31,7 +31,7 @@ export function scrollbackWipeRestoreOffset(
   if (!replayDone) return null;
   if (bufferType !== "normal") return null;
   const offset = baseY - viewportY;
-  return offset > 0 ? offset : null;
+  return Math.max(0, offset);
 }
 
 export const SETTLE_QUIET_MS = 250;

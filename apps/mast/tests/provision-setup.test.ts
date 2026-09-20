@@ -294,9 +294,9 @@ class Distro {
     return this.withOpencode().withCodex(versions.codex).withAgy(versions.agy);
   }
 
-  run(): Run {
+  run(script = SCRIPT): Run {
     const result = spawnSync(tools.bash, ["-s"], {
-      input: SCRIPT,
+      input: script,
       cwd: this.home,
       env: { HOME: this.home, PATH: [...this.pathDirs, this.stubs, this.tools].join(":") },
       encoding: "utf8",
@@ -415,7 +415,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(check.stderr).toBe("");
     expect(check.status).toBe(0);
     expect(SCRIPT).not.toMatch(/@[A-Z_]+@/);
-    expect(embeddedFiles().map((file) => file.installedName).sort()).toEqual(INSTALLED_FROM_REPO.map(([name]) => name).sort());
+    expect(embeddedFiles().map((file) => file.installedName).sort()).toEqual([...INSTALLED_FROM_REPO.map(([name]) => name), "SKILL.md", "SKILL.md"].sort());
     for (const file of embeddedFiles()) {
       expect(SCRIPT).toContain(`<<'${file.delimiter}'\n${readFileSync(file.path, "utf8")}${file.delimiter}\n`);
     }
@@ -483,24 +483,22 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     );
   });
 
-  it("leaves a personal skill file and a symlinked skill directory alone", () => {
+  it("overwrites edited skills and replaces directory links without modifying their targets", () => {
     const distro = new Distro().withAgents();
     mkdirSync(distro.path(".codex", "skills"), { recursive: true });
     const personal = distro.write(distro.path("personal", "mast", "SKILL.md"), "# my own mast skill\n");
     symlinkSync(dirname(personal), distro.path(".codex", "skills", "mast"), "dir");
-    // 우리가 설치한 사본을 사용자가 고친 모양 — 기록과 달라졌으므로 사용자 파일이다.
+    // 기본 스킬의 개인 수정도 원본으로 교체한다.
     const edited = distro.write(distro.path(".claude", "skills", "mast", "SKILL.md"), "# edited after install\n");
     distro.write(distro.path(".claude", "skills", "mast", ".mast-installed"), "# originally installed\n");
 
     const run = distro.run();
 
     expect(run.status).toBe(0);
-    expect(readFileSync(edited, "utf8")).toBe("# edited after install\n");
+    expect(readFileSync(edited, "utf8")).toBe(readFileSync(join(WSL_SCRIPTS, "skills", "mast", "SKILL.md"), "utf8"));
     expect(readFileSync(personal, "utf8")).toBe("# my own mast skill\n");
-    const stderr = run.stderr.join("\n");
-    expect(stderr).toContain(`${distro.path(".claude", "skills", "mast", "SKILL.md")} is not mast's copy`);
-    expect(stderr).toContain(`${distro.path(".codex", "skills", "mast", "SKILL.md")} is a symlink`);
-    expect(distro.log()).toContain("is not mast's copy");
+    expect(lstatSync(distro.path(".codex", "skills", "mast")).isSymbolicLink()).toBe(false);
+    expect(readFileSync(distro.path(".codex", "skills", "mast", "SKILL.md"), "utf8")).toBe(readFileSync(edited, "utf8"));
   });
 
   // 예전 설치기는 `$dest.tmp`라는 고정 이름에 썼다. 그 자리에 개인 파일로 가는 심볼릭 링크가
@@ -512,6 +510,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     mkdirSync(skillDir, { recursive: true });
     const plantedSkill = distro.write(distro.path("personal", "planted-skill.md"), "# personal skill\n");
     const plantedSidecar = distro.write(distro.path("personal", "planted-sidecar.md"), "# personal sidecar\n");
+    symlinkSync(plantedSkill, join(skillDir, "SKILL.md"));
     symlinkSync(plantedSkill, join(skillDir, "SKILL.md.tmp"));
     symlinkSync(plantedSidecar, join(skillDir, ".mast-installed.tmp"));
 
@@ -522,9 +521,8 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(readFileSync(plantedSidecar, "utf8")).toBe("# personal sidecar\n");
     const installed = readFileSync(join(WSL_SCRIPTS, "skills", "mast", "SKILL.md"), "utf8");
     expect(lstatSync(join(skillDir, "SKILL.md")).isSymbolicLink()).toBe(false);
-    expect(lstatSync(join(skillDir, ".mast-installed")).isSymbolicLink()).toBe(false);
+    expect(existsSync(join(skillDir, ".mast-installed"))).toBe(false);
     expect(readFileSync(join(skillDir, "SKILL.md"), "utf8")).toBe(installed);
-    expect(readFileSync(join(skillDir, ".mast-installed"), "utf8")).toBe(installed);
     expect(statSync(join(skillDir, "SKILL.md")).mode & 0o777).toBe(0o644);
     // 심어 둔 이름 자체는 마스트 소유가 아니므로 지우지 않는다.
     expect(lstatSync(join(skillDir, "SKILL.md.tmp")).isSymbolicLink()).toBe(true);
@@ -533,9 +531,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(readdirSync(skillDir).filter((name) => name.startsWith(".mast-install."))).toEqual([]);
   });
 
-  // install_agent_skill 만 따로 떼어 mktemp 실패를 주입한다. set -u 에서 첫 mktemp 가 실패하면
-  // `||` 단락 때문에 tmp_prev 가 대입되지 않는데, 정리용 rm 이 그 이름을 참조하면 unbound
-  // variable 로 죽어 실패 메시지 대신 bash 오류만 남았다. 그 경로를 고정한다.
+  // mktemp 실패가 미초기화 변수 오류에 가려지지 않도록 확인한다.
   it("reports the failure and exits 1 when mktemp itself fails", () => {
     const distro = new Distro();
     const installer = SCRIPT.match(/^install_agent_skill\(\) \{\n[\s\S]*?\n\}\n/m)?.[0];
@@ -559,7 +555,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(readdirSync(skillDir).filter((name) => name.startsWith(".mast-install."))).toEqual([]);
   });
 
-  it("replaces its own outdated copy on a later run, then keeps the user's edit", () => {
+  it("replaces outdated and edited bundled copies on each run", () => {
     const distro = new Distro().withAgents();
     const skillPath = distro.path(".claude", "skills", "mast", "SKILL.md");
     distro.write(skillPath, "# older mast copy\n");
@@ -569,16 +565,53 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     const skill = readFileSync(join(WSL_SCRIPTS, "skills", "mast", "SKILL.md"), "utf8");
     expect(readFileSync(skillPath, "utf8")).toBe(skill);
 
-    // 사용자가 고친 사본은 다음 실행에서도 그대로다 (기록과 달라졌다).
+    // 마커가 남아 있어도 수정된 기본 스킬은 원본으로 돌아온다.
     writeFileSync(skillPath, "# my edit\n");
-    rmSync(distro.path(".mast", `.setup-v${VERSION}`));
     const second = distro.run();
     expect(second.status).toBe(0);
-    expect(readFileSync(skillPath, "utf8")).toBe("# my edit\n");
-    expect(second.stderr.join("\n")).toContain("is not mast's copy");
+    expect(readFileSync(skillPath, "utf8")).toBe(skill);
+    expect(second.stderr).toEqual([]);
   });
 
-  it("does nothing once the marker exists, and changes no file when the steps run again", () => {
+  it("마커가 있어도 수정된 스킬을 새 원본으로 덮어쓰고 훅 opt-out은 보존한다", () => {
+    const distro = new Distro().withAgents();
+    expect(distro.run().status).toBe(0);
+    const skillPath = distro.path(".claude", "skills", "mast", "SKILL.md");
+    const personal = distro.path(".codex", "skills", "mast", "SKILL.md");
+    const custom = distro.write(distro.path(".codex", "skills", "my-mast", "SKILL.md"), "custom instructions\n");
+    const personalText = readFileSync(personal, "utf8") + "\n";
+    writeFileSync(personal, personalText);
+    writeFileSync(distro.claudeSettings(), "{}\n");
+    const hooks = fingerprint(distro.claudeSettings());
+    const original = readFileSync(join(WSL_SCRIPTS, "skills", "mast", "SKILL.md"), "utf8");
+    const updated = original + "\nUpdated bundled instructions.\n";
+    const result = distro.run(SCRIPT.replace(original, updated));
+    expect(result.status).toBe(0);
+    expect(readFileSync(skillPath, "utf8")).toBe(updated);
+    expect(readFileSync(personal, "utf8")).toBe(updated);
+    expect(readFileSync(custom, "utf8")).toBe("custom instructions\n");
+    expect(fingerprint(distro.claudeSettings())).toEqual(hooks);
+    expect(distro.calls()).toHaveLength(3);
+  });
+
+  it("skill-load는 앱 없이 누락된 사본을 복구하며 인자를 거부한다", () => {
+    const distro = new Distro().withAgents();
+    expect(distro.run().status).toBe(0);
+    const skillPath = distro.path(".codex", "skills", "mast", "SKILL.md");
+    rmSync(skillPath);
+    const cli = distro.path(".mast", "bin", "mast");
+    const options = { env: { HOME: distro.home, PATH: distro.tools }, encoding: "utf8" as const, timeout: 10_000 };
+    const result = spawnSync(tools.bash, [cli, "skill-load"], options);
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(readFileSync(skillPath, "utf8")).toBe(readFileSync(join(WSL_SCRIPTS, "skills", "mast", "SKILL.md"), "utf8"));
+    const before = fingerprint(skillPath);
+    expect(spawnSync(tools.bash, [cli, "skill-load"], options).status).toBe(0);
+    expect(readFileSync(skillPath, "utf8")).toBe(before.text);
+    expect(spawnSync(tools.bash, [cli, "skill-load", "--force"], options).status).toBe(2);
+  });
+
+  it("refreshes skills behind the marker without rerunning hooks", () => {
     const distro = new Distro().withAgents();
     expect(distro.run().status).toBe(0);
     const files = [distro.claudeSettings(), distro.codexHooks(), distro.agyHooks()];
@@ -587,7 +620,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
     const skipped = distro.run();
     expect(skipped).toEqual({ status: 0, stdout: "", stderr: [] });
-    expect(distro.log()).toBe(log);
+    expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
     expect(distro.calls()).toHaveLength(3);
 
     rmSync(distro.path(".mast", `.setup-v${VERSION}`));
@@ -701,7 +734,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
     const log = distro.log();
     expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
-    expect(distro.log()).toBe(log);
+    expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
   });
 
   it("creates nothing for agents that are not installed and does not guard a distro without Claude Code", () => {
@@ -731,11 +764,11 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     if (agent === "codex") distro.withAgy();
     expect(distro.run().status).toBe(0);
     expect(distro.marker()).toBe(true);
-    // 이미 깔린 Claude 사본과, codex 케이스에서 함께 깔린 agy 사본은 이 실행이 건드리면 안 된다.
-    const untouched = [distro.claudeSettings(), distro.path(".claude", "skills", "mast", "SKILL.md")];
+    // 스킬을 갱신해도 이미 설치된 훅 설정은 다시 쓰지 않는다.
+    const untouched = [distro.claudeSettings()];
     // 이미 끝난 Antigravity CLI 단계가 다시 돌면 사용자가 지운 mast 훅이 되살아난다.
     if (agent === "codex") {
-      untouched.push(distro.write(distro.agyHooks(), "{}\n"), distro.path(".gemini", "config", "skills", "mast", "SKILL.md"));
+      untouched.push(distro.write(distro.agyHooks(), "{}\n"));
     }
     const kept = untouched.map(fingerprint);
     const before = distro.log();
@@ -770,10 +803,10 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     const log = distro.log();
     const calls = distro.calls().length;
     expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
-    expect(distro.log()).toBe(log);
+    expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
     expect(distro.calls()).toHaveLength(calls);
-    // 마커가 선 뒤의 재실행은 스킬 파일도 다시 쓰지 않는다.
-    expect(fingerprint(skillPath)).toEqual(installedSkill);
+    // 마커 이후에도 스킬은 같은 원본으로 덮어쓴다.
+    expect(readFileSync(skillPath, "utf8")).toBe(installedSkill.text);
   });
 
   it.each(["codex", "agy"] as const)("나중에 설치한 %s의 스킬 설치 실패는 완료 마커를 남기지 않아 재시도한다", (agent) => {
@@ -830,7 +863,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
     const log = distro.log();
     expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
-    expect(distro.log()).toBe(log);
+    expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
   });
 
   it.each([
@@ -862,7 +895,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
     const done = distro.log();
     expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
-    expect(distro.log()).toBe(done);
+    expect(distro.log().slice(done.length)).not.toContain("hooks:");
   });
 
   it("when Codex arrives after Python went from 3.7 to 3.8, records the interpreter and installs the Codex hooks", () => {
@@ -889,7 +922,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
     const done = distro.log();
     expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
-    expect(distro.log()).toBe(done);
+    expect(distro.log().slice(done.length)).not.toContain("hooks:");
   });
 
   it.each([
@@ -951,7 +984,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
     const log = distro.log();
     expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
-    expect(distro.log()).toBe(log);
+    expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
   });
 
   it.each(["mast-hooks-merge.py", "mast-agent-hook.py", "mast-codex-hook.sh", "mast-agy-hook.sh", "mast-notify.sh"])(
@@ -978,7 +1011,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
       const log = distro.log();
       expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
-      expect(distro.log()).toBe(log);
+      expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
     },
   );
 
@@ -1069,7 +1102,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
     const log = distro.log();
     expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
-    expect(distro.log()).toBe(log);
+    expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
   });
 
   it("below Python 3.8 wires only the status hooks, records the Codex step as done, says why and writes the marker", () => {
@@ -1341,7 +1374,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
       const log = distro.log();
       expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
-      expect(distro.log()).toBe(log);
+      expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
 
       rmSync(file(distro));
       rmSync(distro.path(".mast", `.setup-v${VERSION}-${agent}`));
@@ -1407,7 +1440,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
       const log = distro.log();
       expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
-      expect(distro.log()).toBe(log);
+      expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
     },
   );
 

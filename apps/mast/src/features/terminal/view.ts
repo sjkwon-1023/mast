@@ -391,7 +391,7 @@ export class TerminalView {
       buffer.viewportY,
     );
     if (offset === null) return;
-    log(`scroll: scrollback wiped ${offset} line(s) above the bottom — restoring`);
+    log(`scroll: scrollback wiped — restoring bottom-relative offset ${offset}`);
     this.beginScrollRestore(offset);
     this.armScrollRestore();
   }
@@ -441,6 +441,11 @@ export class TerminalView {
 
   private applyScrollRestore(): void {
     if (this.restoreOffset === null) return;
+    // ED 3 이전 하단도 복원 대상이다. 재인쇄 중 남은 xterm 뷰포트 래치를 해제한다.
+    if (this.restoreOffset === 0) {
+      this.releaseScrollLatch();
+      return;
+    }
     const baseY = this.term.buffer.active.baseY;
     const line = restoreTargetLine(baseY, this.restoreOffset);
     if (line === null) {

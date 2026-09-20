@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { provisionSource, setupVersion } from "./setup-script";
+import { assembleSetupScript, provisionSource, setupVersion } from "./setup-script";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -17,15 +17,16 @@ function lf(text: string): string {
 }
 
 const source = lf(provisionSource());
+const assembled = lf(assembleSetupScript());
 const doc = lf(readFileSync(resolve(REPO, "scripts/wsl/claude-hook-example.md"), "utf8"));
 
 function heredocBody(delimiter: string): string {
   const opener = `<<'${delimiter}'\n`;
-  const begin = source.indexOf(opener);
-  const end = source.indexOf(`\n${delimiter}\n`, begin + opener.length);
+  const begin = assembled.indexOf(opener);
+  const end = assembled.indexOf(`\n${delimiter}\n`, begin + opener.length);
   if (begin < 0 || end < 0) throw new Error(`${delimiter} heredoc disappeared from provision.rs`);
-  if (source.indexOf(opener, begin + 1) >= 0) throw new Error(`${delimiter} heredoc appears twice in provision.rs`);
-  return `${source.slice(begin + opener.length, end)}\n`;
+  if (assembled.indexOf(opener, begin + 1) >= 0) throw new Error(`${delimiter} heredoc appears twice in provision.rs`);
+  return `${assembled.slice(begin + opener.length, end)}\n`;
 }
 
 function firstFenceAfter(heading: string, language: string): string {

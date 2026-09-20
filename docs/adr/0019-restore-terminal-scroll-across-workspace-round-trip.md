@@ -361,3 +361,18 @@ the first thing to look at after a lost position is whether `mast:scroll-memory`
 sessionStorage right after the reload — absent means the capture never ran, and the fix belongs in
 the capture trigger rather than in the restore machinery. The store is also deliberately not shared
 between windows or app runs; nothing here persists into `state.json` or across a relaunch.
+
+## 개정: resume 초기 하단 유지 (2026-09-20)
+
+앱 재시작 뒤 `codex resume <session-id>` 실행 시 맨 위에 머무는 현장이 보고됐다.
+기존 ED 3 처리는 양수 오프셋만 복원하고 하단은 제외했다. 하단에서 시작한 재인쇄 중
+뷰포트 래치가 남는 상태를 브라우저 xterm 테스트로 주입하면 그 상태가 계속 유지됐다.
+실제 Windows resume에서 래치가 생기는 이벤트 순서는 아직 직접 계측하지 않았다.
+
+하단도 오프셋 0으로 복원하며 기존 출력 안정화 창(quiet 250ms, 최대 2초)을 사용한다.
+사용자 휠·스크롤바 조작은 즉시 취소한다. 양수 오프셋 복원과 같은 경로를 쓰므로
+워크스페이스 이동·리로드에서 사용자가 올려 둔 위치는 유지한다. 오프셋 0은 저장하지 않는다.
+
+검증: 브라우저 xterm에서 재인쇄 중 래치 고착, 사용자 휠 취소, 기존 위치 복원 테스트.
+Windows에서 앱 종료 → 저장된 resume 명령 실행 → 초기 하단과 이후 수동 스크롤은
+추가 실기 확인 대상이다.
