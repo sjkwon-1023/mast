@@ -202,7 +202,7 @@ export const SECURE_REMOTE_NOTE =
 export const SECURE_CONNECTED_NOTICE =
   "A phone is connected to Secure Remote. It can reconnect until the certificate expires (up to 14 days) or mast exits.";
 export const SECURE_REMEMBERED_NOTICE =
-  "No phone is connected right now. This pairing is remembered until the certificate expires (up to 14 days) or mast exits. Reopen the mast page on your phone to reconnect.";
+  "No phone is connected right now.";
 
 /** 폰이 QR 을 스캔하기를 기다리는 중 (Secure 화면의 상태 줄). */
 export const SECURE_WAITING_TEXT = "Waiting for your phone to scan this QR.";
@@ -489,7 +489,7 @@ export function openPairingDialog(options: PairingDialogOptions = {}): HTMLDialo
     const local = modeButton(
       "local",
       "Local HTTP",
-      "View a tab and send input from a phone over HTTP on this network.",
+      "Connect over HTTP. Use on trusted networks only.",
       () => showLocal(),
     );
     screen.append(
@@ -501,7 +501,7 @@ export function openPairingDialog(options: PairingDialogOptions = {}): HTMLDialo
         () => showSecure(),
       ),
     );
-    const tailscale = modeButton("tailscale", "Tailscale", "Coming later", () => {});
+    const tailscale = modeButton("tailscale", "Tailscale", "Planned. Connect from outside your local network.", () => {});
     tailscale.disabled = true;
     screen.append(tailscale);
     local.focus();
