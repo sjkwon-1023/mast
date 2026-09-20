@@ -47,12 +47,8 @@
 
 import { activeWorkspace } from "../../shared/keys";
 import { detachTerminal } from "../../infrastructure/backend";
-import { ChangesView } from "../changes/changes-view";
-import { FolderView } from "../viewers/folder/view";
 import type { PaneRect } from "../../shared/keys";
-import { MarkdownView } from "../viewers/markdown/view";
 import { PaneView } from "./pane-view";
-import { RecordView } from "../viewers/record/view";
 import type { SendController, ViewRegistry, ViewerRegistry } from "./pane-view";
 import { ScrollMemory } from "./scroll-memory";
 import { SendMode, sendModePrompt } from "./send-mode";
@@ -61,7 +57,7 @@ import type { DragGuard } from "./splitter";
 import { flexPair, structureKey } from "./split-layout";
 import type { SwitchTracer } from "./switch-trace";
 import { TerminalView } from "../terminal/view";
-import { TextView } from "../viewers/text/view";
+import { LazyViewerView } from "../viewers/lazy-view";
 import type { ViewerView } from "../viewers/viewer-view";
 import { existingTabIds, planViewSync, planViewerSync } from "./view-reconcile";
 import type { VisibleView, VisibleViewer } from "./view-reconcile";
@@ -547,41 +543,32 @@ export class WorkspaceView {
     if (existing !== undefined) return existing;
     const ws = this.lastSnapshot === null ? null : activeWorkspace(this.lastSnapshot);
     const distro = ws?.distro ?? null;
-    let created: ViewerView;
-    switch (target.kind.type) {
-      case "terminal":
-        // 셸이 끝난 탭 — 기록 파일이 화면 재료이고 distro·dispatch 가 필요 없다
-        // (ADR-0018). 뷰어 레지스트리에 사는 이유는 features/viewers/viewer-view.ts 참조.
-        created = new RecordView(parent, target.tab);
-        break;
-      case "folderBrowser":
-        created = new FolderView(
-          parent,
-          target.tab,
-          target.pane,
-          distro,
-          target.kind,
-          this.dispatch,
-        );
-        break;
-      case "textViewer":
-        created = new TextView(parent, target.tab, distro, target.kind, this.dispatch);
-        break;
-      case "markdownViewer":
-        created = new MarkdownView(
-          parent,
-          target.tab,
-          // 2MiB 초과 시의 "open as text" 탭이 이 pane 에 들어간다.
-          target.pane,
-          distro,
-          target.kind,
-          this.dispatch,
-        );
-        break;
-      case "changesViewer":
-        created = new ChangesView(parent, target.tab, distro, target.kind);
-        break;
-    }
+    const created = new LazyViewerView(parent, target.kind, async () => {
+      switch (target.kind.type) {
+        case "terminal": {
+          const { RecordView } = await import("../viewers/record/view");
+          return (host) => new RecordView(host, target.tab);
+        }
+        case "folderBrowser": {
+          const { FolderView } = await import("../viewers/folder/view");
+          return (host, kind) =>
+            new FolderView(host, target.tab, target.pane, distro, kind, this.dispatch);
+        }
+        case "textViewer": {
+          const { TextView } = await import("../viewers/text/view");
+          return (host, kind) => new TextView(host, target.tab, distro, kind, this.dispatch);
+        }
+        case "markdownViewer": {
+          const { MarkdownView } = await import("../viewers/markdown/view");
+          return (host, kind) =>
+            new MarkdownView(host, target.tab, target.pane, distro, kind, this.dispatch);
+        }
+        case "changesViewer": {
+          const { ChangesView } = await import("../changes/changes-view");
+          return (host, kind) => new ChangesView(host, target.tab, distro, kind);
+        }
+      }
+    });
     this.viewerViews.set(target.tab, created);
     return created;
   }

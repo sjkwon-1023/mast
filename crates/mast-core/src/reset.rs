@@ -61,6 +61,12 @@ pub struct ResetConfig {
     pub cooldown_ms: u64,
 }
 
+impl ResetConfig {
+    pub fn enabled(&self) -> bool {
+        self.idle_ms.is_some() || self.hidden_ms.is_some() || self.mem_limit_bytes.is_some()
+    }
+}
+
 /// 글루가 로그·계측에 사용한다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResetTrigger {
@@ -356,6 +362,19 @@ mod tests {
             idle_ms: None,
             hidden_ms: None,
             ..cfg()
+        }
+    }
+
+    #[test]
+    fn enabled_requires_at_least_one_trigger() {
+        for bits in 0..8 {
+            let config = ResetConfig {
+                idle_ms: (bits & 1 != 0).then_some(1_000),
+                hidden_ms: (bits & 2 != 0).then_some(500),
+                mem_limit_bytes: (bits & 4 != 0).then_some(1_024),
+                ..cfg()
+            };
+            assert_eq!(config.enabled(), bits != 0);
         }
     }
 

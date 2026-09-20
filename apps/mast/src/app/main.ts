@@ -3,10 +3,11 @@ import { installNavKeys } from "./navigation/actions";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import { ActivityPing } from "./activity-ping";
+import { installActivityPing } from "./activity-ping";
 import {
   dispatch,
   getDiagnostics,
+  getResetEnabled,
   getState,
   getUpdateInfo,
   getUiSettings,
@@ -78,19 +79,6 @@ function installReloadKey(): void {
   );
 }
 
-function installActivityPing(): void {
-  const ping = new ActivityPing((visible) => {
-    userActivity(visible).catch((err) => console.error("user_activity failed", err));
-  });
-  const onActivity = () => ping.activity(performance.now());
-  window.addEventListener("wheel", onActivity, { capture: true, passive: true });
-  window.addEventListener("mousedown", onActivity, { capture: true });
-  window.addEventListener("keydown", onActivity, { capture: true });
-  document.addEventListener("visibilitychange", () => {
-    ping.visibility(document.visibilityState === "visible", performance.now());
-  });
-}
-
 const ERROR_TTL_MS = 5000;
 
 const WINDOW_FOCUS_EVENT = "window-focus";
@@ -157,7 +145,14 @@ class App {
     this.initUpdateNotice();
     installReloadKey();
     installShortcutGuide();
-    installActivityPing();
+    try {
+      installActivityPing(await getResetEnabled(), (visible) => {
+        void userActivity(visible).catch((err) => console.error("user_activity failed", err));
+      });
+    } catch (err) {
+      console.error("get_reset_enabled failed", err);
+      this.showError(formatCommandError(err));
+    }
     this.installWindowFocus();
     await getCurrentWindow().onCloseRequested((event) => {
       if (hasMarkdownDrafts() && !window.confirm("Quit mast and discard unsaved Markdown edits?")) event.preventDefault();

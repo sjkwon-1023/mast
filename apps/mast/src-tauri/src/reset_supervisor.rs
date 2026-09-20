@@ -134,11 +134,12 @@ impl Shared {
 /// 자동 리셋 supervisor 핸들. 커맨드·이벤트 글루가 신호 메서드를 부르고, 발화는
 /// 내부 worker 스레드(또는 전환 신호의 즉시 경로)가 [`perform_reset`] 으로 한다.
 pub struct ResetSupervisor {
-    shared: Arc<Shared>,
+    app: AppHandle,
+    shared: Option<Arc<Shared>>,
 }
 
 impl ResetSupervisor {
-    /// env 설정으로 정책을 만들고 worker 스레드를 기동한다. 유효 설정을 부팅
+    /// 활성 트리거가 있을 때만 정책과 worker를 만든다. 유효 설정을 부팅
     /// 로그로 남긴다 (체크포인트 검증에서 env 반영 여부를 눈으로 확인하는 근거).
     pub fn spawn(app: AppHandle) -> Self {
         let cfg = config_from_env();
@@ -152,9 +153,12 @@ impl ResetSupervisor {
             cfg.safe_idle_ms,
             cfg.cooldown_ms
         );
+        if !cfg.enabled() {
+            return Self { app, shared: None };
+        }
         let policy = ResetPolicy::new(cfg.clone(), 0);
         let shared = Arc::new(Shared {
-            app,
+            app: app.clone(),
             origin: Instant::now(),
             guarded: Mutex::new(Guarded {
                 policy,
@@ -175,7 +179,14 @@ impl ResetSupervisor {
             // 스레드 생성 실패 = 자동 리셋 안전망 전체 불능 — 가리지 않고 부팅
             // 실패로 만든다.
             .expect("failed to spawn reset supervisor thread");
-        Self { shared }
+        Self {
+            app,
+            shared: Some(shared),
+        }
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.shared.is_some()
     }
 
     /// 실제 사용자 입력 신호 — dispatch 성공·activity 핑. attach/resize/ack/
@@ -185,62 +196,74 @@ impl ResetSupervisor {
     /// 재발화한 원인을 판별하려면 재무장이 어디서 왔는지가 필요했다. 콘솔에서는
     /// 소음이라 걷어냈고(2026-08-22), 로그 파일이 생기면서 제자리를 찾았다.
     pub fn user_input(&self, source: &'static str) {
-        let now = self.shared.now_ms();
-        let mut g = self.shared.guarded.lock().unwrap();
+        let Some(shared) = &self.shared else {
+            return;
+        };
+        let now = shared.now_ms();
+        let mut g = shared.guarded.lock().unwrap();
         g.policy.on_user_input(now);
         g.last_input_at = now;
         drop(g);
         wintrace!("reset: activity source={source} (idle/hidden re-armed)");
-        self.shared.cond.notify_all();
+        shared.cond.notify_all();
     }
 
     /// 창 포커스 변화 (`WindowEvent::Focused`) — hidden OR 판정 신호.
     pub fn focus(&self, focused: bool) {
-        let now = self.shared.now_ms();
-        let mut g = self.shared.guarded.lock().unwrap();
+        let Some(shared) = &self.shared else {
+            return;
+        };
+        let now = shared.now_ms();
+        let mut g = shared.guarded.lock().unwrap();
         g.policy.on_focus(focused, now);
         drop(g);
         // 실기에서 최소화·포커스아웃 때 어떤 신호가 실제로 도착하는지 판별하는 줄.
         wintrace!("reset: signal focused={focused}");
-        self.shared.cond.notify_all();
+        shared.cond.notify_all();
     }
 
     /// 프론트 visibility 보조 신호 (`document.visibilitychange` → user_activity)
     /// — hidden OR 판정 신호.
     pub fn visibility(&self, visible: bool) {
-        let now = self.shared.now_ms();
-        let mut g = self.shared.guarded.lock().unwrap();
+        let Some(shared) = &self.shared else {
+            return;
+        };
+        let now = shared.now_ms();
+        let mut g = shared.guarded.lock().unwrap();
         g.policy.on_visibility(visible, now);
         drop(g);
         wintrace!("reset: signal visible={visible}");
-        self.shared.cond.notify_all();
+        shared.cond.notify_all();
     }
 
     /// 워크스페이스 전환 성공 직후 — pending 워치독의 "안전한 순간". 발화가
     /// 나오면 worker 를 기다리지 않고 이 자리에서 리로드한다 (전환 직후 = 이미
     /// 화면이 갈리는 순간이라는 근거가 시점 그 자체이므로).
     pub fn workspace_switch(&self) {
-        let now = self.shared.now_ms();
-        let mut g = self.shared.guarded.lock().unwrap();
+        let Some(shared) = &self.shared else {
+            return;
+        };
+        let now = shared.now_ms();
+        let mut g = shared.guarded.lock().unwrap();
         let fired = g.policy.on_workspace_switch(now);
         if let Some(trigger) = fired {
-            let reason = describe_trigger(trigger, &g, &self.shared.cfg, now);
+            let reason = describe_trigger(trigger, &g, &shared.cfg, now);
             g.suppressed_logged = false;
             drop(g);
-            perform_reset(&self.shared.app, &reason, Some(trigger));
+            perform_reset(&shared.app, &reason, Some(trigger));
         } else {
             drop(g);
         }
         // 발화 여부와 무관하게 재계산을 깨운다 — 발화면 cooldown 시작으로,
         // 억제면 suppressed loud 로그 표출을 위해 데드라인이 바뀌었을 수 있다.
-        self.shared.cond.notify_all();
+        shared.cond.notify_all();
     }
 
     /// dev 훅(`reset_ui`) 전용 수동 리셋 — 정책(트리거·cooldown)을 거치지 않는
     /// 직접 경로다. **UI 버튼으로 노출하지 않는다** (계획 v2 12장 원칙 — 디버깅·
     /// 향후 MCP 전용).
     pub fn reset_now(&self) {
-        perform_reset(&self.shared.app, "trigger=manual (reset_ui dev hook)", None);
+        perform_reset(&self.app, "trigger=manual (reset_ui dev hook)", None);
     }
 }
 
