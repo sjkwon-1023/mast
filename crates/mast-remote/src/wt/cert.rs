@@ -17,10 +17,9 @@ use web_transport_quinn::quinn::rustls::pki_types::{
 
 /// notBefore 를 지금보다 앞당기는 폭 — 폰의 시계가 조금 느려도 "아직 유효하지 않음"
 /// 으로 거절당하지 않게 한다.
-const BACKDATE: time::Duration = time::Duration::hours(24);
-/// notAfter 까지의 잔여 유효기간. 전체 유효기간(BACKDATE + VALIDITY = 13일)이 2주
-/// 상한 안에 들어오면서, 시계 오차를 감안해도 12일은 남는다.
-const VALIDITY: time::Duration = time::Duration::days(12);
+const BACKDATE: time::Duration = time::Duration::minutes(5);
+/// WebTransport가 허용하는 전체 인증서 유효기간은 최대 14일이다.
+const VALIDITY: time::Duration = time::Duration::days(14);
 
 /// 서버가 소유하는 인증서·개인키·해시. `chain`/`key` 는 TLS 설정으로 넘어가고,
 /// 이 값이 drop 되면 개인키도 함께 사라진다 (Secure Remote 종료 = 폐기).
@@ -44,7 +43,7 @@ impl Certificate {
             .distinguished_name
             .push(rcgen::DnType::CommonName, "mast secure remote");
         params.not_before = now - BACKDATE;
-        params.not_after = params.not_before + BACKDATE + VALIDITY;
+        params.not_after = params.not_before + VALIDITY;
         params.subject_alt_names = vec![rcgen::SanType::IpAddress(IpAddr::V4(ip))];
         params.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
         params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
@@ -66,6 +65,10 @@ impl Certificate {
     /// 시계·오차 계산과 어긋나면 여기서 loud 하게 걸린다.
     pub(crate) fn is_valid_at(&self, now: time::OffsetDateTime) -> bool {
         self.not_before <= now && now <= self.not_after
+    }
+
+    pub(crate) fn expires_at_ms(&self) -> u64 {
+        self.not_after.unix_timestamp() as u64 * 1000
     }
 
     /// QR·클라이언트 옵션에 넣는 `base64url(SHA-256(DER))` — 패딩 없는 43자다.

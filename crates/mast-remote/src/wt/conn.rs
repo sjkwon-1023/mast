@@ -57,6 +57,8 @@ pub(crate) struct ServerShared {
     /// 같은 이유: 재시작 뒤 SessionId 가 1 부터 다시 발급돼도 옛 오프셋의 입력이 새
     /// 셸에 들어가지 않게 한다).
     pub(crate) epoch: u64,
+    pub(crate) expires_at: u64,
+    pub(crate) expiry: tokio::time::Instant,
     pub(crate) token: String,
     pub(crate) log: LogFn,
     pub(crate) timeouts: SecureRemoteTimeouts,
@@ -107,7 +109,7 @@ pub(crate) async fn handle(
     let _ = shared.events.send(ConnEvent::Closed { ip, authenticated });
 }
 
-/// 반환값은 "인증된 연결이었는가" — true 면 서버 전체가 수명을 다한다.
+/// 반환값은 "인증된 연결이었는가" — 연결 종료 뒤 재인증 가능한 상태로 되돌린다.
 ///
 /// 인증 전 실패는 **모두** 세션(또는 핸드셰이크 전이면 QUIC 연결)을 닫고 나간다.
 /// `Session::new` 가 띄운 수신 task 가 `Connection` clone 과 CONNECT recv 스트림을
@@ -210,7 +212,7 @@ async fn serve(request: Request, shared: &ServerShared, deadline: tokio::time::I
         return false;
     };
 
-    if !token_matches(&shared.token, &token) {
+    if tokio::time::Instant::now() >= shared.expiry || !token_matches(&shared.token, &token) {
         // 토큰도 헤더도 남기지 않는다 — 출처와 횟수뿐이다.
         let blocked = shared.record_failure(ip, "auth failure");
         let (status, message) = if blocked {
@@ -262,9 +264,16 @@ async fn serve(request: Request, shared: &ServerShared, deadline: tokio::time::I
         }
     }
 
-    if send_frame(&mut send, protocol::ok_frame(auth_id, &[]), shared.timeouts)
-        .await
-        .is_err()
+    if send_frame(
+        &mut send,
+        protocol::ok_frame(
+            auth_id,
+            &[("expiresAt", serde_json::json!(shared.expires_at))],
+        ),
+        shared.timeouts,
+    )
+    .await
+    .is_err()
     {
         return true;
     }
@@ -362,7 +371,7 @@ async fn request_loop(
             Reply::Send(frame) => (frame, false),
             Reply::Close(frame) => (frame, true),
             // 클라이언트가 끊겼다 — 응답을 시도하지 않고 루프를 끝낸다. 여기서 돌아야
-            // 종료 이벤트가 나가고 서버 수명이 끝난다.
+            // 종료 이벤트가 나가고 다음 재연결을 받을 수 있다.
             Reply::ConnectionClosed => return true,
         };
         if send_frame(send, frame, shared.timeouts).await.is_err() {
@@ -481,7 +490,7 @@ async fn handle_payload(
             }
             // 쓰기가 막혀 있는 동안 클라이언트가 끊기거나 서버가 종료되면
             // `done_rx` 는 영원히 오지 않는다 — 연결 종료와 경쟁시켜 여기서 빠져나와야
-            // 종료 이벤트가 나가고 서버 수명이 끝난다 (그러지 않으면 인증 후에는 대기
+            // 종료 이벤트가 나가고 다음 재연결을 받을 수 있다 (그러지 않으면 인증 후에는 대기
             // 타이머도 없어 포트가 영원히 남는다).
             //
             // 브라우저가 **붙어 있는 채로** PTY 쓰기만 막힌 경우에도 같은 문제가 된다:

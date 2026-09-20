@@ -26,6 +26,8 @@
 //!
 //! 반환 JSON 계약(프론트 미러는 청크 4 의 타입):
 //!
+//! 인증된 페어링은 통신 종료 후에도 인증서 만료 또는 앱 종료까지 메모리에 유지한다.
+//!
 //! - `secure_remote_status() -> { state, pairingId, reason }` — `state` 는
 //!   `idle|starting|waiting|connected|stopping|failed`, `pairingId` 는 그 상태가
 //!   가리키는 페어링(없으면 null), `reason` 은 실패 사유. **token·cert hash·개인키는
@@ -407,7 +409,7 @@ impl SecureRemoteManager {
 /// 별개 상황이라 코드가 갈린다.
 fn occupied_error(state: &'static str, pairing_id: &str) -> SecureRemoteCommandError {
     match state {
-        "connected" => SecureRemoteCommandError::connected(pairing_id),
+        "connected" | "remembered" => SecureRemoteCommandError::connected(pairing_id),
         "stopping" => SecureRemoteCommandError::stopping(pairing_id),
         _ => SecureRemoteCommandError::busy(pairing_id),
     }
@@ -419,6 +421,7 @@ fn state_name(state: SecureRemoteState) -> &'static str {
         SecureRemoteState::Starting => "starting",
         SecureRemoteState::Waiting => "waiting",
         SecureRemoteState::Connected => "connected",
+        SecureRemoteState::Remembered => "remembered",
         SecureRemoteState::Stopping => "stopping",
         SecureRemoteState::Idle => "idle",
     }
@@ -643,6 +646,7 @@ mod tests {
     #[test]
     fn the_occupied_error_separates_connected_and_stopping_from_busy() {
         assert_eq!(occupied_error("connected", "p").code, "connected");
+        assert_eq!(occupied_error("remembered", "p").code, "connected");
         assert_eq!(occupied_error("stopping", "p").code, "stopping");
         for state in ["starting", "waiting", "idle"] {
             assert_eq!(occupied_error(state, "p").code, "busy", "{state}");
@@ -654,6 +658,7 @@ mod tests {
         assert_eq!(state_name(SecureRemoteState::Starting), "starting");
         assert_eq!(state_name(SecureRemoteState::Waiting), "waiting");
         assert_eq!(state_name(SecureRemoteState::Connected), "connected");
+        assert_eq!(state_name(SecureRemoteState::Remembered), "remembered");
         assert_eq!(state_name(SecureRemoteState::Stopping), "stopping");
         assert_eq!(state_name(SecureRemoteState::Idle), "idle");
     }

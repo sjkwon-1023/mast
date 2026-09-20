@@ -2,8 +2,8 @@
 //!
 //! 수명 규칙(계획): **Secure Remote 를 시작할 때만** UDP 리스너와 런타임이 열린다.
 //! QR 대기는 [`SecureRemoteTimeouts::wait`] 안에서 끝나고, 인증된 **단일** 연결이
-//! 끝나거나 유휴가 지나면 엔드포인트·연결·TLS 설정·개인키가 함께 끝난다. 다음 페어링은
-//! 새 토큰과 새 인증서로 시작한다. Local HTTP 표면의 수명과는 무관하다.
+//! 끝나거나 유휴가 지나면 연결만 닫고 인증서 만료까지 재인증을 받는다. 앱 종료 시
+//! 엔드포인트·TLS 설정·개인키·토큰을 폐기한다. Local HTTP 표면의 수명과는 무관하다.
 //!
 //! 종료 순서가 계약이다: `server.close` → 엔드포인트 drop(소켓 회수) → lease 닫기.
 //! PTY 쓰기는 별도 스레드라( [`super::writer`] ) 이 순서가 막힐 수 없고, 이미 시작한
@@ -72,6 +72,8 @@ pub struct SecureRemoteTimeouts {
     pub frame_io: Duration,
     /// 인증된 연결에서 요청·heartbeat 사이의 유휴 상한.
     pub idle: Duration,
+    /// 앱 종료 또는 인증서 만료보다 오래 유지할 수 없다.
+    pub lifetime: Duration,
 }
 
 impl Default for SecureRemoteTimeouts {
@@ -81,6 +83,7 @@ impl Default for SecureRemoteTimeouts {
             auth: Duration::from_secs(10),
             frame_io: Duration::from_secs(15),
             idle: Duration::from_secs(30),
+            lifetime: Duration::from_secs(14 * 24 * 60 * 60),
         }
     }
 }
@@ -115,6 +118,7 @@ pub enum SecureRemoteState {
     Starting,
     Waiting,
     Connected,
+    Remembered,
     Stopping,
 }
 
@@ -174,8 +178,9 @@ enum Gate {
     Open,
     /// 취소가 먼저 승인됐다 — 이후 인증은 거절된다.
     Cancelled,
-    /// 인증이 먼저 승인됐다 — 이후 취소는 세션에 손대지 않는다.
+    /// 인증이 먼저 승인됐다 — 다이얼로그 취소로는 페어링을 폐기하지 않는다.
     Authenticated,
+    Remembered,
 }
 
 /// 인증 시도가 게이트에서 받는 판정.
@@ -219,7 +224,7 @@ impl Handle {
                 true
             }
             Gate::Cancelled => true,
-            Gate::Authenticated => false,
+            Gate::Authenticated | Gate::Remembered => false,
         }
     }
 
@@ -227,7 +232,7 @@ impl Handle {
     pub(crate) fn approve_auth(&self) -> AuthDecision {
         let mut gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
         match *gate {
-            Gate::Open => {
+            Gate::Open | Gate::Remembered => {
                 *gate = Gate::Authenticated;
                 AuthDecision::Approved
             }
@@ -238,6 +243,21 @@ impl Handle {
 
     pub(crate) fn is_authenticated(&self) -> bool {
         *self.gate.lock().unwrap_or_else(|e| e.into_inner()) == Gate::Authenticated
+    }
+
+    fn is_paired(&self) -> bool {
+        matches!(
+            *self.gate.lock().unwrap_or_else(|e| e.into_inner()),
+            Gate::Authenticated | Gate::Remembered
+        )
+    }
+
+    fn disconnected(&self) {
+        let mut gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
+        if *gate == Gate::Authenticated {
+            *gate = Gate::Remembered;
+            self.set_state(SecureRemoteState::Remembered);
+        }
     }
 
     fn request_stop(&self) {
@@ -339,7 +359,7 @@ impl SecureRemote {
         self.handle.state()
     }
 
-    /// 인증 전이면 닫는다. 인증된 세션의 수명은 세션 연결에 맡긴다.
+    /// 인증 전이면 닫는다. 인증 후에는 연결이 끊겨도 기억한 페어링을 유지한다.
     ///
     /// 반환값은 "닫으라고 지시했는가"다 — 인증이 먼저 승인된 연결이 있으면 `false`.
     /// 판정은 [`Handle::cancel`] 의 게이트에서 인증 승인과 원자적으로 경합한다.
@@ -405,6 +425,12 @@ fn runtime_main(
 
     runtime.block_on(async move {
         let log = Arc::clone(&deps.log);
+        let now_ms = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64;
+        let lifetime = cfg.timeouts.lifetime.min(Duration::from_millis(
+            cert.expires_at_ms().saturating_sub(now_ms),
+        ));
+        let expires_at = now_ms + lifetime.as_millis() as u64;
+        let expiry = tokio::time::Instant::now() + lifetime;
         let server = ServerBuilder::new()
             .with_addr(cfg.bind)
             .with_certificate(cert.chain, cert.key);
@@ -435,6 +461,8 @@ fn runtime_main(
             dispatcher: deps.dispatcher,
             sessions: deps.sessions,
             epoch,
+            expires_at,
+            expiry,
             token: cfg.token,
             log: Arc::clone(&log),
             timeouts: cfg.timeouts,
@@ -472,7 +500,7 @@ fn runtime_main(
     });
 }
 
-/// 페어링 대기 창 동안 연결을 받는 루프. 인증된 연결이 끝나거나 대기 만료·취소면 끝난다.
+/// 인증 전에는 대기 만료·취소, 인증 후에는 앱 종료·인증서 만료까지 연결을 받는다.
 ///
 /// 대기 만료는 **로컬 플래그가 아니라 인증 게이트**를 본다. 플래그는
 /// `ConnEvent::Authenticated` 를 처리해야 서는데, 인증 승인(`approve_auth`)과 그 이벤트
@@ -499,8 +527,12 @@ async fn accept_loop(
             break;
         }
         tokio::select! {
+            _ = tokio::time::sleep_until(shared.expiry) => {
+                log_line(&shared.log, "secure-remote: remembered pairing expired".to_string());
+                break;
+            }
             _ = tokio::time::sleep_until(wait_deadline), if wait_armed => {
-                if handle.is_authenticated() {
+                if handle.is_paired() {
                     // 인증 승인이 이긴 경합이다 — 세션 수명에 맡기고 만료를 다시 걸지 않는다.
                     wait_armed = false;
                 } else {
@@ -517,7 +549,8 @@ async fn accept_loop(
                 ConnEvent::Closed { ip, authenticated } => {
                     if authenticated {
                         log_line(&shared.log, "secure-remote: client disconnected".to_string());
-                        break;
+                        wait_armed = false;
+                        handle.disconnected();
                     }
                     unauth = unauth.saturating_sub(1);
                     if let Some(count) = unauth_by_ip.get_mut(&ip) {

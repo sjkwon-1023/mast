@@ -193,14 +193,16 @@ export function allowOutcomeMessage(
 export const SECURE_REMOTE_NOTE =
   "The phone connects directly to this PC over TLS (WebTransport) at the LAN address in " +
   "the QR. Reaching it from outside that network needs a separate path you set up — VPN, " +
-  "Tailscale or port forwarding. The QR carries a one-time token and the SHA-256 fingerprint " +
+  "Tailscale or port forwarding. The QR carries a pairing token and the SHA-256 fingerprint " +
   "of a certificate issued for this pairing; the browser trusts that fingerprint for this " +
   "connection only, not the whole trust store.";
 
 /** `cancel` 이 `connected` 를 돌려줬을 때의 안내 — 인증이 먼저 승인된 연결은
  *  취소로 끊기지 않고 그 연결의 수명에 맡겨진다 (서버는 계속 살아 있다). */
 export const SECURE_CONNECTED_NOTICE =
-  "A phone is connected to Secure Remote. The pairing stays up until that connection ends.";
+  "A phone is connected to Secure Remote. It can reconnect until the certificate expires (up to 14 days) or mast exits.";
+export const SECURE_REMEMBERED_NOTICE =
+  "No phone is connected right now. This pairing is remembered until the certificate expires (up to 14 days) or mast exits. Reopen the mast page on your phone to reconnect.";
 
 /** 폰이 QR 을 스캔하기를 기다리는 중 (Secure 화면의 상태 줄). */
 export const SECURE_WAITING_TEXT = "Waiting for your phone to scan this QR.";
@@ -222,7 +224,7 @@ export function secureRemoteErrorText(error: unknown): string {
       case "busy":
         return "Another pairing is already in progress. Close that dialog if it is still open, or wait up to two minutes for it to expire — then start a new one.";
       case "connected":
-        return "A phone is already connected. Wait until that connection ends to pair another one.";
+        return "This PC already remembers a mobile pairing. Reopen the mast page on that phone, or restart mast to clear the pairing and scan a new QR.";
       case "stopping":
         return "The previous secure pairing is still shutting down. Try again in a moment.";
       case "cancelled":
@@ -341,7 +343,7 @@ export function openPairingDialog(options: PairingDialogOptions = {}): HTMLDialo
       .then((status) => {
         // 포함: `close` 뒤에는 dialog.isConnected 가 거짓이라 결과가 항상 폐기된다.
         if (!dialog.isConnected) return;
-        if (status.state !== "connected") return;
+        if (status.state !== "connected" && status.state !== "remembered") return;
         // 응답은 특정 페어링의 관측이라, 방금 취소한 그 ID 의 연결일 때만 자격이 있다.
         if (status.pairingId !== pairingId) return;
         if (!isCancelNoticeScreen(cancelledGeneration)) return;
@@ -470,6 +472,7 @@ export function openPairingDialog(options: PairingDialogOptions = {}): HTMLDialo
         if (query !== state.statusQuery) return;
         if (!isCurrent(generation, "choose")) return;
         if (status.state === "connected") setNotice(SECURE_CONNECTED_NOTICE);
+        if (status.state === "remembered") setNotice(SECURE_REMEMBERED_NOTICE);
       })
       .catch((error: unknown) => {
         console.debug("[mast] secure_remote_status failed", error);
@@ -590,6 +593,11 @@ export function openPairingDialog(options: PairingDialogOptions = {}): HTMLDialo
     /** 서버가 정하는 사건을 화면에 반영한다 — 이 화면의 페어링 ID 와 다르거나 이미
      *  끝난 상태면 이 창의 QR 은 더 이상 새 연결을 받지 못한다. */
     function applyStatus(status: SecureRemoteStatus): void {
+      if (status.pairingId === pairingId && (status.state === "connected" || status.state === "remembered")) {
+        removeQr();
+        setStatus(status.state === "connected" ? SECURE_CONNECTED_NOTICE : SECURE_REMEMBERED_NOTICE);
+        return;
+      }
       if (status.pairingId === pairingId && !qrRemoved) {
         switch (status.state) {
           case "starting":
