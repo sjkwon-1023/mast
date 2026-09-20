@@ -363,7 +363,7 @@ body {
   pointer-events: none;
 }
 
-/* "Pair phone" — 설정·원격 표면 상태와 무관하게 항상 사이드바 푸터에 있다
+/* "Connect mobile" — 설정·원격 표면 상태와 무관하게 항상 사이드바 푸터에 있다
    (다이얼로그가 Local HTTP 설정 안내와 Secure Remote 를 함께 제공한다). */
 .sidebar-pair {
   width: 100%;

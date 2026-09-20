@@ -57,6 +57,13 @@ export class WebTransportUnsupportedError extends Error {
   }
 }
 
+export class ConnectTimeoutError extends Error {
+  constructor(readonly stage: "connection" | "stream") {
+    super(`mast ${stage} setup timed out`);
+    this.name = "ConnectTimeoutError";
+  }
+}
+
 export type WebTransportFactory = (
   url: string,
   options: { serverCertificateHashes: WebTransportHashLike[] },
@@ -73,6 +80,8 @@ export interface WebTransportClientOptions {
   heartbeatMs?: number;
   /** 요청 왕복 하나의 마감. 기본은 서버의 `frame_io` 15초보다 긴 값이다. */
   requestTimeoutMs?: number;
+  /** 인증 전 연결·스트림 생성이 공유하는 마감. */
+  connectTimeoutMs?: number;
 }
 
 /** 모든 종료가 같은 문구로 수렴한다 — 사용자가 다음에 할 일은 언제나 같다. */
@@ -85,6 +94,7 @@ export const REQUEST_TIMEOUT_MESSAGE =
 /** 서버가 프레임 하나를 끝내는 상한(15초)에 여유를 더한 값. 이보다 짧으면 서버가
  *  돌려줄 503/오류를 기다리지 못하고 연결을 끊는다. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+export const DEFAULT_CONNECT_TIMEOUT_MS = 20_000;
 
 interface Pending {
   id: number;
@@ -114,6 +124,7 @@ export class WebTransportClient implements RemoteTransport {
 
   /** 연결 + 스트림 + auth 왕복까지. 실패하면 transport 는 이미 닫힌 상태다. */
   async connect(): Promise<void> {
+    if (this.closedReason !== null) throw new TransportClosedError(this.closedReason);
     const factory = this.options.factory ?? defaultFactory;
     const url = `https://${this.options.host}:${this.options.port}/wt`;
     let transport: WebTransportLike;
@@ -133,8 +144,8 @@ export class WebTransportClient implements RemoteTransport {
     );
 
     try {
-      if (transport.ready !== undefined) await transport.ready;
-      const stream = await transport.createBidirectionalStream();
+      const stream = await this.openStream(transport);
+      if (this.closedReason !== null) throw new TransportClosedError(this.closedReason);
       this.writer = stream.writable.getWriter();
       this.reader = stream.readable.getReader();
       void this.readLoop();
@@ -149,6 +160,29 @@ export class WebTransportClient implements RemoteTransport {
       throw error;
     }
     this.startHeartbeat();
+  }
+
+  private async openStream(transport: WebTransportLike): Promise<BidirectionalStreamLike> {
+    let stage: "connection" | "stream" = "connection";
+    let unsubscribe = () => {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stopped = new Promise<never>((_, reject) => {
+      unsubscribe = this.onClosed((message) => reject(new TransportClosedError(message)));
+      timer = setTimeout(() => {
+        // 종료 알림보다 구체적인 시간 초과 원인을 먼저 전달한다.
+        reject(new ConnectTimeoutError(stage));
+        this.markClosed(TRANSPORT_CLOSED_MESSAGE);
+      }, this.options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([transport.ready ?? Promise.resolve(), stopped]);
+      if (this.closedReason !== null) throw new TransportClosedError(this.closedReason);
+      stage = "stream";
+      return await Promise.race([transport.createBidirectionalStream(), stopped]);
+    } finally {
+      clearTimeout(timer);
+      unsubscribe();
+    }
   }
 
   async fetchState(): Promise<StateSnapshot> {

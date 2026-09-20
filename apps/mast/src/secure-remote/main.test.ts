@@ -7,9 +7,13 @@ import { describe, expect, it } from "vitest";
 
 import { RemoteError, TransportClosedError } from "../remote/transport";
 import { connectErrorText, destinationText } from "./main";
-import { WebTransportUnsupportedError } from "./transport";
+import { ConnectTimeoutError, WebTransportUnsupportedError } from "./transport";
 
 describe("connectErrorText", () => {
+  it("연결과 스트림 생성 시간 초과를 구분해 안내한다", () => {
+    expect(connectErrorText(new ConnectTimeoutError("connection"))).toContain("UDP firewall");
+    expect(connectErrorText(new ConnectTimeoutError("stream"))).toContain("data stream");
+  });
   it("maps 409 to ending the phone session and making a fresh pairing", () => {
     const text = connectErrorText(new RemoteError(409, "a phone is already connected"));
     expect(text).toContain("End that phone session");

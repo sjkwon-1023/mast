@@ -29,7 +29,7 @@ function showPairingHint(root: HTMLElement): void {
   line.textContent = "Scan the pairing QR in mast";
   const detail = document.createElement("p");
   detail.className = "hint-detail";
-  detail.textContent = "Open the sidebar and press “Pair phone” on the desktop app.";
+  detail.textContent = "Open the sidebar and press “Connect mobile” on the desktop app.";
   hint.append(line, detail);
   root.replaceChildren(hint);
 }
