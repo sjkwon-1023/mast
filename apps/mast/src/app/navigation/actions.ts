@@ -12,6 +12,7 @@ import { logSwallowedShortcut } from "../../infrastructure/logging";
 import { adjustFontSize, resetFontSize } from "../../features/terminal/settings";
 import { adjustViewerFontSize, resetViewerFontSize } from "../../features/viewers/viewer-font";
 import type { Command, CommandOutput, StateSnapshot } from "../../shared/types";
+import { isMacPlatform } from "../../shared/platform";
 
 export interface NavigationContext {
   getSnapshot(): StateSnapshot | null;
@@ -24,18 +25,22 @@ export interface NavigationContext {
 
 // 가로채기 목록의 키는 대상이 없어도 소비한다. capture로 xterm보다 먼저 처리한다.
 export function installNavKeys(context: NavigationContext): void {
+  const mac = isMacPlatform();
   window.addEventListener(
     "keydown",
     (ev) => {
+      // keyAction의 `ctrl`은 앱의 primary modifier 의미로 정규화한다.
+      // macOS에서는 Command를 쓰되 OS가 예약한 Cmd+Tab 대신 Ctrl+Tab만 탭 순환에 쓴다.
+      const primary = mac ? (ev.key === "Tab" ? ev.ctrlKey : ev.metaKey) : ev.ctrlKey;
       const action = keyAction({
         key: ev.key,
-        ctrl: ev.ctrlKey,
+        ctrl: primary,
         alt: ev.altKey,
         shift: ev.shiftKey,
         isComposing: ev.isComposing,
       });
       if (action === null) {
-        if (ev.isComposing && (ev.ctrlKey || ev.altKey)) logSwallowedShortcut(ev);
+        if (ev.isComposing && (primary || ev.altKey)) logSwallowedShortcut(ev);
         return;
       }
       ev.preventDefault();
