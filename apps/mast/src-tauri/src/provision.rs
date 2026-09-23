@@ -830,7 +830,7 @@ install_agent_skill() {
   fi
   if ! tmp_dest="$(mktemp "$dir/.mast-install.XXXXXX")" \
     || ! { printf '%s\n' "$body" > "$tmp_dest" && chmod 644 "$tmp_dest"; } \
-    || { [ ! -d "$dest" ] && mv -f "$tmp_dest" "$dest"; }; then
+    || ! { [ ! -d "$dest" ] && mv -f "$tmp_dest" "$dest"; }; then
     rm -f "$tmp_dest"
     echo "[mast] setup: cannot install $dest" >&2
     exit 1
