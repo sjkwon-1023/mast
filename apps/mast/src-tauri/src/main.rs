@@ -21,6 +21,9 @@
 // Windows 릴리스 빌드에서 콘솔 창을 띄우지 않는다 (디버그 빌드는 콘솔 유지).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
+compile_error!("Mast for macOS currently supports Apple Silicon (aarch64) only");
+
 // Windows 셸 앱 신원(AUMID) 등록 — 토스트 발신자 등록용이라 Windows 전용이다.
 #[cfg(windows)]
 mod app_identity;
@@ -117,6 +120,18 @@ fn main() {
             // 파도)가 실기에서 가장 자주 실패하는 구간이라, 그 줄들을 놓치면
             // 로그를 켠 의미가 절반이다.
             logfile::init(&handle);
+
+            #[cfg(target_os = "macos")]
+            {
+                match commands::read_ui_settings(&handle) {
+                    Ok(settings) => host::configure_macos_shell(settings.shell),
+                    Err(err) => {
+                        winlog!("macOS shell setting could not be read: {err}; using $SHELL/default");
+                        host::configure_macos_shell(None);
+                    }
+                }
+            }
+
             let sessions = Arc::new(SessionManager::new());
             let sinks = Arc::new(state::SinkRegistry::default());
             // OSC 라우터는 sink 생성보다 먼저 — sink factory(TauriHost)가 핸들을
