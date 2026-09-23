@@ -306,8 +306,16 @@ def open_terminal():
         return os.open("/dev/tty", flags)
     except OSError:
         pass
-    # Claude Code 훅 프로세스에는 controlling tty 가 없어 /dev/tty 가 ENXIO 다. mast-notify.sh 와
-    # 같은 규율로 조상 8단계까지 fd 0/1/2 가 가리키는 pts 를 찾는다.
+    # macOS에는 /proc가 없다. Mast가 터미널을 스폰할 때 실제 PTY 경로를 MAST_TTY로
+    # export하므로, controlling tty를 잃은 agent hook은 이 경로를 두 번째로 사용한다.
+    inherited = os.environ.get("MAST_TTY")
+    if inherited and inherited.startswith("/dev/"):
+        try:
+            return os.open(inherited, flags)
+        except OSError:
+            pass
+    # Linux/WSL에서는 기존 조상 탐색을 그대로 쓴다. Claude Code 훅 프로세스에는
+    # controlling tty가 없어 /dev/tty가 ENXIO일 수 있다.
     pid = os.getpid()
     for _ in range(TTY_HOPS):
         if pid is None or pid <= 1:
