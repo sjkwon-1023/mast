@@ -629,7 +629,15 @@ mast_emit() {
     return 0
   fi
 
-  local pid=$$ depth=0 fd target stat ppid
+  # macOS has no /proc. Mast exports the pane PTY before exec'ing the user's shell,
+  # so hooks that lose their controlling tty can still return OSC status to the pane.
+  if [[ -n "${MAST_TTY:-}" && "$MAST_TTY" == /dev/* ]]; then
+    if { printf '%s' "$payload" > "$MAST_TTY"; } 2>/dev/null; then
+      return 0
+    fi
+  fi
+
+  local pid=$ depth=0 fd target stat ppid
   while [[ "$pid" -gt 1 && "$depth" -lt 8 ]]; do
     for fd in 0 1 2; do
       target="$(readlink "/proc/$pid/fd/$fd" 2>/dev/null || true)"
