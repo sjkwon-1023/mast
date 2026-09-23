@@ -2,6 +2,9 @@ name: Native macOS development validation
 on:
   push:
     branches: [feat/macos-native-platform]
+defaults:
+  run:
+    shell: bash
 permissions:
   contents: write
 concurrency:
@@ -30,7 +33,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git commit -m 'feat: connect native macOS platform support'
+          git commit -m 'fix: validate native platform contracts and include macOS icon'
           git push origin HEAD:feat/macos-native-platform
       - id: head
         run: |
