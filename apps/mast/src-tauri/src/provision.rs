@@ -1107,7 +1107,13 @@ fi
 #   dispatcher 는 이 판정으로 idle 을 생략하므로 좁게 둔다.
 # - unknown: 읽지 못했거나 잘렸거나 시간이 넘은 경우.
 codex_thread_ownership() {
-  LC_ALL=C timeout --kill-after=1s 2s bash -s -- "${CODEX_HOME:-$HOME/.codex}" "$THREAD_ID" <<'MAST_CODEX_RESUME_CHECK_EOF'
+  local -a owner_runner=(bash -s --)
+  if command -v timeout > /dev/null 2>&1; then
+    owner_runner=(timeout --kill-after=1s 2s bash -s --)
+  elif command -v gtimeout > /dev/null 2>&1; then
+    owner_runner=(gtimeout --kill-after=1s 2s bash -s --)
+  fi
+  LC_ALL=C "${owner_runner[@]}" "${CODEX_HOME:-$HOME/.codex}" "$THREAD_ID" <<'MAST_CODEX_RESUME_CHECK_EOF'
 shopt -s nullglob
 verdict=unknown
 for transcript in "$1"/sessions/*/*/*/rollout-*-"$2".jsonl; do
@@ -1623,6 +1629,20 @@ target="${1:-}"
 if [ -z "$target" ]; then
   echo "mast-open: usage: mast-open <http(s)-url|path>" >&2
   exit 2
+fi
+
+if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+  case "$target" in
+    http://*|https://*) ;;
+    *)
+      if [ ! -e "$target" ]; then
+        echo "mast-open: refusing (not an http(s) URL and not an existing path): $target" >&2
+        exit 2
+      fi
+      case "$target" in -*) target="./$target" ;; esac
+      ;;
+  esac
+  exec /usr/bin/open "$target"
 fi
 
 case "$target" in
