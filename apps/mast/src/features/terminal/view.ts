@@ -36,6 +36,7 @@ import type { OutputChunk } from "../../infrastructure/backend";
 import { parseAttachBody, parseFrame } from "./frame";
 import type { GateResult } from "./attach-gate";
 import { log } from "../../infrastructure/logging";
+import { primaryModifier } from "../../shared/platform";
 import type { SettlePoll } from "./scroll";
 import "@xterm/xterm/css/xterm.css";
 
@@ -321,7 +322,7 @@ export class TerminalView {
       if (ev.type !== "keydown") return true;
 
       // Shift+Enter는 Claude Code의 줄바꿈 시퀀스 ESC CR로 보낸다.
-      if (ev.key === "Enter" && ev.shiftKey && !ev.ctrlKey && !ev.altKey) {
+      if (ev.key === "Enter" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
         ev.preventDefault();
         this.enqueueWrite("\x1b\r");
         return false;
@@ -348,7 +349,7 @@ export class TerminalView {
         }
         return true;
       }
-      if (!ev.ctrlKey || ev.altKey) return true;
+      if (!primaryModifier(ev) || ev.altKey) return true;
       if (ev.key.toLowerCase() === "v") {
         ev.preventDefault();
         void this.pasteFromClipboard();
