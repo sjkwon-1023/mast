@@ -452,6 +452,7 @@ const SETUP_SCRIPT: &str = r###"
 # 모든 단계는 멱등이고, 마커 파일이 다음 실행을 단축한다.
 set -u
 
+PLATFORM="$(uname -s 2>/dev/null || echo unknown)"
 MAST_HOME="$HOME/.mast"
 MARKER="$MAST_HOME/.setup-v@SETUP_VERSION@"
 CODEX_MARKER="$MARKER-codex"
@@ -537,7 +538,8 @@ version_lt() {
 # 설치본이라 이 distro 의 설정을 읽지 않는다.
 agent_candidates() {
   local name="$1" candidate resolved seen=$'\n'
-  local -a candidates=("$(command -v "$name" 2> /dev/null)" "$HOME/.local/bin/$name")
+  local -a candidates=("$(command -v "$name" 2> /dev/null)" "$HOME/.local/bin/$name"
+    "/opt/homebrew/bin/$name" "/usr/local/bin/$name")
   if [ "$name" = claude ]; then
     # 옛 로컬 설치기는 PATH 가 아니라 alias 로 이 파일을 가리킨다.
     candidates+=("$HOME/.claude/local/$name")
@@ -555,7 +557,11 @@ agent_candidates() {
       *) continue ;;
     esac
     [ -f "$candidate" ] && [ -x "$candidate" ] || continue
-    resolved="$(readlink -f -- "$candidate" 2> /dev/null)" || resolved="$candidate"
+    if command -v realpath > /dev/null 2>&1; then
+      resolved="$(realpath "$candidate" 2> /dev/null)" || resolved="$candidate"
+    else
+      resolved="$(readlink -f -- "$candidate" 2> /dev/null)" || resolved="$candidate"
+    fi
     case "$seen" in
       *$'\n'"$resolved"$'\n'*) continue ;;
     esac
@@ -572,8 +578,17 @@ agent_candidates() {
 # - -k 는 TERM 을 무시하는 프로그램까지 끝낸다. 그 KILL 은 프로세스 그룹 전체라 timeout 자신도 죽는다. 그러면 bash
 #   가 stderr 에 "Killed" 줄을 내 알림으로 새는데, 명령 치환 안에서는 내지 않으므로 이 함수는 `$(…)` 로만 부른다.
 agent_version() {
-  local path="$1" output=""
-  timeout -k 1 10 env PATH="${path%/*}:$PATH" "$path" --version < /dev/null > "$VERSION_OUT" 2> /dev/null
+  local path="$1" output="" timeout_bin=""
+  if command -v timeout > /dev/null 2>&1; then
+    timeout_bin="$(command -v timeout)"
+  elif command -v gtimeout > /dev/null 2>&1; then
+    timeout_bin="$(command -v gtimeout)"
+  fi
+  if [ -n "$timeout_bin" ]; then
+    "$timeout_bin" -k 1 10 env PATH="${path%/*}:$PATH" "$path" --version < /dev/null > "$VERSION_OUT" 2> /dev/null
+  else
+    env PATH="${path%/*}:$PATH" "$path" --version < /dev/null > "$VERSION_OUT" 2> /dev/null
+  fi
   IFS= read -r -d '' -n 65536 output 2> /dev/null < "$VERSION_OUT"
   rm -f "$VERSION_OUT"
   if [[ "$output" =~ [0-9]+\.[0-9]+\.[0-9]+ ]]; then
@@ -815,7 +830,7 @@ install_agent_skill() {
   fi
   if ! tmp_dest="$(mktemp "$dir/.mast-install.XXXXXX")" \
     || ! { printf '%s\n' "$body" > "$tmp_dest" && chmod 644 "$tmp_dest"; } \
-    || ! mv -fT "$tmp_dest" "$dest"; then
+    || { [ ! -d "$dest" ] && mv -f "$tmp_dest" "$dest"; }; then
     rm -f "$tmp_dest"
     echo "[mast] setup: cannot install $dest" >&2
     exit 1
