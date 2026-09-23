@@ -19,7 +19,7 @@ import {
 import type { KeySpec, PaneRect } from "./keys";
 import type { Pane, Workspace } from "./types";
 
-// This suite describes the existing Windows keymap, on every test host.
+// 이 스위트는 모든 테스트 호스트에서 기존 Windows 키맵을 기술한다.
 const keyAction = (key: KeySpec) => platformKeyAction(key, false);
 const shortcutBadge = (id: Parameters<typeof platformShortcutBadge>[0]) => platformShortcutBadge(id, false);
 const shortcutLabel = (id: Parameters<typeof platformShortcutLabel>[0]) => platformShortcutLabel(id, false);

@@ -35,5 +35,5 @@ pub mod session;
 pub mod update;
 pub mod wslpath;
 
-/// Small OS-specific boundaries shared by desktop callers.
+/// 데스크톱 호출자가 공유하는 작은 OS 별 경계.
 pub mod platform;

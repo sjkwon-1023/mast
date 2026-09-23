@@ -12,7 +12,7 @@ import {
 import { clampFontSize } from "../../shared/font-size";
 import { altArrowSequence, isCopySelectionKey as platformCopySelectionKey, shouldOpenLink } from "./interaction";
 
-// Explicitly retain the Windows copy-selection contract; Mac is tested separately.
+// Windows 선택 복사 계약을 명시적으로 유지한다. Mac 은 따로 테스트한다.
 const isCopySelectionKey = (event: KeyboardEvent, selected: boolean) => platformCopySelectionKey(event, selected, false);
 
 describe("clampFontSize", () => {

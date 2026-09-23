@@ -297,8 +297,8 @@ fn main() {
         .on_window_event(move |window, event| match event {
             #[cfg(target_os = "macos")]
             tauri::WindowEvent::Destroyed if window.label() == "main" => {
-                // Last-window close is explicit shutdown, not hide-to-dock.
-                // Destroyed runs only AFTER the frontend close guard accepted.
+                // 마지막 창 닫기는 명시적 종료이며, Dock 으로 숨기기가 아니다.
+                // Destroyed 는 프론트엔드 close guard 가 수락한 **뒤에만** 온다.
                 window.app_handle().exit(0);
             }
             tauri::WindowEvent::Focused(focused) => {

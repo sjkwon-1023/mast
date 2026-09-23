@@ -1,8 +1,8 @@
-# Shared bash/zsh integration. This file is sourced, not executed.
+# bash/zsh 공용 통합. 이 파일은 실행하지 않고 source 한다.
 export PATH="$HOME/.mast/bin:$PATH"
 export MAST=1 TERM=xterm-256color COLORTERM=truecolor
 _mast_cwd() {
-  # Escape OSC terminators and URI-sensitive characters; never print raw control bytes.
+  # OSC 종결자와 URI 에 민감한 문자를 이스케이프한다 — 원시 제어 바이트는 절대 출력하지 않는다.
   local _mast_p="$PWD"
   _mast_p=${_mast_p//\%/%25}; _mast_p=${_mast_p//\\/%5C}; _mast_p=${_mast_p// /%20}; _mast_p=${_mast_p//\#/%23}; _mast_p=${_mast_p//\?/%3F}
   _mast_p=${_mast_p//$'\x01'/%01}
@@ -83,7 +83,7 @@ _mast_resume() {
     *) return 0 ;;
   esac
   case "$token" in ''|*[!A-Za-z0-9_-]*) return 0 ;; esac
-  # A hint only: never eval or execute the saved command.
+  # 힌트일 뿐이다: 저장된 명령을 eval 하거나 실행하지 않는다.
   if [[ -n ${ZSH_VERSION:-} ]]; then print -s -- "$cmd"; else history -s "$cmd"; history -a; fi
   printf '\033[2m[mast] resume previous agent: %s\033[0m\n' "$cmd"
 }

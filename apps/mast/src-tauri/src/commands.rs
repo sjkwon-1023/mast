@@ -377,8 +377,8 @@ pub fn user_activity(state: State<'_, AppState>, visible: Option<bool>) {
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiSettings {
-    /// macOS login-shell executable; unset uses the account login shell. Kept
-    /// optional so Windows settings/model compatibility is unchanged.
+    /// macOS 로그인 셸 실행 파일. 비어 있으면 계정 로그인 셸을 쓴다. Windows 설정·모델
+    /// 호환성이 바뀌지 않도록 optional 로 둔다.
     pub shell: Option<String>,
     /// xterm `fontFamily` — CSS font-family 문자열 그대로.
     pub font_family: Option<String>,
@@ -1217,8 +1217,8 @@ mod tests {
     }
 }
 
-// Native services are kept behind macOS cfg gates; the WinRT/WSL paths above
-// remain intact. Values are passed as argv, never interpolated shell/AppleScript.
+// 네이티브 서비스는 macOS cfg 게이트 뒤에 둔다 — 위의 WinRT/WSL 경로는 그대로 남는다.
+// 값은 argv 로 넘기며, 셸·AppleScript 에 끼워 넣지 않는다.
 #[cfg(target_os = "macos")]
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
@@ -1244,9 +1244,9 @@ pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
 #[tauri::command]
 pub async fn notify_toast(title: String, body: String, log_label: String) -> Result<(), String> {
     let result = tauri::async_runtime::spawn_blocking(move || {
-        // osascript can deliver native banners from unbundled development builds;
-        // UNUserNotificationCenter requires a signed/bundled application identity.
-        // A fixed script consumes argv; untrusted agent text is never source code.
+        // osascript 는 번들되지 않은 개발 빌드에서도 네이티브 배너를 띄울 수 있다.
+        // UNUserNotificationCenter 는 서명·번들된 앱 identity 를 요구한다.
+        // 고정 스크립트가 argv 를 읽는다 — 신뢰할 수 없는 에이전트 텍스트는 절대 소스 코드가 되지 않는다.
         let script = "on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv)\nend run";
         let mut command = std::process::Command::new("/usr/bin/osascript");
         command.args(["-e", script, "--", &title, &body]);

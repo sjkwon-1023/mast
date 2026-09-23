@@ -1,10 +1,10 @@
-//! Narrow platform boundaries. The workspace/layout model and PTY pipeline stay shared.
+//! 좁은 플랫폼 경계. workspace/layout 모델과 PTY 파이프라인은 공유한 채로 둔다.
 
 #[cfg(target_os = "macos")]
 pub mod macos;
 
-/// Native POSIX paths do not need WSL's Windows-UNC alias restrictions.
-/// Dot components remain disallowed so callers can safely reason about path prefixes.
+/// 네이티브 POSIX 경로에는 WSL 의 Windows-UNC alias 제약이 필요 없다.
+/// 호출자가 경로 prefix 를 안전하게 따질 수 있도록 dot 컴포넌트는 계속 금지한다.
 pub fn validate_native_path(path: &str) -> Result<(), String> {
     if !path.starts_with('/') || path.contains('\0') {
         return Err("expected an absolute POSIX path without NUL".into());

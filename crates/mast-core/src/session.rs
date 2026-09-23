@@ -651,7 +651,7 @@ impl PtySession {
         unpack_size(self.size.load(Ordering::Relaxed))
     }
 
-    /// On-demand CLI metadata, not a persisted identifier. A closed PTY has none.
+    /// 필요할 때 조회하는 CLI 메타데이터이며 영속 식별자가 아니다. 닫힌 PTY 에는 없다.
     #[cfg(target_os = "macos")]
     pub fn tty_name(&self) -> Option<String> {
         self.master.lock().unwrap().as_ref()?.tty_name()?
@@ -1158,8 +1158,8 @@ fn unpack_size(packed: u32) -> (u16, u16) {
 
 /// 세션 레지스트리 — `SessionId` 를 발급하고 세션을 보관한다. 내부 동기화는
 /// std Mutex (외부 lock 없이 스레드 간 공유 가능).
-/// During final shutdown, sink callbacks must not turn persisted Running tabs
-/// into Exited tabs: reopening the app needs to respawn those shells.
+/// 최종 종료 중에는 sink 콜백이 영속된 Running 탭을 Exited 탭으로 바꾸면 안 된다 —
+/// 앱을 다시 열 때 그 셸들을 다시 스폰해야 한다.
 struct ManagedSink {
     sink: Box<dyn SessionSink>,
     stopping: Arc<AtomicBool>,
@@ -1247,8 +1247,8 @@ impl SessionManager {
         Ok(id)
     }
 
-    /// Stop accepting spawns, suppress shutdown callbacks, and terminate all owned
-    /// sessions even when another component still holds an Arc to a session.
+    /// 스폰을 더 받지 않고, 종료 콜백을 억제하고, 다른 컴포넌트가 아직 세션의 Arc 를
+    /// 쥐고 있어도 소유한 모든 세션을 종료한다.
     ///
     /// macOS 에서는 동기로 끝낸다 — 호출 직후 `process::exit` 가 오므로 에스컬레이션
     /// 스레드에 맡기면 SIGKILL 이 영영 가지 않는다. 레지스트리의 모든 leader 와 탭 닫기로

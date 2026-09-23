@@ -1,9 +1,9 @@
 import { IS_MAC } from "./platform";
-// macOS interception: ⌘1–9 workspace, ⌘⌥arrows pane, Ctrl(+Shift)+Tab tab,
-// ⌘T terminal, ⌘⇧B folder, ⌘D auto split / ⌘⇧D vertical, ⌘N workspace,
-// ⌘⇧[ / ] previous/next workspace, ⌘W tab / ⌘⇧W workspace close,
-// ⌘+ / - / 0 zoom, F2 rename. ⌘C/V editing, ⌘⇧R reload, ⌘Q quit
-// have separate owners. Unlisted Ctrl/Option combinations remain PTY-owned.
+// macOS 가로채기: ⌘1–9 workspace, ⌘⌥방향키 pane, Ctrl(+Shift)+Tab 탭,
+// ⌘T 터미널, ⌘⇧B 폴더, ⌘D 자동 분할 / ⌘⇧D 세로 분할, ⌘N workspace,
+// ⌘⇧[ / ] 이전/다음 workspace, ⌘W 탭 닫기 / ⌘⇧W workspace 닫기,
+// ⌘+ / - / 0 확대·축소, F2 이름 바꾸기. ⌘C/V 편집, ⌘⇧R 새로고침, ⌘Q 종료는
+// 담당이 따로 있다. 목록에 없는 Ctrl/Option 조합은 계속 PTY 몫이다.
 // 키보드 판정 — DOM 무의존 순수 모듈 (계획 v2 "키보드 모델" 장).
 //
 // 3층 구조(워크스페이스 / pane / 탭)의 이동 키와, 마우스로만 되던 조작
@@ -181,9 +181,9 @@ const CTRL_SHIFT_KEYS: Record<
   closeWorkspace: { letter: "q", action: () => ({ type: "closeWorkspace" }) },
 };
 
-// Native Mac command table. Cmd+Q belongs to the native quit/close guard;
-// Cmd+W closes a TAB, never the application window. Ctrl is terminal-owned
-// except the conventional Ctrl+Tab / Ctrl+Shift+Tab pane-local tab cycle.
+// 네이티브 Mac 명령 표. Cmd+Q 는 네이티브 quit/close guard 몫이고,
+// Cmd+W 는 **탭**을 닫으며 앱 창은 절대 닫지 않는다. Ctrl 은 관례적인
+// Ctrl+Tab / Ctrl+Shift+Tab pane 내 탭 순환을 빼면 터미널 몫이다.
 const MAC_KEYS: Record<ShortcutId, { letter: string; shift: boolean; shifted?: string; action: () => KeyAction }> = {
   closeTab: { ...CTRL_SHIFT_KEYS.closeTab, shift: false },
   newTerminalTab: { ...CTRL_SHIFT_KEYS.newTerminalTab, shift: false },

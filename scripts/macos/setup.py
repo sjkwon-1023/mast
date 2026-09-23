@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Idempotent native agent wiring. Only Mast-owned integrations are replaced.
+"""멱등한 네이티브 에이전트 연결. Mast 소유 통합만 교체한다.
 
-Shell profiles are never edited. Existing malformed/user-owned agent settings
-are preserved and errors are reported in ~/.mast/setup.log by the host.
+셸 프로필은 절대 수정하지 않는다. 기존의 형식이 잘못된 에이전트 설정이나 사용자 소유
+에이전트 설정은 보존하고, 오류는 호스트가 ~/.mast/setup.log 에 기록한다.
 """
 import hashlib
 import importlib.util
@@ -37,7 +37,7 @@ def atomic(path, data, mode=0o600):
 
 
 def bounded_run(args, seconds=8):
-    # A broken version shim must not leave a child holding our output pipe open.
+    # 깨진 버전 shim 때문에 자식이 우리 출력 파이프를 연 채 남으면 안 된다.
     process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, start_new_session=True)
     try:
@@ -102,7 +102,7 @@ def skills():
     if (HOME / ".codex").is_dir():
         targets.append((HOME / ".codex/skills/mast", "mast-skill.md"))
     for directory, source in targets:
-        # Do not follow an existing skill-directory symlink into an unrelated tree.
+        # 기존 skill 디렉터리 symlink 를 따라 무관한 트리로 들어가지 않는다.
         if directory.is_symlink():
             raise ValueError("refusing symlinked skill directory: " + str(directory))
         atomic(directory / "SKILL.md", (BIN / source).read_bytes(), 0o644)
@@ -170,7 +170,7 @@ def connect_agents(errors):
         marker = MAST / (".setup-macos-v%s-%s" % (VERSION, agent))
         if marker.exists() or (MAST / ("no-" + agent + "-hooks")).exists():
             continue
-        # Retry on the next app launch if an agent is installed after this one.
+        # 이번 실행 뒤에 에이전트가 설치되면 다음 앱 실행에서 다시 시도한다.
         if not list(candidates(agent)) and not (HOME / ("." + agent)).is_dir():
             continue
         try:

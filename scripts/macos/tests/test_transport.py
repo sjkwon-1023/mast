@@ -1,4 +1,4 @@
-"""CLI transport errors must not masquerade as a successful send or submit."""
+"""CLI 전송 오류가 성공한 send·submit 으로 위장하면 안 된다."""
 import base64
 import importlib.util
 from pathlib import Path

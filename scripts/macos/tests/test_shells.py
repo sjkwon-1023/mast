@@ -1,4 +1,4 @@
-"""Exercise the shipped startup files with real macOS PTYs and real zsh/bash."""
+"""배포되는 시작 파일을 실제 macOS PTY 와 실제 zsh/bash 로 실행해 본다."""
 import errno
 import os
 from pathlib import Path

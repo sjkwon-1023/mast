@@ -1,5 +1,5 @@
 #!/bin/bash
-# Arguments, never shell interpolation: shell executable, stable tab ID, initial cwd.
+# 셸 보간 없이 인자로만 받는다: 셸 실행 파일, 고정 탭 ID, 초기 cwd.
 set -eu
 shell=$1
 export MAST=1 MAST_TAB="$2" TERM=xterm-256color COLORTERM=truecolor
@@ -8,7 +8,7 @@ export MAST_SHELL_PID=$$
 export TERM_PROGRAM=mast BASH_SILENCE_DEPRECATION_WARNING=1
 export MAST_CONFIG_PATH="${4:-}"
 export PATH="$HOME/.mast/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-# Finder does not necessarily inherit a UTF-8 locale from an interactive terminal.
+# Finder 는 대화형 터미널의 UTF-8 locale 을 반드시 물려받지는 않는다.
 if [[ -z ${LANG:-} && -z ${LC_ALL:-} && -z ${LC_CTYPE:-} ]]; then export LANG=en_US.UTF-8; fi
 cd -- "$HOME"
 if [[ -n $3 ]] && ! cd -- "$3" 2>/dev/null; then

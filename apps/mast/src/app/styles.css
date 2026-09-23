@@ -1546,7 +1546,7 @@ body {
   display: none;
 }
 
-/* Native command-key guide; Windows labels and layout remain unchanged. */
+/* 네이티브 command 키 가이드. Windows 라벨과 레이아웃은 그대로 둔다. */
 .platform-macos.shortcut-guide::after {
   content: "⌘1–9: workspace  ·  ⌘⇧[ / ]: cycle  ·  ⌘D: auto split  ·  ⌘⌥arrows: pane";
 }

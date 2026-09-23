@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native Mast CLI. Same OSC contract as WSL, without GNU tools or a daemon."""
+"""네이티브 Mast CLI. WSL 과 같은 OSC 계약이며, GNU 도구나 데몬 없이 동작한다."""
 import base64
 import importlib.util
 import json
@@ -55,12 +55,12 @@ def encode(text):
 
 
 def flat(value, limit):
-    # Titles are untrusted terminal output, not executable terminal markup.
+    # 제목은 신뢰할 수 없는 터미널 출력이며, 실행 가능한 터미널 마크업이 아니다.
     return " ".join(re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", str(value)).split())[:limit]
 
 
 def commands_by_tty():
-    """A single on-demand ps snapshot, never a background process monitor."""
+    """필요할 때 한 번 찍는 ps 스냅샷이며, 백그라운드 프로세스 모니터가 아니다."""
     try:
         result = subprocess.run(
             ["/bin/ps", "-axo", "pid=,pgid=,tpgid=,tty=,comm="],
@@ -82,8 +82,8 @@ def commands_by_tty():
 def list_tabs(args):
     if args:
         raise ValueError("usage: mast ls")
-    # Keep /tmp literal: the OSC reply-path contract is /tmp, not $TMPDIR or
-    # canonical /private/tmp. The unpredictable 0700 directory owns the reply.
+    # /tmp 를 문자 그대로 둔다: OSC 응답 경로 계약은 $TMPDIR 나 정규화된 /private/tmp 가
+    # 아니라 /tmp 다. 예측할 수 없는 0700 디렉터리가 응답을 소유한다.
     directory = Path(tempfile.mkdtemp(prefix="mast-query-", dir="/tmp"))
     reply = directory / "tabs.json"
     try:

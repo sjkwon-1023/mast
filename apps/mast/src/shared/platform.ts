@@ -1,7 +1,7 @@
-/** Desktop host detection; also safe in unit tests / pre-rendering without DOM. */
+/** 데스크톱 호스트 판별. 단위 테스트·DOM 없는 사전 렌더링에서도 안전하다. */
 export const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
-/** Native editing/zoom modifier. Never turn Ctrl+C/D/W into app shortcuts on Mac. */
+/** 네이티브 편집·확대 modifier. Mac 에서 Ctrl+C/D/W 를 앱 단축키로 만들지 않는다. */
 export function primaryModifier(
   event: Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "altKey">,
   mac = IS_MAC,

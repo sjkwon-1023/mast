@@ -1,4 +1,4 @@
-"""Native adapters; run with Python 3.11+ on any host (shell tests require POSIX)."""
+"""네이티브 어댑터. 어느 호스트에서든 Python 3.11+ 로 실행한다(셸 테스트는 POSIX 필요)."""
 import base64
 import contextlib
 import importlib.util

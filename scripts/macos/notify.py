@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native notification / Codex-notify bridge; failures never break an agent."""
+"""네이티브 알림 / Codex-notify 브리지. 실패해도 에이전트를 깨뜨리지 않는다."""
 import glob
 import importlib.util
 import json
@@ -104,6 +104,6 @@ if __name__ == "__main__":
     try:
         main(sys.argv[1:])
     except Exception:
-        # The dispatcher logs state problems; notification failure must not be
-        # surfaced as a failed tool or an interrupted agent session.
+        # 상태 문제는 dispatcher 가 기록한다. 알림 실패를 실패한 도구나 중단된
+        # 에이전트 세션으로 드러내면 안 된다.
         pass

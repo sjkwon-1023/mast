@@ -1878,8 +1878,8 @@ fn close_pane_drops_agent_state_of_every_removed_tab() {
     assert_eq!(agent(&d, ws), (AgentStatus::Idle, None));
 }
 
-/// WSL distro is forwarded on Windows/Linux, but newly created native Mac
-/// workspaces intentionally have no distro. Keep testing both platform contracts.
+/// Windows/Linux 에서는 WSL distro 를 넘기지만, 새로 만든 네이티브 Mac workspace 는
+/// 의도적으로 distro 가 없다. 두 플랫폼 계약을 모두 계속 테스트한다.
 fn expected_distro(name: &str) -> Option<String> {
     if cfg!(target_os = "macos") { None } else { Some(name.to_owned()) }
 }

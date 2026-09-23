@@ -307,9 +307,9 @@ def open_terminal():
     except OSError:
         pass
     if sys.platform == "darwin":
-        # Detached hooks inherit the exact slave TTY from Mast's launch wrapper.
-        # /proc does not exist on macOS. Never open an arbitrary inherited path:
-        # require a real, same-user terminal device, without following symlinks.
+        # 분리된 훅은 Mast 실행 래퍼가 준 slave TTY 를 그대로 물려받는다.
+        # macOS 에는 /proc 이 없다. 물려받은 임의 경로는 절대 열지 않는다:
+        # symlink 를 따라가지 않고, 같은 사용자의 실제 터미널 장치여야 한다.
         target = os.environ.get("MAST_TTY", "")
         if os.environ.get("MAST") != "1" or not re.fullmatch(r"/dev/ttys[0-9]+", target):
             return None

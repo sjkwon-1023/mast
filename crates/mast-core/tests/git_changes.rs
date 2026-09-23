@@ -7,8 +7,8 @@ use std::process::{Command, Output};
 use mast_core::git::{self, GitChange, GitDiffRequest, GitScope};
 use tempfile::TempDir;
 
-// macOS exposes /var through /private/var. Git returns the canonical path;
-// construct fixtures there so path assertions mean the same thing on every OS.
+// macOS 는 /var 를 /private/var 로 노출한다. Git 은 정규 경로를 돌려주므로,
+// 경로 단언이 모든 OS 에서 같은 뜻이 되도록 fixture 를 그곳에 만든다.
 fn fixture_dir() -> TempDir {
     let root = fs::canonicalize(std::env::temp_dir()).unwrap();
     tempfile::tempdir_in(root).unwrap()

@@ -1,4 +1,4 @@
-//! Apple Silicon host integration. No separate product, terminal engine or daemon.
+//! Apple Silicon 호스트 통합. 별도 제품·터미널 엔진·데몬은 없다.
 use std::ffi::CStr;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::PermissionsExt;
@@ -73,8 +73,8 @@ fn install(path: &Path, text: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Capture bounded diagnostic output without a pipe that a grandchild could keep
-/// open. A timeout kills the command's private group and reaps the direct child.
+/// 손자 프로세스가 열어 둔 채 남을 수 있는 파이프 없이, 크기가 제한된 진단 출력을 받는다.
+/// 시간이 초과되면 명령의 전용 프로세스 그룹을 죽이고 직계 자식을 reap 한다.
 pub(crate) fn run(mut command: Command, seconds: u64) -> Result<String, String> {
     let mut output = tempfile::tempfile().map_err(|e| e.to_string())?;
     let mut child = command
@@ -90,7 +90,7 @@ pub(crate) fn run(mut command: Command, seconds: u64) -> Result<String, String> 
             Some(status) => break status,
             None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             None => {
-                // SAFETY: process_group(0) created this unreaped child's group.
+                // SAFETY: process_group(0) 이 아직 reap 되지 않은 이 자식의 그룹을 만들었다.
                 unsafe {
                     libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
                 }
@@ -117,7 +117,7 @@ fn login_shell() -> Option<String> {
     let mut storage = vec![0u8; 16 * 1024];
     let mut pwd = std::mem::MaybeUninit::<libc::passwd>::zeroed();
     let mut result = std::ptr::null_mut();
-    // getpwuid_r avoids libc's process-global passwd storage in a multithreaded app.
+    // getpwuid_r 는 멀티스레드 앱에서 libc 의 프로세스 전역 passwd 저장소를 피한다.
     let code = unsafe {
         libc::getpwuid_r(
             libc::geteuid(),
@@ -235,8 +235,8 @@ fn startup_failure(message: String) -> anyhow::Error {
     anyhow::Error::msg(message)
 }
 
-/// Must finish before the first tab is spawned. Asset installation is local,
-/// atomic, and does not edit .zshrc/.bashrc/.profile or execute their contents.
+/// 첫 탭을 스폰하기 전에 끝나야 한다. 자산 설치는 로컬에서 원자적으로 하며,
+/// .zshrc/.bashrc/.profile 을 수정하거나 그 내용을 실행하지 않는다.
 pub(crate) fn initialize(app: &AppHandle) -> anyhow::Result<()> {
     install_menu(app)?;
     install_terminate_guard(app)?;
@@ -391,7 +391,7 @@ fn provision_now(config: &ShellConfig) {
             error
         }
     };
-    // One bounded diagnostic per launch; do not append an unbounded setup log.
+    // 실행마다 크기가 제한된 진단 하나만 남긴다 — setup 로그에 한없이 덧붙이지 않는다.
     let _ = install(&config.home.join(".mast/setup.log"), &text);
 }
 
@@ -502,8 +502,8 @@ mod tests {
     }
 }
 
-/// Do not install Tauri's default Cmd+W "Close Window" item: Cmd+W belongs to
-/// Mast's active tab. Quit goes through the existing Markdown close guard.
+/// Tauri 기본 Cmd+W "Close Window" 항목을 설치하지 않는다 — Cmd+W 는 Mast 의
+/// 활성 탭 몫이다. 종료는 기존 Markdown close guard 를 거친다.
 pub(crate) fn install_menu(app: &AppHandle) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem as P, Submenu};
     let quit = MenuItem::with_id(app, "mast-quit", "Quit Mast", true, Some("Cmd+Q"))?;

@@ -223,8 +223,8 @@ fn git_command(
     let mut command = Command::new("/usr/bin/timeout");
     #[cfg(target_os = "macos")]
     let mut command = Command::new("/usr/bin/env");
-    // Native capture already owns a process group and enforces the deadline.
-    // Only the WSL relay needs a second, in-guest timeout supervisor.
+    // 네이티브 capture 는 이미 프로세스 그룹을 소유하고 deadline 을 강제한다.
+    // guest 안의 두 번째 timeout 감독자가 필요한 것은 WSL relay 뿐이다.
     #[cfg(target_os = "macos")]
     let _ = timeout;
 
