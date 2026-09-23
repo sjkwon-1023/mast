@@ -856,11 +856,25 @@ impl PtySession {
     /// `on_exit` 는 여기서 호출하지 않는다 — kill 로 죽인 자식도 waiter 의
     /// `child.wait()` 를 반환시키므로, 자연 종료·kill 어느 경로든 **waiter 가
     /// 단독으로 정확히 1회** 호출한다 ([`waiter_loop`] 참조).
+    ///
+    /// macOS 에서는 leader 에 SIGHUP 만 동기로 보내고 곧바로 반환한다. HUP 을 무시한
+    /// leader 는 분리 스레드가 grace 뒤 SIGKILL 한다 — 호출자가 Dispatcher lock 아래에
+    /// 있어도 grace 를 기다리지 않는다.
     pub fn kill(&self) {
+        if !self.hang_up() {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        crate::platform::macos::escalate_in_background(Arc::clone(&self.process_scope));
+    }
+
+    /// [`kill`](Self::kill) 의 동기 부분 — killed 확정, 리더 깨우기, 종료 신호, PTY fd 회수.
+    /// 이번 호출이 처음이었으면 true (이미 kill 됐거나 자연 종료됐으면 아무것도 하지 않고 false).
+    fn hang_up(&self) -> bool {
         {
             let mut inner = self.shared.inner.lock().unwrap();
             if inner.killed {
-                return;
+                return false;
             }
             inner.killed = true;
         }
@@ -871,7 +885,7 @@ impl PtySession {
         // (ESRCH 등)할 수 있다. "프로세스가 죽어 있어야 한다"는 의도는 이미
         // 충족된 상태이므로 이 에러는 무시한다 (멱등 kill — 에러 은폐가 아님).
         #[cfg(target_os = "macos")]
-        self.process_scope.terminate();
+        self.process_scope.hang_up();
         #[cfg(not(target_os = "macos"))]
         let _ = self.killer.lock().unwrap().kill();
 
@@ -881,6 +895,7 @@ impl PtySession {
         // 스레드 종료 시 함께 drop 된다.
         *self.writer.lock().unwrap() = None;
         *self.master.lock().unwrap() = None;
+        true
     }
 }
 
@@ -1169,6 +1184,12 @@ pub struct SessionManager {
     stopping: Arc<AtomicBool>,
     next_id: Mutex<SessionId>,
     sessions: Mutex<HashMap<SessionId, Arc<PtySession>>>,
+    /// 탭 닫기로 레지스트리에서 빠졌지만 leader 가 아직 reap 되지 않았을 수 있는 세션의
+    /// 신호 권한. 에스컬레이션 스레드는 앱 종료(`process::exit`)와 함께 사라지므로
+    /// [`shutdown`](Self::shutdown) 이 이 leader 들도 직접 끝낸다. reap 된 항목은 다음
+    /// 추가 때 걸러 낸다. lock 순서: `sessions` → `closing`.
+    #[cfg(target_os = "macos")]
+    closing: Mutex<Vec<Arc<crate::platform::macos::ProcessScope>>>,
 }
 
 impl SessionManager {
@@ -1177,6 +1198,8 @@ impl SessionManager {
             stopping: Arc::new(AtomicBool::new(false)),
             next_id: Mutex::new(1),
             sessions: Mutex::new(HashMap::new()),
+            #[cfg(target_os = "macos")]
+            closing: Mutex::new(Vec::new()),
         }
     }
 
@@ -1206,6 +1229,17 @@ impl SessionManager {
         let mut sessions = self.sessions.lock().unwrap();
         if self.stopping.load(Ordering::Acquire) {
             drop(sessions);
+            // shutdown 이 이미 레지스트리를 비운 뒤라 이 세션은 그쪽에서 보이지 않는다.
+            // 곧 `process::exit` 가 올 수 있으므로 macOS 에서는 에스컬레이션을 스레드에
+            // 맡기지 않고 여기서 HUP → grace → KILL 을 끝낸다.
+            #[cfg(target_os = "macos")]
+            {
+                session.hang_up();
+                crate::platform::macos::kill_unreaped_after_grace(&[Arc::clone(
+                    &session.process_scope,
+                )]);
+            }
+            #[cfg(not(target_os = "macos"))]
             session.kill();
             anyhow::bail!("session manager shut down during spawn");
         }
@@ -1215,12 +1249,30 @@ impl SessionManager {
 
     /// Stop accepting spawns, suppress shutdown callbacks, and terminate all owned
     /// sessions even when another component still holds an Arc to a session.
+    ///
+    /// macOS 에서는 동기로 끝낸다 — 호출 직후 `process::exit` 가 오므로 에스컬레이션
+    /// 스레드에 맡기면 SIGKILL 이 영영 가지 않는다. 레지스트리의 모든 leader 와 탭 닫기로
+    /// 빠졌지만 아직 reap 되지 않은 leader 에 SIGHUP 을 보내고, grace 를 전체에서 한 번만
+    /// 기다린 뒤 아직 reap 되지 않은 leader 만 SIGKILL 한다.
     pub fn shutdown(&self) {
         let sessions = {
             let mut guard = self.sessions.lock().unwrap();
             self.stopping.store(true, Ordering::Release);
             std::mem::take(&mut *guard)
         };
+        #[cfg(target_os = "macos")]
+        {
+            let mut scopes = std::mem::take(&mut *self.closing.lock().unwrap());
+            for scope in &scopes {
+                scope.hang_up();
+            }
+            for session in sessions.values() {
+                session.hang_up();
+                scopes.push(Arc::clone(&session.process_scope));
+            }
+            crate::platform::macos::kill_unreaped_after_grace(&scopes);
+        }
+        #[cfg(not(target_os = "macos"))]
         for session in sessions.into_values() { session.kill(); }
     }
 
@@ -1232,7 +1284,19 @@ impl SessionManager {
     pub fn remove(&self, id: SessionId) -> bool {
         // kill 은 sessions lock 을 놓은 뒤 수행한다 — sink 콜백·wait 지연이
         // 레지스트리 전체를 잡아두지 않게.
-        let removed = self.sessions.lock().unwrap().remove(&id);
+        let removed = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let removed = sessions.remove(&id);
+            // 레지스트리에서 빼는 것과 같은 임계구역에서 종료 대기 목록에 올린다 — 그 사이에
+            // shutdown 이 끼어들어도 이 leader 는 둘 중 한 곳에서 반드시 보인다.
+            #[cfg(target_os = "macos")]
+            if let Some(session) = &removed {
+                let mut closing = self.closing.lock().unwrap();
+                closing.retain(|scope| scope.unreaped());
+                closing.push(Arc::clone(&session.process_scope));
+            }
+            removed
+        };
         match removed {
             Some(session) => {
                 session.kill();
