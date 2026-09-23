@@ -393,6 +393,10 @@ pub struct UiSettings {
     /// (features/workspace/tab-id-settings.ts). `log` 와 같은 규율로 부팅 때 한 번만
     /// 읽으므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
     pub show_tab_ids: Option<bool>,
+    /// macOS 터미널에서 사용할 로그인 셸. 미설정이면 사용자 환경의 `$SHELL` 을
+    /// 따르고, 그것도 없으면 Apple Silicon macOS 기본값인 `/bin/zsh` 를 쓴다.
+    /// Windows에서는 읽되 사용하지 않는다. 예: `"zsh"`, `"/bin/bash"`.
+    pub shell: Option<String>,
     /// 원격 표면(LAN 폴링, [`crate::remote`]). **키가 있으면 켜짐**이고 없으면
     /// 리스너도 스레드도 토큰 파일도 생기지 않는다. `log` 와 같은 규율으로 부팅 때
     /// 한 번만 읽으므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
@@ -498,6 +502,14 @@ fn parse_ui_settings(text: &str, path: &Path) -> Result<UiSettings, String> {
     if let Some(family) = &settings.font_family {
         if family.trim().is_empty() {
             return Err(format!("fontFamily in {} must not be blank", path.display()));
+        }
+    }
+    if let Some(shell) = &settings.shell {
+        if shell.trim().is_empty() {
+            return Err(format!("shell in {} must not be blank", path.display()));
+        }
+        if shell.contains('\0') {
+            return Err(format!("shell in {} contains a NUL byte", path.display()));
         }
     }
     // 같은 loud-fail 규율: 오타 난 언어 이름("pyton")을 조용히 무시하면 사용자는
@@ -606,12 +618,39 @@ pub fn notify_toast(
     result
 }
 
-/// unix(개발 실행)에는 띄울 WinRT 토스트가 없다 — 조용한 성공으로 가리지 않고
-/// 명시적으로 실패한다 (`pick_workspace_folder` 의 cfg 분기와 같은 규율).
-#[cfg(not(windows))]
+/// macOS 1차 지원에서는 추가 플러그인 없이 시스템 `osascript` 로 Notification
+/// Center 알림을 보낸다. 제목/본문은 셸 문자열이 아니라 argv 로 전달하므로 에이전트
+/// 메시지에 따옴표나 셸 메타문자가 있어도 명령으로 평가되지 않는다. 앱 자체 알림
+/// identity/권한 통합은 후속 범위다.
+#[cfg(target_os = "macos")]
 #[tauri::command]
 pub fn notify_toast(title: String, body: String, _log_label: String) -> Result<(), String> {
-    Err(format!("toasts are Windows-only (dropped: {title} / {body})"))
+    let status = std::process::Command::new("/usr/bin/osascript")
+        .args([
+            "-e",
+            "on run argv",
+            "-e",
+            "display notification (item 2 of argv) with title (item 1 of argv)",
+            "-e",
+            "end run",
+            "--",
+        ])
+        .arg(title)
+        .arg(body)
+        .status()
+        .map_err(|err| format!("cannot start macOS notification helper: {err}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("macOS notification helper exited with {status}"))
+    }
+}
+
+/// 지원 대상이 아닌 unix 개발 실행은 가짜 성공으로 가리지 않는다.
+#[cfg(all(not(windows), not(target_os = "macos")))]
+#[tauri::command]
+pub fn notify_toast(title: String, body: String, _log_label: String) -> Result<(), String> {
+    Err(format!("toasts are unsupported on this platform (dropped: {title} / {body})"))
 }
 
 /// 토스트 시도를 [`TOAST_LOG_FILE`] 에 한 줄 append 한다 — **베스트에포트**다.
@@ -688,18 +727,38 @@ pub async fn open_url(url: String) -> Result<(), String> {
         .map_err(|err| format!("open_url task join failed: {err}"))?
 }
 
-/// unix(개발 실행)에는 넘길 Windows 셸이 없다 — 가짜로 성공하지 않고 명시적으로 실패한다
-/// (`pick_workspace_folder` 와 같은 규율).
-#[cfg(not(windows))]
+/// macOS에서는 LaunchServices의 `open` 유틸리티에 검증된 URL을 argv 하나로 넘긴다.
+/// 셸을 거치지 않아 `&` 등이 든 OAuth URL도 명령으로 재해석되지 않는다.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn open_url(url: String) -> Result<(), String> {
+    let url = validated_http_url(url)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let status = std::process::Command::new("/usr/bin/open")
+            .arg(&url)
+            .status()
+            .map_err(|err| format!("cannot start /usr/bin/open: {err}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("/usr/bin/open exited with {status}"))
+        }
+    })
+    .await
+    .map_err(|err| format!("open_url task join failed: {err}"))?
+}
+
+/// 지원 대상이 아닌 unix 개발 실행에는 플랫폼 opener 계약이 없다.
+#[cfg(all(not(windows), not(target_os = "macos")))]
 #[tauri::command]
 pub async fn open_url(_url: String) -> Result<(), String> {
-    Err("opening links is Windows-only".to_owned())
+    Err("opening links is unsupported on this platform".to_owned())
 }
 
 /// http/https 만 통과시킨다. 제어문자·공백은 거부한다 — URL 로 쓰일 수 없는 문자이고,
 /// 로그·파일 내용에서 잘못 잘려 나온 문자열이 여기까지 오는 것을 막는다. 길이 상한은
 /// 브라우저들이 실질적으로 다루는 범위(2048)를 기준으로 둔다.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn validated_http_url(url: String) -> Result<String, String> {
     const MAX_LEN: usize = 2048;
     let lower = url.to_ascii_lowercase();
@@ -807,20 +866,44 @@ pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
     }))
 }
 
-/// unix(개발 실행)에는 띄울 네이티브 대화상자가 없다 — 조용한 no-op 이나 가짜
-/// 경로로 가리지 않고 명시적으로 실패한다 (`host.rs`·`host_path` 의 cfg 분기와
-/// 같은 규율: Windows 전용 기능은 dev 경로에서 loud 하게 없음을 알린다).
-#[cfg(not(windows))]
+/// macOS 네이티브 폴더 선택. POSIX 절대 경로를 모델의 기존 `rootPath` 필드에
+/// 그대로 넣고 `Workspace.distro` 는 의도적으로 None 으로 둔다.
+#[cfg(target_os = "macos")]
 #[tauri::command]
 pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
-    Err("folder picker is Windows-only".to_owned())
+    let picked = tauri::async_runtime::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("Select a workspace folder")
+            .pick_folder()
+    })
+    .await
+    .map_err(|err| format!("pick_workspace_folder task join failed: {err}"))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .to_str()
+        .ok_or_else(|| format!("selected path is not valid UTF-8: {}", picked.display()))?;
+    mast_core::wslpath::validate_linux_path(path)?;
+    Ok(Some(PickedFolder {
+        name: folder_name(path, None),
+        linux_path: path.to_owned(),
+        distro: None,
+    }))
+}
+
+/// 지원 대상이 아닌 unix 개발 실행에는 네이티브 picker 를 제공하지 않는다.
+#[cfg(all(not(windows), not(target_os = "macos")))]
+#[tauri::command]
+pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
+    Err("folder picker is unsupported on this platform".to_owned())
 }
 
 /// 리눅스 경로의 마지막 세그먼트 (빈 세그먼트는 건너뛴다) — 코어의 탭 제목
 /// 규칙(`command.rs::path_title`)과 같은 계산이되, distro 루트("/") 픽의 퇴화만
 /// 보정한다 (리뷰 finding): `"/"` 대신 distro 이름이 워크스페이스 이름으로
 /// 자연스럽다. (드라이브 루트 보정은 드라이브 픽 자체가 거부되면서 제거됐다.)
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn folder_name(linux_path: &str, distro: Option<&str>) -> String {
     if linux_path == "/" {
         if let Some(d) = distro {
