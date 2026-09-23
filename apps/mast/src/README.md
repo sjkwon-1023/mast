@@ -7,7 +7,7 @@ state; the frontend receives revisioned snapshots and renders disposable views.
 | --- | --- |
 | `app/` | Desktop bootstrap, snapshot store, keyboard action wiring, activity reporting, update notice and app stylesheet. `app/main.ts` connects the features. |
 | `features/workspace/` | Sidebar, panes, tabs, split layout, view reconciliation and workspace switching. `workspace-view.ts` owns the terminal/viewer registries. |
-| `features/terminal/` | Live xterm view, shared terminal settings, attach framing, acknowledgements and scroll restoration. |
+| `features/terminal/` | Live xterm view, shared terminal settings, attach framing, acknowledgements, scroll restoration and the macOS WebKit Hangul input adapter (`webkit-ime*.ts`). |
 | `features/viewers/` | Common viewer lifetime/font/scroll contracts; `text/`, `markdown/`, `folder/` and `record/` own their respective views. |
 | `features/changes/` | Git change selection and diff presentation. |
 | `features/pairing/` | Desktop phone-pairing dialog and firewall feedback. |

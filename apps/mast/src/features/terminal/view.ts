@@ -37,6 +37,7 @@ import {
 import { Channel } from "@tauri-apps/api/core";
 import type { OutputChunk } from "../../infrastructure/backend";
 import { parseAttachBody, parseFrame } from "./frame";
+import { WebKitImeInput } from "./webkit-ime-input";
 import type { GateResult } from "./attach-gate";
 import { log } from "../../infrastructure/logging";
 import type { SettlePoll } from "./scroll";
@@ -59,6 +60,9 @@ export class TerminalView {
   private opened = false;
 
   private focusPending = false;
+
+  // macOS WebKit 한글 입력 어댑터. Windows 는 설치하지 않는다 (webkit-ime.ts 참조).
+  private ime: WebKitImeInput | null = null;
 
   private replayDone = false;
 
@@ -133,6 +137,8 @@ export class TerminalView {
   setVisible(v: boolean): void {
     if (this.visible === v) return;
     this.visible = v;
+    // 숨겨지는 탭의 조합 중 글자는 blur 를 기다리지 않고 확정한다.
+    if (!v) this.ime?.flush();
     this.root.style.display = v ? "" : "none";
     if (v) this.scheduleFit();
   }
@@ -166,10 +172,13 @@ export class TerminalView {
         length: text.length,
       });
     }
+    // 조합 중 글자가 붙여넣은 텍스트보다 먼저 가야 한다. xterm 의 paste 는 입력창도 비운다.
+    this.ime?.flush();
     this.term.paste(text);
   }
 
   submit(): void {
+    this.ime?.flush();
     this.enqueueWrite("\r");
   }
 
@@ -199,6 +208,7 @@ export class TerminalView {
 
     this.fit();
     this.installCopyPasteKeys();
+    if (IS_MAC) this.ime = new WebKitImeInput(this.term);
 
     // attach 응답 전에 들어오는 출력을 놓치지 않도록 채널을 먼저 만든다.
     const channel = new Channel<OutputChunk>();
@@ -266,6 +276,9 @@ export class TerminalView {
     if (this.disposed) return;
     this.disposed = true;
     unregisterTerminalFontTarget(this);
+    // 남은 조합은 onData 구독을 끊기 전에 확정해야 PTY 에 닿는다.
+    this.ime?.dispose();
+    this.ime = null;
     this.endScrollRestore("disposed");
 
     this.latchedByRestore = false;
