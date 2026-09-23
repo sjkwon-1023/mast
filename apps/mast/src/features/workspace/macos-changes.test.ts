@@ -129,7 +129,11 @@ describe("macOS Changes viewer", () => {
       return null;
     });
     view.render(snapshot(1, 1, workspace(1, changesTab(11, SAVED_PATH))));
-    await sleep(20);
+    // 지연 로딩(dynamic import)과 비동기 조회는 부하에 따라 늦어진다 — 고정 시간 대신 결과를 기다린다.
+    // 복원된 탭의 조회까지 끝난 뒤에 넘어가야 이 테스트의 늦은 호출이 다음 테스트의 호출 수에 섞이지 않는다.
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLElement>(".changes-root")?.textContent).toBe(REPO_ROOT),
+    );
 
     const button = root.querySelector<HTMLButtonElement>(
       '.pane-header button[title="New changes viewer tab"]',
@@ -151,7 +155,9 @@ describe("macOS Changes viewer", () => {
     });
     const { root, view } = mount();
     view.render(snapshot(1, 1, workspace(1, changesTab(11, SAVED_PATH))));
-    await sleep(20);
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLElement>(".changes-root")?.textContent).toBe(REPO_ROOT),
+    );
 
     expect(root.querySelector(".pane-placeholder")?.textContent).not.toContain("deferred");
     expect(gitStatus).toHaveBeenCalledTimes(1);
@@ -161,7 +167,11 @@ describe("macOS Changes viewer", () => {
     const row = root.querySelector<HTMLButtonElement>(".changes-file");
     expect(row?.textContent).toContain(filePath);
     row?.click();
-    await sleep(20);
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLElement>(".changes-diff")?.textContent).toContain(
+        "native path preserved",
+      ),
+    );
 
     expect(gitDiff).toHaveBeenCalledWith(null, {
       root: REPO_ROOT,
@@ -185,7 +195,7 @@ describe("macOS Changes viewer", () => {
     const savedWorkspace = workspace(1, changesTab(11, SAVED_PATH));
     const otherWorkspace = workspace(2, null);
     view.render(snapshot(1, 1, savedWorkspace, otherWorkspace));
-    await sleep(20);
+    await vi.waitFor(() => expect(root.querySelector(".changes-file")).not.toBeNull());
 
     root.querySelector<HTMLButtonElement>(".changes-file")?.click();
     expect(gitDiff).toHaveBeenCalledTimes(1);
@@ -196,7 +206,7 @@ describe("macOS Changes viewer", () => {
     expect(root.querySelector(".changes-diff")).toBeNull();
 
     view.render(snapshot(1, 3, savedWorkspace, otherWorkspace));
-    await sleep(20);
+    await vi.waitFor(() => expect(gitStatus).toHaveBeenCalledTimes(2));
     expect(gitStatus).toHaveBeenCalledTimes(2);
     expect(gitStatus).toHaveBeenNthCalledWith(2, null, SAVED_PATH);
   });

@@ -419,11 +419,15 @@ The phone keeps its Local HTTP pairing token in browser local storage. Local HTT
 HTTP and is intended for a trusted LAN.
 
 macOS Application Firewall decisions are application-scoped, not port- or protocol-scoped.
-The pairing dialog reads the global firewall state, block-all state and rule for the current
-executable. Its status covers both Local HTTP over TCP and Secure Remote over UDP, and an allow
+The pairing dialog reads the global firewall state, block-all state and the current executable's
+entry in the firewall app list (`socketfilterfw --listapps`). `--getappblocked` is not used as
+evidence: it answers "permitted" for paths that are not in the list at all, so an unlisted
+executable is reported as not yet allowed rather than allowed. Output that does not match the
+known formats (including the current and older block-all wording) is reported as unknown. Its status covers both Local HTTP over TCP and Secure Remote over UDP, and an allow
 rule can cover other incoming connections for that executable as well. Mast requests administrator
 approval only after the user presses **Allow in macOS Firewall**; it adds and unblocks the current
-executable, then re-reads the status. It does not change global firewall state or block-all. The
+executable (both steps are attempted even if adding reports it is already listed), then re-reads
+the status. It does not change global firewall state or block-all. The
 separate macOS incoming-connection prompt, when shown by the OS, is not the same flow. Windows
 continues to use its existing port, profile and rule-name checks without change.
 

@@ -97,7 +97,11 @@ port or one transport. The pairing dialog only requests administrator approval
 after you click **Allow in macOS Firewall**. macOS's own incoming-connection
 prompt is a separate system prompt. Mast does not change the global firewall or
 the block-all setting. When macOS block-all is enabled, an app allow rule cannot
-override it; review Firewall settings in System Settings. The application-wide
+override it; review Firewall settings in System Settings. Mast reports the app as
+allowed only when it appears in the firewall's app list with incoming connections
+allowed; an app that is not in that list is reported as not yet allowed, even
+though `socketfilterfw --getappblocked` answers "permitted" for unlisted paths.
+The application-wide
 rule is keyed to the current executable and is broader than either phone mode by
 itself, so a moved copy may need its own approval; add it only on networks you
 trust.

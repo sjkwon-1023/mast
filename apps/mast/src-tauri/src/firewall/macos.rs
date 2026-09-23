@@ -12,6 +12,8 @@ const OSASCRIPT: &str = "/usr/bin/osascript";
 const READ_TIMEOUT: Duration = Duration::from_secs(3);
 const APPLY_TIMEOUT: Duration = Duration::from_secs(120);
 const STREAM_LIMIT: usize = 8 * 1024;
+// `--listapps` 는 등록된 앱마다 두 줄을 낸다. 앱이 많은 Mac 에서도 잘리지 않게 넉넉히 두되 상한은 유지한다.
+const LIST_APPS_LIMIT: usize = 256 * 1024;
 const BLOCK_ALL_DETAIL: &str = "Block all incoming connections";
 const APP_BLOCKED_DETAIL: &str = "This app is blocked by macOS Firewall";
 
@@ -20,7 +22,7 @@ const APPLESCRIPT_ARGUMENT_HANDLER: &str = "    if (count of argv) is not 1 then
         error \"invalid argument count\" number -50\n\
     end if\n\
     set quotedExecutablePath to quoted form of (item 1 of argv)\n";
-const APPLESCRIPT_ELEVATED_ACTION: &str = "    set shellCommand to \"/usr/libexec/ApplicationFirewall/socketfilterfw --add \" & quotedExecutablePath & \" && /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp \" & quotedExecutablePath\n\
+const APPLESCRIPT_ELEVATED_ACTION: &str = "    set shellCommand to \"/usr/libexec/ApplicationFirewall/socketfilterfw --add \" & quotedExecutablePath & \" ; /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp \" & quotedExecutablePath\n\
     try\n\
         do shell script shellCommand with administrator privileges\n\
         return \"applied\"\n\
@@ -115,13 +117,15 @@ where
         None => return Err("unrecognized --getblockall output".to_owned()),
     }
 
-    let app_output = read(&["--getappblocked", exe])
-        .map_err(|reason| format!("socketfilterfw --getappblocked failed: {reason}"))?;
-    match parse_app_rule(&app_output, exe) {
+    // `--getappblocked` 는 목록에 없는 경로(존재하지 않는 경로 포함)도 "permitted" 라고 답한다.
+    // 그래서 허용 여부는 등록 목록(`--listapps`)에서 이 실행 파일의 항목으로만 판정한다.
+    let list_output = read(&["--listapps"])
+        .map_err(|reason| format!("socketfilterfw --listapps failed: {reason}"))?;
+    match parse_listed_app(&list_output, exe) {
         Some(AppRule::Blocked) => Ok(make_status("blocked", Some(APP_BLOCKED_DETAIL), exe, port)),
         Some(AppRule::Permitted) => Ok(make_status("allowed", None, exe, port)),
         Some(AppRule::NotInFirewall) => Ok(make_status("missing", None, exe, port)),
-        None => Err("unrecognized --getappblocked output".to_owned()),
+        None => Err("unrecognized --listapps output".to_owned()),
     }
 }
 
@@ -147,31 +151,47 @@ fn parse_global_state(output: &str) -> Option<bool> {
 fn parse_block_all(output: &str) -> Option<bool> {
     let output = trim_output_whitespace(output);
     match output {
-        "Firewall has block all state set to enabled." => Some(true),
-        "Firewall has block all state set to disabled." => Some(false),
+        // 현행 API(`Firewall %s.`)와 구 API 의 문구 — socketfilterfw 바이너리의 문자열 표와 대조했다.
+        "Firewall is blocking all non-essential incoming connections."
+        | "Firewall is set to block all non-essential incoming connections" => Some(true),
+        "Firewall has block all state set to disabled." | "Block all DISABLED!" => Some(false),
         _ => None,
     }
 }
 
-fn parse_app_rule(output: &str, exe: &str) -> Option<AppRule> {
-    [
-        (" is blocked", AppRule::Blocked),
-        (" is permitted", AppRule::Permitted),
-        (" is not part of the firewall", AppRule::NotInFirewall),
-    ]
-    .into_iter()
-    .find_map(|(suffix, rule)| {
-        let expected = format!("Incoming connection to {exe}{suffix}");
-        has_optional_period_and_output_whitespace(output, &expected).then_some(rule)
-    })
-}
-
-fn has_optional_period_and_output_whitespace(output: &str, expected: &str) -> bool {
-    let Some(suffix) = output.strip_prefix(expected) else {
-        return false;
-    };
-    let suffix = suffix.strip_prefix('.').unwrap_or(suffix);
-    suffix.chars().all(is_output_whitespace)
+/// `--listapps` 출력에서 이 실행 파일의 규칙을 찾는다. 형식은
+/// `Total number of apps = N ` 다음에 앱마다 `<번호> : <경로> ` 한 줄과
+/// `(Allow incoming connections)` 또는 `(Block incoming connections)` 한 줄이다.
+/// 항목 수가 머리줄과 다르거나 형식이 어긋나면 None(알 수 없음)이다. 경로는 줄 전체가
+/// 정확히 같아야 하고, 개행이 든 경로는 줄 단위로 대조할 수 없어 None 이다.
+fn parse_listed_app(output: &str, exe: &str) -> Option<AppRule> {
+    if exe.contains('\n') || exe.contains('\r') {
+        return None;
+    }
+    let mut lines = output.split('\n').map(|line| line.trim_end_matches('\r'));
+    let header = lines.next()?.trim_end_matches(' ');
+    let expected: usize = header.strip_prefix("Total number of apps = ")?.parse().ok()?;
+    let mut rows = lines.filter(|line| !line.trim().is_empty());
+    let mut found = None;
+    for index in 1..=expected {
+        let path = rows
+            .next()?
+            .strip_prefix(&format!("{index} : "))?
+            .strip_suffix(' ')?;
+        let rule = match rows.next()?.trim() {
+            "(Allow incoming connections)" => AppRule::Permitted,
+            "(Block incoming connections)" => AppRule::Blocked,
+            _ => return None,
+        };
+        // 같은 경로가 두 번 나오면 어느 규칙이 적용되는지 알 수 없다.
+        if path == exe && found.replace(rule).is_some() {
+            return None;
+        }
+    }
+    if rows.next().is_some() {
+        return None;
+    }
+    Some(found.unwrap_or(AppRule::NotInFirewall))
 }
 
 fn trim_output_whitespace(output: &str) -> &str {
@@ -185,7 +205,12 @@ fn is_output_whitespace(character: char) -> bool {
 fn read_socketfilterfw(arguments: &[&str]) -> Result<String, String> {
     let mut command = Command::new(SOCKETFILTERFW);
     command.args(arguments).env("LC_ALL", "C");
-    let captured = capture_text(&mut command, READ_TIMEOUT)?;
+    let limit = if arguments == ["--listapps"] {
+        LIST_APPS_LIMIT
+    } else {
+        STREAM_LIMIT
+    };
+    let captured = capture_text(&mut command, READ_TIMEOUT, limit)?;
     if !captured.status.success() {
         return Err(format!(
             "command exited unsuccessfully ({})",
@@ -195,7 +220,11 @@ fn read_socketfilterfw(arguments: &[&str]) -> Result<String, String> {
     Ok(captured.stdout)
 }
 
-fn capture_text(command: &mut Command, timeout: Duration) -> Result<CapturedText, String> {
+fn capture_text(
+    command: &mut Command,
+    timeout: Duration,
+    stdout_limit: usize,
+) -> Result<CapturedText, String> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -203,7 +232,7 @@ fn capture_text(command: &mut Command, timeout: Duration) -> Result<CapturedText
     let output = capture(
         command,
         CaptureLimits {
-            stdout_bytes: STREAM_LIMIT,
+            stdout_bytes: stdout_limit,
             stderr_bytes: STREAM_LIMIT,
             timeout,
         },
@@ -217,7 +246,7 @@ fn capture_text(command: &mut Command, timeout: Duration) -> Result<CapturedText
         ));
     }
     if output.stdout_truncated || output.stderr_truncated {
-        return Err("command output exceeded the 8 KiB limit".to_owned());
+        return Err("command output exceeded its size limit".to_owned());
     }
     let stdout = String::from_utf8(output.stdout)
         .map_err(|_| "command stdout was not valid UTF-8".to_owned())?;
@@ -253,7 +282,7 @@ fn elevation_command(exe: &str) -> Command {
 
 fn run_elevation(exe: &str) -> Result<ApplyResult, String> {
     let mut command = elevation_command(exe);
-    let captured = capture_text(&mut command, APPLY_TIMEOUT).map_err(|reason| {
+    let captured = capture_text(&mut command, APPLY_TIMEOUT, STREAM_LIMIT).map_err(|reason| {
         if reason.starts_with("command timed out") {
             format!(
                 "administrator approval timed out after {} seconds; the operation may have continued",
@@ -315,11 +344,23 @@ mod tests {
     const GLOBAL_ENABLED: &str = "Firewall is enabled. (State = 1)\n";
     const BLOCK_ALL_DISABLED: &str = "Firewall has block all state set to disabled.\n";
 
-    fn status_for_app_output(app_output: &str) -> FirewallStatus {
+    /// 실제 `socketfilterfw --listapps` 형식으로 목록을 만든다.
+    fn list_apps(entries: &[(&str, &str)]) -> String {
+        let mut output = format!("Total number of apps = {} \n", entries.len());
+        for (index, (path, rule)) in entries.iter().enumerate() {
+            output.push_str(&format!(
+                "{} : {path} \n             ({rule} incoming connections)\n",
+                index + 1
+            ));
+        }
+        output
+    }
+
+    fn status_for_list(list_output: &str) -> FirewallStatus {
         status_with(PORT, Ok(EXE.to_owned()), |arguments| match arguments {
             ["--getglobalstate"] => Ok(GLOBAL_ENABLED.to_owned()),
             ["--getblockall"] => Ok(BLOCK_ALL_DISABLED.to_owned()),
-            ["--getappblocked", exe] if *exe == EXE => Ok(app_output.to_owned()),
+            ["--listapps"] => Ok(list_output.to_owned()),
             _ => Err("unexpected arguments".to_owned()),
         })
     }
@@ -349,26 +390,37 @@ mod tests {
 
         let blocked_all = status_with(PORT, Ok(EXE.to_owned()), |arguments| match arguments {
             ["--getglobalstate"] => Ok("Firewall is enabled. (State = 2)\n".to_owned()),
-            ["--getblockall"] => Ok("Firewall has block all state set to enabled.\n".to_owned()),
-            ["--getappblocked", _] => panic!("block-all must take precedence over app status"),
+            ["--getblockall"] => {
+                Ok("Firewall is blocking all non-essential incoming connections.\n".to_owned())
+            }
+            ["--listapps"] => panic!("block-all must take precedence over app status"),
             _ => Err("unexpected arguments".to_owned()),
         });
         assert_eq!(blocked_all.state, "blocked");
         assert_eq!(blocked_all.detail.as_deref(), Some(BLOCK_ALL_DETAIL));
 
-        let blocked_app =
-            status_for_app_output(&format!("Incoming connection to {EXE} is blocked.\n"));
+        // 구 API 의 block-all 문구도 인식한다.
+        assert_eq!(
+            parse_block_all("Firewall is set to block all non-essential incoming connections \n"),
+            Some(true)
+        );
+        assert_eq!(parse_block_all("Block all DISABLED! \n"), Some(false));
+
+        let blocked_app = status_for_list(&list_apps(&[
+            ("/usr/sbin/cupsd", "Allow"),
+            (EXE, "Block"),
+        ]));
         assert_eq!(blocked_app.state, "blocked");
         assert_ne!(blocked_app.detail.as_deref(), Some(BLOCK_ALL_DETAIL));
 
-        let permitted =
-            status_for_app_output(&format!("Incoming connection to {EXE} is permitted.\n"));
+        let permitted = status_for_list(&list_apps(&[(EXE, "Allow"), ("/usr/sbin/smbd", "Allow")]));
         assert_eq!(permitted.state, "allowed");
 
-        let missing = status_for_app_output(&format!(
-            "Incoming connection to {EXE} is not part of the firewall.\n"
-        ));
+        // 목록에 없는 앱은 허용된 것이 아니다 — `--getappblocked` 가 뭐라고 하든 미등록이다.
+        let missing = status_for_list(&list_apps(&[("/usr/libexec/remoted", "Allow")]));
         assert_eq!(missing.state, "missing");
+        let empty = status_for_list("Total number of apps = 0 \n");
+        assert_eq!(empty.state, "missing");
 
         for reason in [
             "nonzero exit status",
@@ -398,9 +450,7 @@ mod tests {
             match arguments {
                 ["--getglobalstate"] => Ok(GLOBAL_ENABLED.to_owned()),
                 ["--getblockall"] => Ok(BLOCK_ALL_DISABLED.to_owned()),
-                ["--getappblocked", exe] if *exe == EXE => {
-                    Ok(format!("Incoming connection to {EXE} is permitted.\n"))
-                }
+                ["--listapps"] => Ok(list_apps(&[(EXE, "Allow")])),
                 _ => Err("unexpected arguments".to_owned()),
             }
         };
@@ -418,26 +468,55 @@ mod tests {
             vec![
                 vec!["--getglobalstate"],
                 vec!["--getblockall"],
-                vec!["--getappblocked", EXE],
+                vec!["--listapps"],
                 vec!["--getglobalstate"],
                 vec!["--getblockall"],
-                vec!["--getappblocked", EXE],
+                vec!["--listapps"],
             ]
         );
     }
 
     #[test]
     fn path_text_cannot_forge_an_allowed_status() {
-        let exe = "/tmp/permitted 'single' \"double\" \\slash\nline\r$() `tick` Ω";
-        let permitted = format!("Incoming connection to {exe} is permitted.\n");
-        assert_eq!(parse_app_rule(&permitted, exe), Some(AppRule::Permitted));
+        let exe = "/tmp/permitted 'single' \"double\" \\slash $() `tick` Ω";
+        assert_eq!(
+            parse_listed_app(&list_apps(&[(exe, "Allow")]), exe),
+            Some(AppRule::Permitted)
+        );
+        // 접두어만 같은 다른 경로의 허용은 이 앱의 허용이 아니다.
+        assert_eq!(
+            parse_listed_app(&list_apps(&[(&format!("{exe}x"), "Allow")]), exe),
+            Some(AppRule::NotInFirewall)
+        );
+        assert_eq!(
+            parse_listed_app(&list_apps(&[(&exe[..exe.len() - 3], "Allow")]), exe),
+            Some(AppRule::NotInFirewall)
+        );
+        // 같은 경로가 두 번이면 어느 규칙인지 알 수 없다.
+        assert_eq!(
+            parse_listed_app(&list_apps(&[(exe, "Block"), (exe, "Allow")]), exe),
+            None
+        );
+        // 머리줄의 항목 수와 실제 항목이 다르면 잘린 출력이다.
+        let truncated = list_apps(&[(exe, "Allow")]).replace("= 1 ", "= 2 ");
+        assert_eq!(parse_listed_app(&truncated, exe), None);
+        let unknown_rule = list_apps(&[(exe, "Allow")]).replace("(Allow", "(Maybe");
+        assert_eq!(parse_listed_app(&unknown_rule, exe), None);
+        // 개행이 든 경로는 줄 단위로 대조할 수 없다.
+        let multiline = "/tmp/a\n1 : /tmp/b";
+        assert_eq!(parse_listed_app(&list_apps(&[("/tmp/b", "Allow")]), multiline), None);
+    }
 
-        let forged = format!("Incoming connection to {exe} is blocked. permitted\n");
-        assert_eq!(parse_app_rule(&forged, exe), None);
-        let extra_line = format!("Incoming connection to {exe} is permitted.\nunknown\n");
-        assert_eq!(parse_app_rule(&extra_line, exe), None);
-        let other_executable = format!("Incoming connection to {exe}x is permitted.\n");
-        assert_eq!(parse_app_rule(&other_executable, exe), None);
+    #[test]
+    fn real_listapps_output_decides_the_app_rule() {
+        // macOS 26.6.2 의 `socketfilterfw --listapps` 원본 출력(공백 포함 그대로).
+        const REAL: &str = "Total number of apps = 7 \n1 : /usr/libexec/remoted \n             (Allow incoming connections)\n2 : /usr/bin/python3 \n             (Allow incoming connections)\n3 : /usr/bin/ruby \n             (Allow incoming connections)\n4 : /usr/sbin/cupsd \n             (Allow incoming connections)\n5 : /usr/libexec/sharingd \n             (Allow incoming connections)\n6 : /usr/libexec/sshd-keygen-wrapper \n             (Allow incoming connections)\n7 : /usr/sbin/smbd \n             (Allow incoming connections)\n";
+        assert_eq!(parse_listed_app(REAL, "/usr/sbin/cupsd"), Some(AppRule::Permitted));
+        assert_eq!(
+            parse_listed_app(REAL, "/System/Applications/Calculator.app"),
+            Some(AppRule::NotInFirewall)
+        );
+        assert_eq!(parse_listed_app(REAL, "/usr/sbin/cups"), Some(AppRule::NotInFirewall));
     }
 
     #[test]
@@ -477,7 +556,8 @@ mod tests {
         assert!(!test_script.contains("with administrator privileges"));
         let mut command = Command::new(OSASCRIPT);
         command.arg("-e").arg(test_script).arg(executable);
-        let captured = capture_text(&mut command, READ_TIMEOUT).expect("non-elevated osascript");
+        let captured = capture_text(&mut command, READ_TIMEOUT, STREAM_LIMIT)
+            .expect("non-elevated osascript");
         assert!(captured.status.success(), "{}", captured.stderr);
         let returned_hex = captured
             .stdout
