@@ -41,6 +41,13 @@ Python does not stop terminals or viewers; agent integration and `mast` CLI
 commands report that it is missing. Inspect `~/.mast/setup.log`, install Python
 3.11+, and restart Mast. No Python process is kept running between hook events.
 
+Agent setup (the Python 3.11+ probe and `mast-setup.py`) runs on a background
+thread and never delays startup or workspace creation; until it finishes, `mast`
+may report that Python is required. The setup helper runs in its own process
+group with time-limited commands and finishes on its own if Mast quits first;
+that run's `~/.mast/setup.log` may then be missing or stale, and the next launch
+retries based on the setup marker files.
+
 The initial native notification transport uses `osascript` so unbundled source
 builds can show macOS notification banners without a signed app identity. Grant
 notification permission when macOS requests it; Focus/Do Not Disturb can suppress
@@ -61,6 +68,10 @@ mast config set shell /bin/bash
 mast config set shell /opt/homebrew/bin/bash
 mast config reset shell
 ```
+
+`mast config set shell` rejects a path that does not exist or that the current
+user cannot execute (symlinks are followed). A saved shell that was later
+removed does not block `mast config reset shell` or setting a valid one.
 
 Restart Mast after changing the shell. The same `settings.json` conventions as
 Windows are used; on macOS its usual location is
@@ -87,6 +98,21 @@ OSC events as Windows, and keep history in `~/.mast/history/<shell>-tab-<id>`.
 A removed saved directory falls back to `$HOME` with a visible notice. Paths are
 passed as separate process arguments, including spaces, quotes and Unicode.
 
+## Startup errors
+
+Startup configuration errors stop Mast with a native error dialog instead of
+falling back to defaults. If `settings.json` cannot be read or parsed (any key,
+for example `fontSize` or `remote`), the dialog names the file's absolute path
+and the cause; fix the file or move it aside to start with default settings. If
+the selected shell is unusable — not an absolute path to `zsh` or `bash`,
+missing, not a regular file, or not executable by the current user — the dialog
+says where the shell came from and how to fix it: a `shell` entry in
+`settings.json` (fix or remove it), `MAST_SHELL` (fix or unset it), or the
+account login shell or `$SHELL` (add `"shell": "/bin/zsh"` to `settings.json`).
+Mast exits after the dialog is dismissed. If Mast cannot install its quit
+confirmation (for example after an incompatible windowing-library update), it
+also shows an error dialog and does not start.
+
 ## Agent integration and resume
 
 The host atomically installs the native adapters and the existing shared agent
@@ -107,7 +133,10 @@ OpenCode uses the shared Mast plugin in
 user-owned or modified `mast.js` is not overwritten. Setup failures are recorded
 in `~/.mast/setup.log`; successful integrations have per-agent
 `~/.mast/.setup-macos-v1-<agent>` markers. Remove the relevant marker to request a
-fresh merge. Unavailable agents are retried at a subsequent launch. The existing
+fresh merge. If a Mast skill file cannot be installed (for example,
+`~/.claude/skills/mast` is a symlink), agent hook wiring still runs; the failure
+is recorded in `~/.mast/setup.log` and `mast skill-load` reports it too.
+Unavailable agents are retried at a subsequent launch. The existing
 `no-codex-hooks` opt-out marker remains supported; native setup also respects
 `no-claude-hooks` and `no-opencode-hooks`.
 
@@ -152,14 +181,38 @@ Ctrl+W and other shell-editing keys are not app commands. IME composition is not
 intercepted. Hold Command to show button shortcut hints. Windows keeps its
 existing Ctrl/Alt bindings and terminal copy/paste behavior.
 
+## Quit and unsaved Markdown
+
+Dock Quit, logout, restart and AppleScript `quit` go through the same
+unsaved-Markdown confirmation as Cmd+Q. With no Markdown drafts Mast quits
+immediately and never delays a logout. With unsaved drafts — or before the
+window has reported its draft state, for example while it is loading or
+reloading — Mast cancels the quit, which cancels a logout or restart the way
+other macOS apps do, and shows the quit confirmation; save or discard, then quit
+or log out again. Mast does not defer termination (`NSTerminateLater`). A quit
+that arrives within milliseconds of the first edit, before the window has
+reported it, can still quit without the confirmation.
+
 ## Shutdown contract
 
-A tab close, normal app quit, or last-window close terminates the private POSIX
-session created for each PTY, including ordinary background jobs and separate
-foreground job groups. HUP is followed by KILL after a short grace period. The
-root child's PID is kept unreaped until cleanup finishes to avoid confusing a
-reused PID with an owned session. Natural shell exit also cleans its remaining
-session jobs. No daemon, tmux server or always-on process watcher is introduced.
+Closing a tab sends SIGHUP to the tab's shell (the PTY session leader) and
+returns immediately; an interactive zsh or bash then hangs up its own jobs, as in
+Terminal.app and on the Linux path. If the shell itself ignores HUP, Mast sends
+SIGKILL to that shell only, after a 500 ms grace period, from a background
+thread. Mast never signals other members of the session by PID, so jobs that
+ignore HUP (`nohup`, `trap '' HUP`, `disown`) keep running after the tab closes.
+When a shell exits on its own, Mast sends no signal; job cleanup follows the
+shell's own rules (zsh's `HUP` option, bash's `huponexit` — which applies only to
+login shells, so a Mast bash tab leaves background jobs running after `exit`).
+
+App quit, including closing the last window, sends SIGHUP to every shell it owns,
+including shells of tabs that were just closed and whose shell has not exited
+yet, waits one shared grace period and sends SIGKILL to any shell still running,
+before the process exits. The shell's PID is kept unreaped until Mast has
+finished signalling it, so a reused PID is never signalled. A HUP-ignoring job
+that keeps the terminal open and prints nothing holds that tab's output reader
+thread until it writes or exits. No daemon, tmux server or always-on process
+watcher is introduced.
 
 Final app shutdown rejects late/restored-tab spawns and suppresses exit callbacks
 that would otherwise mark saved Running tabs as Exited. Thus reopening the app
@@ -173,8 +226,12 @@ normal-shutdown guarantee. Mast itself does not create such persistent sessions.
 
 ## Verification
 
-Automated native tests cover PTY child cleanup (including HUP-ignoring background
-jobs), shutdown/restoration callback suppression, zsh startup ordering/custom
+Automated native tests cover PTY lifetime with real interactive shells: closing
+a tab ends ordinary jobs and spares HUP-ignoring ones, a HUP-ignoring shell is
+killed after the grace period without blocking the close, natural exit leaves
+job handling to the shell, and app quit ends every owned shell (including
+just-closed tabs) after one shared grace period. They also cover
+shutdown/restoration callback suppression, zsh startup ordering/custom
 ZDOTDIR, bash profile/history isolation, missing-directory fallback, resume hint
 validation, native CLI protocol/quoting and failed-send handling, safe config
 merging, and Mac key maps.
@@ -190,7 +247,14 @@ Before treating a source build as daily-driver-ready, run this device checklist:
 create several workspaces and split panes; run each installed agent; observe
 running/needs-input/idle transitions and notification permissions; exchange
 literal/submitted `mast send` messages and inspect `mast ls`; quit/reopen and
-resume each agent; verify all shells/dev-server jobs end at quit; open/edit/save
-Unicode-path files; check Korean IME, clipboard/image paste, resizing, scrolling
-and Cmd shortcuts. Compile/unit-test success is not a claim that authenticated
-agent sessions or native GUI behavior were exercised on a physical device.
+resume each agent; verify shells and ordinary dev-server jobs end at tab close and
+at quit, while a `nohup`/`trap '' HUP` job survives both; edit a Markdown tab
+without saving and choose Quit from the Dock menu — Mast stays open and shows the
+quit confirmation, cancelling keeps it running and confirming quits, and with no
+unsaved edits Dock Quit quits immediately and tabs restore on relaunch; with an
+unsaved Markdown edit, log out — the logout is cancelled and Mast shows the quit
+confirmation, and with no drafts logout proceeds without Mast stopping it;
+open/edit/save Unicode-path files; check Korean IME, clipboard/image paste,
+resizing, scrolling and Cmd shortcuts. Compile/unit-test success is not a claim
+that authenticated agent sessions or native GUI behavior were exercised on a
+physical device.
