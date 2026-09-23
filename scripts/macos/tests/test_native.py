@@ -7,8 +7,10 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -100,6 +102,53 @@ class NativeInstaller(unittest.TestCase):
         path.write_text(text)
         return path
 
+    def symlinked_skill_home(self):
+        # 첫 skill 디렉터리를 다른 트리로 향하는 symlink 로 두고, 실제 외부 명령 없이 끝나는 OpenCode 만 연결 대상으로 남긴다.
+        setup.BIN.mkdir(parents=True)
+        for name in ("mast-skill.md", "mast-send-skill.md"):
+            (setup.BIN / name).write_text("skill")
+        (setup.BIN / "mast-opencode-plugin.js").write_text("// managed source")
+        elsewhere = self.home / "elsewhere"
+        elsewhere.mkdir()
+        (self.home / ".claude/skills").mkdir(parents=True)
+        (self.home / ".claude/skills/mast").symlink_to(elsewhere)
+        for agent in ("claude", "codex"):
+            (setup.MAST / ("no-" + agent + "-hooks")).touch()
+        (self.home / ".opencode").mkdir()
+        return elsewhere
+
+    def run_setup(self, args):
+        # 앱과 `mast skill-load` 가 부르는 것과 같은 방식으로 스크립트 진입점을 실행한다.
+        config = self.home / ".config"
+        result = subprocess.run([sys.executable, "-I", str(ROOT / "scripts/macos/setup.py")] + args,
+                                env=dict(os.environ, HOME=str(self.home), XDG_CONFIG_HOME=str(config)),
+                                capture_output=True, text=True, timeout=30)
+        return result.returncode, result.stderr, config / "opencode/plugins/mast.js"
+
+    def test_timed_out_command_ends_even_if_a_detached_descendant_keeps_the_pipe(self):
+        # 새 세션으로 빠져나간 손자는 killpg 에 걸리지 않고 출력 파이프를 계속 쥔다.
+        detached = "import os, time; os.setsid(); time.sleep(30)"
+        started = time.monotonic()
+        with self.assertRaises(ValueError):
+            setup.bounded_run(["/bin/sh", "-c", '"$0" -c "$1" & sleep 30', sys.executable, detached], 0.5)
+        self.assertLess(time.monotonic() - started, 10)
+
+    def test_skill_failure_is_reported_and_agents_are_still_connected(self):
+        elsewhere = self.symlinked_skill_home()
+        code, stderr, plugin = self.run_setup([])
+        self.assertNotEqual(code, 0)
+        self.assertIn(str(self.home / ".claude/skills/mast"), stderr)
+        self.assertEqual(plugin.read_text(), "// managed source")
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
+    def test_skills_only_reports_failure_without_connecting_agents(self):
+        elsewhere = self.symlinked_skill_home()
+        code, stderr, plugin = self.run_setup(["--skills-only"])
+        self.assertNotEqual(code, 0)
+        self.assertIn(str(self.home / ".claude/skills/mast"), stderr)
+        self.assertFalse(plugin.exists())
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
     def test_notify_added_at_root_once_without_rewriting_user_config(self):
         original = '# user comment\nmodel="example"\n[projects."/Users/me/work"]\ntrust_level="trusted"\n'
         path = self.config(original)
@@ -145,6 +194,58 @@ class NativeInstaller(unittest.TestCase):
             source.write_text("// version 2")
             setup.opencode_plugin()
         self.assertEqual((config / "opencode/plugins/mast.js").read_text(), "// version 2")
+
+
+@unittest.skipUnless(sys.platform == "darwin", "the shell setting exists only on macOS")
+class NativeConfig(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.settings = self.root / "settings.json"
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def config(self, *args):
+        return subprocess.run([sys.executable, "-I", str(ROOT / "scripts/wsl/mast-config.py"), *args],
+                              env=dict(os.environ, MAST_CONFIG_PATH=str(self.settings)),
+                              capture_output=True, text=True, timeout=30)
+
+    def saved(self):
+        return json.loads(self.settings.read_text()) if self.settings.exists() else {}
+
+    def test_set_shell_rejects_a_missing_or_non_executable_file(self):
+        shells = self.root / "shells"
+        shells.mkdir()
+        missing = shells / "zsh"
+        not_executable = shells / "bash"
+        not_executable.write_text("#!/bin/sh\n")
+        # 소유자 실행 비트가 없으면 group/other 실행 비트가 있어도 현재 사용자는 실행할 수 없다(root 는 예외).
+        modes = [0o644] + ([0o655] if os.geteuid() != 0 else [])
+        for path, mode in [(missing, None)] + [(not_executable, mode) for mode in modes]:
+            with self.subTest(path=path.name, mode=mode):
+                if mode is not None:
+                    path.chmod(mode)
+                result = self.config("set", "shell", str(path))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("shell", self.saved())
+
+    def test_set_shell_accepts_an_executable_symlink(self):
+        link = self.root / "links/bash"
+        link.parent.mkdir()
+        link.symlink_to("/bin/bash")
+        result = self.config("set", "shell", str(link))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.saved()["shell"], str(link))
+
+    def test_a_deleted_saved_shell_can_still_be_reset_or_replaced(self):
+        for recovery in (["reset", "shell"], ["set", "shell", "/bin/zsh"]):
+            with self.subTest(recovery=recovery):
+                self.settings.write_text(json.dumps({"shell": str(self.root / "removed/zsh"), "fontSize": 14}))
+                result = self.config(*recovery)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = {"fontSize": 14} if recovery[0] == "reset" else {"fontSize": 14, "shell": "/bin/zsh"}
+                self.assertEqual(self.saved(), expected)
 
 
 class NativeResume(unittest.TestCase):

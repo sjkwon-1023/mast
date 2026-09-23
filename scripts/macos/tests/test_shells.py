@@ -6,6 +6,7 @@ import pty
 import select
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -129,6 +130,27 @@ class ShellStartup(unittest.TestCase):
         history = (self.home / ".mast/history/bash-tab-42").read_text()
         self.assertIn("echo native-history-entry", history)
         self.assertFalse((self.home / ".bash_history").exists())
+
+    def test_zsh_cwd_report_does_not_change_path_while_it_runs(self):
+        # local 변수는 함수가 끝나면 복원되므로, 함수 안의 각 명령 직전에 PATH 를 기록해 실행 도중을 본다.
+        script = r'''
+source "$1"
+original=$PATH
+seen=()
+trap '[[ ${funcstack[1]-} == _mast_cwd ]] && seen+=("$PATH")' DEBUG
+_mast_cwd
+trap - DEBUG
+print -rN -- "$original" "${seen[@]}"
+'''
+        result = subprocess.run(["/bin/zsh", "-f", "-c", script, "zsh", str(self.shell_dir / "integration.sh")],
+                                cwd=self.cwd, env=dict(os.environ, HOME=str(self.home), PWD=str(self.cwd)),
+                                capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        report, _, rest = result.stdout.partition(b"\x07")
+        original, *seen = rest.split(b"\0")[:-1]
+        self.assertTrue(seen, "the DEBUG trap did not observe commands inside _mast_cwd")
+        self.assertEqual(set(seen), {original})
+        self.assertEqual(report, b"\x1b]7;file://" + str(self.cwd).replace(" ", "%20").encode())
 
     def test_missing_saved_directory_falls_back_to_home(self):
         (self.home / ".bashrc").write_text('PS1="MAST_READY> "\n')

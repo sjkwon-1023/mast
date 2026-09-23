@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 HOME = Path.home()
 MAST = HOME / ".mast"
@@ -43,7 +44,12 @@ def bounded_run(args, seconds=8):
         output, _ = process.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
-        process.communicate()
+        try:
+            process.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            # 다른 세션으로 빠져나간 자손이 파이프를 쥐고 있어도 setup 은 끝나야 한다.
+            process.stdout.close()
+            process.wait()
         raise ValueError("timed out: " + str(args[0]))
     return process.returncode, output.decode("utf-8", "replace")
 
@@ -107,14 +113,6 @@ def codex_notify():
     if not path.is_file():
         return
     text = path.read_text(encoding="utf-8")
-    try:
-        import tomllib
-    except ImportError:
-        # Apple CLT Python may predate 3.11. Never guess where a root TOML key
-        # belongs or replace a user's own notify integration using a regex.
-        print("Codex notify/resume wiring needs Python 3.11+ (hooks still work). "
-              "Install Python 3.11+ and remove ~/.mast/.setup-macos-v%s-codex to retry." % VERSION)
-        return
     document = tomllib.loads(text)
     if "notify" in document:
         print("Codex: keeping existing notify configuration")
@@ -152,12 +150,22 @@ def opencode_plugin():
 
 
 def main(args):
-    skills()
-    if args == ["--skills-only"]:
-        return 0
-    if args:
+    if args not in ([], ["--skills-only"]):
         raise ValueError("unknown setup arguments")
     errors = []
+    # skill 설치 실패(예: symlink 로 된 skill 디렉터리)는 모아서 끝에 보고하고, 에이전트 연결은 계속한다.
+    try:
+        skills()
+    except (OSError, ValueError) as error:
+        errors.append("skills: " + str(error))
+    if not args:
+        connect_agents(errors)
+    for error in errors:
+        print(error, file=sys.stderr)
+    return 1 if errors else 0
+
+
+def connect_agents(errors):
     for agent in ("claude", "codex", "opencode"):
         marker = MAST / (".setup-macos-v%s-%s" % (VERSION, agent))
         if marker.exists() or (MAST / ("no-" + agent + "-hooks")).exists():
@@ -180,9 +188,6 @@ def main(args):
             atomic(marker, b"native agent integration installed\n")
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             errors.append(agent + ": " + str(error))
-    for error in errors:
-        print(error, file=sys.stderr)
-    return 1 if errors else 0
 
 
 if __name__ == "__main__":

@@ -174,6 +174,10 @@ def mutation(args):
     if key == "highlightLanguages" and not isinstance(value, list):
         raise ValueError("highlightLanguages must be a JSON array")
     validate({"remote": {"port": value}} if key == "remote.port" else {key: value})
+    # shell 키는 macOS 에만 있다. 실행 가능 여부는 새 값을 저장할 때만 확인한다 — 읽기에도 쓰이는
+    # validate() 에 넣으면 저장된 셸이 지워진 뒤 reset 이나 올바른 set 으로도 복구할 수 없게 된다.
+    if key == "shell" and not (os.path.isfile(value) and os.access(value, os.X_OK)):
+        raise ValueError("shell must be an existing file the current user can execute: " + value)
     return key, value, False
 
 
