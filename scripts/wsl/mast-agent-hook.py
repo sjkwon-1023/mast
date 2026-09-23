@@ -306,6 +306,25 @@ def open_terminal():
         return os.open("/dev/tty", flags)
     except OSError:
         pass
+    if sys.platform == "darwin":
+        # Detached hooks inherit the exact slave TTY from Mast's launch wrapper.
+        # /proc does not exist on macOS. Never open an arbitrary inherited path:
+        # require a real, same-user terminal device, without following symlinks.
+        target = os.environ.get("MAST_TTY", "")
+        if os.environ.get("MAST") != "1" or not re.fullmatch(r"/dev/ttys[0-9]+", target):
+            return None
+        descriptor = None
+        try:
+            import stat as stat_module
+            descriptor = os.open(target, flags | getattr(os, "O_NOFOLLOW", 0))
+            meta = os.fstat(descriptor)
+            if stat_module.S_ISCHR(meta.st_mode) and meta.st_uid == os.geteuid() and os.isatty(descriptor):
+                return descriptor
+        except OSError:
+            pass
+        if descriptor is not None:
+            os.close(descriptor)
+        return None
     # Claude Code 훅 프로세스에는 controlling tty 가 없어 /dev/tty 가 ENXIO 다. mast-notify.sh 와
     # 같은 규율로 조상 8단계까지 fd 0/1/2 가 가리키는 pts 를 찾는다.
     pid = os.getpid()

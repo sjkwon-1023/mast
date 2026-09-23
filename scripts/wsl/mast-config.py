@@ -49,9 +49,20 @@ def integer(value, low, high, name):
         raise ValueError(f"{name} must be an integer from {low} to {high}")
 
 
+if sys.platform == "darwin":
+    KEYS.add("shell")
+    DEFAULTS["shell"] = "macOS account login shell (zsh or bash)"
+    DEFAULTS["fontFamily"] = "terminal: Menlo, 'SFMono-Regular', monospace; viewers: monospace"
+    HELP += "\nmacOS: mast config set shell /bin/zsh (or /bin/bash); restart to apply.\n"
+
+
 def validate(data):
     if not isinstance(data, dict):
         raise ValueError("settings must be a JSON object")
+    if sys.platform == "darwin" and data.get("shell") is not None:
+        shell = data["shell"]
+        if not isinstance(shell, str) or not shell.startswith("/") or "\0" in shell or Path(shell).name not in ("zsh", "bash"):
+            raise ValueError("shell must be an absolute zsh or bash executable path")
     family = data.get("fontFamily")
     if family is not None and (not isinstance(family, str) or not family.strip()):
         raise ValueError("fontFamily must be a non-blank string")
@@ -271,7 +282,14 @@ def main():
                     raise ValueError("get accepts one optional known setting name")
             else:
                 mutation(args)
-        execute(args, windows_settings_path())
+        if sys.platform == "darwin":
+            path = Path(os.environ.get("MAST_CONFIG_PATH") or
+                        Path.home() / "Library/Application Support/app.mast.desktop/settings.json")
+            if args[:2] in (["set", "remote"], ["set", "remote.port"]):
+                raise ValueError("remote control is not supported in the initial macOS version")
+        else:
+            path = windows_settings_path()
+        execute(args, path)
         return 0
     except (ValueError, OSError, RecursionError, subprocess.SubprocessError) as error:
         print("mast config: " + ascii(str(error)), file=sys.stderr)

@@ -1,3 +1,4 @@
+import { IS_MAC } from "../../shared/platform";
 import type { ITheme } from "@xterm/xterm";
 import { clampFontSize } from "../../shared/font-size";
 import type { UiSettings } from "../../infrastructure/backend";
@@ -26,7 +27,7 @@ const TERMINAL_THEME: ITheme = {
   brightWhite: "#e5e5e5",
 };
 
-const DEFAULT_FONT_FAMILY = "Consolas, 'Cascadia Mono', monospace";
+const DEFAULT_FONT_FAMILY = IS_MAC ? "Menlo, 'SFMono-Regular', monospace" : "Consolas, 'Cascadia Mono', monospace";
 
 const DEFAULT_FONT_SIZE = 13;
 

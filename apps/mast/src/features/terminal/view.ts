@@ -27,6 +27,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import {
   shouldOpenLink,
   isCopySelectionKey,
+  isPasteKey,
   copyTerminalSelection,
   clipboardHasImage,
   altArrowSequence,
@@ -318,10 +319,10 @@ export class TerminalView {
 
   private installCopyPasteKeys(): void {
     this.term.attachCustomKeyEventHandler((ev) => {
-      if (ev.type !== "keydown") return true;
+      if (ev.type !== "keydown" || ev.isComposing) return true;
 
       // Shift+Enter는 Claude Code의 줄바꿈 시퀀스 ESC CR로 보낸다.
-      if (ev.key === "Enter" && ev.shiftKey && !ev.ctrlKey && !ev.altKey) {
+      if (ev.key === "Enter" && ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
         ev.preventDefault();
         this.enqueueWrite("\x1b\r");
         return false;
@@ -340,16 +341,7 @@ export class TerminalView {
         void copyTerminalSelection(this.term);
         return false;
       }
-      if (ev.key === "Insert") {
-        if (ev.shiftKey && !ev.ctrlKey && !ev.altKey) {
-          ev.preventDefault();
-          void this.pasteFromClipboard();
-          return false;
-        }
-        return true;
-      }
-      if (!ev.ctrlKey || ev.altKey) return true;
-      if (ev.key.toLowerCase() === "v") {
+      if (isPasteKey(ev)) {
         ev.preventDefault();
         void this.pasteFromClipboard();
         return false;

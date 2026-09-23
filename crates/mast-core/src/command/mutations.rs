@@ -19,6 +19,7 @@ impl Dispatcher {
             } => {
                 // 워크스페이스 루트는 WSL 파일시스템이어야 한다. /mnt는 뷰어의 읽기 경로로만 허용한다.
                 // 프런트 검사를 우회하는 호출도 이 코어 경계에서 거부한다.
+                #[cfg(not(target_os = "macos"))]
                 if let Some(path) = root_path.as_deref() {
                     if path == "/mnt" || path.starts_with("/mnt/") {
                         return Err(CommandError::InvalidPath {
@@ -29,6 +30,8 @@ impl Dispatcher {
                         });
                     }
                 }
+                #[cfg(target_os = "macos")]
+                let distro = { let _ = distro; None };
                 // 스폰·경로 검증은 모든 상태 변이 전에 끝내 실패 시 상태와 ID를 보존한다.
                 // 아직 없는 워크스페이스의 기본값을 넘기고 workspace → pane → tab 순서로 탭 ID를 예측한다.
                 let history_tab = self.state.peek_id(2);

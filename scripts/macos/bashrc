@@ -1,0 +1,26 @@
+# Bash --rcfile does not load login profiles. Source the login files once, in bash order.
+# Do not also source .bashrc when a profile already sources it.
+[[ -r /etc/profile ]] && source /etc/profile
+if [[ -r "$HOME/.bash_profile" ]]; then source "$HOME/.bash_profile"
+elif [[ -r "$HOME/.bash_login" ]]; then source "$HOME/.bash_login"
+elif [[ -r "$HOME/.profile" ]]; then source "$HOME/.profile"
+elif [[ -r "$HOME/.bashrc" ]]; then source "$HOME/.bashrc"
+fi
+source "$HOME/.mast/shell/integration.sh"
+if [[ -n $MAST_TAB && $MAST_TAB != *[!0-9]* ]]; then
+  mkdir -p "$HOME/.mast/history"
+  export HISTFILE="$HOME/.mast/history/bash-tab-$MAST_TAB"
+  HISTSIZE=${HISTSIZE:-10000}; HISTFILESIZE=${HISTFILESIZE:-10000}
+  shopt -s histappend
+  history -c
+  [[ -r $HISTFILE ]] && history -r "$HISTFILE"
+  _mast_resume
+fi
+_mast_prompt() { history -a; _mast_cwd; }
+# Preserve string and (newer bash) array prompt hooks, including the user's prompt theme.
+if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a '* ]]; then
+  PROMPT_COMMAND+=(_mast_prompt)
+else
+  PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }_mast_prompt"
+fi
+_mast_cwd

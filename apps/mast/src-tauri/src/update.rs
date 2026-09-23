@@ -13,7 +13,7 @@ pub fn get_update_info(state: State<'_, UpdateState>) -> UpdateInfo {
 pub fn init(app: &AppHandle) {
     let cache = Arc::new(UpdateCheck::new(env!("CARGO_PKG_VERSION")));
     app.manage(UpdateState(cache.clone()));
-    if !cache.begin() {
+    if cfg!(target_os = "macos") || !cache.begin() {
         return;
     }
     let handle = app.clone();

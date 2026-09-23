@@ -91,3 +91,8 @@ windows = { version = "0.61", features = [
     # 명시한다 (이 파일 상단의 "직접 의존 + features 명시" 규율).
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+rfd = { version = "0.17", default-features = false }
+libc = "0.2"
+tempfile = "3"

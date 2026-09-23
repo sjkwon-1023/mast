@@ -1,3 +1,9 @@
+import { IS_MAC } from "./platform";
+// macOS interception: ⌘1–9 workspace, ⌘⌥arrows pane, Ctrl(+Shift)+Tab tab,
+// ⌘T terminal, ⌘⇧B folder, ⌘D auto split / ⌘⇧D vertical, ⌘N workspace,
+// ⌘⇧[ / ] previous/next workspace, ⌘W tab / ⌘⇧W workspace close,
+// ⌘+ / - / 0 zoom, F2 rename. ⌘C/V editing, ⌘⇧R reload, ⌘Q quit
+// have separate owners. Unlisted Ctrl/Option combinations remain PTY-owned.
 // 키보드 판정 — DOM 무의존 순수 모듈 (계획 v2 "키보드 모델" 장).
 //
 // 3층 구조(워크스페이스 / pane / 탭)의 이동 키와, 마우스로만 되던 조작
@@ -77,6 +83,7 @@ import type { Pane, PaneId, SplitDirection, StateSnapshot, TabId, Workspace, Wor
 export interface KeySpec {
   key: string;
   ctrl: boolean;
+  meta?: boolean;
   alt: boolean;
   shift: boolean;
   /** 조합 중의 키는 조합기 소유라 가로채지 않는다. */
@@ -174,9 +181,52 @@ const CTRL_SHIFT_KEYS: Record<
   closeWorkspace: { letter: "q", action: () => ({ type: "closeWorkspace" }) },
 };
 
+// Native Mac command table. Cmd+Q belongs to the native quit/close guard;
+// Cmd+W closes a TAB, never the application window. Ctrl is terminal-owned
+// except the conventional Ctrl+Tab / Ctrl+Shift+Tab pane-local tab cycle.
+const MAC_KEYS: Record<ShortcutId, { letter: string; shift: boolean; shifted?: string; action: () => KeyAction }> = {
+  closeTab: { ...CTRL_SHIFT_KEYS.closeTab, shift: false },
+  newTerminalTab: { ...CTRL_SHIFT_KEYS.newTerminalTab, shift: false },
+  newFolderTab: { ...CTRL_SHIFT_KEYS.newFolderTab, shift: true },
+  newWorkspace: { ...CTRL_SHIFT_KEYS.newWorkspace, shift: false },
+  prevWorkspace: { ...CTRL_SHIFT_KEYS.prevWorkspace, shift: true },
+  nextWorkspace: { ...CTRL_SHIFT_KEYS.nextWorkspace, shift: true },
+  closeWorkspace: { letter: "w", shift: true, action: () => ({ type: "closeWorkspace" }) },
+};
+
+function macKeyAction(spec: KeySpec): KeyAction | null {
+  if (spec.isComposing) return null;
+  if (spec.ctrl && !spec.meta && !spec.alt && spec.key === "Tab") {
+    return { type: "cycleTab", delta: spec.shift ? -1 : 1 };
+  }
+  if (!spec.meta || spec.ctrl) {
+    return spec.key === "F2" && !spec.meta && !spec.ctrl && !spec.alt && !spec.shift
+      ? { type: "renameWorkspace" } : null;
+  }
+  if (spec.alt) {
+    const dir = ARROW_DIRS[spec.key];
+    return !spec.shift && dir !== undefined ? { type: "focusPane", dir } : null;
+  }
+  const letter = spec.key.toLowerCase();
+  for (const def of Object.values(MAC_KEYS)) {
+    if (spec.shift === def.shift && (letter === def.letter || letter === def.shifted)) return def.action();
+  }
+  if (letter === "d") return spec.shift ? { type: "splitPane", direction: "vertical" } : { type: "splitPaneAuto" };
+  if (spec.key === "+" || (!spec.shift && spec.key === "=")) return { type: "zoom", delta: 1 };
+  if (spec.shift) return null;
+  if (spec.key === "-") return { type: "zoom", delta: -1 };
+  if (spec.key === "0") return { type: "zoomReset" };
+  if (DIGIT_KEY.test(spec.key)) return { type: "switchWorkspace", ordinal: Number(spec.key) };
+  return null;
+}
+
 /** 버튼 툴팁에 붙일 단축키 표기 — 표시 문자열의 **단일 소스**다. UI 는 이 함수를
  *  거치지 않고 단축키를 하드코딩하지 않는다 (키를 바꿔도 툴팁이 따라온다). */
-export function shortcutLabel(id: ShortcutId): string {
+export function shortcutLabel(id: ShortcutId, mac = IS_MAC): string {
+  if (mac) {
+    const def = MAC_KEYS[id];
+    return `⌘${def.shift ? "⇧" : ""}${def.letter.toUpperCase()}`;
+  }
   const key = CTRL_SHIFT_KEYS[id].letter.toUpperCase();
   return `Alt+Shift+${key}`;
 }
@@ -189,7 +239,11 @@ export function shortcutLabel(id: ShortcutId): string {
  *  Alt 를 누른 사용자가 그대로 눌렀을 때 아무 일도 일어나지 않아, 안내가 실제 키
  *  동작과 어긋난다. 워크스페이스 ordinal(`Alt+1`~`9`)에는 Shift 가 필요 없으므로
  *  그 배지들은 숫자 그대로다 (sidebar.ts). */
-export function shortcutBadge(id: ShortcutId): string {
+export function shortcutBadge(id: ShortcutId, mac = IS_MAC): string {
+  if (mac) {
+    const def = MAC_KEYS[id];
+    return `${def.shift ? "⇧" : ""}${def.letter.toUpperCase()}`;
+  }
   return `⇧${CTRL_SHIFT_KEYS[id].letter.toUpperCase()}`;
 }
 
@@ -225,7 +279,9 @@ export function pathBasename(path: string): string {
 
 /** keydown → 액션. 가로채기 목록에 없는 조합은 전부 null 이고, 그때 글루는
  *  이벤트에 손대지 않는다 (터미널로 그대로 흘려보낸다). */
-export function keyAction(spec: KeySpec): KeyAction | null {
+export function keyAction(spec: KeySpec, mac = IS_MAC): KeyAction | null {
+  if (mac) return macKeyAction(spec);
+  if (spec.meta) return null;
   // 한글 입력 중의 조합 키가 이동으로 오판돼 조합을 깨뜨리면 안 된다.
   if (spec.isComposing) return null;
   if (spec.ctrl && !spec.alt && spec.key === "Tab") {

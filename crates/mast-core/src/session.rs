@@ -49,14 +49,17 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, ensure};
 use portable_pty::{
-    native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtyPair, PtySize,
+    native_pty_system, Child, CommandBuilder, MasterPty, PtyPair, PtySize,
 };
+
+#[cfg(not(target_os = "macos"))]
+use portable_pty::ChildKiller;
 
 use crate::flow::{FlowAction, FlowControl};
 use crate::osc::{OscEvent, OscScanner};
@@ -305,6 +308,8 @@ impl SizeState {
 
 /// PTY 세션 핸들. 스레드 간 공유 가능(`&self` API + 내부 Mutex).
 pub struct PtySession {
+    #[cfg(target_os = "macos")]
+    process_scope: Arc<crate::platform::macos::ProcessScope>,
     shared: Arc<Shared>,
     /// PTY 입력 writer. waiter 와 공유 — kill·종료 후에는 None (fd 회수).
     writer: SharedWriter,
@@ -313,6 +318,7 @@ pub struct PtySession {
     /// 블록된 read 를 풀어준다 (모듈 rustdoc "스레드 구조와 종료 감지").
     master: SharedMaster,
     /// waiter 스레드가 `Child` 본체(wait 용)를 가져가므로 kill 신호는 분리된 killer 로 보낸다.
+    #[cfg(not(target_os = "macos"))]
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// 현재 PTY 창 크기 (`cols << 16 | rows`). [`screen_since`](Self::screen_since)
     /// 의 소비자는 데스크톱과 같은 크기의 터미널을 만들어야 하는데 PTY master 에는
@@ -360,6 +366,13 @@ impl PtySession {
         // (이걸 잡고 있으면 자식 종료 후에도 master read 가 EOF 를 받지 못한다.)
         drop(slave);
 
+        #[cfg(target_os = "macos")]
+        let process_scope = Arc::new(crate::platform::macos::ProcessScope::new(
+            child.process_id().ok_or_else(|| anyhow!("PTY child has no process ID"))?,
+        ));
+        #[cfg(target_os = "macos")]
+        let mut spawn_guard = crate::platform::macos::SpawnGuard::new(Arc::clone(&process_scope));
+        #[cfg(not(target_os = "macos"))]
         let killer = child.clone_killer();
         let reader = master.try_clone_reader()?;
         let writer = master.take_writer()?;
@@ -403,8 +416,16 @@ impl PtySession {
                 let shared = Arc::clone(&shared);
                 let writer = Arc::clone(&writer);
                 let master = Arc::clone(&master);
-                move || waiter_loop(child, sink, shared, writer, master)
+                #[cfg(target_os = "macos")]
+                let scope = Arc::clone(&process_scope);
+                move || {
+                    #[cfg(target_os = "macos")]
+                    scope.before_reap();
+                    waiter_loop(child, sink, shared, writer, master)
+                }
             })?;
+        #[cfg(target_os = "macos")]
+        spawn_guard.disarm();
         // 워치독은 마감을 요구한 경우에만, 그리고 마감까지만 산다 — 표식이 오거나
         // 세션이 죽으면 리더·waiter 의 notify 로 즉시 회수된다. 상시 스레드 수는
         // 세션당 둘 그대로다.
@@ -429,9 +450,12 @@ impl PtySession {
         }
 
         Ok(Self {
+            #[cfg(target_os = "macos")]
+            process_scope,
             shared,
             writer,
             master,
+            #[cfg(not(target_os = "macos"))]
             killer: Mutex::new(killer),
             size: AtomicU32::new(pack_size(spec.cols, spec.rows)),
             // 스폰 크기가 첫 데스크톱 크기다 — 데스크톱 pane 이 attach 하며 곧 실제
@@ -626,6 +650,14 @@ impl PtySession {
     pub fn size(&self) -> (u16, u16) {
         unpack_size(self.size.load(Ordering::Relaxed))
     }
+
+    /// On-demand CLI metadata, not a persisted identifier. A closed PTY has none.
+    #[cfg(target_os = "macos")]
+    pub fn tty_name(&self) -> Option<String> {
+        self.master.lock().unwrap().as_ref()?.tty_name()?
+            .to_str().map(str::to_owned)
+    }
+
 
     /// 프론트엔드가 n bytes 소비를 완료했다. Resume 전환 시 리더를 깨운다.
     pub fn ack(&self, n: usize) {
@@ -838,6 +870,9 @@ impl PtySession {
         // 자식이 방금 자연 종료했다면(waiter 가 아직 관측 전) 신호 전송이 실패
         // (ESRCH 등)할 수 있다. "프로세스가 죽어 있어야 한다"는 의도는 이미
         // 충족된 상태이므로 이 에러는 무시한다 (멱등 kill — 에러 은폐가 아님).
+        #[cfg(target_os = "macos")]
+        self.process_scope.terminate();
+        #[cfg(not(target_os = "macos"))]
         let _ = self.killer.lock().unwrap().kill();
 
         // writer/master 를 즉시 drop 해 우리가 쥔 PTY fd 를 회수한다. waiter 도
@@ -1108,7 +1143,30 @@ fn unpack_size(packed: u32) -> (u16, u16) {
 
 /// 세션 레지스트리 — `SessionId` 를 발급하고 세션을 보관한다. 내부 동기화는
 /// std Mutex (외부 lock 없이 스레드 간 공유 가능).
+/// During final shutdown, sink callbacks must not turn persisted Running tabs
+/// into Exited tabs: reopening the app needs to respawn those shells.
+struct ManagedSink {
+    sink: Box<dyn SessionSink>,
+    stopping: Arc<AtomicBool>,
+}
+impl SessionSink for ManagedSink {
+    fn on_output(&self, offset: u64, bytes: &[u8]) -> Delivery {
+        if self.stopping.load(Ordering::Acquire) { Delivery::Dropped }
+        else { self.sink.on_output(offset, bytes) }
+    }
+    fn on_osc(&self, event: &OscEvent) {
+        if !self.stopping.load(Ordering::Acquire) { self.sink.on_osc(event); }
+    }
+    fn on_exit(&self, code: Option<u32>) {
+        if !self.stopping.load(Ordering::Acquire) { self.sink.on_exit(code); }
+    }
+    fn on_startup_timeout(&self) {
+        if !self.stopping.load(Ordering::Acquire) { self.sink.on_startup_timeout(); }
+    }
+}
+
 pub struct SessionManager {
+    stopping: Arc<AtomicBool>,
     next_id: Mutex<SessionId>,
     sessions: Mutex<HashMap<SessionId, Arc<PtySession>>>,
 }
@@ -1116,6 +1174,7 @@ pub struct SessionManager {
 impl SessionManager {
     pub fn new() -> Self {
         Self {
+            stopping: Arc::new(AtomicBool::new(false)),
             next_id: Mutex::new(1),
             sessions: Mutex::new(HashMap::new()),
         }
@@ -1133,16 +1192,36 @@ impl SessionManager {
         opts: SessionOptions,
         make_sink: impl FnOnce(SessionId) -> Box<dyn SessionSink>,
     ) -> anyhow::Result<SessionId> {
+        ensure!(!self.stopping.load(Ordering::Acquire), "session manager is shutting down");
         let id = {
             let mut next = self.next_id.lock().unwrap();
             let id = *next;
             *next += 1;
             id
         };
-        let sink = make_sink(id);
+        let sink = Box::new(ManagedSink {
+            sink: make_sink(id), stopping: Arc::clone(&self.stopping),
+        });
         let session = PtySession::spawn(spec, sink, opts)?;
-        self.sessions.lock().unwrap().insert(id, Arc::new(session));
+        let mut sessions = self.sessions.lock().unwrap();
+        if self.stopping.load(Ordering::Acquire) {
+            drop(sessions);
+            session.kill();
+            anyhow::bail!("session manager shut down during spawn");
+        }
+        sessions.insert(id, Arc::new(session));
         Ok(id)
+    }
+
+    /// Stop accepting spawns, suppress shutdown callbacks, and terminate all owned
+    /// sessions even when another component still holds an Arc to a session.
+    pub fn shutdown(&self) {
+        let sessions = {
+            let mut guard = self.sessions.lock().unwrap();
+            self.stopping.store(true, Ordering::Release);
+            std::mem::take(&mut *guard)
+        };
+        for session in sessions.into_values() { session.kill(); }
     }
 
     pub fn get(&self, id: SessionId) -> Option<Arc<PtySession>> {

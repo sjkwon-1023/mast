@@ -30,6 +30,7 @@ export function installNavKeys(context: NavigationContext): void {
       const action = keyAction({
         key: ev.key,
         ctrl: ev.ctrlKey,
+      meta: ev.metaKey,
         alt: ev.altKey,
         shift: ev.shiftKey,
         isComposing: ev.isComposing,

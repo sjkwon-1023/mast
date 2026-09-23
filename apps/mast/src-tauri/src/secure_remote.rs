@@ -501,6 +501,10 @@ pub async fn secure_remote_start(
     state: State<'_, SecureRemoteManager>,
     pairing_id: String,
 ) -> Result<SecureRemoteStart, SecureRemoteCommandError> {
+    if cfg!(target_os = "macos") {
+        return Err(SecureRemoteCommandError::failed(
+            "Secure Remote is deferred in the initial macOS version".into()));
+    }
     state.claim(&pairing_id)?;
     let dispatcher = Arc::clone(&state.dispatcher);
     let sessions = Arc::clone(&state.sessions);

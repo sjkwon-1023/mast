@@ -1,3 +1,4 @@
+import { IS_MAC, primaryModifier } from "../../../shared/platform";
 import { markdownDraft, keepMarkdownDraft, discardMarkdownDraft, markdownSaved, onMarkdownSaved } from "./drafts";
 // markdownViewer 탭의 뷰 — 마크다운 파일을 렌더해 보여주고, 활성인 동안
 // 2초 주기 mtime 폴링으로 라이브 리로드한다.
@@ -348,7 +349,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     this.editor.hidden = true;
     this.editor.addEventListener("input", () => this.rememberDraft());
     this.editor.addEventListener("keydown", (event) => {
-      if (!event.isComposing && event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
+      if (!event.isComposing && primaryModifier(event) && !event.shiftKey && event.key.toLowerCase() === "s") {
         event.preventDefault();
         void this.save();
       }
@@ -398,7 +399,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     this.scrollEl.hidden = true;
     this.editButton.hidden = true;
     this.saveButton.hidden = this.cancelButton.hidden = false;
-    this.setBanner("Editing — Ctrl+S to save. Unsaved edits survive tab switches and WebView reloads.", false);
+    this.setBanner(`Editing — ${IS_MAC ? "⌘S" : "Ctrl+S"} to save. Unsaved edits survive tab switches and WebView reloads.`, false);
     if (focus) this.editor.focus();
   }
 

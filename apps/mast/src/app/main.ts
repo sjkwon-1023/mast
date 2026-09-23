@@ -1,3 +1,4 @@
+import { IS_MAC, primaryModifier } from "../shared/platform";
 import { closingMarkdownDrafts, discardMarkdownDraft, hasMarkdownDrafts } from "../features/viewers/markdown/drafts";
 import { installNavKeys } from "./navigation/actions";
 import { listen } from "@tauri-apps/api/event";
@@ -70,7 +71,7 @@ function installReloadKey(): void {
   window.addEventListener(
     "keydown",
     (ev) => {
-      if (ev.ctrlKey && ev.shiftKey && !ev.altKey && ev.code === "KeyR") {
+      if (!ev.isComposing && primaryModifier(ev) && ev.shiftKey && ev.code === "KeyR") {
         ev.preventDefault();
         if (!hasMarkdownDrafts() || window.confirm("Reload with unsaved Markdown edits? Drafts will be restored from this session.")) location.reload();
       }
@@ -142,7 +143,8 @@ class App {
       lastSwitch: null,
     };
 
-    this.initUpdateNotice();
+    document.body.classList.toggle("platform-macos", IS_MAC);
+    if (!IS_MAC) this.initUpdateNotice();
     installReloadKey();
     installShortcutGuide();
     try {
@@ -183,7 +185,7 @@ class App {
       console.error("get_ui_settings failed", err);
       this.showError(formatCommandError(err));
     }
-    await this.initRemote();
+    if (!IS_MAC) await this.initRemote();
     this.store.subscribe((snapshot) => this.render(snapshot));
     await this.store.init();
   }
@@ -239,7 +241,7 @@ class App {
       return;
     }
 
-    if (cwd === "/mnt" || cwd.startsWith("/mnt/")) {
+    if (!IS_MAC && (cwd === "/mnt" || cwd.startsWith("/mnt/"))) {
       this.showError(
         "cannot create a workspace under /mnt: Windows drives are data-only — cd into the WSL filesystem first",
       );
@@ -249,7 +251,7 @@ class App {
       type: "createWorkspace",
       name: pathBasename(cwd),
       rootPath: cwd,
-      distro: ws.distro,
+      distro: IS_MAC ? null : ws.distro,
       tab: { type: "terminal", cwd: null },
     });
   }

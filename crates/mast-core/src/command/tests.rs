@@ -1268,6 +1268,7 @@ fn viewer_commands_reject_wrong_tab_kinds_without_state_change() {
 }
 
 #[test]
+#[cfg(not(target_os = "macos"))]
 fn create_workspace_rejects_mnt_roots() {
     // Windows 스토리지는 워크스페이스 루트 금지 — /mnt 정확히·하위 경로 둘 다.
     // 접두 경계는 지킨다 (/mnta 는 무관한 디렉터리다). 거부는 상태 불변이다.
@@ -1311,8 +1312,11 @@ fn viewer_paths_are_validated_on_create_and_navigate() {
     for path in [
         "relative/path",
         "/proj/../etc",
+        #[cfg(not(target_os = "macos"))]
         r"/proj/a\b",
+        #[cfg(not(target_os = "macos"))]
         "/proj/a:stream",
+        #[cfg(not(target_os = "macos"))]
         "/proj/trailing.",
         "",
     ] {
@@ -3510,4 +3514,17 @@ fn a_tab_whose_session_is_missing_from_either_registry_is_dangling() {
 
     let audit = audit_registries(d.state(), &[], &[]);
     assert_eq!(audit.dangling_tabs, vec![(t1, s1), (t2, s2)]);
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn native_workspace_ignores_distro_and_accepts_native_paths() {
+    let (mut d, _host) = dispatcher();
+    d.dispatch(Command::CreateWorkspace {
+        name: "native".into(), root_path: Some("/mnt/a:project".into()),
+        distro: Some("Ubuntu".into()), tab: None,
+    }).unwrap();
+    let ws = &d.state().workspaces[0];
+    assert_eq!(ws.distro, None);
+    assert_eq!(ws.root_path.as_deref(), Some("/mnt/a:project"));
 }

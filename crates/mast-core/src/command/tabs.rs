@@ -285,7 +285,7 @@ fn viewer_tab(id: TabId, title: String, kind: TabKind) -> Tab {
 /// 싣는다 (생성·NavigateFolder 공유). 실존 여부는 검사하지 않는다 (코어 무 I/O —
 /// 없는 경로는 뷰 로드 실패로 표면화).
 pub(super) fn validate_viewer_path(path: &str) -> Result<(), CommandError> {
-    crate::wslpath::validate_linux_path(path)
+    crate::platform::validate_viewer_path(path)
         .map_err(|message| CommandError::InvalidPath { message })
 }
 

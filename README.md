@@ -10,6 +10,13 @@ desk or from your phone.**
 
 Check terminal output and send input from your phone on the same trusted local network as your PC.
 
+## macOS (Apple Silicon, source builds)
+
+The native macOS port shares the same workspace, pane, tab and terminal core as Windows.
+See [the macOS guide](docs/MACOS.md) for prerequisites, shell selection, agent integration,
+native shortcuts, supported scope and the device-verification checklist. Mac packaging,
+remote control and signed releases are not included in this initial port.
+
 ## What it's for
 
 You are running Claude Code, Codex and a couple of shells at once, and each stops to ask you

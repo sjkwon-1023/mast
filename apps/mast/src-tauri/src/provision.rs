@@ -233,6 +233,7 @@ fn claim(key: &str) -> bool {
 ///
 /// `_app` 은 호출부 대칭(모든 호출 지점이 `AppHandle` 을 쥐고 있다)을 위해 계약에
 /// 남긴 인자다 — 현재 구현은 쓰지 않는다.
+#[cfg(not(target_os = "macos"))]
 pub fn ensure_provisioned(_app: &AppHandle, distro: Option<&str>) {
     let distro = distro.filter(|d| !d.is_empty()).map(str::to_owned);
     tauri::async_runtime::spawn_blocking(move || {
@@ -2011,4 +2012,9 @@ mod tests {
             assert_eq!(script.matches(&block).count(), 1, "{delimiter}");
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+pub fn ensure_provisioned(_app: &AppHandle, _distro: Option<&str>) {
+    crate::platform::macos::provision();
 }

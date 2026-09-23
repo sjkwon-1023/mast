@@ -420,6 +420,8 @@ const QUERY_KIND_LIST_TABS: &str = "list-tabs";
 struct QueryReply<'a> {
     tabs: &'a [TabInfo],
     self_tab: Option<u64>,
+    #[cfg(target_os = "macos")]
+    ttys: std::collections::BTreeMap<u64, String>,
 }
 
 /// 에이전트 질의 채널 (`OSC 777;mast-query;<kind>;<base64 회신 경로>`) —
@@ -492,6 +494,24 @@ fn deliver_query(app: &AppHandle, requester: SessionId, kind: &str, reply_b64: &
         let json = match serde_json::to_vec(&QueryReply {
             tabs: &tabs,
             self_tab,
+            #[cfg(target_os = "macos")]
+            ttys: {
+                let dispatcher = state.dispatcher.lock().unwrap();
+                let mut names = std::collections::BTreeMap::new();
+                for ws in &dispatcher.state().workspaces {
+                    for pane in ws.panes.values() {
+                        for tab in &pane.tabs {
+                            if !tabs.iter().any(|listed| listed.tab == tab.id.0) { continue; }
+                            if let mast_core::model::TabKind::Terminal { pty_session: Some(id), .. } = &tab.kind {
+                                if let Some(tty) = state.sessions.get(*id).and_then(|s| s.tty_name()) {
+                                    names.insert(tab.id.0, tty);
+                                }
+                            }
+                        }
+                    }
+                }
+                names
+            },
         }) {
             Ok(json) => json,
             Err(err) => {

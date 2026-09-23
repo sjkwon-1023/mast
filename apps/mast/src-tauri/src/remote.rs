@@ -59,6 +59,7 @@ pub fn init(
     dispatcher: Arc<Mutex<Dispatcher>>,
     sessions: Arc<SessionManager>,
 ) -> RemoteState {
+    if cfg!(target_os = "macos") { return RemoteState::Off; }
     // 설정을 못 읽는 것은 여기서 말하지 않는다. 같은 파일을 `get_ui_settings` 가
     // 다시 읽어 프론트 상태 라인에 사유를 띄우는 것이 loud-fail 계약의 담당자이고
     // (`logfile::init` 과 같은 판단), 여기서 `failed` 로 바꾸면 폰트 오타 하나가

@@ -34,3 +34,6 @@ pub mod send;
 pub mod session;
 pub mod update;
 pub mod wslpath;
+
+/// Small OS-specific boundaries shared by desktop callers.
+pub mod platform;

@@ -55,11 +55,15 @@ impl TauriHost {
 ///
 /// 스폰([`spawn_spec`])과 부팅 예열([`crate::boot`])이 **같은 값을 골라야** 한다 —
 /// 예열이 다른 distro 를 세우면 정작 스폰이 콜드 VM 을 만난다.
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn resolve_distro(requested: Option<String>) -> Option<String> {
     requested
         .filter(|d| !d.is_empty())
         .or_else(|| std::env::var("MAST_DISTRO").ok().filter(|d| !d.is_empty()))
 }
+
+#[cfg(target_os = "macos")]
+pub(crate) fn resolve_distro(_requested: Option<String>) -> Option<String> { None }
 
 /// `ShellSpawnReq` → 플랫폼별 `SpawnSpec` 매핑.
 ///
@@ -99,7 +103,9 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
             rows: req.rows,
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    { crate::platform::macos::spawn_spec(req) }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         // unix(개발): $SHELL -l ($SHELL 없으면 bash -l), cwd 는 직접 사용.
         // 탭별 HISTFILE 은 여기서 적용하지 않는다 — $SHELL 이 bash 라는 보장이
@@ -271,12 +277,12 @@ const STARTUP_DEADLINE: Duration = Duration::from_secs(20);
 /// 표식을 낼 래퍼가 있는 경로에서만 기본 활성이다. unix 개발 실행은 `$SHELL -l` 을
 /// 직접 띄워(`spawn_spec`) 표식을 낼 자리가 없으므로, 마감을 걸면 느린 rc 가 곧바로
 /// 오탐이 된다.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn platform_startup_deadline() -> Option<Duration> {
     Some(STARTUP_DEADLINE)
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn platform_startup_deadline() -> Option<Duration> {
     None
 }
@@ -539,8 +545,13 @@ fn release_script(tabs: &[TabId]) -> String {
 
 /// unix 개발 실행에는 지울 것이 없다 — `spawn_spec` 이 탭별 `HISTFILE` 을 물리지
 /// 않으므로(그 함수 주석) 탭 전용 파일 자체가 만들어지지 않는다.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn release_tab_files(_tabs: &[TabId], _distro: Option<&str>) {}
+
+#[cfg(target_os = "macos")]
+fn release_tab_files(tabs: &[TabId], _distro: Option<&str>) {
+    crate::platform::macos::release_tab_files(tabs);
+}
 
 /// 스폰 명령 구성 테스트 — Windows 대상에서만 성립하는 argv 계약이라 그 타깃에서만
 /// 컴파일·실행된다 (unix 개발 경로는 `$SHELL -l` 무변경).

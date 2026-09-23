@@ -1,3 +1,4 @@
+import { IS_MAC } from "../../shared/platform";
 // 워크스페이스 사이드바 — 카드 리스트 + 하단 버튼
 // ("+ New workspace", 그리고 페어링 다이얼로그를 여는 "Connect mobile").
 //
@@ -161,6 +162,7 @@ export class Sidebar {
     this.pairBtn = document.createElement("button");
     this.pairBtn.type = "button";
     this.pairBtn.className = "sidebar-pair";
+    this.pairBtn.hidden = IS_MAC;
     this.pairBtn.textContent = "Connect mobile";
     this.pairBtn.title = "Pair a phone: choose Local HTTP or Secure Remote";
     this.pairBtn.addEventListener("click", () => this.onPairing());

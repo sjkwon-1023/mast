@@ -1,3 +1,4 @@
+import { IS_MAC, primaryModifier } from "../../shared/platform";
 import type { Terminal } from "@xterm/xterm";
 
 // 이미지가 확인된 경우에만 Ctrl+V를 PTY로 보낸다. 빈 값·조회 실패는 quoted-insert를 유발하지 않는다.
@@ -50,10 +51,16 @@ export function altArrowSequence(
 }
 
 // 선택 없는 Ctrl+C는 SIGINT로 통과시킨다. 기록 뷰도 이 판정을 공유한다.
-export function isCopySelectionKey(ev: KeyboardEvent, hasSelection: boolean): boolean {
-  if (!ev.ctrlKey || ev.altKey || !hasSelection) return false;
-  if (ev.key === "Insert") return !ev.shiftKey;
+export function isCopySelectionKey(ev: KeyboardEvent, hasSelection: boolean, mac = IS_MAC): boolean {
+  if (ev.isComposing || !hasSelection || !primaryModifier(ev, mac)) return false;
+  if (!mac && ev.key === "Insert") return !ev.shiftKey;
   return ev.key.toLowerCase() === "c";
+}
+
+export function isPasteKey(ev: KeyboardEvent, mac = IS_MAC): boolean {
+  if (ev.isComposing) return false;
+  if (primaryModifier(ev, mac) && ev.key.toLowerCase() === "v") return true;
+  return !mac && ev.key === "Insert" && ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey;
 }
 
 export async function copyTerminalSelection(term: Terminal): Promise<void> {

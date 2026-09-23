@@ -1,0 +1,5 @@
+# Preserve the user's ZDOTDIR (including changes made by earlier startup files).
+if [[ -n $MAST_USER_ZDOTDIR_SET ]]; then export ZDOTDIR="$MAST_USER_ZDOTDIR"; else unset ZDOTDIR; fi
+[[ -r "${ZDOTDIR:-$HOME}/.zlogin" ]] && source "${ZDOTDIR:-$HOME}/.zlogin"
+unset MAST_USER_ZDOTDIR_SET MAST_USER_ZDOTDIR
+source "$HOME/.mast/shell/zsh-integration.zsh"
