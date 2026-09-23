@@ -1,3 +1,4 @@
+import { IS_MAC, primaryModifier } from "../../../shared/platform";
 import { markdownDraft, keepMarkdownDraft, discardMarkdownDraft, markdownSaved, onMarkdownSaved } from "./drafts";
 // markdownViewer 탭의 뷰 — 마크다운 파일을 렌더해 보여주고, 활성인 동안
 // 2초 주기 mtime 폴링으로 라이브 리로드한다.
@@ -41,6 +42,7 @@ import { Marked } from "marked";
 
 import type { TimerHost } from "../../terminal/ack-batcher";
 import { fsReadChunk, fsStat, fsSaveMarkdown } from "../../../infrastructure/backend";
+import { confirmAction } from "../../../infrastructure/confirm";
 import { ScrollSettle, SCROLL_SETTLE_MS, shouldAdoptScroll } from "../viewer-scroll";
 import { registerViewerFontTarget, unregisterViewerFontTarget } from "../viewer-font";
 import type { ViewerFontTarget } from "../viewer-font";
@@ -339,7 +341,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     this.editButton = button("Edit", "markdown-edit", () => this.beginEdit());
     this.editButton.disabled = true;
     this.saveButton = button("Save", "markdown-save", () => void this.save());
-    this.cancelButton = button("Cancel", "markdown-cancel", () => this.cancelEdit());
+    this.cancelButton = button("Cancel", "markdown-cancel", () => void this.cancelEdit());
     this.saveButton.hidden = this.cancelButton.hidden = true;
     this.editor = document.createElement("textarea");
     this.editor.className = "markdown-editor";
@@ -348,7 +350,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     this.editor.hidden = true;
     this.editor.addEventListener("input", () => this.rememberDraft());
     this.editor.addEventListener("keydown", (event) => {
-      if (!event.isComposing && event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
+      if (!event.isComposing && primaryModifier(event) && !event.shiftKey && event.key.toLowerCase() === "s") {
         event.preventDefault();
         void this.save();
       }
@@ -398,7 +400,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     this.scrollEl.hidden = true;
     this.editButton.hidden = true;
     this.saveButton.hidden = this.cancelButton.hidden = false;
-    this.setBanner("Editing — Ctrl+S to save. Unsaved edits survive tab switches and WebView reloads.", false);
+    this.setBanner(`Editing — ${IS_MAC ? "⌘S" : "Ctrl+S"} to save. Unsaved edits survive tab switches and WebView reloads.`, false);
     if (focus) this.editor.focus();
   }
 
@@ -441,9 +443,19 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     }
   }
 
-  private cancelEdit(): void {
+  private async cancelEdit(): Promise<void> {
     if (this.saving) return;
-    if (markdownDraft(this.tab) && !window.confirm("Discard unsaved Markdown edits?")) return;
+    if (markdownDraft(this.tab)) {
+      let ok: boolean;
+      try {
+        ok = await confirmAction("Discard unsaved Markdown edits?");
+      } catch (error) {
+        if (!this.disposed) this.setBanner(`Could not confirm discarding edits: ${describeError(error)}`, true);
+        return;
+      }
+      // 확인을 기다리는 사이 탭이 닫혔거나 저장이 시작됐거나 편집이 끝났으면 손대지 않는다.
+      if (!ok || this.disposed || this.saving || !this.editing) return;
+    }
     discardMarkdownDraft(this.tab);
     this.endEdit();
     this.load(false);

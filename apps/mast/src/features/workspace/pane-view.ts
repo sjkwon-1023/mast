@@ -1,3 +1,4 @@
+import { IS_MAC } from "../../shared/platform";
 // pane 1개의 뷰 — 헤더(탭바 + 탭 생성·분할 아이콘) + keep-alive 콘텐츠 영역
 // (12단계 청크 C).
 //
@@ -180,8 +181,11 @@ function placeholderText(tab: Tab | null): string {
 }
 
 /** 시작하지 못한 탭의 배너 문구 (영어 UI 텍스트) — exited 와 전혀 다른 상황이라
- *  안내가 갈린다: "아직 시작도 못 했다"(대개 WSL 이 느리다)와 "끝났다". */
-const NOT_STARTED_NOTICE = "The shell has not started. WSL may be slow or unresponsive.";
+ *  안내가 갈린다: "아직 시작도 못 했다"(Windows 에서는 대개 WSL 이 느리다)와 "끝났다".
+ *  macOS 에는 WSL 이 없으므로 셸 시작 자체를 가리키는 문구를 쓴다. */
+const NOT_STARTED_NOTICE = IS_MAC
+  ? "The shell has not started. Its startup files may be slow or waiting for input."
+  : "The shell has not started. WSL may be slow or unresponsive.";
 
 /** 끝난 탭의 배너 문구 — DOM-free 순수 함수라 테스트가 네 조합을 다 잠근다.
  *
@@ -399,11 +403,11 @@ export class PaneView {
       }), shortcutBadge("newFolderTab")),
       // Changes 는 pane 셸의 cwd 가 아니라 워크스페이스 루트에서 여는 전역
       // 작업 목록이다. path null 은 코어가 워크스페이스 rootPath 로 해석한다.
-      this.svgButton(SVG_CHANGES, "New changes viewer tab", () => ({
+      ...(IS_MAC ? [] : [this.svgButton(SVG_CHANGES, "New changes viewer tab", () => ({
         type: "createTab",
         pane: this.paneId,
         tab: { type: "changesViewer", path: null },
-      })),
+      }))]),
       // 브라우저 탭 버튼(◎)은 여기 있었다 — 영구 disabled 라 자리만 차지해
       // 뺐다. v2 에서 기능과 함께 돌아온다.
 
@@ -611,7 +615,9 @@ export class PaneView {
     const notStarted = document.createElement("span");
     notStarted.className = "tab-not-started";
     notStarted.textContent = "not started";
-    notStarted.title = "The shell has not started yet — WSL may be slow or unresponsive.";
+    notStarted.title = IS_MAC
+      ? "The shell has not started yet — its startup files may be slow or waiting for input."
+      : "The shell has not started yet — WSL may be slow or unresponsive.";
 
     const close = document.createElement("button");
     close.type = "button";

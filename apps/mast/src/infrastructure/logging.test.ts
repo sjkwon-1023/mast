@@ -22,7 +22,7 @@ vi.mock("./backend", () => ({
 }));
 
 function settings(log: boolean | null): UiSettings {
-  return { fontFamily: null, fontSize: null, highlightLanguages: null, log, remote: null, showTabIds: null };
+  return { fontFamily: null, fontSize: null, highlightLanguages: null, log, remote: null, showTabIds: null, macOptionIsMeta: null };
 }
 
 /** **happy-dom 에는 `CompositionEvent` 가 없다** — `window.CompositionEvent` 는 그냥

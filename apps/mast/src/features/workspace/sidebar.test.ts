@@ -98,6 +98,8 @@ function mount(): {
   version: () => HTMLSpanElement;
   updateBtn: () => HTMLButtonElement;
   openedUrls: string[];
+  /** 사용자에게 보일 오류 — main.ts 글루가 상태줄에 띄운다. */
+  errors: unknown[];
 } {
   const root = document.createElement("div");
   document.body.replaceChildren(root);
@@ -105,6 +107,7 @@ function mount(): {
   let newWorkspaceCalls = 0;
   let pairingCalls = 0;
   const openedUrls: string[] = [];
+  const errors: unknown[] = [];
   const sidebar = new Sidebar(
     root,
     async (cmd) => {
@@ -119,6 +122,9 @@ function mount(): {
     },
     (url) => {
       openedUrls.push(url);
+    },
+    (err) => {
+      errors.push(err);
     },
   );
   const cardsEl = root.querySelector<HTMLElement>(".sidebar-cards");
@@ -139,6 +145,7 @@ function mount(): {
     version: () => versionEl,
     updateBtn: () => updateEl,
     openedUrls,
+    errors,
   };
 }
 
@@ -324,6 +331,22 @@ describe("Sidebar inline rename (F2)", () => {
     expect(input.hidden).toBe(true);
   });
 
+  it("double-clicking a card's name edits that card, even when it is not the active one", () => {
+    const { sidebar, cards, dispatched } = mount();
+    sidebar.render(snapshot(1, THREE, 2));
+    const card = cards()[2];
+    const input = renameInput(card);
+
+    child(card, ".ws-card-name").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(input.hidden).toBe(false);
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("ws 3");
+
+    input.value = "third";
+    press(input, "Enter");
+    expect(dispatched).toEqual([{ type: "renameWorkspace", workspace: 3, name: "third" }]);
+  });
+
   it("skips patching the card being edited and catches up when editing ends", () => {
     const { sidebar, cards } = mount();
     sidebar.render(snapshot(1, THREE, 2));
@@ -395,12 +418,12 @@ describe("Sidebar close (× 버튼 · Ctrl+Shift+Q)", () => {
     return spy;
   }
 
-  it("키 경로가 × 버튼과 같은 confirm·명령을 탄다 — 대상은 활성 워크스페이스", () => {
+  it("키 경로가 × 버튼과 같은 confirm·명령을 탄다 — 대상은 활성 워크스페이스", async () => {
     const confirmSpy = stubConfirm(true);
     const { sidebar, dispatched } = mount();
     sidebar.render(snapshot(1, THREE, 2));
 
-    sidebar.closeActive();
+    await sidebar.closeActive();
 
     expect(confirmSpy).toHaveBeenCalledTimes(1);
     expect(confirmSpy.mock.calls[0][0]).toBe(
@@ -409,25 +432,43 @@ describe("Sidebar close (× 버튼 · Ctrl+Shift+Q)", () => {
     expect(dispatched).toEqual([{ type: "closeWorkspace", workspace: 2 }]);
   });
 
-  it("confirm 취소는 아무것도 보내지 않는다 — × 클릭과 키가 같은 판정", () => {
+  it("confirm 취소는 아무것도 보내지 않는다 — × 클릭과 키가 같은 판정", async () => {
     const confirmSpy = stubConfirm(false);
     const { sidebar, cards, dispatched } = mount();
     sidebar.render(snapshot(1, THREE, 2));
 
-    sidebar.closeActive();
+    await sidebar.closeActive();
     child(cards()[0], ".ws-card-close").click();
+    await Promise.resolve();
 
     expect(confirmSpy).toHaveBeenCalledTimes(2);
     expect(dispatched).toEqual([]);
   });
 
-  it("활성 워크스페이스가 없으면 조용한 no-op — confirm 도 뜨지 않는다", () => {
+  it("확인 대화상자가 실패하면 닫지 않고 사유를 사용자에게 보인다", async () => {
+    const failure = new Error("cannot open the confirmation dialog");
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => {
+        throw failure;
+      }),
+    );
+    const { sidebar, dispatched, errors } = mount();
+    sidebar.render(snapshot(1, THREE, 2));
+
+    await sidebar.closeActive();
+
+    expect(dispatched).toEqual([]);
+    expect(errors).toEqual([failure]);
+  });
+
+  it("활성 워크스페이스가 없으면 조용한 no-op — confirm 도 뜨지 않는다", async () => {
     const confirmSpy = stubConfirm(true);
     const { sidebar, dispatched } = mount();
     // 워크스페이스 0개(빈 상태) — 그리고 스냅샷이 아직 없는 부트 직후도 같은 경로.
     sidebar.render(snapshot(1, [], null));
 
-    sidebar.closeActive();
+    await sidebar.closeActive();
 
     expect(confirmSpy).not.toHaveBeenCalled();
     expect(dispatched).toEqual([]);

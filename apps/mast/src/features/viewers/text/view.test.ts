@@ -520,6 +520,23 @@ describe("textKeyAction", () => {
     });
   });
 
+  it("on macOS moves to the first/last window with Cmd+Up/Cmd+Down", () => {
+    expect(textKeyAction(key("ArrowUp", { meta: true }), true)).toEqual({
+      type: "window",
+      action: "first",
+    });
+    expect(textKeyAction(key("ArrowDown", { meta: true }), true)).toEqual({
+      type: "window",
+      action: "last",
+    });
+    // 다른 ⌘ 조합은 뷰가 소비하지 않는다 (⌘C 복사·⌘A 전체 선택 등은 WebView 몫).
+    for (const name of ["ArrowLeft", "PageUp", "Home", "c", "a"]) {
+      expect(textKeyAction(key(name, { meta: true }), true)).toBeNull();
+    }
+    // Windows 에는 ⌘ 이 없다 — Ctrl+Home/End 가 그대로 같은 일을 한다.
+    expect(textKeyAction(key("Home", { ctrl: true }), false)).toEqual({ type: "window", action: "first" });
+  });
+
   it("pages the viewport with bare PageUp/PageDown", () => {
     expect(textKeyAction(key("PageUp"))).toEqual({ type: "page", delta: -1 });
     expect(textKeyAction(key("PageDown"))).toEqual({ type: "page", delta: 1 });
@@ -864,6 +881,7 @@ describe("TextView 하이라이트 적용", () => {
       log: null,
       remote: null,
       showTabIds: null,
+      macOptionIsMeta: null,
     };
   }
 
@@ -1007,6 +1025,7 @@ describe("TextView 행 격자와 설정 글꼴", () => {
       log: null,
       remote: null,
       showTabIds: null,
+      macOptionIsMeta: null,
     });
     document.body.replaceChildren();
   });
@@ -1022,6 +1041,7 @@ describe("TextView 행 격자와 설정 글꼴", () => {
       log: null,
       remote: null,
       showTabIds: null,
+      macOptionIsMeta: null,
     });
   });
 
@@ -1054,6 +1074,7 @@ describe("TextView 행 격자와 설정 글꼴", () => {
       log: null,
       remote: null,
       showTabIds: null,
+      macOptionIsMeta: null,
     });
     const view = await mounted("one\ntwo\nthree\n", 3);
     const lineHeight = lineHeightForFontSize(24);

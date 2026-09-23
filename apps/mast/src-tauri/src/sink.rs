@@ -420,6 +420,8 @@ const QUERY_KIND_LIST_TABS: &str = "list-tabs";
 struct QueryReply<'a> {
     tabs: &'a [TabInfo],
     self_tab: Option<u64>,
+    #[cfg(target_os = "macos")]
+    ttys: std::collections::BTreeMap<u64, String>,
 }
 
 /// 에이전트 질의 채널 (`OSC 777;mast-query;<kind>;<base64 회신 경로>`) —
@@ -481,17 +483,40 @@ fn deliver_query(app: &AppHandle, requester: SessionId, kind: &str, reply_b64: &
         // 열거와 요청자 역매핑은 둘 다 순수 조회다 — 한 번 잡은 lock 아래에서
         // 같이 읽어 두 조회가 서로 다른 순간의 상태를 보는 일을 막고, 파일 I/O
         // 전에 놓는다.
+        // macOS 의 tty 이름표도 같은 lock 아래에서 만든다 — tabs·self_tab 과 다른
+        // 순간의 상태를 보면 방금 열거한 탭의 세션이 바뀌어 있을 수 있다.
+        #[cfg(target_os = "macos")]
+        let ttys;
         let (tabs, self_tab, distro) = {
             let dispatcher = state.dispatcher.lock().unwrap();
             // 열거 범위는 코어가 요청자 세션에서 워크스페이스를 되짚어 정한다
             // (전송과 같은 격리 경계 — `Dispatcher::list_tabs`).
             let tabs = dispatcher.list_tabs(requester);
             let (self_tab, distro) = requester_tab_and_distro(dispatcher.state(), requester);
+            #[cfg(target_os = "macos")]
+            {
+                let mut names = std::collections::BTreeMap::new();
+                for ws in &dispatcher.state().workspaces {
+                    for pane in ws.panes.values() {
+                        for tab in &pane.tabs {
+                            if !tabs.iter().any(|listed| listed.tab == tab.id.0) { continue; }
+                            if let mast_core::model::TabKind::Terminal { pty_session: Some(id), .. } = &tab.kind {
+                                if let Some(tty) = state.sessions.get(*id).and_then(|s| s.tty_name()) {
+                                    names.insert(tab.id.0, tty);
+                                }
+                            }
+                        }
+                    }
+                }
+                ttys = names;
+            }
             (tabs, self_tab, distro)
         };
         let json = match serde_json::to_vec(&QueryReply {
             tabs: &tabs,
             self_tab,
+            #[cfg(target_os = "macos")]
+            ttys,
         }) {
             Ok(json) => json,
             Err(err) => {

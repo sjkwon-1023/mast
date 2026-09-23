@@ -1938,14 +1938,17 @@ name = "mast-app"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "libc",
  "mast-core",
  "mast-remote",
+ "objc2",
  "rfd",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-winrt-notification",
+ "tempfile",
  "windows",
  "windows-sys 0.61.2",
 ]

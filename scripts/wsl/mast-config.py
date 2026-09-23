@@ -49,9 +49,23 @@ def integer(value, low, high, name):
         raise ValueError(f"{name} must be an integer from {low} to {high}")
 
 
+if sys.platform == "darwin":
+    KEYS.update(("shell", "macOptionIsMeta"))
+    DEFAULTS["shell"] = "macOS account login shell (zsh or bash)"
+    DEFAULTS["macOptionIsMeta"] = False
+    DEFAULTS["fontFamily"] = "terminal: Menlo, 'SFMono-Regular', monospace; viewers: monospace"
+    HELP += ("\nmacOS: mast config set shell /bin/zsh (or /bin/bash); restart to apply.\n"
+             "macOS: mast config set macOptionIsMeta <true|false> makes Option send Meta (ESC) "
+             "instead of typing special characters; restart to apply.\n")
+
+
 def validate(data):
     if not isinstance(data, dict):
         raise ValueError("settings must be a JSON object")
+    if sys.platform == "darwin" and data.get("shell") is not None:
+        shell = data["shell"]
+        if not isinstance(shell, str) or not shell.startswith("/") or "\0" in shell or Path(shell).name not in ("zsh", "bash"):
+            raise ValueError("shell must be an absolute zsh or bash executable path")
     family = data.get("fontFamily")
     if family is not None and (not isinstance(family, str) or not family.strip()):
         raise ValueError("fontFamily must be a non-blank string")
@@ -61,6 +75,9 @@ def validate(data):
         raise ValueError("log must be true or false")
     if data.get("showTabIds") is not None and type(data["showTabIds"]) is not bool:
         raise ValueError("showTabIds must be true or false")
+    # 앱(Rust UiSettings)은 모든 플랫폼에서 이 키의 타입을 검사하므로 읽기 검증도 플랫폼과 무관하다.
+    if data.get("macOptionIsMeta") is not None and type(data["macOptionIsMeta"]) is not bool:
+        raise ValueError("macOptionIsMeta must be true or false")
     languages = data.get("highlightLanguages")
     if languages is not None and (
         not isinstance(languages, list)
@@ -157,12 +174,16 @@ def mutation(args):
         raise ValueError(f"set {key} requires exactly one value")
     text = values[0]
     value = (number(text) if key in ("fontSize", "remote.port") else
-             boolean(text) if key in ("log", "showTabIds") else
+             boolean(text) if key in ("log", "showTabIds", "macOptionIsMeta") else
              parse(text) if key == "highlightLanguages" else text)
     # null은 파일에서는 미설정으로 읽지만, CLI는 reset으로 의도를 명시한다.
     if key == "highlightLanguages" and not isinstance(value, list):
         raise ValueError("highlightLanguages must be a JSON array")
     validate({"remote": {"port": value}} if key == "remote.port" else {key: value})
+    # shell 키는 macOS 에만 있다. 실행 가능 여부는 새 값을 저장할 때만 확인한다 — 읽기에도 쓰이는
+    # validate() 에 넣으면 저장된 셸이 지워진 뒤 reset 이나 올바른 set 으로도 복구할 수 없게 된다.
+    if key == "shell" and not (os.path.isfile(value) and os.access(value, os.X_OK)):
+        raise ValueError("shell must be an existing file the current user can execute: " + value)
     return key, value, False
 
 
@@ -271,7 +292,14 @@ def main():
                     raise ValueError("get accepts one optional known setting name")
             else:
                 mutation(args)
-        execute(args, windows_settings_path())
+        if sys.platform == "darwin":
+            path = Path(os.environ.get("MAST_CONFIG_PATH") or
+                        Path.home() / "Library/Application Support/app.mast.desktop/settings.json")
+            if args[:2] in (["set", "remote"], ["set", "remote.port"]):
+                raise ValueError("remote control is not supported in the initial macOS version")
+        else:
+            path = windows_settings_path()
+        execute(args, path)
         return 0
     except (ValueError, OSError, RecursionError, subprocess.SubprocessError) as error:
         print("mast config: " + ascii(str(error)), file=sys.stderr)

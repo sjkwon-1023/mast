@@ -1,7 +1,10 @@
-import { closingMarkdownDrafts, discardMarkdownDraft, hasMarkdownDrafts } from "../features/viewers/markdown/drafts";
+import { IS_MAC, primaryModifier } from "../shared/platform";
+import { closingMarkdownDrafts, discardMarkdownDraft, hasMarkdownDrafts, reportMarkdownDraftState } from "../features/viewers/markdown/drafts";
 import { installNavKeys } from "./navigation/actions";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 import { installActivityPing } from "./activity-ping";
 import {
@@ -47,6 +50,8 @@ import type {
 } from "../shared/types";
 import { initUpdateNotice as startUpdateNotice } from "./update-notice";
 import { installShortcutGuide } from "./shortcut-guide";
+import { confirmAction } from "../infrastructure/confirm";
+import { handleFileDrop } from "../features/terminal/file-drop";
 
 declare global {
   interface Window {
@@ -66,13 +71,22 @@ declare global {
 }
 
 // F5는 터미널 앱에 전달하고 Ctrl+Shift+R만 WebView 리로드로 가로챈다.
-function installReloadKey(): void {
+function installReloadKey(onError: (err: unknown) => void): void {
   window.addEventListener(
     "keydown",
     (ev) => {
-      if (ev.ctrlKey && ev.shiftKey && !ev.altKey && ev.code === "KeyR") {
+      if (!ev.isComposing && primaryModifier(ev) && ev.shiftKey && ev.code === "KeyR") {
         ev.preventDefault();
-        if (!hasMarkdownDrafts() || window.confirm("Reload with unsaved Markdown edits? Drafts will be restored from this session.")) location.reload();
+        if (!hasMarkdownDrafts()) {
+          location.reload();
+          return;
+        }
+        confirmAction("Reload with unsaved Markdown edits? Drafts will be restored from this session.").then(
+          (ok) => {
+            if (ok) location.reload();
+          },
+          onError,
+        );
       }
     },
     { capture: true },
@@ -118,6 +132,7 @@ class App {
         console.debug("[mast] update link failed", err);
       });
     },
+    (err) => this.showError(formatCommandError(err)),
   );
 
   private agentStatuses: Map<TabId, AgentStatus> | null = null;
@@ -142,8 +157,49 @@ class App {
       lastSwitch: null,
     };
 
-    this.initUpdateNotice();
-    installReloadKey();
+    document.body.classList.toggle("platform-macos", IS_MAC);
+    // 창 close 확인 가드는 한 번만 등록한다. 등록은 여기서 시작하고 완료는 아래에서 기다린다 —
+    // 그 사이의 초기화 순서와 동작은 바꾸지 않는다.
+    // 핸들러는 async 다 — @tauri-apps/api 의 onCloseRequested 는 핸들러를 await 한 뒤
+    // preventDefault 가 없을 때만 창을 destroy 하므로, 확인을 기다리는 동안 창은 닫히지 않는다.
+    // 확인 중에 다시 온 close(⌘Q 연타, Dock Quit)는 같은 질문을 겹쳐 띄우지 않고 막는다.
+    let closeConfirming = false;
+    const closeGuard = getCurrentWindow().onCloseRequested(async (event) => {
+      if (!hasMarkdownDrafts()) return;
+      if (closeConfirming) {
+        event.preventDefault();
+        return;
+      }
+      closeConfirming = true;
+      try {
+        if (!(await confirmAction("Quit mast and discard unsaved Markdown edits?"))) event.preventDefault();
+      } catch (err) {
+        // 확인을 못 했으면 닫지 않는다 — draft 를 묻지 않고 버리는 쪽으로 넘어가지 않는다.
+        event.preventDefault();
+        console.error("quit confirmation failed", err);
+        this.showError(formatCommandError(err));
+      } finally {
+        closeConfirming = false;
+      }
+    });
+    // macOS 의 Dock Quit·로그아웃은 창 close 를 거치지 않고 백엔드의 종료 판정으로 간다.
+    // 판정은 Clean 일 때만 확인 없이 끝내고, 그 밖에는 창 close 로 위 가드를 태운다. 그래서
+    // 보고는 가드 등록이 끝난 **뒤에만** 시작한다(순서가 계약이다): 백엔드가 Clean·Dirty 를
+    // 받은 시점에는 JS 가드가 이미 있다. 등록이 끝나기 전의 짧은 구간에는 백엔드가 Unknown 이라
+    // 창 close 를 요청하지만 그 close 를 막을 가드가 아직 없어 확인 없이 끝날 수 있다 —
+    // docs/MACOS.md 에 적은 한계다. 등록 실패는 아래의 await 가 드러내며, 그때 보고는
+    // 시작하지 않는다.
+    if (IS_MAC) {
+      closeGuard.then(
+        () => reportMarkdownDraftState((state) => invoke("set_markdown_draft_state", { state })),
+        () => {},
+      );
+    }
+    if (!IS_MAC) this.initUpdateNotice();
+    installReloadKey((err) => {
+      console.error("reload confirmation failed", err);
+      this.showError(formatCommandError(err));
+    });
     installShortcutGuide();
     try {
       installActivityPing(await getResetEnabled(), (visible) => {
@@ -154,9 +210,8 @@ class App {
       this.showError(formatCommandError(err));
     }
     this.installWindowFocus();
-    await getCurrentWindow().onCloseRequested((event) => {
-      if (hasMarkdownDrafts() && !window.confirm("Quit mast and discard unsaved Markdown edits?")) event.preventDefault();
-    });
+    if (IS_MAC) this.installFileDrop();
+    await closeGuard;
 
     initWindowVisibility().catch((err: unknown) => {
       console.error("window visibility listen failed", err);
@@ -167,7 +222,7 @@ class App {
       dispatchUI: (command) => this.dispatchUI(command),
       createWorkspaceHere: () => this.createWorkspaceHere(),
       renameWorkspace: () => this.sidebar.beginRename(),
-      closeWorkspace: () => this.sidebar.closeActive(),
+      closeWorkspace: () => void this.sidebar.closeActive(),
     });
 
     try {
@@ -183,7 +238,7 @@ class App {
       console.error("get_ui_settings failed", err);
       this.showError(formatCommandError(err));
     }
-    await this.initRemote();
+    if (!IS_MAC) await this.initRemote();
     this.store.subscribe((snapshot) => this.render(snapshot));
     await this.store.init();
   }
@@ -226,6 +281,22 @@ class App {
     })();
   }
 
+  // Finder 에서 터미널로 끌어 놓은 파일 경로를 그 pane 에 붙여넣는다 (features/terminal/file-drop.ts).
+  // Windows 는 드롭 경로의 WSL 변환이 없어 설치하지 않는다.
+  private installFileDrop(): void {
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        handleFileDrop(
+          event.payload,
+          (x, y) => this.wsView.terminalAtPoint(x, y),
+          (message) => this.showError(message),
+        );
+      })
+      .catch((err: unknown) => {
+        console.error("file drop listen failed", err);
+      });
+  }
+
   private createWorkspaceHere(): void {
     const snapshot = this.store.snapshot;
     const ws = snapshot === null ? null : activeWorkspace(snapshot);
@@ -239,7 +310,7 @@ class App {
       return;
     }
 
-    if (cwd === "/mnt" || cwd.startsWith("/mnt/")) {
+    if (!IS_MAC && (cwd === "/mnt" || cwd.startsWith("/mnt/"))) {
       this.showError(
         "cannot create a workspace under /mnt: Windows drives are data-only — cd into the WSL filesystem first",
       );
@@ -249,7 +320,7 @@ class App {
       type: "createWorkspace",
       name: pathBasename(cwd),
       rootPath: cwd,
-      distro: ws.distro,
+      distro: IS_MAC ? null : ws.distro,
       tab: { type: "terminal", cwd: null },
     });
   }
@@ -279,7 +350,7 @@ class App {
     let traceToken: number | null = null;
     try {
       const closingDrafts = closingMarkdownDrafts(cmd, this.store.snapshot);
-      if (closingDrafts.length > 0 && !window.confirm("Close and discard unsaved Markdown edits?")) return null;
+      if (closingDrafts.length > 0 && !(await confirmAction("Close and discard unsaved Markdown edits?"))) return null;
       if (cmd.type === "switchWorkspace") {
         const active = this.store.snapshot?.state.activeWorkspace ?? null;
         if (active !== cmd.workspace) {

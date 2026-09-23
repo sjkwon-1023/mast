@@ -12,7 +12,7 @@
 // 선택 행 1개를 유지하며, 방향키·Home/End·PageUp/PageDown 이 선택을 옮기고
 // Enter 가 클릭과 같은 라우팅을, Backspace 가 `..` 와 같은 상위 이동을 한다.
 // 이 keydown 은 **뷰 내부 리스너**라 전역 가로채기(shared/keys.ts 의 window capture)와
-// 층이 다르고, 수식키 없는 키만 소비하므로 Ctrl+Shift+방향키(전역 pane 이동)와 겹치지
+// 층이 다르고, 수식키 없는 키만 소비하므로 Alt+Shift+방향키(전역 pane 이동)와 겹치지
 // 않는다.
 //
 // 행 모델(folderRows)·정렬(sortEntries)·부모 경로(parentPath)·확장자 라우팅
@@ -23,6 +23,7 @@
 import { fsListDir } from "../../../infrastructure/backend";
 import type { DirEntry, DirListing } from "../../../infrastructure/backend";
 import type { KeySpec } from "../../../shared/keys";
+import { IS_MAC } from "../../../shared/platform";
 import type { ViewerKind, ViewerView } from "../viewer-view";
 import type { Command, CommandOutput, NewTab, PaneId, TabId } from "../../../shared/types";
 
@@ -169,13 +170,20 @@ const MOVE_KEYS: Record<string, SelectionMove | undefined> = {
 /** keydown → 폴더 뷰 액션. 목록 밖 조합은 전부 null 이고, 그때 뷰는 이벤트에
  *  손대지 않는다.
  *
- *  **수식키가 하나라도 붙으면 받지 않는다**: Ctrl+Shift+방향키는 전역 pane 이동
+ *  **수식키가 하나라도 붙으면 받지 않는다**: Alt+Shift+방향키는 전역 pane 이동
  *  (shared/keys.ts)이고 Ctrl 계열도 전역 목록 소유라, 여기서 같은 키를 소비하면 뷰어
  *  탭에서만 전역 이동이 죽는 비일관이 생긴다. IME 조합 중의 키도 조합기 몫이다
  *  (keys.keyAction 과 같은 규약). */
-export function folderKeyAction(spec: KeySpec): FolderKeyAction | null {
+export function folderKeyAction(spec: KeySpec, mac = IS_MAC): FolderKeyAction | null {
   if (spec.isComposing) return null;
   if (spec.ctrl || spec.alt || spec.shift) return null;
+  // macOS 는 Finder 관례를 따른다: ⌘↑ 상위 폴더, ⌘↓ 열기. 그 밖의 ⌘ 조합은 받지 않는다
+  // (⌘←/→ 가 수식 없는 ←/→ 로 읽혀 폴더를 옮기지 않게). Windows 는 meta 를 보지 않는다.
+  if (mac && spec.meta === true) {
+    if (spec.key === "ArrowUp") return { type: "parent" };
+    if (spec.key === "ArrowDown") return { type: "open" };
+    return null;
+  }
   const move = MOVE_KEYS[spec.key];
   if (move !== undefined) return { type: "move", move };
   if (spec.key === "Enter") return { type: "open" };
@@ -349,6 +357,7 @@ export class FolderView implements ViewerView {
     const action = folderKeyAction({
       key: ev.key,
       ctrl: ev.ctrlKey,
+      meta: ev.metaKey,
       alt: ev.altKey,
       shift: ev.shiftKey,
       isComposing: ev.isComposing,

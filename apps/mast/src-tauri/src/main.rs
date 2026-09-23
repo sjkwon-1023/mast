@@ -19,7 +19,10 @@
 //! 않고, publish 도착마다 점진 attach 된다 (ADR-0016 결정 8).
 
 // Windows 릴리스 빌드에서 콘솔 창을 띄우지 않는다 (디버그 빌드는 콘솔 유지).
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
+#[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
+compile_error!("Mast supports macOS on Apple Silicon only (aarch64-apple-darwin).");
 
 // Windows 셸 앱 신원(AUMID) 등록 — 토스트 발신자 등록용이라 Windows 전용이다.
 #[cfg(windows)]
@@ -34,6 +37,7 @@ mod git;
 mod host;
 mod logfile;
 mod provision;
+mod platform;
 mod remote;
 mod reset_supervisor;
 mod router;
@@ -117,6 +121,8 @@ fn main() {
             // 파도)가 실기에서 가장 자주 실패하는 구간이라, 그 줄들을 놓치면
             // 로그를 켠 의미가 절반이다.
             logfile::init(&handle);
+            #[cfg(target_os = "macos")]
+            platform::macos::initialize(&handle)?;
             let sessions = Arc::new(SessionManager::new());
             let sinks = Arc::new(state::SinkRegistry::default());
             // OSC 라우터는 sink 생성보다 먼저 — sink factory(TauriHost)가 핸들을
@@ -289,6 +295,12 @@ fn main() {
         // 생성되므로 이 시점엔 항상 manage 되어 있다 — 아니라면 신호가 새고 있는
         // 프로그램 결함이라 숨기지 않는다 (publish_state 와 같은 규율).
         .on_window_event(move |window, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::WindowEvent::Destroyed if window.label() == "main" => {
+                // 마지막 창 닫기는 명시적 종료이며, Dock 으로 숨기기가 아니다.
+                // Destroyed 는 프론트엔드 close guard 가 수락한 **뒤에만** 온다.
+                window.app_handle().exit(0);
+            }
             tauri::WindowEvent::Focused(focused) => {
                 match window.app_handle().try_state::<state::AppState>() {
                     Some(managed) => managed.reset.focus(*focused),
@@ -369,6 +381,12 @@ fn main() {
             commands::fs_stat,
             commands::fs_read_chunk,
             commands::fs_save_markdown,
+            // Markdown draft 유무 — macOS Dock Quit·로그아웃 종료 판정의 근거다.
+            #[cfg(target_os = "macos")]
+            commands::set_markdown_draft_state,
+            // 확인 대화상자 — WKWebView 의 window.confirm 이 대화상자 없이 false 라 대신 쓴다.
+            #[cfg(target_os = "macos")]
+            commands::confirm_dialog,
             git::git_status,
             git::git_diff,
             // 끝난 터미널 탭의 기록 바이트 (ADR-0018) — 기록 뷰가 마운트 때 1회.
@@ -409,6 +427,8 @@ fn main() {
                         // (기본 100ms) 안의 cwd·상태 변경이 상태에 반영되게 한 뒤,
                         // 그 결과까지 담아 Saver 를 flush 한다 (18단계 glue 계약).
                         managed.router.flush_now();
+                        #[cfg(target_os = "macos")]
+                        managed.sessions.shutdown();
                         managed.saver.flush();
                     }
                     // setup 실패로 manage 전에 종료되는 경로뿐 — flush 할 상태

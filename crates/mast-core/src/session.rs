@@ -49,14 +49,17 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, ensure};
 use portable_pty::{
-    native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtyPair, PtySize,
+    native_pty_system, Child, CommandBuilder, MasterPty, PtyPair, PtySize,
 };
+
+#[cfg(not(target_os = "macos"))]
+use portable_pty::ChildKiller;
 
 use crate::flow::{FlowAction, FlowControl};
 use crate::osc::{OscEvent, OscScanner};
@@ -305,6 +308,8 @@ impl SizeState {
 
 /// PTY 세션 핸들. 스레드 간 공유 가능(`&self` API + 내부 Mutex).
 pub struct PtySession {
+    #[cfg(target_os = "macos")]
+    process_scope: Arc<crate::platform::macos::ProcessScope>,
     shared: Arc<Shared>,
     /// PTY 입력 writer. waiter 와 공유 — kill·종료 후에는 None (fd 회수).
     writer: SharedWriter,
@@ -313,6 +318,7 @@ pub struct PtySession {
     /// 블록된 read 를 풀어준다 (모듈 rustdoc "스레드 구조와 종료 감지").
     master: SharedMaster,
     /// waiter 스레드가 `Child` 본체(wait 용)를 가져가므로 kill 신호는 분리된 killer 로 보낸다.
+    #[cfg(not(target_os = "macos"))]
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// 현재 PTY 창 크기 (`cols << 16 | rows`). [`screen_since`](Self::screen_since)
     /// 의 소비자는 데스크톱과 같은 크기의 터미널을 만들어야 하는데 PTY master 에는
@@ -360,6 +366,13 @@ impl PtySession {
         // (이걸 잡고 있으면 자식 종료 후에도 master read 가 EOF 를 받지 못한다.)
         drop(slave);
 
+        #[cfg(target_os = "macos")]
+        let process_scope = Arc::new(crate::platform::macos::ProcessScope::new(
+            child.process_id().ok_or_else(|| anyhow!("PTY child has no process ID"))?,
+        ));
+        #[cfg(target_os = "macos")]
+        let mut spawn_guard = crate::platform::macos::SpawnGuard::new(Arc::clone(&process_scope));
+        #[cfg(not(target_os = "macos"))]
         let killer = child.clone_killer();
         let reader = master.try_clone_reader()?;
         let writer = master.take_writer()?;
@@ -403,8 +416,16 @@ impl PtySession {
                 let shared = Arc::clone(&shared);
                 let writer = Arc::clone(&writer);
                 let master = Arc::clone(&master);
-                move || waiter_loop(child, sink, shared, writer, master)
+                #[cfg(target_os = "macos")]
+                let scope = Arc::clone(&process_scope);
+                move || {
+                    #[cfg(target_os = "macos")]
+                    scope.before_reap();
+                    waiter_loop(child, sink, shared, writer, master)
+                }
             })?;
+        #[cfg(target_os = "macos")]
+        spawn_guard.disarm();
         // 워치독은 마감을 요구한 경우에만, 그리고 마감까지만 산다 — 표식이 오거나
         // 세션이 죽으면 리더·waiter 의 notify 로 즉시 회수된다. 상시 스레드 수는
         // 세션당 둘 그대로다.
@@ -429,9 +450,12 @@ impl PtySession {
         }
 
         Ok(Self {
+            #[cfg(target_os = "macos")]
+            process_scope,
             shared,
             writer,
             master,
+            #[cfg(not(target_os = "macos"))]
             killer: Mutex::new(killer),
             size: AtomicU32::new(pack_size(spec.cols, spec.rows)),
             // 스폰 크기가 첫 데스크톱 크기다 — 데스크톱 pane 이 attach 하며 곧 실제
@@ -626,6 +650,14 @@ impl PtySession {
     pub fn size(&self) -> (u16, u16) {
         unpack_size(self.size.load(Ordering::Relaxed))
     }
+
+    /// 필요할 때 조회하는 CLI 메타데이터이며 영속 식별자가 아니다. 닫힌 PTY 에는 없다.
+    #[cfg(target_os = "macos")]
+    pub fn tty_name(&self) -> Option<String> {
+        self.master.lock().unwrap().as_ref()?.tty_name()?
+            .to_str().map(str::to_owned)
+    }
+
 
     /// 프론트엔드가 n bytes 소비를 완료했다. Resume 전환 시 리더를 깨운다.
     pub fn ack(&self, n: usize) {
@@ -824,11 +856,28 @@ impl PtySession {
     /// `on_exit` 는 여기서 호출하지 않는다 — kill 로 죽인 자식도 waiter 의
     /// `child.wait()` 를 반환시키므로, 자연 종료·kill 어느 경로든 **waiter 가
     /// 단독으로 정확히 1회** 호출한다 ([`waiter_loop`] 참조).
+    ///
+    /// macOS 에서는 leader 에 SIGHUP 만 동기로 보내고 곧바로 반환한다. HUP 을 무시한
+    /// leader 는 분리 스레드가 grace 뒤 SIGKILL 한다 — 호출자가 Dispatcher lock 아래에
+    /// 있어도 grace 를 기다리지 않는다.
     pub fn kill(&self) {
+        let first = self.hang_up();
+        #[cfg(target_os = "macos")]
+        if first {
+            crate::platform::macos::escalate_in_background(Arc::clone(&self.process_scope));
+        }
+        // macOS 밖에서는 에스컬레이션이 없으므로 결과를 쓰지 않는다.
+        #[cfg(not(target_os = "macos"))]
+        let _ = first;
+    }
+
+    /// [`kill`](Self::kill) 의 동기 부분 — killed 확정, 리더 깨우기, 종료 신호, PTY fd 회수.
+    /// 이번 호출이 처음이었으면 true (이미 kill 됐거나 자연 종료됐으면 아무것도 하지 않고 false).
+    fn hang_up(&self) -> bool {
         {
             let mut inner = self.shared.inner.lock().unwrap();
             if inner.killed {
-                return;
+                return false;
             }
             inner.killed = true;
         }
@@ -838,6 +887,9 @@ impl PtySession {
         // 자식이 방금 자연 종료했다면(waiter 가 아직 관측 전) 신호 전송이 실패
         // (ESRCH 등)할 수 있다. "프로세스가 죽어 있어야 한다"는 의도는 이미
         // 충족된 상태이므로 이 에러는 무시한다 (멱등 kill — 에러 은폐가 아님).
+        #[cfg(target_os = "macos")]
+        self.process_scope.hang_up();
+        #[cfg(not(target_os = "macos"))]
         let _ = self.killer.lock().unwrap().kill();
 
         // writer/master 를 즉시 drop 해 우리가 쥔 PTY fd 를 회수한다. waiter 도
@@ -846,6 +898,7 @@ impl PtySession {
         // 스레드 종료 시 함께 drop 된다.
         *self.writer.lock().unwrap() = None;
         *self.master.lock().unwrap() = None;
+        true
     }
 }
 
@@ -1108,16 +1161,111 @@ fn unpack_size(packed: u32) -> (u16, u16) {
 
 /// 세션 레지스트리 — `SessionId` 를 발급하고 세션을 보관한다. 내부 동기화는
 /// std Mutex (외부 lock 없이 스레드 간 공유 가능).
+/// 최종 종료 중에는 sink 콜백이 영속된 Running 탭을 Exited 탭으로 바꾸면 안 된다 —
+/// 앱을 다시 열 때 그 셸들을 다시 스폰해야 한다.
+struct ManagedSink {
+    sink: Box<dyn SessionSink>,
+    stopping: Arc<AtomicBool>,
+}
+impl SessionSink for ManagedSink {
+    fn on_output(&self, offset: u64, bytes: &[u8]) -> Delivery {
+        if self.stopping.load(Ordering::Acquire) { Delivery::Dropped }
+        else { self.sink.on_output(offset, bytes) }
+    }
+    fn on_osc(&self, event: &OscEvent) {
+        if !self.stopping.load(Ordering::Acquire) { self.sink.on_osc(event); }
+    }
+    fn on_exit(&self, code: Option<u32>) {
+        if !self.stopping.load(Ordering::Acquire) { self.sink.on_exit(code); }
+    }
+    fn on_startup_timeout(&self) {
+        if !self.stopping.load(Ordering::Acquire) { self.sink.on_startup_timeout(); }
+    }
+}
+
 pub struct SessionManager {
+    stopping: Arc<AtomicBool>,
     next_id: Mutex<SessionId>,
     sessions: Mutex<HashMap<SessionId, Arc<PtySession>>>,
+    /// 탭 닫기로 레지스트리에서 빠졌지만 leader 가 아직 reap 되지 않았을 수 있는 세션의
+    /// 신호 권한. 에스컬레이션 스레드는 앱 종료(`process::exit`)와 함께 사라지므로
+    /// [`shutdown`](Self::shutdown) 이 이 leader 들도 직접 끝낸다. reap 된 항목은 다음
+    /// 추가 때 걸러 낸다. lock 순서: `sessions` → `closing`.
+    #[cfg(target_os = "macos")]
+    closing: Mutex<Vec<Arc<crate::platform::macos::ProcessScope>>>,
+    /// 진행 중인 [`create`](Self::create). shutdown 이 시작된 뒤 끝난 스폰은 create 가
+    /// 스스로 정리하는데, shutdown 이 그 정리를 기다리지 않고 반환하면 곧 올
+    /// `process::exit` 가 정리를 끊는다.
+    #[cfg(target_os = "macos")]
+    spawns: SpawnsInFlight,
+}
+
+/// shutdown 이 진행 중인 스폰을 기다리는 상한. 글루의 스폰 마감(5s)에 create 자신의
+/// HUP → grace(500ms) → KILL 정리를 더한 값을 덮는다. 넘기면 기록만 남기고 진행한다 —
+/// 앱 종료를 무기한 막지 않는다.
+#[cfg(target_os = "macos")]
+const SPAWN_DRAIN_LIMIT: Duration = Duration::from_secs(6);
+
+/// 진행 중인 `create()` 수와 그 수가 0 이 됐음을 알리는 condvar.
+///
+/// stopping 확인과 증가를 같은 lock 아래에서 한다. shutdown 은 stopping 을 세운 **뒤에**
+/// 같은 lock 으로 수를 읽으므로, 입장한 create 는 shutdown 이 반드시 보고, shutdown 이
+/// 수를 읽은 뒤 들어오려는 create 는 stopping 을 반드시 보고 거절된다.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct SpawnsInFlight {
+    count: Mutex<usize>,
+    idle: Condvar,
+}
+
+#[cfg(target_os = "macos")]
+impl SpawnsInFlight {
+    fn enter<'a>(&'a self, stopping: &AtomicBool) -> anyhow::Result<SpawnInFlight<'a>> {
+        let mut count = self.count.lock().unwrap();
+        ensure!(!stopping.load(Ordering::Acquire), "session manager is shutting down");
+        *count += 1;
+        Ok(SpawnInFlight(self))
+    }
+
+    /// 진행 중인 create 가 모두 끝날 때까지 `deadline` 까지만 기다린다. 다 끝났으면 true.
+    fn wait_idle(&self, deadline: Instant) -> bool {
+        let mut count = self.count.lock().unwrap();
+        while *count > 0 {
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            count = self.idle.wait_timeout(count, deadline - now).unwrap().0;
+        }
+        true
+    }
+}
+
+/// create 가 끝날 때(성공·실패·정리 모두) 진행 중 수를 되돌리는 RAII guard.
+#[cfg(target_os = "macos")]
+struct SpawnInFlight<'a>(&'a SpawnsInFlight);
+
+#[cfg(target_os = "macos")]
+impl Drop for SpawnInFlight<'_> {
+    fn drop(&mut self) {
+        let mut count = self.0.count.lock().unwrap();
+        *count -= 1;
+        if *count == 0 {
+            self.0.idle.notify_all();
+        }
+    }
 }
 
 impl SessionManager {
     pub fn new() -> Self {
         Self {
+            stopping: Arc::new(AtomicBool::new(false)),
             next_id: Mutex::new(1),
             sessions: Mutex::new(HashMap::new()),
+            #[cfg(target_os = "macos")]
+            closing: Mutex::new(Vec::new()),
+            #[cfg(target_os = "macos")]
+            spawns: SpawnsInFlight::default(),
         }
     }
 
@@ -1133,16 +1281,79 @@ impl SessionManager {
         opts: SessionOptions,
         make_sink: impl FnOnce(SessionId) -> Box<dyn SessionSink>,
     ) -> anyhow::Result<SessionId> {
+        ensure!(!self.stopping.load(Ordering::Acquire), "session manager is shutting down");
+        // 함수가 끝날 때(아래 stopping 재검사 경로의 동기 정리까지 마친 뒤) 풀린다 —
+        // 다른 지역 변수보다 먼저 선언해 가장 나중에 drop 되게 한다.
+        #[cfg(target_os = "macos")]
+        let _in_flight = self.spawns.enter(&self.stopping)?;
         let id = {
             let mut next = self.next_id.lock().unwrap();
             let id = *next;
             *next += 1;
             id
         };
-        let sink = make_sink(id);
+        let sink = Box::new(ManagedSink {
+            sink: make_sink(id), stopping: Arc::clone(&self.stopping),
+        });
         let session = PtySession::spawn(spec, sink, opts)?;
-        self.sessions.lock().unwrap().insert(id, Arc::new(session));
+        let mut sessions = self.sessions.lock().unwrap();
+        if self.stopping.load(Ordering::Acquire) {
+            drop(sessions);
+            // shutdown 이 이미 레지스트리를 비운 뒤라 이 세션은 그쪽에서 보이지 않는다.
+            // 곧 `process::exit` 가 올 수 있으므로 macOS 에서는 에스컬레이션을 스레드에
+            // 맡기지 않고 여기서 HUP → grace → KILL 을 끝낸다.
+            #[cfg(target_os = "macos")]
+            {
+                session.hang_up();
+                crate::platform::macos::kill_unreaped_after_grace(&[Arc::clone(
+                    &session.process_scope,
+                )]);
+            }
+            #[cfg(not(target_os = "macos"))]
+            session.kill();
+            anyhow::bail!("session manager shut down during spawn");
+        }
+        sessions.insert(id, Arc::new(session));
         Ok(id)
+    }
+
+    /// 스폰을 더 받지 않고, 종료 콜백을 억제하고, 다른 컴포넌트가 아직 세션의 Arc 를
+    /// 쥐고 있어도 소유한 모든 세션을 종료한다.
+    ///
+    /// macOS 에서는 동기로 끝낸다 — 호출 직후 `process::exit` 가 오므로 에스컬레이션
+    /// 스레드에 맡기면 SIGKILL 이 영영 가지 않는다. 레지스트리의 모든 leader 와 탭 닫기로
+    /// 빠졌지만 아직 reap 되지 않은 leader 에 SIGHUP 을 보내고, grace 를 전체에서 한 번만
+    /// 기다린 뒤 아직 reap 되지 않은 leader 만 SIGKILL 한다. 이어서 shutdown 이 시작될 때
+    /// 진행 중이던 스폰이 끝나기를 상한([`SPAWN_DRAIN_LIMIT`]) 안에서 기다린다 — 그 스폰은
+    /// 끝난 뒤 stopping 을 보고 자기 leader 를 동기로 정리하므로, 반환할 때는 그 정리도
+    /// 끝나 있다.
+    pub fn shutdown(&self) {
+        let sessions = {
+            let mut guard = self.sessions.lock().unwrap();
+            self.stopping.store(true, Ordering::Release);
+            std::mem::take(&mut *guard)
+        };
+        #[cfg(target_os = "macos")]
+        {
+            let drain_deadline = Instant::now() + SPAWN_DRAIN_LIMIT;
+            let mut scopes = std::mem::take(&mut *self.closing.lock().unwrap());
+            for scope in &scopes {
+                scope.hang_up();
+            }
+            for session in sessions.values() {
+                session.hang_up();
+                scopes.push(Arc::clone(&session.process_scope));
+            }
+            crate::platform::macos::kill_unreaped_after_grace(&scopes);
+            if !self.spawns.wait_idle(drain_deadline) {
+                eprintln!(
+                    "[mast] shutdown: a shell spawn still running after {SPAWN_DRAIN_LIMIT:?}; \
+                     exiting without its cleanup"
+                );
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        for session in sessions.into_values() { session.kill(); }
     }
 
     pub fn get(&self, id: SessionId) -> Option<Arc<PtySession>> {
@@ -1153,7 +1364,19 @@ impl SessionManager {
     pub fn remove(&self, id: SessionId) -> bool {
         // kill 은 sessions lock 을 놓은 뒤 수행한다 — sink 콜백·wait 지연이
         // 레지스트리 전체를 잡아두지 않게.
-        let removed = self.sessions.lock().unwrap().remove(&id);
+        let removed = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let removed = sessions.remove(&id);
+            // 레지스트리에서 빼는 것과 같은 임계구역에서 종료 대기 목록에 올린다 — 그 사이에
+            // shutdown 이 끼어들어도 이 leader 는 둘 중 한 곳에서 반드시 보인다.
+            #[cfg(target_os = "macos")]
+            if let Some(session) = &removed {
+                let mut closing = self.closing.lock().unwrap();
+                closing.retain(|scope| scope.unreaped());
+                closing.push(Arc::clone(&session.process_scope));
+            }
+            removed
+        };
         match removed {
             Some(session) => {
                 session.kill();

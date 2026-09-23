@@ -24,16 +24,22 @@ import {
   unregisterTerminalFontTarget,
 } from "./settings";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { IS_MAC } from "../../shared/platform";
 import {
   shouldOpenLink,
   isCopySelectionKey,
+  isPasteKey,
+  isImageOnlyPaste,
   copyTerminalSelection,
   clipboardHasImage,
   altArrowSequence,
+  macTerminalKeyAction,
 } from "./interaction";
+import type { MacTerminalKey } from "./interaction";
 import { Channel } from "@tauri-apps/api/core";
 import type { OutputChunk } from "../../infrastructure/backend";
 import { parseAttachBody, parseFrame } from "./frame";
+import { WebKitImeInput } from "./webkit-ime-input";
 import type { GateResult } from "./attach-gate";
 import { log } from "../../infrastructure/logging";
 import type { SettlePoll } from "./scroll";
@@ -56,6 +62,9 @@ export class TerminalView {
   private opened = false;
 
   private focusPending = false;
+
+  // macOS WebKit 한글 입력 어댑터. Windows 는 설치하지 않는다 (webkit-ime.ts 참조).
+  private ime: WebKitImeInput | null = null;
 
   private replayDone = false;
 
@@ -90,8 +99,8 @@ export class TerminalView {
     this.root.className = "term-host";
     parent.appendChild(this.root);
 
-    const activateLink = (_event: MouseEvent, uri: string): void => {
-      if (!shouldOpenLink(uri, this.term.modes.mouseTrackingMode)) return;
+    const activateLink = (event: MouseEvent, uri: string): void => {
+      if (!shouldOpenLink(uri, this.term.modes.mouseTrackingMode, event)) return;
       void openUrl(uri).catch((err: unknown) => console.error("open_url failed", err));
     };
 
@@ -130,6 +139,8 @@ export class TerminalView {
   setVisible(v: boolean): void {
     if (this.visible === v) return;
     this.visible = v;
+    // 숨겨지는 탭의 조합 중 글자는 blur 를 기다리지 않고 확정한다.
+    if (!v) this.ime?.flush();
     this.root.style.display = v ? "" : "none";
     if (v) this.scheduleFit();
   }
@@ -163,10 +174,13 @@ export class TerminalView {
         length: text.length,
       });
     }
+    // 조합 중 글자가 붙여넣은 텍스트보다 먼저 가야 한다. xterm 의 paste 는 입력창도 비운다.
+    this.ime?.flush();
     this.term.paste(text);
   }
 
   submit(): void {
+    this.ime?.flush();
     this.enqueueWrite("\r");
   }
 
@@ -196,6 +210,7 @@ export class TerminalView {
 
     this.fit();
     this.installCopyPasteKeys();
+    if (IS_MAC) this.ime = new WebKitImeInput(this.term);
 
     // attach 응답 전에 들어오는 출력을 놓치지 않도록 채널을 먼저 만든다.
     const channel = new Channel<OutputChunk>();
@@ -263,6 +278,9 @@ export class TerminalView {
     if (this.disposed) return;
     this.disposed = true;
     unregisterTerminalFontTarget(this);
+    // 남은 조합은 onData 구독을 끊기 전에 확정해야 PTY 에 닿는다.
+    this.ime?.dispose();
+    this.ime = null;
     this.endScrollRestore("disposed");
 
     this.latchedByRestore = false;
@@ -317,13 +335,40 @@ export class TerminalView {
   }
 
   private installCopyPasteKeys(): void {
+    // macOS 는 네이티브 붙여넣기(paste 이벤트)를 xterm 이 처리한다(isPasteKey 참조). 이미지만
+    // 있는 붙여넣기만 xterm 보다 먼저(capture) 가로채 Ctrl+V 로 바꾼다. 이 리스너가 IME
+    // 어댑터의 paste 리스너보다 먼저 등록돼 먼저 돌므로, 남은 한글 조합을 여기서 먼저 확정해야
+    // Ctrl+V 보다 앞서 간다(앞선 keydown 이 없는 Edit › Paste 경로).
+    if (IS_MAC) {
+      this.term.element?.addEventListener(
+        "paste",
+        (ev) => {
+          if (!ev.clipboardData || !isImageOnlyPaste(ev.clipboardData)) return;
+          ev.preventDefault();
+          ev.stopPropagation();
+          this.ime?.flush();
+          this.enqueueWrite("\x16");
+        },
+        { capture: true },
+      );
+    }
     this.term.attachCustomKeyEventHandler((ev) => {
-      if (ev.type !== "keydown") return true;
+      if (ev.type !== "keydown" || ev.isComposing) return true;
 
       // Shift+Enter는 Claude Code의 줄바꿈 시퀀스 ESC CR로 보낸다.
-      if (ev.key === "Enter" && ev.shiftKey && !ev.ctrlKey && !ev.altKey) {
+      if (ev.key === "Enter" && ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
         ev.preventDefault();
         this.enqueueWrite("\x1b\r");
+        return false;
+      }
+      // macOS 의 ⌘ 줄 편집·⌘K·Fn 스크롤 (interaction.ts::macTerminalKeyAction). Windows 는 null.
+      const macKey = macTerminalKeyAction(ev, {
+        normalBuffer: this.term.buffer.active.type === "normal",
+        mouseTracking: this.term.modes.mouseTrackingMode !== "none",
+      });
+      if (macKey !== null) {
+        ev.preventDefault();
+        this.runMacTerminalKey(macKey);
         return false;
       }
       // xterm 의 Alt+방향키→Ctrl+방향키 재작성을 우회해 진짜 Alt 시퀀스를 보낸다 —
@@ -340,22 +385,31 @@ export class TerminalView {
         void copyTerminalSelection(this.term);
         return false;
       }
-      if (ev.key === "Insert") {
-        if (ev.shiftKey && !ev.ctrlKey && !ev.altKey) {
-          ev.preventDefault();
-          void this.pasteFromClipboard();
-          return false;
-        }
-        return true;
-      }
-      if (!ev.ctrlKey || ev.altKey) return true;
-      if (ev.key.toLowerCase() === "v") {
+      if (isPasteKey(ev)) {
         ev.preventDefault();
         void this.pasteFromClipboard();
         return false;
       }
       return true;
     });
+  }
+
+  private runMacTerminalKey(key: MacTerminalKey): void {
+    switch (key.type) {
+      case "send":
+        // 사용자 입력 경로(onData)를 그대로 태워 replay 게이트와 입력 시 하단 스크롤을 받는다.
+        this.term.input(key.data, true);
+        return;
+      case "clear":
+        this.term.clear();
+        return;
+      case "scroll":
+        if (key.to === "pageUp") this.term.scrollPages(-1);
+        else if (key.to === "pageDown") this.term.scrollPages(1);
+        else if (key.to === "top") this.term.scrollToTop();
+        else this.term.scrollToBottom();
+        return;
+    }
   }
 
   // preventDefault 후 이 경로로만 붙여넣어 네이티브 paste와 중복되지 않게 한다.

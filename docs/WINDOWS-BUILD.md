@@ -523,8 +523,8 @@ regression once the model fields are dynamic.
 
 ### Stage 20 — three-tier keyboard navigation (계획 v2 "키보드 모델"; the canonical interception list lives in the [`apps/mast/src/shared/keys.ts`](../apps/mast/src/shared/keys.ts) module doc)
 
-One movement key per tier: `Ctrl+1`…`Ctrl+9` (workspace), `Ctrl+Shift+arrows` (pane focus, by
-on-screen adjacency), `Ctrl+Tab` / `Ctrl+Shift+Tab` (tab cycle inside the active pane).
+One movement key per tier: `Ctrl+1`…`Ctrl+9` (workspace), `Alt+Shift+arrows` (pane focus, by
+on-screen adjacency — `Ctrl+Shift+arrows` until 2026-09-23, see ADR-0007), `Ctrl+Tab` / `Ctrl+Shift+Tab` (tab cycle inside the active pane).
 All three are window-level capture handlers, so they work with the terminal focused. When
 a key has no target (ordinal past the last workspace, already-active workspace, no pane in
 that direction, 0–1 tabs) the app does nothing — silently, with no status-line error.
@@ -534,10 +534,10 @@ that direction, 0–1 tabs) the app does nothing — silently, with no status-li
    and focus lands in that workspace's active pane (typing goes to its terminal
    immediately). Pressing the ordinal of the **already active** workspace, or an ordinal
    past the last card (e.g. `Ctrl+9` with 3 workspaces), does nothing at all.
-2. **Pane focus move (`Ctrl+Shift+arrows`, since v0.3.30)** — in a workspace split into 2x2 panes, `Ctrl+Shift+→` /
-   `Ctrl+Shift+↓` / `Ctrl+Shift+←` / `Ctrl+Shift+↑` move the active-pane highlight to the geometrically
+2. **Pane focus move (`Alt+Shift+arrows`; `Ctrl+Shift+arrows` from v0.3.30 until 2026-09-23)** — in a workspace split into 2x2 panes, `Alt+Shift+→` /
+   `Alt+Shift+↓` / `Alt+Shift+←` / `Alt+Shift+↑` move the active-pane highlight to the geometrically
    adjacent pane each time, and the newly focused pane's terminal receives typing. At an
-   edge (e.g. `Ctrl+Shift+→` from the rightmost pane) and in a single-pane workspace, nothing
+   edge (e.g. `Alt+Shift+→` from the rightmost pane) and in a single-pane workspace, nothing
    happens and no error appears. Verify that `Alt+Up` reaches Codex's queued-question UI
    both with and without an adjacent pane, and plain `Ctrl+arrows` still reach the terminal.
    These v0.3.30 bindings remain pending field verification.
@@ -704,7 +704,7 @@ keyboard-first UX batch need one focused re-verification round. Pull, run
 6. **Folder browser keyboard navigation** — with the folder list focused: arrows move the
    selection highlight, `Home`/`End` jump, `PgUp`/`PgDn` move by 10, `Enter` opens the
    selected row (directory navigates, file opens a viewer), `Backspace` goes to the
-   parent. `Ctrl+Shift+arrows` must still move pane focus (the view only consumes unmodified
+   parent. `Alt+Shift+arrows` must still move pane focus (the view only consumes unmodified
    keys). Verify a mouse click moves the selection too, and that keyboard navigation
    still works right after opening a directory by mouse.
 7. **Text viewer windows by keyboard** — with the text view focused: `Ctrl+PgUp`/
@@ -2339,6 +2339,23 @@ restore apart from bytes that never arrived. Item 9 turns the log **off** again 
    keyboard must stay up — focus must not leave the composer.
 14. On an iPhone with a home indicator, confirm the bottom dock (composer + key bar) sits above
    it and is not obscured.
+
+### Unreleased — pane focus is Alt+Shift only (ADR-0007 amendment 2026-09-23)
+
+Pending Windows field verification. Automated tests cover the key decision; these check live
+WebView2 delivery and that nothing else changed on Windows.
+
+1. In a 2x2 split, `Alt+Shift+arrows` move pane focus as before. `Ctrl+Shift+arrows` no longer
+   move it.
+2. In a Markdown tab in edit mode, `Ctrl+Shift+←/→` select word by word in the editor.
+3. In a terminal, `Ctrl+Shift+→` reaches the program: at a bash prompt run `cat -v`, press it,
+   and see `^[[1;6C`; `Ctrl+C` to leave.
+4. Unchanged on Windows: closing a workspace with a running shell still asks through the usual
+   WebView confirmation; discarding Markdown edits, `Ctrl+Shift+R` and closing the window with a
+   Markdown draft still ask; plain `Alt+arrows` still reach Codex as `ESC[1;3X`; a terminal link
+   still opens on a plain click; `Ctrl+C` with a selection still copies and clears it.
+5. Double-clicking a workspace name in the sidebar opens the rename field (also on a card that
+   was not active); `Enter` renames, `Esc` cancels. `F2` still works.
 
 ### Unreleased — Codex scroll after WebView reload (ADR-0019 amendment 2026-09-20)
 

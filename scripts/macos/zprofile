@@ -1,0 +1,5 @@
+# 사용자의 ZDOTDIR 을 보존한다(앞선 시작 파일이 바꾼 값 포함).
+if [[ -n $MAST_USER_ZDOTDIR_SET ]]; then export ZDOTDIR="$MAST_USER_ZDOTDIR"; else unset ZDOTDIR; fi
+[[ -r "${ZDOTDIR:-$HOME}/.zprofile" ]] && source "${ZDOTDIR:-$HOME}/.zprofile"
+export MAST_USER_ZDOTDIR_SET="${ZDOTDIR+x}" MAST_USER_ZDOTDIR="${ZDOTDIR:-$HOME}"
+export ZDOTDIR="$HOME/.mast/shell/zsh"

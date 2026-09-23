@@ -10,7 +10,17 @@ import {
   scrollbackWipeRestoreOffset,
 } from "./scroll";
 import { clampFontSize } from "../../shared/font-size";
-import { altArrowSequence, isCopySelectionKey, shouldOpenLink } from "./interaction";
+import {
+  altArrowSequence as platformAltArrowSequence,
+  isCopySelectionKey as platformCopySelectionKey,
+  shouldOpenLink as platformShouldOpenLink,
+} from "./interaction";
+
+// Windows 계약(선택 복사·Alt+방향키 재작성·클릭 한 번 링크)을 명시적으로 유지한다. 테스트
+// 호스트가 Mac 이어도 같다. Mac 동작은 mac-terminal-keys.test.ts 가 따로 본다.
+const isCopySelectionKey = (event: KeyboardEvent, selected: boolean) => platformCopySelectionKey(event, selected, false);
+const altArrowSequence = (event: KeyboardEvent) => platformAltArrowSequence(event, false);
+const shouldOpenLink = (uri: string, mode: string) => platformShouldOpenLink(uri, mode, { metaKey: false }, false);
 
 describe("clampFontSize", () => {
   it("범위 안의 값은 그대로 통과한다", () => {

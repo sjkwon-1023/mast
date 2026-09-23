@@ -199,14 +199,27 @@ describe("folderKeyAction", () => {
   });
 
   it("ignores every modified combination", () => {
-    // Ctrl+Shift+방향키는 전역 pane 이동(shared/keys.ts) 소유다 — 뷰가 가로채면 뷰어 탭에서만
-    // 이동이 죽는다.
+    // 수식키가 붙은 방향키는 뷰가 가로채지 않는다 — pane 이동(Windows Alt+Shift, macOS ⌘⌥)은
+    // 전역(shared/keys.ts) 소유이고, 뷰가 가로채면 뷰어 탭에서만 이동이 죽는다.
     expect(folderKeyAction(key("ArrowDown", { alt: true }))).toBeNull();
     expect(folderKeyAction(key("ArrowUp", { alt: true }))).toBeNull();
     expect(folderKeyAction(key("ArrowUp", { ctrl: true, shift: true }))).toBeNull();
     expect(folderKeyAction(key("Enter", { ctrl: true }))).toBeNull();
     expect(folderKeyAction(key("ArrowDown", { shift: true }))).toBeNull();
     expect(folderKeyAction(key("Home", { ctrl: true }))).toBeNull();
+  });
+
+  it("on macOS maps Cmd+Up to the parent folder and Cmd+Down to open, like Finder", () => {
+    expect(folderKeyAction(key("ArrowUp", { meta: true }), true)).toEqual({ type: "parent" });
+    expect(folderKeyAction(key("ArrowDown", { meta: true }), true)).toEqual({ type: "open" });
+    // 그 밖의 ⌘ 조합은 수식 없는 키로 읽히지 않는다 (⌘← 가 상위 폴더로 가면 안 된다).
+    for (const name of ["ArrowLeft", "ArrowRight", "Enter", "Backspace", "Home", "PageDown"]) {
+      expect(folderKeyAction(key(name, { meta: true }), true)).toBeNull();
+    }
+    expect(folderKeyAction(key("ArrowUp", { meta: true, shift: true }), true)).toBeNull();
+    // 수식 없는 키는 macOS 에서도 그대로다.
+    expect(folderKeyAction(key("ArrowUp"), true)).toEqual({ type: "move", move: "up" });
+    expect(folderKeyAction(key("Backspace"), true)).toEqual({ type: "parent" });
   });
 
   it("ignores keys while an IME composition is in progress", () => {

@@ -227,6 +227,7 @@ export class TextView implements ViewerView, ViewerFontTarget {
     const action = textKeyAction({
       key: ev.key,
       ctrl: ev.ctrlKey,
+      meta: ev.metaKey,
       alt: ev.altKey,
       shift: ev.shiftKey,
       isComposing: ev.isComposing,

@@ -25,6 +25,7 @@ use mast_core::command::{Command, CommandError, CommandOutput};
 use mast_core::model::TabId;
 use mast_core::record::RecordStore;
 use mast_core::session::{PtySession, SessionId};
+#[cfg(not(target_os = "macos"))]
 use mast_core::wslpath;
 
 use crate::state::{publish_state, AppState};
@@ -376,6 +377,9 @@ pub fn user_activity(state: State<'_, AppState>, visible: Option<bool>) {
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiSettings {
+    /// macOS 로그인 셸 실행 파일. 비어 있으면 계정 로그인 셸을 쓴다. Windows 설정·모델
+    /// 호환성이 바뀌지 않도록 optional 로 둔다.
+    pub shell: Option<String>,
     /// xterm `fontFamily` — CSS font-family 문자열 그대로.
     pub font_family: Option<String>,
     /// xterm `fontSize` (px). [`FONT_SIZE_RANGE`] 밖이면 에러다.
@@ -393,6 +397,10 @@ pub struct UiSettings {
     /// (features/workspace/tab-id-settings.ts). `log` 와 같은 규율로 부팅 때 한 번만
     /// 읽으므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
     pub show_tab_ids: Option<bool>,
+    /// macOS 에서 Option 키를 Meta(ESC 접두)로 보낼지 — xterm `macOptionIsMeta`. 미설정·
+    /// `false` 는 macOS 기본(Option 은 문자 입력)이다. 프론트가 macOS 에서만 적용하고
+    /// Windows 는 읽지 않는다. `log` 와 같은 규율로 부팅 때 한 번만 읽는다.
+    pub mac_option_is_meta: Option<bool>,
     /// 원격 표면(LAN 폴링, [`crate::remote`]). **키가 있으면 켜짐**이고 없으면
     /// 리스너도 스레드도 토큰 파일도 생기지 않는다. `log` 와 같은 규율으로 부팅 때
     /// 한 번만 읽으므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
@@ -472,6 +480,11 @@ pub(crate) fn read_ui_settings(app: &AppHandle) -> Result<UiSettings, String> {
 fn parse_ui_settings(text: &str, path: &Path) -> Result<UiSettings, String> {
     let settings: UiSettings = serde_json::from_str(text)
         .map_err(|err| format!("cannot parse {}: {err}", path.display()))?;
+    if let Some(shell) = &settings.shell {
+        if shell.trim().is_empty() || shell.contains('\0') {
+            return Err(format!("shell in {} must not be blank or contain NUL", path.display()));
+        }
+    }
     if let Some(size) = settings.font_size {
         if !FONT_SIZE_RANGE.contains(&size) {
             return Err(format!(
@@ -608,7 +621,7 @@ pub fn notify_toast(
 
 /// unix(개발 실행)에는 띄울 WinRT 토스트가 없다 — 조용한 성공으로 가리지 않고
 /// 명시적으로 실패한다 (`pick_workspace_folder` 의 cfg 분기와 같은 규율).
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 pub fn notify_toast(title: String, body: String, _log_label: String) -> Result<(), String> {
     Err(format!("toasts are Windows-only (dropped: {title} / {body})"))
@@ -690,7 +703,7 @@ pub async fn open_url(url: String) -> Result<(), String> {
 
 /// unix(개발 실행)에는 넘길 Windows 셸이 없다 — 가짜로 성공하지 않고 명시적으로 실패한다
 /// (`pick_workspace_folder` 와 같은 규율).
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 pub async fn open_url(_url: String) -> Result<(), String> {
     Err("opening links is Windows-only".to_owned())
@@ -699,7 +712,7 @@ pub async fn open_url(_url: String) -> Result<(), String> {
 /// http/https 만 통과시킨다. 제어문자·공백은 거부한다 — URL 로 쓰일 수 없는 문자이고,
 /// 로그·파일 내용에서 잘못 잘려 나온 문자열이 여기까지 오는 것을 막는다. 길이 상한은
 /// 브라우저들이 실질적으로 다루는 범위(2048)를 기준으로 둔다.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn validated_http_url(url: String) -> Result<String, String> {
     const MAX_LEN: usize = 2048;
     let lower = url.to_ascii_lowercase();
@@ -810,7 +823,7 @@ pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
 /// unix(개발 실행)에는 띄울 네이티브 대화상자가 없다 — 조용한 no-op 이나 가짜
 /// 경로로 가리지 않고 명시적으로 실패한다 (`host.rs`·`host_path` 의 cfg 분기와
 /// 같은 규율: Windows 전용 기능은 dev 경로에서 loud 하게 없음을 알린다).
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
     Err("folder picker is Windows-only".to_owned())
@@ -820,7 +833,7 @@ pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
 /// 규칙(`command.rs::path_title`)과 같은 계산이되, distro 루트("/") 픽의 퇴화만
 /// 보정한다 (리뷰 finding): `"/"` 대신 distro 이름이 워크스페이스 이름으로
 /// 자연스럽다. (드라이브 루트 보정은 드라이브 픽 자체가 거부되면서 제거됐다.)
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn folder_name(linux_path: &str, distro: Option<&str>) -> String {
     if linux_path == "/" {
         if let Some(d) = distro {
@@ -1074,7 +1087,7 @@ pub(crate) fn host_path(distro: Option<String>, path: &str) -> Result<PathBuf, S
 
 #[cfg(not(windows))]
 pub(crate) fn host_path(_distro: Option<String>, path: &str) -> Result<PathBuf, String> {
-    wslpath::validate_linux_path(path)?;
+    mast_core::platform::validate_viewer_path(path)?;
     Ok(PathBuf::from(path))
 }
 
@@ -1198,6 +1211,18 @@ mod tests {
     }
 
     #[test]
+    fn mac_option_is_meta_reads_a_boolean_and_rejects_other_types() {
+        let on = parse_ui_settings(r#"{"macOptionIsMeta": true}"#, path()).unwrap();
+        assert_eq!(on.mac_option_is_meta, Some(true));
+        let off = parse_ui_settings(r#"{"macOptionIsMeta": false}"#, path()).unwrap();
+        assert_eq!(off.mac_option_is_meta, Some(false));
+        assert_eq!(parse_ui_settings("{}", path()).unwrap().mac_option_is_meta, None);
+        for text in [r#"{"macOptionIsMeta": "yes"}"#, r#"{"macOptionIsMeta": 1}"#] {
+            assert!(parse_ui_settings(text, path()).is_err(), "{text}");
+        }
+    }
+
+    #[test]
     fn unknown_keys_stay_forward_compatible_and_known_range_checks_still_hold() {
         // 뒤 버전이 넣을 키가 든 파일을 옛 빌드가 거부하면 안 된다 (deny_unknown_fields
         // 를 걸지 않은 이유).
@@ -1206,4 +1231,88 @@ mod tests {
         assert!(parse_ui_settings(r#"{"fontSize": 200}"#, path()).is_err());
         assert!(parse_ui_settings(r#"{"remote": {"port": 80}}"#, path()).is_err());
     }
+}
+
+// 네이티브 서비스는 macOS cfg 게이트 뒤에 둔다 — 위의 WinRT/WSL 경로는 그대로 남는다.
+// 값은 argv 로 넘기며, 셸·AppleScript 에 끼워 넣지 않는다.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn open_url(url: String) -> Result<(), String> {
+    let url = validated_http_url(url)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut command = std::process::Command::new("/usr/bin/open");
+        command.arg(url);
+        crate::platform::macos::run(command, 5).map(|_| ())
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
+    let Some(picked) = rfd::AsyncFileDialog::new()
+        .set_title("Select a workspace folder").pick_folder().await else { return Ok(None); };
+    let path = picked.path().to_str().ok_or("selected path is not valid UTF-8")?.to_owned();
+    mast_core::platform::validate_native_path(&path)?;
+    Ok(Some(PickedFolder { name: folder_name(&path, None), linux_path: path, distro: None }))
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn notify_toast(title: String, body: String, log_label: String) -> Result<(), String> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        // osascript 는 번들되지 않은 개발 빌드에서도 네이티브 배너를 띄울 수 있다.
+        // UNUserNotificationCenter 는 서명·번들된 앱 identity 를 요구한다.
+        // 고정 스크립트가 argv 를 읽는다 — 신뢰할 수 없는 에이전트 텍스트는 절대 소스 코드가 되지 않는다.
+        let script = "on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv)\nend run";
+        let mut command = std::process::Command::new("/usr/bin/osascript");
+        command.args(["-e", script, "--", &title, &body]);
+        crate::platform::macos::run(command, 5).map(|_| ())
+    }).await.map_err(|e| e.to_string())?;
+    if let Err(error) = &result {
+        winlog!("native notification failed ({}): {error}", log_label.replace(['\r', '\n'], " "));
+    }
+    result
+}
+
+/// 예/아니오 확인 — 프론트 `infrastructure/confirm.ts` 의 macOS 경로.
+///
+/// wry 0.55 의 WKUIDelegate 에는 `runJavaScriptConfirmPanelWithMessage` 가 없어 WKWebView 의
+/// `window.confirm()` 이 대화상자 없이 false 를 돌려준다. 그래서 파괴적 동작의 확인을 여기서
+/// 네이티브로 묻는다: main 창에 붙는 sheet(NSAlert, OK/Cancel)이고, OK 일 때만 true 다.
+///
+/// rfd 의 sheet 경로는 AppKit 객체(부모 NSView → NSWindow, NSAlert)를 만지므로 대화상자를
+/// **메인 스레드에서** 연다. `show()` 는 sheet 를 띄우고 곧바로 future 를 돌려주며, 그 future 는
+/// sheet 의 완료 핸들러가 깨운다 — 커맨드는 그 future 만 기다리므로 메인 스레드를 막지 않는다.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn confirm_dialog(window: tauri::WebviewWindow, message: String) -> Result<bool, String> {
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    let parent = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let answer = rfd::AsyncMessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title(message.as_str())
+                .set_buttons(rfd::MessageButtons::OkCancel)
+                .set_parent(&parent)
+                .show();
+            // 용량 1 채널의 첫 전송이라 가득 찰 수 없다. 받는 쪽이 이미 사라졌으면(커맨드 취소)
+            // 대화상자의 답을 받을 곳이 없을 뿐이다.
+            let _ = sender.try_send(answer);
+        })
+        .map_err(|error| format!("cannot open the confirmation dialog: {error}"))?;
+    let answer = receiver
+        .recv()
+        .await
+        .ok_or("the confirmation dialog was not opened")?;
+    Ok(answer.await == rfd::MessageDialogResult::Ok)
+}
+
+/// 프론트엔드의 Markdown draft 상태를 받아 둔다. Dock Quit·로그아웃·AppleScript quit
+/// 이 부르는 `applicationShouldTerminate:` 판정이 이 값을 읽는다
+/// ([`crate::platform::macos::set_draft_state`]). 값은 idempotent 라 재전송해도 된다.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn set_markdown_draft_state(state: crate::platform::macos::DraftState) {
+    crate::platform::macos::set_draft_state(state);
 }

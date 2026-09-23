@@ -219,16 +219,25 @@ fn git_command(
         cmd.args(["--exec", "/usr/bin/timeout"]);
         cmd
     };
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let mut command = Command::new("/usr/bin/timeout");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("/usr/bin/env");
+    // 네이티브 capture 는 이미 프로세스 그룹을 소유하고 deadline 을 강제한다.
+    // guest 안의 두 번째 timeout 감독자가 필요한 것은 WSL relay 뿐이다.
+    #[cfg(target_os = "macos")]
+    let _ = timeout;
 
     // wsl.exe 를 끝내도 Linux 자손 종료는 보장되지 않는다. WSL 안의 timeout 이
     // 별도 process group 을 감독하고, 바깥 capture 는 relay·파이프의 마감도 지킨다.
-    command.args([
-        "--kill-after=1s",
-        &format!("{:.3}s", timeout.as_secs_f64().max(0.001)),
-    ]);
-    command.arg("/usr/bin/env");
+    #[cfg(not(target_os = "macos"))]
+    {
+        command.args([
+            "--kill-after=1s",
+            &format!("{:.3}s", timeout.as_secs_f64().max(0.001)),
+        ]);
+        command.arg("/usr/bin/env");
+    }
     for name in [
         "GIT_DIR",
         "GIT_WORK_TREE",
@@ -499,7 +508,7 @@ u AA N... 000000 100644 100644 100644 aaa bbb ccc conflict file\0";
     }
 
     #[test]
-    fn command_keeps_paths_as_arguments_and_uses_nonzero_linux_supervision() {
+    fn command_keeps_paths_as_arguments_and_uses_platform_supervision() {
         let command = git_command(
             Some("Ubuntu"),
             "/repo ' $(name)",
@@ -516,7 +525,18 @@ u AA N... 000000 100644 100644 100644 aaa bbb ccc conflict file\0";
                 &["--distribution", "Ubuntu", "--exec", "/usr/bin/timeout"]
             );
         }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        assert_eq!(command.get_program(), "/usr/bin/timeout");
+        #[cfg(not(target_os = "macos"))]
         assert!(args.windows(2).any(|p| p == ["--kill-after=1s", "0.001s"]));
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(command.get_program(), "/usr/bin/env");
+            assert!(!args.iter().any(|arg| arg.starts_with("--kill-after=")));
+            assert!(!args.contains(&"/usr/bin/timeout"));
+            assert!(!args.contains(&"--distribution"));
+            assert!(args.windows(2).any(|p| p == ["-u", "GIT_DIR"]));
+        }
         assert!(args.contains(&"--no-optional-locks"));
         assert!(args.contains(&"--literal-pathspecs"));
         assert!(args.windows(2).any(|p| p == ["-C", "/repo ' $(name)"]));

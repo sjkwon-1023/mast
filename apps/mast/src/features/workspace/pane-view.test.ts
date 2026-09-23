@@ -40,6 +40,7 @@ function idSettings(showTabIds: boolean | null): UiSettings {
     log: null,
     remote: null,
     showTabIds,
+    macOptionIsMeta: null,
   };
 }
 
