@@ -384,6 +384,9 @@ fn main() {
             // Markdown draft 유무 — macOS Dock Quit·로그아웃 종료 판정의 근거다.
             #[cfg(target_os = "macos")]
             commands::set_markdown_draft_state,
+            // 확인 대화상자 — WKWebView 의 window.confirm 이 대화상자 없이 false 라 대신 쓴다.
+            #[cfg(target_os = "macos")]
+            commands::confirm_dialog,
             git::git_status,
             git::git_diff,
             // 끝난 터미널 탭의 기록 바이트 (ADR-0018) — 기록 뷰가 마운트 때 1회.

@@ -209,6 +209,19 @@ describe("folderKeyAction", () => {
     expect(folderKeyAction(key("Home", { ctrl: true }))).toBeNull();
   });
 
+  it("on macOS maps Cmd+Up to the parent folder and Cmd+Down to open, like Finder", () => {
+    expect(folderKeyAction(key("ArrowUp", { meta: true }), true)).toEqual({ type: "parent" });
+    expect(folderKeyAction(key("ArrowDown", { meta: true }), true)).toEqual({ type: "open" });
+    // 그 밖의 ⌘ 조합은 수식 없는 키로 읽히지 않는다 (⌘← 가 상위 폴더로 가면 안 된다).
+    for (const name of ["ArrowLeft", "ArrowRight", "Enter", "Backspace", "Home", "PageDown"]) {
+      expect(folderKeyAction(key(name, { meta: true }), true)).toBeNull();
+    }
+    expect(folderKeyAction(key("ArrowUp", { meta: true, shift: true }), true)).toBeNull();
+    // 수식 없는 키는 macOS 에서도 그대로다.
+    expect(folderKeyAction(key("ArrowUp"), true)).toEqual({ type: "move", move: "up" });
+    expect(folderKeyAction(key("Backspace"), true)).toEqual({ type: "parent" });
+  });
+
   it("ignores keys while an IME composition is in progress", () => {
     expect(folderKeyAction(key("Enter", { isComposing: true }))).toBeNull();
     expect(folderKeyAction(key("ArrowDown", { isComposing: true }))).toBeNull();

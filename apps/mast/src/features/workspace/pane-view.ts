@@ -181,8 +181,11 @@ function placeholderText(tab: Tab | null): string {
 }
 
 /** 시작하지 못한 탭의 배너 문구 (영어 UI 텍스트) — exited 와 전혀 다른 상황이라
- *  안내가 갈린다: "아직 시작도 못 했다"(대개 WSL 이 느리다)와 "끝났다". */
-const NOT_STARTED_NOTICE = "The shell has not started. WSL may be slow or unresponsive.";
+ *  안내가 갈린다: "아직 시작도 못 했다"(Windows 에서는 대개 WSL 이 느리다)와 "끝났다".
+ *  macOS 에는 WSL 이 없으므로 셸 시작 자체를 가리키는 문구를 쓴다. */
+const NOT_STARTED_NOTICE = IS_MAC
+  ? "The shell has not started. Its startup files may be slow or waiting for input."
+  : "The shell has not started. WSL may be slow or unresponsive.";
 
 /** 끝난 탭의 배너 문구 — DOM-free 순수 함수라 테스트가 네 조합을 다 잠근다.
  *
@@ -612,7 +615,9 @@ export class PaneView {
     const notStarted = document.createElement("span");
     notStarted.className = "tab-not-started";
     notStarted.textContent = "not started";
-    notStarted.title = "The shell has not started yet — WSL may be slow or unresponsive.";
+    notStarted.title = IS_MAC
+      ? "The shell has not started yet — its startup files may be slow or waiting for input."
+      : "The shell has not started yet — WSL may be slow or unresponsive.";
 
     const close = document.createElement("button");
     close.type = "button";

@@ -38,6 +38,10 @@ let fontSize = DEFAULT_FONT_SIZE;
 
 let baseFontSize = DEFAULT_FONT_SIZE;
 
+// macOS 에서 Option 을 Meta(ESC 접두)로 쓸지 — settings.json `macOptionIsMeta`, 기본 false.
+// false 면 Option 은 macOS 문자 입력(예: Option+2 = ™)이다. Windows 는 읽지 않는다.
+let macOptionIsMeta = false;
+
 export interface TerminalFontTarget {
   setFontSize(size: number): void;
 }
@@ -53,12 +57,18 @@ export function unregisterTerminalFontTarget(view: TerminalFontTarget): void {
   liveViews.delete(view);
 }
 
-export function terminalViewOptions(): {
+export function terminalViewOptions(mac = IS_MAC): {
   fontSize: number;
   fontFamily: string;
   theme: ITheme;
+  macOptionIsMeta?: boolean;
+  macOptionClickForcesSelection?: boolean;
 } {
-  return { fontSize, fontFamily, theme: { ...TERMINAL_THEME } };
+  const base = { fontSize, fontFamily, theme: { ...TERMINAL_THEME } };
+  if (!mac) return base;
+  // 마우스를 추적하는 TUI 안에서도 Option+드래그로 텍스트를 선택할 수 있게 한다
+  // (Terminal.app·iTerm2 관례). Windows 는 Shift+드래그가 같은 일을 하고 여기서 바꾸지 않는다.
+  return { ...base, macOptionIsMeta, macOptionClickForcesSelection: true };
 }
 
 export function adjustFontSize(delta: number): void {
@@ -78,6 +88,7 @@ function applyFontSize(size: number): void {
 // 백엔드가 검증한 설정을 첫 뷰 생성 전에 한 번 적용한다.
 export function applyTerminalSettings(settings: UiSettings): void {
   if (settings.fontFamily !== null) fontFamily = settings.fontFamily;
+  if (settings.macOptionIsMeta !== null) macOptionIsMeta = settings.macOptionIsMeta;
   if (settings.fontSize !== null) {
     fontSize = settings.fontSize;
 

@@ -50,10 +50,13 @@ def integer(value, low, high, name):
 
 
 if sys.platform == "darwin":
-    KEYS.add("shell")
+    KEYS.update(("shell", "macOptionIsMeta"))
     DEFAULTS["shell"] = "macOS account login shell (zsh or bash)"
+    DEFAULTS["macOptionIsMeta"] = False
     DEFAULTS["fontFamily"] = "terminal: Menlo, 'SFMono-Regular', monospace; viewers: monospace"
-    HELP += "\nmacOS: mast config set shell /bin/zsh (or /bin/bash); restart to apply.\n"
+    HELP += ("\nmacOS: mast config set shell /bin/zsh (or /bin/bash); restart to apply.\n"
+             "macOS: mast config set macOptionIsMeta <true|false> makes Option send Meta (ESC) "
+             "instead of typing special characters; restart to apply.\n")
 
 
 def validate(data):
@@ -72,6 +75,9 @@ def validate(data):
         raise ValueError("log must be true or false")
     if data.get("showTabIds") is not None and type(data["showTabIds"]) is not bool:
         raise ValueError("showTabIds must be true or false")
+    # 앱(Rust UiSettings)은 모든 플랫폼에서 이 키의 타입을 검사하므로 읽기 검증도 플랫폼과 무관하다.
+    if data.get("macOptionIsMeta") is not None and type(data["macOptionIsMeta"]) is not bool:
+        raise ValueError("macOptionIsMeta must be true or false")
     languages = data.get("highlightLanguages")
     if languages is not None and (
         not isinstance(languages, list)
@@ -168,7 +174,7 @@ def mutation(args):
         raise ValueError(f"set {key} requires exactly one value")
     text = values[0]
     value = (number(text) if key in ("fontSize", "remote.port") else
-             boolean(text) if key in ("log", "showTabIds") else
+             boolean(text) if key in ("log", "showTabIds", "macOptionIsMeta") else
              parse(text) if key == "highlightLanguages" else text)
     # null은 파일에서는 미설정으로 읽지만, CLI는 reset으로 의도를 명시한다.
     if key == "highlightLanguages" and not isinstance(value, list):

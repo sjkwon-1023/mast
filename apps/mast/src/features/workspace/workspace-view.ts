@@ -416,6 +416,17 @@ export class WorkspaceView {
 
   /** focus 보상 요청 (main.dispatchUI 성공 경로 — 계획 D7). 즉시 1회 시도하고,
    *  대상이 아직 없으면(스냅샷 미도착) 다음 render 가 해소한다. */
+  /** 화면 좌표(CSS px)에 보이는 터미널 뷰 — macOS 파일 드롭의 대상 판정이다. 그 자리가
+   *  터미널이 아니면(뷰어·사이드바·헤더) null 이다. 숨은 탭은 레이아웃이 없어 맞지 않는다. */
+  terminalAtPoint(x: number, y: number): TerminalView | null {
+    const hit = document.elementFromPoint(x, y);
+    if (hit === null) return null;
+    for (const view of this.views.values()) {
+      if (view.root.contains(hit)) return view;
+    }
+    return null;
+  }
+
   requestFocus(req: FocusRequest): void {
     // rendersLeft 3: 명령 결과 스냅샷보다 앞선 무관 이벤트 렌더가 1~2개 끼어도
     // 보상이 살아남고, 정말 stale 한 요청(대상 탭이 닫힘)은 몇 렌더 안에 폐기된다.
@@ -444,6 +455,14 @@ export class WorkspaceView {
   private tryResolveFocus(atRender: boolean): void {
     const pending = this.pendingFocus;
     if (pending === null) return;
+    // 포커스를 지켜야 하는 입력(`data-keep-focus` — 사이드바 카드 이름 편집)에 포커스가 있으면
+    // 보상을 버린다. 카드 이름 더블클릭은 그 카드로의 전환과 겹치는데, 전환의 포커스 보상이
+    // 입력을 빼앗으면 blur 로 편집이 바로 취소된다.
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.dataset.keepFocus !== undefined && !this.rootEl.contains(active)) {
+      this.pendingFocus = null;
+      return;
+    }
     const view = this.focusTarget(pending.req);
     if (view !== null) {
       view.focus();

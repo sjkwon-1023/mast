@@ -537,13 +537,16 @@ pub(crate) fn install_menu(app: &AppHandle) -> tauri::Result<()> {
             &P::select_all(app, None)?,
         ],
     )?;
+    // View 메뉴 — 표준 전체 화면 항목("Toggle Full Screen", ⌃⌘F). 전체 화면은 창 초록 버튼으로도 되지만
+    // macOS 앱은 이 항목과 단축키를 View 메뉴에 둔다.
+    let view = Submenu::with_items(app, "View", true, &[&P::fullscreen(app, None)?])?;
     let window = Submenu::with_items(
         app,
         "Window",
         true,
         &[&P::minimize(app, None)?, &P::maximize(app, None)?],
     )?;
-    app.set_menu(Menu::with_items(app, &[&app_menu, &edit, &window])?)?;
+    app.set_menu(Menu::with_items(app, &[&app_menu, &edit, &view, &window])?)?;
     app.on_menu_event(|app, event| {
         if event.id().as_ref() == "mast-quit" {
             if let Some(window) = app.get_webview_window("main") {

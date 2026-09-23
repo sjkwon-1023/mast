@@ -251,6 +251,26 @@ class NativeConfig(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.saved()["shell"], str(link))
 
+    def test_mac_option_is_meta_is_saved_as_a_boolean_and_reset(self):
+        self.settings.write_text(json.dumps({"fontSize": 14}))
+        result = self.config("set", "macOptionIsMeta", "true")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.saved(), {"fontSize": 14, "macOptionIsMeta": True})
+        for bad in ("yes", "1", "True"):
+            with self.subTest(value=bad):
+                result = self.config("set", "macOptionIsMeta", bad)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.saved()["macOptionIsMeta"], True)
+        result = self.config("reset", "macOptionIsMeta")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.saved(), {"fontSize": 14})
+
+    def test_a_non_boolean_mac_option_is_meta_in_the_file_is_reported(self):
+        self.settings.write_text(json.dumps({"macOptionIsMeta": "yes"}))
+        result = self.config("get")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("macOptionIsMeta", result.stderr)
+
     def test_a_deleted_saved_shell_can_still_be_reset_or_replaced(self):
         for recovery in (["reset", "shell"], ["set", "shell", "/bin/zsh"]):
             with self.subTest(recovery=recovery):

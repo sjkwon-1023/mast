@@ -20,7 +20,7 @@ import { IS_MAC } from "../../shared/platform";
 //
 // 상호작용:
 // - 카드 클릭 = SwitchWorkspace (이미 활성이면 no-op 스킵 — 무변경 revision 잡음 방지).
-// - × = CloseWorkspace. 실행 중인 터미널 세션이 1개라도 있으면 confirm() 을
+// - × = CloseWorkspace. 실행 중인 터미널 세션이 1개라도 있으면 확인(confirmAction)을
 //   거친다 — 그 세션들을 죽이는 파괴적 동작이다. 판정은 렌더 캐시가 아니라 클릭
 //   시점의 최신 스냅샷으로 한다 (카드 DOM 이 스킵으로 오래됐을 수 있다).
 //   같은 흐름이 Ctrl+Shift+Q 로도 들어온다 (closeActive — app/main.ts 글루가 부른다):
@@ -31,8 +31,8 @@ import { IS_MAC } from "../../shared/platform";
 //   치던 인라인 폼은 없앴다 — 경로는 대화상자가, 이름은 폴더명이 정한다.
 // - "Connect mobile" = 페어링 다이얼로그 (onPairing 콜백 — app/main.ts 글루 소유).
 //   버튼 표시는 설정·원격 표면 상태와 무관하다 (모듈 상단 주석).
-// - F2 = 활성 카드 이름 인라인 편집 (beginRename — app/main.ts 글루가 부른다).
-//   Enter 확정 = RenameWorkspace dispatch, Esc·blur = 취소.
+// - F2 = 활성 카드 이름 인라인 편집 (beginRename — app/main.ts 글루가 부른다). 카드 이름
+//   더블클릭도 같은 편집을 연다 (그 카드가 대상). Enter 확정 = RenameWorkspace dispatch, Esc·blur = 취소.
 //
 // **편집 상태 가드**: 편집 중인 카드는 patch 판정에서 건너뛴다 — 패치가 이름
 // 텍스트를 덮어써도 입력값과 어긋나고, 무엇보다 입력 중 DOM 을 흔들면 IME
@@ -47,6 +47,7 @@ import { IS_MAC } from "../../shared/platform";
 // 않는다 (편집 중 F2 는 편집을 다시 시작할 뿐이다).
 
 import { shortcutBadge, shortcutLabel } from "../../shared/keys";
+import { confirmAction } from "../../infrastructure/confirm";
 import {
   dropBefore,
   hasRunningTerminals,
@@ -231,11 +232,11 @@ export class Sidebar {
     this.lastCards = model;
   }
 
-  /** 활성 워크스페이스 카드의 이름을 인라인 편집으로 바꾼다 (F2 — main.ts 글루가
-   *  부른다). 활성 워크스페이스가 없거나(빈 상태) 그 카드가 아직 없으면 조용한
-   *  no-op 이다. 이미 편집 중이면 값을 다시 채워 재시작한다. */
-  beginRename(): void {
-    const workspace = this.lastSnapshot?.state.activeWorkspace ?? null;
+  /** 워크스페이스 카드의 이름을 인라인 편집으로 바꾼다. 인자가 없으면 활성 워크스페이스
+   *  (F2 — main.ts 글루가 부른다), 있으면 그 카드(이름 더블클릭)다. 대상이 없거나(빈 상태)
+   *  그 카드가 아직 없으면 조용한 no-op 이다. 이미 편집 중이면 값을 다시 채워 재시작한다. */
+  beginRename(target?: WorkspaceId): void {
+    const workspace = target ?? this.lastSnapshot?.state.activeWorkspace ?? null;
     if (workspace === null) return;
     const nodes = this.cardNodes.get(workspace);
     if (nodes === undefined) return;
@@ -287,6 +288,9 @@ export class Sidebar {
     input.hidden = true;
     // WebView 자동완성·자동교정이 이름 입력을 방해하지 않게 끈다.
     input.autocomplete = "off";
+    // 워크스페이스 전환의 포커스 보상이 편집 중인 입력을 빼앗지 않게 한다 (workspace-view.ts
+    // tryResolveFocus). 이름 더블클릭은 그 카드로의 전환과 겹친다.
+    input.dataset.keepFocus = "";
     input.spellcheck = false;
     return input;
   }
@@ -306,6 +310,13 @@ export class Sidebar {
 
     const name = document.createElement("span");
     name.className = "ws-card-name";
+    // 이름 더블클릭 = 이름 변경 (F2 와 같은 편집). macOS 에는 F2 가 Fn+F2 라 찾기 어렵고,
+    // 사이드바 카드 이름을 더블클릭하는 것은 Finder·탭 관례다. 두 번의 click 은 이미 카드
+    // 전환으로 처리됐으므로 여기서는 편집만 연다.
+    name.addEventListener("dblclick", (ev) => {
+      ev.stopPropagation();
+      this.beginRename(nodes.model.workspace);
+    });
 
     const rename = this.renameInput();
     rename.addEventListener("keydown", (ev) => {
@@ -338,7 +349,7 @@ export class Sidebar {
     close.title = `Close workspace (${shortcutLabel("closeWorkspace")})`;
     close.addEventListener("click", (ev) => {
       ev.stopPropagation(); // 카드 클릭(전환)과 분리
-      this.onClose(model.workspace);
+      void this.onClose(model.workspace);
     });
 
     head.append(name, rename, dot, close);
@@ -520,22 +531,30 @@ export class Sidebar {
   /** `Ctrl+Shift+Q` — 활성 워크스페이스 닫기 (main.ts 글루가 부른다). × 버튼과
    *  완전히 같은 경로를 타므로 confirm 조건·문구가 갈라지지 않는다. 활성
    *  워크스페이스가 없으면(빈 상태·스냅샷 미도착) 조용한 no-op 이다. */
-  closeActive(): void {
+  async closeActive(): Promise<void> {
     const workspace = this.lastSnapshot?.state.activeWorkspace ?? null;
     if (workspace === null) return;
-    this.onClose(workspace);
+    await this.onClose(workspace);
   }
 
-  private onClose(workspace: WorkspaceId): void {
+  /** 확인은 infrastructure/confirm.ts 의 confirmAction 이다 — macOS 의 window.confirm 은
+   *  대화상자 없이 false 라 쓰지 않는다. 확인 자체가 실패하면 닫지 않는다. */
+  private async onClose(workspace: WorkspaceId): Promise<void> {
     const ws =
       this.lastSnapshot?.state.workspaces.find((w) => w.id === workspace) ?? null;
     if (ws === null) return; // 이미 닫힌 카드의 늦은 클릭 — 보낼 것이 없다
     if (hasRunningTerminals(ws)) {
-      const ok = confirm(
-        `Close workspace "${ws.name}"? All terminal sessions in it will be killed.`,
-      );
+      let ok: boolean;
+      try {
+        ok = await confirmAction(
+          `Close workspace "${ws.name}"? All terminal sessions in it will be killed.`,
+        );
+      } catch (err) {
+        console.error("close workspace confirmation failed", err);
+        return;
+      }
       if (!ok) return;
     }
-    void this.dispatch({ type: "closeWorkspace", workspace });
+    await this.dispatch({ type: "closeWorkspace", workspace });
   }
 }

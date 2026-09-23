@@ -139,6 +139,21 @@ across a restart, a rename and changes to the tab strip, so an address stays val
 `false` are the only values; JSON `null` counts as unset, as it does for the other keys, and any
 other type is an error. Read once at boot.
 
+## `macOptionIsMeta` (macOS only)
+
+Makes the Option key act as Meta in the terminal: Option+B sends `ESC b`, Option+F `ESC f`,
+and so on, the way Terminal.app's "Use Option as Meta key" does. Default **off**, where Option
+types the macOS special characters (Option+2 is `™`) and only Option+arrows are word moves.
+
+```json
+"macOptionIsMeta": true
+```
+
+From a Mast shell: `mast config set macOptionIsMeta true` (or `false`), and
+`mast config reset macOptionIsMeta` to return to the default. `true` and `false` are the only
+values; any other type is an error on every platform, but Windows ignores the setting.
+Read once at boot.
+
 ## `remote` (Local HTTP)
 
 Lets a phone on the same Wi-Fi read a tab and send it input. **This key controls the Local HTTP

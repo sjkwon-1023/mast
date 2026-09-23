@@ -1,5 +1,6 @@
 import { DEFAULT_VIEWER_FONT_SIZE } from "../viewer-font";
 import type { KeySpec } from "../../../shared/keys";
+import { IS_MAC } from "../../../shared/platform";
 
 // 파일 전체 크기와 무관하게 512KiB 창 하나만 상주시킨다.
 export const WINDOW_BYTES = 512 * 1024;
@@ -216,8 +217,16 @@ const CTRL_WINDOW_KEYS: Record<string, WindowAction | undefined> = {
   End: "last",
 };
 
-export function textKeyAction(spec: KeySpec): TextKeyAction | null {
+export function textKeyAction(spec: KeySpec, mac = IS_MAC): TextKeyAction | null {
   if (spec.isComposing || spec.alt || spec.shift) return null;
+  // macOS: ⌘↑/⌘↓ = 처음/마지막 윈도우 (Windows 의 Ctrl+Home/End 짝 — Mac 의 "문서 처음/끝"
+  // 관례). 그 밖의 ⌘ 조합은 받지 않는다. Windows 는 meta 를 보지 않는다.
+  if (mac && spec.meta === true) {
+    if (spec.ctrl) return null;
+    if (spec.key === "ArrowUp") return { type: "window", action: "first" };
+    if (spec.key === "ArrowDown") return { type: "window", action: "last" };
+    return null;
+  }
   if (spec.ctrl) {
     const action = CTRL_WINDOW_KEYS[spec.key];
     return action === undefined ? null : { type: "window", action };

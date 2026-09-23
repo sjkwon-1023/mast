@@ -52,23 +52,10 @@ describe("keyAction", () => {
     }
   });
 
-  it("Ctrl+Shift+방향키 4종은 pane 이동 방향으로 매핑된다", () => {
-    expect(keyAction(spec({ key: "ArrowUp", ctrl: true, shift: true }))).toEqual({
-      type: "focusPane",
-      dir: "up",
-    });
-    expect(keyAction(spec({ key: "ArrowDown", ctrl: true, shift: true }))).toEqual({
-      type: "focusPane",
-      dir: "down",
-    });
-    expect(keyAction(spec({ key: "ArrowLeft", ctrl: true, shift: true }))).toEqual({
-      type: "focusPane",
-      dir: "left",
-    });
-    expect(keyAction(spec({ key: "ArrowRight", ctrl: true, shift: true }))).toEqual({
-      type: "focusPane",
-      dir: "right",
-    });
+  it("Ctrl+Shift+방향키는 pane 이동이 아니라 터미널(편집기의 단어 선택) 몫이다", () => {
+    for (const key of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]) {
+      expect(keyAction(spec({ key, ctrl: true, shift: true }))).toBeNull();
+    }
   });
 
   it.each(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"])("%s의 Alt·Ctrl 조합은 터미널 소유이며 pane 이동은 IME 중 가로채지 않는다", (key) => {

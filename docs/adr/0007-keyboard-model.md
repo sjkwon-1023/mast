@@ -18,7 +18,8 @@ trade — that is why the list is a contract and not an implementation detail.
 ## Decisions
 
 1. **One movement key per tier**: `Ctrl+1`…`Ctrl+9` (workspace by sidebar ordinal, 1-based),
-   `Ctrl+Shift+arrows` (pane focus by on-screen geometry — nearest centre in the direction's
+   `Ctrl+Shift+arrows` (pane focus by on-screen geometry — `Alt+Shift+arrows` only since the
+   2026-09-23 amendment — nearest centre in the direction's
    half-plane), `Ctrl+Tab` / `Ctrl+Shift+Tab` (tab cycle inside the active pane, wrapping).
    The plan's alternative `Ctrl+↑↓` was rejected: TUI apps use `Ctrl+arrow`, and
    `Ctrl+1`–`9` already covers the tier.
@@ -150,3 +151,57 @@ PTY 에는 Alt 가 아니라 Ctrl 이 도착한다 — 실패는 가로채기가
 함께 잠근다. window capture 는 `apps/mast/src/app/navigation/actions.test.ts` 가
 `Alt+Shift` 소비·plain `Alt` 통과를 실제 DOM 이벤트로 본다. 라이브 WebView2 전달과
 Codex 질문 UI 동작은 필드 확인 대상이다 (WINDOWS-BUILD §10).
+
+## 2026-09-23 amendment: Windows pane focus is Alt+Shift only; macOS terminal keys
+
+**Windows (user decision).** Pane focus moves with `Alt+Shift+arrows` only. `Ctrl+Shift+arrows`
+is no longer intercepted, so it reaches whatever has focus again: word-wise selection in the
+Markdown editor, and `ESC[1;6A/B/C/D` in the terminal. This reverses the v0.3.30 binding and
+the "terminal applications no longer receive `Ctrl+Shift+arrows`" cost recorded above. All
+other `Ctrl+Shift` letter shortcuts and their `Alt+Shift` aliases are unchanged. Workspace
+cards also enter the inline rename on a double-click of the name, on both platforms; `F2`
+still works.
+
+**macOS terminal keys (usability audit).** The terminal view claims the following, all inside
+`features/terminal/view.ts`'s key handler and decided by `interaction.ts::macTerminalKeyAction`;
+Windows never reaches that function.
+
+1. `Cmd+Left` / `Cmd+Right` / `Cmd+Backspace` send `\x01` / `\x05` / `\x15` (start of line,
+   end of line, kill line) — the Terminal.app and iTerm2 convention. `Cmd+Option+arrows` stay
+   pane focus.
+2. `Cmd+K` clears the screen and scrollback with xterm's `clear()` and sends nothing to the
+   PTY. It is not claimed on the alternate buffer: that screen belongs to the full-screen
+   program and has no scrollback, and clearing it would only corrupt it until the next redraw.
+3. `PageUp` / `PageDown` / `Home` / `End` (`Fn+arrows` on a Mac keyboard) scroll the scrollback
+   by a page or to the top/bottom, as in Terminal.app, **only** on the normal buffer with mouse
+   tracking off. On the alternate buffer or while a program tracks the mouse the key goes to
+   the program unchanged.
+4. `Shift+PageUp` / `Shift+PageDown` send `ESC[5~` / `ESC[6~` to the program instead of
+   scrolling. xterm's own default is the opposite (Shift+PageUp scrolls), so the pair is
+   rerouted to match Terminal.app, where Shift is the way to hand those keys to the program.
+   `Shift+Home` / `Shift+End` already reach the program through xterm (`ESC[1;2H` / `ESC[1;2F`).
+5. `Option+arrows` are **not** rewritten on macOS. The Windows `ESC[1;3X` rewrite (the
+   2026-09-20 amendment) exists to undo xterm's non-Mac Alt→Ctrl hack; on macOS xterm already
+   sends Terminal.app's bytes — `ESC b` / `ESC f` for `Option+Left/Right` (shell word motion)
+   and `ESC[1;3A/B` for `Option+Up/Down` — and the rewrite had been overriding that.
+6. `Cmd+C` keeps the selection after copying: copy and interrupt are different keys on macOS,
+   so the Windows reason for clearing it (the next `Ctrl+C` must reach the shell as SIGINT)
+   does not apply.
+
+The WebKit Korean IME adapter runs before this handler and commits any pending syllable on
+every non-229 keydown, so a line-editing byte never overtakes the syllable being composed.
+Outside the terminal, the text viewer takes `Cmd+Up` / `Cmd+Down` for its first/last window
+and the folder browser takes `Cmd+Up` for the parent folder and `Cmd+Down` to open the
+selection (Finder); other `Cmd` combinations are not read as their unmodified keys there.
+
+Links in the terminal open on `Cmd+click` on macOS, not on a plain click, which is left to
+selection and cursor placement. `settings.json`'s `macOptionIsMeta` (default `false`) turns
+Option into Meta for the terminal, and `Option+drag` forces a text selection inside programs
+that track the mouse (`macOptionClickForcesSelection`).
+
+Verification: `apps/mast/src/features/terminal/mac-terminal-keys.test.ts` drives the real
+xterm browser build in Mac mode and checks the bytes each key sends (or the buffer it
+scrolls or clears), including a pending Korean syllable arriving before `Cmd+Left`'s byte;
+the viewer and `keys.ts` suites cover the rest. Live WKWebView delivery of the `Cmd` and `Fn`
+keys and the Windows `Ctrl+Shift+arrows` pass-through are field checks (`docs/MACOS.md`,
+`docs/WINDOWS-BUILD.md`).

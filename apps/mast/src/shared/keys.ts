@@ -2,8 +2,10 @@ import { IS_MAC } from "./platform";
 // macOS 가로채기: ⌘1–9 workspace, ⌘⌥방향키 pane, Ctrl(+Shift)+Tab 탭,
 // ⌘T 터미널, ⌘⇧B 폴더, ⌘D 자동 분할 / ⌘⇧D 세로 분할, ⌘N workspace,
 // ⌘⇧[ / ] 이전/다음 workspace, ⌘W 탭 닫기 / ⌘⇧W workspace 닫기,
-// ⌘+ / - / 0 확대·축소, F2 이름 바꾸기. ⌘C/V 편집, ⌘⇧R 새로고침, ⌘Q 종료는
-// 담당이 따로 있다. 목록에 없는 Ctrl/Option 조합은 계속 PTY 몫이다.
+// ⌘+ / - / 0 확대·축소, F2(Fn+F2) 이름 바꾸기. ⌘C/V 편집, ⌘⇧R 새로고침, ⌘Q 종료는
+// 담당이 따로 있다. 터미널 안의 ⌘←/→/⌫ 줄 편집, ⌘K 지우기, Fn+↑/↓/←/→ 스크롤,
+// ⇧Fn+↑/↓ 는 아래 표의 macOS 행(features/terminal/view.ts 소유)이다. 목록에 없는
+// Ctrl/Option 조합은 계속 PTY 몫이다 (Option+←/→ 는 xterm Mac 기본 `ESC b`/`ESC f`).
 // 키보드 판정 — DOM 무의존 순수 모듈 (계획 v2 "키보드 모델" 장).
 //
 // 3층 구조(워크스페이스 / pane / 탭)의 이동 키와, 마우스로만 되던 조작
@@ -21,7 +23,7 @@ import { IS_MAC } from "./platform";
 // | 키 | 동작 | 가로채는 곳 |
 // |---|---|---|
 // | `Ctrl+1`~`9` / `Alt+1`~`9` | 워크스페이스 전환 (사이드바 순서 1-based) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
-// | `Ctrl/Alt+Shift+↑/↓/←/→` | pane 포커스 이동 (기하학적 인접) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
+// | `Alt+Shift+↑/↓/←/→` | pane 포커스 이동 (기하학적 인접). `Ctrl+Shift+방향키`는 가로채지 않는다 — 편집기의 단어 선택 몫 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 활성 pane 의 탭 순환 (다음/이전, 끝에서 순환) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+Shift+W` / `Alt+Shift+W` | 활성 pane 의 활성 탭 닫기 (뷰어 탭 포함) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+Shift+T` / `Alt+Shift+T` | 활성 pane 에 새 터미널 탭 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
@@ -34,17 +36,21 @@ import { IS_MAC } from "./platform";
 // | `Ctrl+=` / `Ctrl++` | 터미널 **+ 뷰어** 글꼴 확대 (세션 한정 — settings.json 은 그대로) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+-` | 터미널 **+ 뷰어** 글꼴 축소 (세션 한정) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+0` | 터미널·뷰어 글꼴 크기를 각자의 settings.json 기준값으로 리셋 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
-// | `F2` | 활성 워크스페이스 이름 변경 (사이드바 카드 인라인 편집) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
+// | `F2` (macOS 는 `Fn+F2` 또는 기능 키 설정) | 활성 워크스페이스 이름 변경 (사이드바 카드 인라인 편집 — 카드 이름 더블클릭도 같은 편집, 키가 아니라 표 밖) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+Shift+R` | WebView 리로드 (F5 는 쓰지 않는다 — app/main.ts 주석 참조) | app/main.ts installReloadKey |
 // | `Ctrl+V` / `Ctrl+Shift+V` / `Shift+Insert` | 붙여넣기 (클립보드 → xterm paste) | features/terminal/view.ts customKeyEventHandler |
-// | `Ctrl+C` / `Ctrl+Shift+C` / `Ctrl+Insert` (선택 있을 때만) | 복사 — 선택 없는 `Ctrl+C` 는 SIGINT 로 통과 | features/terminal/interaction.ts `isCopySelectionKey` (기록 뷰도 같은 판정 — features/viewers/record/view.ts) |
+// | `Ctrl+C` / `Ctrl+Shift+C` / `Ctrl+Insert` (선택 있을 때만) | 복사 — 선택 없는 `Ctrl+C` 는 SIGINT 로 통과. 복사 뒤 선택을 지운다. macOS 는 `⌘C` 이고 선택을 남긴다(Ctrl+C 는 항상 PTY) | features/terminal/interaction.ts `isCopySelectionKey` (기록 뷰도 같은 판정 — features/viewers/record/view.ts) |
 // | `Shift+Enter` (터미널 내) | ESC CR 재작성 — Claude Code 줄바꿈 관례 | features/terminal/view.ts customKeyEventHandler |
-// | `Alt+↑↓←→` (터미널 내, Shift 없이) | 실제 Alt 시퀀스(`ESC[1;3X`)로 재작성 — xterm 5.5 의 Alt→Ctrl 재작성(HACK) 우회. pane 이동은 `Alt+Shift` 계열이라 여기 닿지 않는다 | features/terminal/view.ts customKeyEventHandler + features/terminal/interaction.ts::altArrowSequence |
+// | `Alt+↑↓←→` (터미널 내, Shift 없이 — **Windows 만**) | 실제 Alt 시퀀스(`ESC[1;3X`)로 재작성 — xterm 5.5 의 Alt→Ctrl 재작성(HACK) 우회. pane 이동은 `Alt+Shift` 계열이라 여기 닿지 않는다. macOS 는 재작성하지 않는다 (xterm Mac 기본 = Terminal.app: Option+←/→ `ESC b`/`ESC f`) | features/terminal/view.ts customKeyEventHandler + features/terminal/interaction.ts::altArrowSequence |
+// | macOS `⌘←` / `⌘→` / `⌘⌫` (터미널 내) | 줄 처음 `\x01` / 줄 끝 `\x05` / 줄 지우기 `\x15` 로 PTY 에 보낸다 (Terminal.app·iTerm2 관례) | features/terminal/view.ts customKeyEventHandler + features/terminal/interaction.ts::macTerminalKeyAction |
+// | macOS `⌘K` (터미널 내, 일반 버퍼에서만) | 화면 + 스크롤백 지우기 (xterm `clear()`, PTY 에는 보내지 않음). alt 버퍼(vim 등)에서는 가로채지 않는다 | 같은 곳 |
+// | macOS `PgUp` / `PgDn` / `Home` / `End` = `Fn+↑/↓/←/→` (터미널 내, 수식 없이) | 일반 버퍼이고 마우스 추적이 꺼져 있을 때만 스크롤백 한 페이지 위/아래·맨 위/맨 아래. alt 버퍼·마우스 추적 중에는 가로채지 않는다(PTY 몫) | 같은 곳 |
+// | macOS `Shift+PgUp` / `Shift+PgDn` (터미널 내) | 스크롤하지 않고 `ESC[5~`/`ESC[6~` 를 PTY 로 (Terminal.app 관례 — xterm 기본은 이 조합을 스크롤에 쓴다) | 같은 곳 |
 // | `Esc` (send-mode 활성 중에만 — **현재 UI 진입점 없음: 휴면**) | 전달 대상 선택 취소 — 평시 Esc 는 PTY 소유 | features/workspace/workspace-view.ts (모드 활성 중에만 설치) |
 // | `Ctrl+PgUp` / `Ctrl+PgDn` (textViewer 포커스 중에만) | 이전/다음 512KiB 윈도우 | features/viewers/text/view.ts 뷰 내부 keydown |
-// | `Ctrl+Home` / `Ctrl+End` (textViewer 포커스 중에만) | 처음/마지막 윈도우 | features/viewers/text/view.ts 뷰 내부 keydown |
+// | `Ctrl+Home` / `Ctrl+End` (textViewer 포커스 중에만; macOS 는 `⌘↑` / `⌘↓` 도) | 처음/마지막 윈도우 | features/viewers/text/view.ts 뷰 내부 keydown |
 // | `PgUp` / `PgDn` (textViewer 포커스 중에만) | 행높이 배수 페이지 스크롤 | features/viewers/text/view.ts 뷰 내부 keydown |
-// | `↑↓ Home End PgUp PgDn Enter Backspace` (folderBrowser 포커스 중에만) | 목록 선택 이동·열기·상위 이동 | features/viewers/folder/view.ts 뷰 내부 keydown |
+// | `↑↓ Home End PgUp PgDn Enter Backspace` (folderBrowser 포커스 중에만; macOS 는 `⌘↑` 상위 폴더 · `⌘↓` 열기도) | 목록 선택 이동·열기·상위 이동 | features/viewers/folder/view.ts 뷰 내부 keydown |
 //
 // modifier 규약: 앱 전역 단축키는 `Ctrl+Shift` 와 `Alt+Shift` 별칭을 쓴다.
 // plain `Ctrl` 조합은 아래 명시한 예외 외에 셸 소유로 남긴다 — `Ctrl+W` 는 bash 의 단어
@@ -69,7 +75,7 @@ import { IS_MAC } from "./platform";
 // 이 표와 CTRL_SHIFT_KEYS 를 함께 고치면 된다 (판정·표시 단일 소스).
 //
 // shift 규약: shift 를 받는 조합은 `Ctrl+Shift+Tab` · 위에 명시한 문자 조합 ·
-// pane 이동의 `Ctrl/Alt+Shift+방향키` · 확대 키의 `+`(US 배열에서 `Shift+=` 로 오는 문자)뿐이다.
+// pane 이동의 `Alt+Shift+방향키` · 확대 키의 `+`(US 배열에서 `Shift+=` 로 오는 문자)뿐이다.
 // `Ctrl+Shift+1` 같은 변형은 판정 대상이 아니다(null) —
 // shift 는 레이아웃에 따라 다른 문자를 만들 수 있어 보수적으로 목록에 명시된
 // 조합만 가로챈다. `[`·`]` 는 그 예외를 정면으로 만나는 자리라 표기 문자와
@@ -90,7 +96,7 @@ export interface KeySpec {
   isComposing: boolean;
 }
 
-/** pane 이동 방향 — 화면 기하 기준 (Ctrl+Shift+방향키). */
+/** pane 이동 방향 — 화면 기하 기준 (Windows `Alt+Shift+방향키`, macOS `⌘⌥방향키`). */
 export type PaneDirection = "up" | "down" | "left" | "right";
 
 /** 판정 결과. ordinal 은 1-based 사이드바 순서, delta 는 탭 순환 방향이다.
@@ -288,8 +294,10 @@ export function keyAction(spec: KeySpec, mac = IS_MAC): KeyAction | null {
     return { type: "cycleTab", delta: spec.shift ? -1 : 1 };
   }
   if ((spec.ctrl !== spec.alt) && spec.shift) {
+    // pane 이동은 `Alt+Shift+방향키` 뿐이다. `Ctrl+Shift+방향키`는 편집기·셸의 단어 선택
+    // 관례라 가로채지 않고 터미널로 흘려보낸다 (사용자 결정 2026-09-23, ADR-0007 개정).
     const dir = ARROW_DIRS[spec.key];
-    if (dir !== undefined) return { type: "focusPane", dir };
+    if (dir !== undefined) return spec.alt ? { type: "focusPane", dir } : null;
     // Shift 가 눌린 keydown 의 key 는 대문자라 소문자로 접어 비교한다. 표에 없는
     // 조합(`Ctrl+Shift+C`/`V` 복사·붙여넣기, `Ctrl+Shift+R` 리로드)은 여기서
     // 걸리지 않고 각자의 소유자에게 그대로 흘러간다.

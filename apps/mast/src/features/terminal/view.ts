@@ -33,7 +33,9 @@ import {
   copyTerminalSelection,
   clipboardHasImage,
   altArrowSequence,
+  macTerminalKeyAction,
 } from "./interaction";
+import type { MacTerminalKey } from "./interaction";
 import { Channel } from "@tauri-apps/api/core";
 import type { OutputChunk } from "../../infrastructure/backend";
 import { parseAttachBody, parseFrame } from "./frame";
@@ -97,8 +99,8 @@ export class TerminalView {
     this.root.className = "term-host";
     parent.appendChild(this.root);
 
-    const activateLink = (_event: MouseEvent, uri: string): void => {
-      if (!shouldOpenLink(uri, this.term.modes.mouseTrackingMode)) return;
+    const activateLink = (event: MouseEvent, uri: string): void => {
+      if (!shouldOpenLink(uri, this.term.modes.mouseTrackingMode, event)) return;
       void openUrl(uri).catch((err: unknown) => console.error("open_url failed", err));
     };
 
@@ -356,6 +358,16 @@ export class TerminalView {
         this.enqueueWrite("\x1b\r");
         return false;
       }
+      // macOS 의 ⌘ 줄 편집·⌘K·Fn 스크롤 (interaction.ts::macTerminalKeyAction). Windows 는 null.
+      const macKey = macTerminalKeyAction(ev, {
+        normalBuffer: this.term.buffer.active.type === "normal",
+        mouseTracking: this.term.modes.mouseTrackingMode !== "none",
+      });
+      if (macKey !== null) {
+        ev.preventDefault();
+        this.runMacTerminalKey(macKey);
+        return false;
+      }
       // xterm 의 Alt+방향키→Ctrl+방향키 재작성을 우회해 진짜 Alt 시퀀스를 보낸다 —
       // Codex 질문 UI 등 Alt+방향키를 쓰는 TUI 가 Ctrl+방향키를 받던 원인이다
       // (interaction.ts::altArrowSequence 참조). IME 조합 중에는 조합기 소유다.
@@ -377,6 +389,24 @@ export class TerminalView {
       }
       return true;
     });
+  }
+
+  private runMacTerminalKey(key: MacTerminalKey): void {
+    switch (key.type) {
+      case "send":
+        // 사용자 입력 경로(onData)를 그대로 태워 replay 게이트와 입력 시 하단 스크롤을 받는다.
+        this.term.input(key.data, true);
+        return;
+      case "clear":
+        this.term.clear();
+        return;
+      case "scroll":
+        if (key.to === "pageUp") this.term.scrollPages(-1);
+        else if (key.to === "pageDown") this.term.scrollPages(1);
+        else if (key.to === "top") this.term.scrollToTop();
+        else this.term.scrollToBottom();
+        return;
+    }
   }
 
   // preventDefault 후 이 경로로만 붙여넣어 네이티브 paste와 중복되지 않게 한다.

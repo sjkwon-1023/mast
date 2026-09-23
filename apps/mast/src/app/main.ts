@@ -4,6 +4,7 @@ import { installNavKeys } from "./navigation/actions";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 import { installActivityPing } from "./activity-ping";
 import {
@@ -49,6 +50,8 @@ import type {
 } from "../shared/types";
 import { initUpdateNotice as startUpdateNotice } from "./update-notice";
 import { installShortcutGuide } from "./shortcut-guide";
+import { confirmAction } from "../infrastructure/confirm";
+import { handleFileDrop } from "../features/terminal/file-drop";
 
 declare global {
   interface Window {
@@ -68,13 +71,22 @@ declare global {
 }
 
 // F5는 터미널 앱에 전달하고 Ctrl+Shift+R만 WebView 리로드로 가로챈다.
-function installReloadKey(): void {
+function installReloadKey(onError: (err: unknown) => void): void {
   window.addEventListener(
     "keydown",
     (ev) => {
       if (!ev.isComposing && primaryModifier(ev) && ev.shiftKey && ev.code === "KeyR") {
         ev.preventDefault();
-        if (!hasMarkdownDrafts() || window.confirm("Reload with unsaved Markdown edits? Drafts will be restored from this session.")) location.reload();
+        if (!hasMarkdownDrafts()) {
+          location.reload();
+          return;
+        }
+        confirmAction("Reload with unsaved Markdown edits? Drafts will be restored from this session.").then(
+          (ok) => {
+            if (ok) location.reload();
+          },
+          onError,
+        );
       }
     },
     { capture: true },
@@ -147,8 +159,27 @@ class App {
     document.body.classList.toggle("platform-macos", IS_MAC);
     // 창 close 확인 가드는 한 번만 등록한다. 등록은 여기서 시작하고 완료는 아래에서 기다린다 —
     // 그 사이의 초기화 순서와 동작은 바꾸지 않는다.
-    const closeGuard = getCurrentWindow().onCloseRequested((event) => {
-      if (hasMarkdownDrafts() && !window.confirm("Quit mast and discard unsaved Markdown edits?")) event.preventDefault();
+    // 핸들러는 async 다 — @tauri-apps/api 의 onCloseRequested 는 핸들러를 await 한 뒤
+    // preventDefault 가 없을 때만 창을 destroy 하므로, 확인을 기다리는 동안 창은 닫히지 않는다.
+    // 확인 중에 다시 온 close(⌘Q 연타, Dock Quit)는 같은 질문을 겹쳐 띄우지 않고 막는다.
+    let closeConfirming = false;
+    const closeGuard = getCurrentWindow().onCloseRequested(async (event) => {
+      if (!hasMarkdownDrafts()) return;
+      if (closeConfirming) {
+        event.preventDefault();
+        return;
+      }
+      closeConfirming = true;
+      try {
+        if (!(await confirmAction("Quit mast and discard unsaved Markdown edits?"))) event.preventDefault();
+      } catch (err) {
+        // 확인을 못 했으면 닫지 않는다 — draft 를 묻지 않고 버리는 쪽으로 넘어가지 않는다.
+        event.preventDefault();
+        console.error("quit confirmation failed", err);
+        this.showError(formatCommandError(err));
+      } finally {
+        closeConfirming = false;
+      }
     });
     // macOS 의 Dock Quit·로그아웃은 창 close 를 거치지 않고 백엔드의 종료 판정으로 간다.
     // 판정은 Clean 일 때만 확인 없이 끝내고, 그 밖에는 창 close 로 위 가드를 태운다. 그래서
@@ -164,7 +195,10 @@ class App {
       );
     }
     if (!IS_MAC) this.initUpdateNotice();
-    installReloadKey();
+    installReloadKey((err) => {
+      console.error("reload confirmation failed", err);
+      this.showError(formatCommandError(err));
+    });
     installShortcutGuide();
     try {
       installActivityPing(await getResetEnabled(), (visible) => {
@@ -175,6 +209,7 @@ class App {
       this.showError(formatCommandError(err));
     }
     this.installWindowFocus();
+    if (IS_MAC) this.installFileDrop();
     await closeGuard;
 
     initWindowVisibility().catch((err: unknown) => {
@@ -186,7 +221,7 @@ class App {
       dispatchUI: (command) => this.dispatchUI(command),
       createWorkspaceHere: () => this.createWorkspaceHere(),
       renameWorkspace: () => this.sidebar.beginRename(),
-      closeWorkspace: () => this.sidebar.closeActive(),
+      closeWorkspace: () => void this.sidebar.closeActive(),
     });
 
     try {
@@ -245,6 +280,22 @@ class App {
     })();
   }
 
+  // Finder 에서 터미널로 끌어 놓은 파일 경로를 그 pane 에 붙여넣는다 (features/terminal/file-drop.ts).
+  // Windows 는 드롭 경로의 WSL 변환이 없어 설치하지 않는다.
+  private installFileDrop(): void {
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        handleFileDrop(
+          event.payload,
+          (x, y) => this.wsView.terminalAtPoint(x, y),
+          window.devicePixelRatio,
+        );
+      })
+      .catch((err: unknown) => {
+        console.error("file drop listen failed", err);
+      });
+  }
+
   private createWorkspaceHere(): void {
     const snapshot = this.store.snapshot;
     const ws = snapshot === null ? null : activeWorkspace(snapshot);
@@ -298,7 +349,7 @@ class App {
     let traceToken: number | null = null;
     try {
       const closingDrafts = closingMarkdownDrafts(cmd, this.store.snapshot);
-      if (closingDrafts.length > 0 && !window.confirm("Close and discard unsaved Markdown edits?")) return null;
+      if (closingDrafts.length > 0 && !(await confirmAction("Close and discard unsaved Markdown edits?"))) return null;
       if (cmd.type === "switchWorkspace") {
         const active = this.store.snapshot?.state.activeWorkspace ?? null;
         if (active !== cmd.workspace) {

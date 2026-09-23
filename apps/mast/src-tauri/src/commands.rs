@@ -397,6 +397,10 @@ pub struct UiSettings {
     /// (features/workspace/tab-id-settings.ts). `log` 와 같은 규율로 부팅 때 한 번만
     /// 읽으므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
     pub show_tab_ids: Option<bool>,
+    /// macOS 에서 Option 키를 Meta(ESC 접두)로 보낼지 — xterm `macOptionIsMeta`. 미설정·
+    /// `false` 는 macOS 기본(Option 은 문자 입력)이다. 프론트가 macOS 에서만 적용하고
+    /// Windows 는 읽지 않는다. `log` 와 같은 규율로 부팅 때 한 번만 읽는다.
+    pub mac_option_is_meta: Option<bool>,
     /// 원격 표면(LAN 폴링, [`crate::remote`]). **키가 있으면 켜짐**이고 없으면
     /// 리스너도 스레드도 토큰 파일도 생기지 않는다. `log` 와 같은 규율으로 부팅 때
     /// 한 번만 읽으므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
@@ -1207,6 +1211,18 @@ mod tests {
     }
 
     #[test]
+    fn mac_option_is_meta_reads_a_boolean_and_rejects_other_types() {
+        let on = parse_ui_settings(r#"{"macOptionIsMeta": true}"#, path()).unwrap();
+        assert_eq!(on.mac_option_is_meta, Some(true));
+        let off = parse_ui_settings(r#"{"macOptionIsMeta": false}"#, path()).unwrap();
+        assert_eq!(off.mac_option_is_meta, Some(false));
+        assert_eq!(parse_ui_settings("{}", path()).unwrap().mac_option_is_meta, None);
+        for text in [r#"{"macOptionIsMeta": "yes"}"#, r#"{"macOptionIsMeta": 1}"#] {
+            assert!(parse_ui_settings(text, path()).is_err(), "{text}");
+        }
+    }
+
+    #[test]
     fn unknown_keys_stay_forward_compatible_and_known_range_checks_still_hold() {
         // 뒤 버전이 넣을 키가 든 파일을 옛 빌드가 거부하면 안 된다 (deny_unknown_fields
         // 를 걸지 않은 이유).
@@ -1256,6 +1272,40 @@ pub async fn notify_toast(title: String, body: String, log_label: String) -> Res
         winlog!("native notification failed ({}): {error}", log_label.replace(['\r', '\n'], " "));
     }
     result
+}
+
+/// 예/아니오 확인 — 프론트 `infrastructure/confirm.ts` 의 macOS 경로.
+///
+/// wry 0.55 의 WKUIDelegate 에는 `runJavaScriptConfirmPanelWithMessage` 가 없어 WKWebView 의
+/// `window.confirm()` 이 대화상자 없이 false 를 돌려준다. 그래서 파괴적 동작의 확인을 여기서
+/// 네이티브로 묻는다: main 창에 붙는 sheet(NSAlert, OK/Cancel)이고, OK 일 때만 true 다.
+///
+/// rfd 의 sheet 경로는 AppKit 객체(부모 NSView → NSWindow, NSAlert)를 만지므로 대화상자를
+/// **메인 스레드에서** 연다. `show()` 는 sheet 를 띄우고 곧바로 future 를 돌려주며, 그 future 는
+/// sheet 의 완료 핸들러가 깨운다 — 커맨드는 그 future 만 기다리므로 메인 스레드를 막지 않는다.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn confirm_dialog(window: tauri::WebviewWindow, message: String) -> Result<bool, String> {
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    let parent = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let answer = rfd::AsyncMessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title(message.as_str())
+                .set_buttons(rfd::MessageButtons::OkCancel)
+                .set_parent(&parent)
+                .show();
+            // 용량 1 채널의 첫 전송이라 가득 찰 수 없다. 받는 쪽이 이미 사라졌으면(커맨드 취소)
+            // 대화상자의 답을 받을 곳이 없을 뿐이다.
+            let _ = sender.try_send(answer);
+        })
+        .map_err(|error| format!("cannot open the confirmation dialog: {error}"))?;
+    let answer = receiver
+        .recv()
+        .await
+        .ok_or("the confirmation dialog was not opened")?;
+    Ok(answer.await == rfd::MessageDialogResult::Ok)
 }
 
 /// 프론트엔드의 Markdown draft 상태를 받아 둔다. Dock Quit·로그아웃·AppleScript quit

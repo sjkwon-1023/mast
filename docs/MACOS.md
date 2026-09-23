@@ -169,17 +169,68 @@ write immediately and removes its private reply directory.
 | Auto split / vertical split | Cmd+D / Cmd+Shift+D |
 | New workspace at current directory | Cmd+N |
 | Close active tab / workspace | Cmd+W / Cmd+Shift+W |
-| Rename workspace | F2 |
+| Rename workspace | F2 (Fn+F2 on a Mac keyboard), or double-click the workspace name |
 | Zoom in/out/reset | Cmd+plus / minus / 0 |
 | Copy / paste | Cmd+C / Cmd+V |
 | Save Markdown edits | Cmd+S |
 | Reload the WebView, not the backend | Cmd+Shift+R |
+| Enter/exit full screen | Ctrl+Cmd+F (View menu) |
 | Quit (through the unsaved-Markdown guard) | Cmd+Q |
+
+Inside a terminal:
+
+| Action | macOS binding |
+| --- | --- |
+| Move by word | Option+Left / Option+Right (`ESC b` / `ESC f`) |
+| Start / end of line | Cmd+Left / Cmd+Right (`Ctrl+A` / `Ctrl+E`) |
+| Delete to start of line | Cmd+Backspace (`Ctrl+U`) |
+| Clear screen and scrollback | Cmd+K |
+| Scroll back a page / forward a page | Fn+Up / Fn+Down (PageUp / PageDown) |
+| Scroll to top / bottom | Fn+Left / Fn+Right (Home / End) |
+| Send PageUp / PageDown to the program | Shift+Fn+Up / Shift+Fn+Down |
+| Select text inside a program that uses the mouse | Option+drag |
+| Open a link | Cmd+click |
+| Paste file paths | Drag files from Finder onto the terminal |
+
+The Fn scroll keys act on the scrollback only in an ordinary shell screen. In a
+full-screen program (vim, less, an agent on the alternate screen) or while a
+program tracks the mouse they go to that program, exactly as typed. Cmd+K clears
+only an ordinary shell screen; in a full-screen program it does nothing.
+Cmd+C leaves the selection in place after copying. Shift+Fn+Left/Right go to the
+program as xterm sends them.
+
+Option types macOS special characters by default (Option+2 is `™`). To make
+Option act as Meta (Option+B sends `ESC b`, as with Terminal.app's "Use Option
+as Meta key"), set `macOptionIsMeta` and restart Mast:
+
+```sh
+mast config set macOptionIsMeta true
+mast config reset macOptionIsMeta
+```
+
+Dropping files from Finder onto a terminal pane pastes their paths at the
+cursor, each wrapped in single quotes (a `'` inside a name becomes `'\''`) and
+separated by spaces, so names with spaces, quotes or `$` stay intact. Nothing is
+run; press Return yourself. Programs that enable bracketed paste receive the
+paths as one paste. A drop anywhere else (a viewer, the sidebar, a tab header)
+is ignored.
 
 Ctrl+C always reaches the terminal on Mac, even when text is selected. Ctrl+D,
 Ctrl+W and other shell-editing keys are not app commands. IME composition is not
-intercepted. Hold Command to show button shortcut hints. Windows keeps its
-existing Ctrl/Alt bindings and terminal copy/paste behavior.
+intercepted, and a Korean syllable still being composed is committed before any
+of the keys above act. Hold Command to show button shortcut hints. Windows keeps
+its existing Ctrl/Alt bindings and terminal copy/paste behavior.
+
+## Confirmation dialogs
+
+Closing a workspace with running terminals, discarding unsaved Markdown edits,
+quitting and reloading with unsaved Markdown drafts all ask for confirmation in
+a native sheet attached to the Mast window (OK / Cancel). The WebView's own
+`window.confirm()` cannot be used on macOS: the windowing library's WebKit
+delegate does not implement the JavaScript confirm panel, so WebKit answers
+"cancel" without showing anything. If the sheet itself cannot be opened, the
+action is not performed and the error appears in the status line (or the
+Markdown banner).
 
 ## Quit and unsaved Markdown
 
@@ -262,6 +313,17 @@ unsaved edits Dock Quit quits immediately and tabs restore on relaunch; with an
 unsaved Markdown edit, log out — the logout is cancelled and Mast shows the quit
 confirmation, and with no drafts logout proceeds without Mast stopping it;
 open/edit/save Unicode-path files; check Korean IME, clipboard/image paste,
-resizing, scrolling and Cmd shortcuts. Compile/unit-test success is not a claim
+resizing, scrolling and Cmd shortcuts. For the terminal keys: Option+Left/Right
+move by word at a zsh and a bash prompt; Cmd+Left/Right/Backspace edit the line,
+including right after typing a Korean syllable; Cmd+K clears a long scrollback
+but leaves vim untouched; Fn+arrows scroll a long `seq 1 1000` output but reach
+`less`/vim; Shift+Fn+Up reaches `less`; Option+drag selects inside a program with
+mouse tracking; a link opens on Cmd+click only; `macOptionIsMeta` changes
+Option+B from `∫` to a word move after a restart. Close a workspace with a
+running shell and cancel/confirm the sheet; discard Markdown edits; Cmd+Q and
+Dock Quit with a draft; Cmd+Shift+R with a draft. Double-click a workspace name
+(also on a non-active card) and rename it. Drag one and several Finder files
+(names with spaces and a `'`) onto a pane, onto a split pane's other half, and
+onto a viewer. Use View › Toggle Full Screen (Ctrl+Cmd+F). Compile/unit-test success is not a claim
 that authenticated agent sessions or native GUI behavior were exercised on a
 physical device.

@@ -45,4 +45,16 @@ describe('tab close focus ordering', () => {
       expect(document.activeElement).toBe(folder);
     });
   });
+  it('does not take focus from the sidebar rename input that a card double-click just opened', async () => {
+    const root = setup();
+    view.render(snapshot(false));
+    const rename = document.createElement('input'); rename.dataset.keepFocus = ''; document.body.append(rename); rename.focus();
+    view.requestFocus({ kind: 'activePane', after: { type: 'closeTab', tab: 3 } });
+    view.render(snapshot(true, 2));
+    // 폴더 뷰는 지연 로드된다 — 로드가 끝난 뒤에도 포커스가 입력에 남아야 한다.
+    await vi.waitFor(() => expect(root.querySelector('.folder-list')).not.toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(document.activeElement).toBe(rename);
+    expect(root.contains(document.activeElement)).toBe(false);
+  });
 });
