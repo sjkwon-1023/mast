@@ -260,6 +260,40 @@ describe("WebKitImeState — 두벌식 입력", () => {
     expect(h.preview).toBe("");
   });
 
+  it("키 없이 온 이모지·한자·여러 글자는 남은 조합과 함께 바로 간다", () => {
+    const h = new Harness();
+    h.type([[ins("ㅎ")], [rep("하")]]);
+    h.change(ins("😀"));
+    expect(h.sent).toBe("하😀");
+    h.change(ins("漢"));
+    expect(h.sent).toBe("하😀漢");
+    h.change(ins("안녕"));
+    expect(h.sent).toBe("하😀漢안녕");
+    // 조합 중인 음절을 한자로 바꾸는 교체도 같다.
+    h.type([[ins("ㅎ")], [rep("하")], [rep("한")]]);
+    h.change(rep("韓"));
+    expect(h.sent).toBe("하😀漢안녕韓");
+    h.blur();
+    expect(h.sent).toBe("하😀漢안녕韓");
+  });
+
+  it("키 없이 온 한글 한 글자는 뒤따르는 keydown 을 기다리고, 오지 않았다고 알려 주면 간다", () => {
+    const h = new Harness();
+    h.change(ins("한"));
+    expect(h.ime.awaitingKey).toBe(true);
+    expect(h.sent).toBe("");
+    // 정상 타이핑: 곧 keydown 229 가 와서 기다림이 풀리고 조합은 이어진다.
+    h.ime.keydown({ keyCode: 229, key: "Process" }, h.field);
+    expect(h.ime.awaitingKey).toBe(false);
+    expect(h.sent).toBe("");
+    // 키가 오지 않은 경우: 어댑터의 타이머가 flush 한다.
+    h.change(ins("ㄱ"));
+    expect(h.ime.awaitingKey).toBe(true);
+    h.ime.flush(h.field);
+    expect(h.ime.awaitingKey).toBe(false);
+    expect(h.sent).toBe("한ㄱ");
+  });
+
   it("composition 이벤트를 쓰는 IME 의 확정분은 xterm 몫이라 다시 보내지 않는다", () => {
     const h = new Harness();
     const field = { value: "", selectionStart: 0 };

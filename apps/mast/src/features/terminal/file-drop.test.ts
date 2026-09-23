@@ -40,8 +40,18 @@ const AWKWARD = [
   "/Users/me/My Documents/report final.pdf",
   "/tmp/it's here",
   "/tmp/$HOME `whoami` \\ ! * ? [x] ; & | > <",
-  "/tmp/line\nbreak",
   "/Users/me/한글 파일.txt",
+];
+
+// readline/zle 가 셸 파서보다 먼저 키로 읽는 문자가 든 이름 — 인용으로는 막을 수 없다.
+// 붙여넣기를 조기 종료하는 `ESC[201~`, 줄을 지우는 Ctrl+U, 실행하는 CR·LF, DEL, C1(CSI).
+const CONTROL = [
+  "/tmp/x\x1b[201~\x15echo pwned\r",
+  "/tmp/line\nbreak",
+  "/tmp/tab\there",
+  "/tmp/del\x7f",
+  "/tmp/csi\u009b201~",
+  "/tmp/nul\u0000",
 ];
 
 const views: TerminalView[] = [];
@@ -83,36 +93,54 @@ describe("드롭 경로의 셸 인용", () => {
 });
 
 describe("드롭 위치의 터미널에 붙여넣기", () => {
-  it("물리 픽셀 위치를 CSS px 로 바꿔 그 자리의 터미널에 붙여넣고, 실행(Enter)은 하지 않는다", async () => {
+  it("드롭 위치(macOS 에서는 이미 CSS px)의 터미널에 붙여넣고, 실행(Enter)은 하지 않는다", async () => {
     const view = await attachedView();
     const targetAt = vi.fn((_x: number, _y: number) => view);
+    const onError = vi.fn();
     const handled = handleFileDrop(
       { type: "drop", paths: ["/tmp/a b"], position: { x: 300, y: 200 } },
       targetAt,
-      2,
+      onError,
     );
     expect(handled).toBe(true);
-    expect(targetAt).toHaveBeenCalledWith(150, 100);
+    // Retina(devicePixelRatio 2)에서도 받은 좌표 그대로 hit test 한다.
+    expect(targetAt).toHaveBeenCalledWith(300, 200);
     expect(await sent()).toBe("'/tmp/a b'");
+    expect(onError).not.toHaveBeenCalled();
   });
 
-  it("bracketed paste 를 켠 앱에는 괄호를 씌워 보내 경로 안의 개행이 입력을 끝내지 않는다", async () => {
+  it("bracketed paste 를 켠 앱에는 괄호를 씌워 보낸다", async () => {
     const view = await attachedView();
     const term = (view as unknown as { term: Terminal }).term;
     await new Promise<void>((resolve) => term.write("\x1b[?2004h", resolve));
-    handleFileDrop({ type: "drop", paths: ["/tmp/line\nbreak"], position: { x: 1, y: 1 } }, () => view, 1);
-    const bytes = await sent();
-    expect(bytes.startsWith("\x1b[200~")).toBe(true);
-    expect(bytes.endsWith("\x1b[201~")).toBe(true);
+    handleFileDrop({ type: "drop", paths: ["/tmp/a b"], position: { x: 1, y: 1 } }, () => view, vi.fn());
+    expect(await sent()).toBe("\x1b[200~'/tmp/a b'\x1b[201~");
+  });
+
+  it.each(CONTROL)("제어문자가 든 이름(%j)이 하나라도 있으면 드롭 전체를 붙여넣지 않고 사용자에게 알린다", async (bad) => {
+    const view = await attachedView();
+    const paste = vi.spyOn(view, "paste");
+    const onError = vi.fn();
+    const handled = handleFileDrop(
+      { type: "drop", paths: ["/tmp/ok.txt", bad], position: { x: 1, y: 1 } },
+      () => view,
+      onError,
+    );
+    expect(handled).toBe(false);
+    expect(paste).not.toHaveBeenCalled();
+    expect(await sent()).toBe("");
+    expect(onError).toHaveBeenCalledTimes(1);
   });
 
   it("터미널이 아닌 곳이나 경로 없는 이벤트는 무시한다", async () => {
     const view = await attachedView();
     const paste = vi.spyOn(view, "paste");
-    expect(handleFileDrop({ type: "drop", paths: ["/tmp/x"], position: { x: 1, y: 1 } }, () => null, 1)).toBe(false);
-    expect(handleFileDrop({ type: "over", position: { x: 1, y: 1 } }, () => view, 1)).toBe(false);
-    expect(handleFileDrop({ type: "drop", paths: [], position: { x: 1, y: 1 } }, () => view, 1)).toBe(false);
+    const onError = vi.fn();
+    expect(handleFileDrop({ type: "drop", paths: ["/tmp/x"], position: { x: 1, y: 1 } }, () => null, onError)).toBe(false);
+    expect(handleFileDrop({ type: "over", position: { x: 1, y: 1 } }, () => view, onError)).toBe(false);
+    expect(handleFileDrop({ type: "drop", paths: [], position: { x: 1, y: 1 } }, () => view, onError)).toBe(false);
     expect(paste).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
     expect(await sent()).toBe("");
   });
 });

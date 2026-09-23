@@ -16,6 +16,13 @@ import { WebKitImeState } from "./webkit-ime";
 
 type Listener = (ev: Event) => void;
 
+// keydown 없이 온 한글 한 글자를 확정하기까지 기다리는 시간. 정상 타이핑의 keydown 229 는 같은
+// 네이티브 키 처리에서 입력창 변경 바로 뒤에 온다. 0(다음 task)으로 두지 않는 이유: 입력창
+// 변경과 keydown 이 같은 task 안에서 온다는 보장을 확인하지 못했다 — 둘 사이에 타이머가 끼면
+// 조합 중인 자모를 확정해 음절이 깨지므로 여유를 둔다. 받아쓰기·문자 뷰어의 한 글자가 이만큼
+// 늦는 것은 눈에 띄지 않는다.
+const KEYLESS_COMMIT_MS = 50;
+
 export class WebKitImeInput {
   private readonly state: WebKitImeState;
   private readonly element: HTMLElement;
@@ -25,6 +32,7 @@ export class WebKitImeInput {
   private readonly preview: HTMLDivElement;
   private readonly listeners: Array<[string, Listener]>;
   private readonly renderSub: IDisposable;
+  private keylessTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
 
   constructor(private readonly term: Terminal) {
@@ -76,6 +84,7 @@ export class WebKitImeInput {
   dispose(): void {
     if (this.disposed) return;
     this.flush();
+    this.cancelKeylessCommit();
     this.disposed = true;
     for (const [type, fn] of this.listeners) {
       this.element.removeEventListener(type, fn, { capture: true });
@@ -86,6 +95,7 @@ export class WebKitImeInput {
 
   private readonly onKeyDown: Listener = (ev) => {
     if (ev.target !== this.textarea) return;
+    this.cancelKeylessCommit();
     const key = ev as KeyboardEvent;
     if (this.state.keydown(key, this.textarea) === "block") {
       ev.stopPropagation();
@@ -115,6 +125,7 @@ export class WebKitImeInput {
     if (this.state.input(input.inputType, input.data, this.textarea) === "block") {
       ev.stopPropagation();
     }
+    if (this.state.awaitingKey) this.scheduleKeylessCommit();
     this.updatePreview();
   };
 
@@ -138,6 +149,21 @@ export class WebKitImeInput {
   private readonly onFlushEvent: Listener = () => {
     this.flush();
   };
+
+  // 키 없이 온 한글 한 글자(webkit-ime.ts 머리 주석): 뒤이은 keydown 이 오지 않으면 확정한다.
+  private scheduleKeylessCommit(): void {
+    this.cancelKeylessCommit();
+    this.keylessTimer = setTimeout(() => {
+      this.keylessTimer = null;
+      if (this.state.awaitingKey) this.flush();
+    }, KEYLESS_COMMIT_MS);
+  }
+
+  private cancelKeylessCommit(): void {
+    if (this.keylessTimer === null) return;
+    clearTimeout(this.keylessTimer);
+    this.keylessTimer = null;
+  }
 
   private updatePreview(): void {
     const text = this.state.pendingText(this.textarea);

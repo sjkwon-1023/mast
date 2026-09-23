@@ -588,7 +588,8 @@ const NS_TERMINATE_NOW: usize = 1;
 /// 같은 경로 — main 창 close → 프론트 `onCloseRequested` 확인 — 를 태운다. 확인 뒤의
 /// 종료는 `terminate:` 를 거치지 않으므로(창 Destroyed → `exit(0)`) 여기로 되돌아와
 /// 다시 취소되는 일은 없다. `window.close()` 는 이벤트 루프에 메시지만 보내는 비동기
-/// 호출이라 이 콜백 안에서 불러도 된다.
+/// 호출이라 이 콜백 안에서 불러도 된다. close 전에 창을 unminimize·show·focus 해 최소화된
+/// 창에서도 확인 시트가 보이게 한다.
 ///
 /// FFI 경계라 panic 이 나면 unwind 하지 않고 abort 한다(`extern "C"`).
 extern "C" fn application_should_terminate(
@@ -608,6 +609,17 @@ extern "C" fn application_should_terminate(
         winlog!("terminate: no main window to confirm unsaved Markdown; quitting");
         return NS_TERMINATE_NOW;
     };
+    // 확인 시트는 main 창에 붙는다. 창이 최소화·숨김 상태면 시트가 보이지 않아 종료가 멈춘
+    // 것처럼 보이므로 먼저 앞으로 꺼낸다. 실패해도 close 는 그대로 요청한다(확인 경로가 우선).
+    if let Err(error) = window.unminimize() {
+        winlog!("terminate: cannot unminimize the main window: {error}");
+    }
+    if let Err(error) = window.show() {
+        winlog!("terminate: cannot show the main window: {error}");
+    }
+    if let Err(error) = window.set_focus() {
+        winlog!("terminate: cannot focus the main window: {error}");
+    }
     if let Err(error) = window.close() {
         winlog!("terminate: cannot ask the main window to confirm quitting: {error}");
     }

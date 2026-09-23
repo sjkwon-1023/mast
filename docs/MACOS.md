@@ -213,7 +213,10 @@ cursor, each wrapped in single quotes (a `'` inside a name becomes `'\''`) and
 separated by spaces, so names with spaces, quotes or `$` stay intact. Nothing is
 run; press Return yourself. Programs that enable bracketed paste receive the
 paths as one paste. A drop anywhere else (a viewer, the sidebar, a tab header)
-is ignored.
+is ignored. If any dropped name contains a control character (for example a
+newline or an escape character), nothing from that drop is pasted and the
+status line says why: quoting protects the name from the shell, but not from the
+line editor that reads those characters as keys first.
 
 Ctrl+C always reaches the terminal on Mac, even when text is selected. Ctrl+D,
 Ctrl+W and other shell-editing keys are not app commands. IME composition is not
@@ -321,9 +324,14 @@ but leaves vim untouched; Fn+arrows scroll a long `seq 1 1000` output but reach
 mouse tracking; a link opens on Cmd+click only; `macOptionIsMeta` changes
 Option+B from `∫` to a word move after a restart. Close a workspace with a
 running shell and cancel/confirm the sheet; discard Markdown edits; Cmd+Q and
-Dock Quit with a draft; Cmd+Shift+R with a draft. Double-click a workspace name
+Dock Quit with a draft, also with the window minimized (it comes forward with
+the sheet); Cmd+Shift+R with a draft. Double-click a workspace name
 (also on a non-active card) and rename it. Drag one and several Finder files
-(names with spaces and a `'`) onto a pane, onto a split pane's other half, and
-onto a viewer. Use View › Toggle Full Screen (Ctrl+Cmd+F). Compile/unit-test success is not a claim
+(names with spaces and a `'`) onto a pane, onto a split pane's other half on a
+Retina display, and onto a viewer; drop a file whose name contains a newline —
+nothing is pasted and the status line explains why. Insert an emoji from the
+Character Viewer and pick a Hanja candidate with the mouse while a Korean
+syllable is being composed — both reach the shell at once; Finder Cmd+C on a
+file then Cmd+V in a pane does not send Ctrl+V. Use View › Toggle Full Screen (Ctrl+Cmd+F). Compile/unit-test success is not a claim
 that authenticated agent sessions or native GUI behavior were exercised on a
 physical device.

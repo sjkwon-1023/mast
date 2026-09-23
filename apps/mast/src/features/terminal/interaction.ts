@@ -153,9 +153,10 @@ export function isPasteKey(ev: KeyboardEvent, mac = IS_MAC): boolean {
 
 // 붙여넣기 데이터에 텍스트가 없고 이미지만 있는지. 그때는 Ctrl+V(\x16)를 PTY 로 보내
 // 에이전트가 클립보드 이미지를 직접 읽게 한다 — Windows 경로의 clipboardHasImage 와 같은 규칙.
+// `Files` 타입만으로는 이미지로 보지 않는다 — Finder 에서 ⌘C 한 파일도 `Files` 로 온다.
 export function isImageOnlyPaste(data: Pick<DataTransfer, "types" | "getData">): boolean {
   if (data.getData("text/plain").length > 0) return false;
-  return Array.from(data.types).some((type) => type.startsWith("image/") || type === "Files");
+  return Array.from(data.types).some((type) => type.startsWith("image/"));
 }
 
 export async function copyTerminalSelection(term: Terminal, mac = IS_MAC): Promise<void> {

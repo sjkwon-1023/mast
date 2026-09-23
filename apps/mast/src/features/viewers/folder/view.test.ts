@@ -199,8 +199,8 @@ describe("folderKeyAction", () => {
   });
 
   it("ignores every modified combination", () => {
-    // Ctrl+Shift+방향키는 전역 pane 이동(shared/keys.ts) 소유다 — 뷰가 가로채면 뷰어 탭에서만
-    // 이동이 죽는다.
+    // 수식키가 붙은 방향키는 뷰가 가로채지 않는다 — pane 이동(Windows Alt+Shift, macOS ⌘⌥)은
+    // 전역(shared/keys.ts) 소유이고, 뷰가 가로채면 뷰어 탭에서만 이동이 죽는다.
     expect(folderKeyAction(key("ArrowDown", { alt: true }))).toBeNull();
     expect(folderKeyAction(key("ArrowUp", { alt: true }))).toBeNull();
     expect(folderKeyAction(key("ArrowUp", { ctrl: true, shift: true }))).toBeNull();

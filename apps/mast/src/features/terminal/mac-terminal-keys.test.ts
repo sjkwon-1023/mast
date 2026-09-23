@@ -2,26 +2,17 @@
 //
 // macOS 터미널 키 — 실제 xterm 5.5 브라우저 빌드와 TerminalView 배선으로, 키 하나가 PTY 에
 // 어떤 바이트를 보내는지(백엔드 mock 의 writeStdin) 또는 화면·스크롤백이 어떻게 바뀌는지를 본다.
-//
-// xterm 은 Mac 판정을 모듈 로드 때 `navigator.platform` 으로 하되, `process.title` 이 있으면
-// Node 로 보고 판정을 건너뛴다. 테스트 러너에는 process 가 있으므로 xterm 을 불러오기 전에
-// 그 둘을 WKWebView 와 같게 맞춰 xterm 의 Mac 동작(Option 키 처리 등)을 그대로 돌린다.
+// xterm 은 Mac 모드로 불러온다(xterm-mac-mode.test-support.ts) — Option 키 처리 등 xterm 의
+// Mac 동작을 그대로 돌린다.
 
+import { restoreProcessTitle } from "./xterm-mac-mode.test-support";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Terminal } from "@xterm/xterm";
 
-const h = vi.hoisted(() => {
-  const title = Object.getOwnPropertyDescriptor(process, "title");
-  delete (process as { title?: string }).title;
-  Object.defineProperty(navigator, "platform", { get: () => "MacIntel", configurable: true });
-  return {
-    restoreTitle: () => {
-      if (title !== undefined) Object.defineProperty(process, "title", title);
-    },
-    writeStdin: vi.fn(async (_session: number, _data: string) => undefined),
-    openUrl: vi.fn(async (_url: string) => undefined),
-  };
-});
+const h = vi.hoisted(() => ({
+  writeStdin: vi.fn(async (_session: number, _data: string) => undefined),
+  openUrl: vi.fn(async (_url: string) => undefined),
+}));
 
 vi.mock("../../infrastructure/backend", () => ({
   writeStdin: h.writeStdin,
@@ -43,7 +34,7 @@ import { TerminalView } from "./view";
 import { applyTerminalSettings } from "./settings";
 import { shouldOpenLink } from "./interaction";
 
-h.restoreTitle();
+restoreProcessTitle();
 
 function attachBody(): ArrayBuffer {
   const out = new Uint8Array(9);
@@ -112,6 +103,21 @@ function press(view: TerminalView, key: string, init: KeyboardEventInit = {}): K
   return ev;
 }
 
+/** WebKit 이 Option+문자 한 번에 내는 순서: keydown → (막히지 않았으면) keypress →
+ *  (그것도 막히지 않았으면) 입력창에 들어가는 insertText. */
+function optionType(view: TerminalView, char: string, code: string): void {
+  const textarea = termOf(view).textarea!;
+  const down = press(view, char, { altKey: true, code });
+  if (down.defaultPrevented) return;
+  const pressEv = new KeyboardEvent("keypress", { key: char, code, altKey: true, bubbles: true, cancelable: true });
+  Object.defineProperty(pressEv, "keyCode", { get: () => char.charCodeAt(0) });
+  Object.defineProperty(pressEv, "charCode", { get: () => char.charCodeAt(0) });
+  Object.defineProperty(pressEv, "which", { get: () => char.charCodeAt(0) });
+  textarea.dispatchEvent(pressEv);
+  if (pressEv.defaultPrevented) return;
+  imeInput(textarea, "insertText", char, textarea.value + char);
+}
+
 /** 스크롤백이 생길 만큼 줄을 찍는다 (기본 24행). */
 async function fillScrollback(term: Terminal): Promise<void> {
   await write(term, Array.from({ length: 200 }, (_, i) => `line ${i}`).join("\r\n"));
@@ -177,10 +183,11 @@ describe("macOS 줄 편집 키", () => {
 });
 
 describe("macOS Option = Meta 설정", () => {
-  it("켜면 Option+문자가 ESC 접두로 가고, 끄면(기본) Option 은 문자 입력이라 keydown 에서 보내지 않는다", async () => {
+  it("켜면 Option+문자가 ESC 접두로 가고, 끄면(기본) Option 은 문자 입력이라 그 문자가 한 번 간다", async () => {
     const plain = await attachedView();
-    press(plain, "∫", { altKey: true, code: "KeyB" });
-    expect(await sent()).toEqual([]);
+    optionType(plain, "∫", "KeyB");
+    expect(await sent()).toEqual(["∫"]);
+    h.writeStdin.mockClear();
 
     applyTerminalSettings({
       fontFamily: null,
@@ -192,7 +199,7 @@ describe("macOS Option = Meta 설정", () => {
       macOptionIsMeta: true,
     });
     const meta = await attachedView();
-    press(meta, "∫", { altKey: true, code: "KeyB" });
+    optionType(meta, "∫", "KeyB");
     expect(await sent()).toEqual(["\x1bb"]);
   });
 });

@@ -71,7 +71,9 @@ describe("native Mac shortcuts", () => {
   it("treats a paste with no text but an image as an image paste", () => {
     const data = (types: string[], text = "") => ({ types, getData: (t: string) => (t === "text/plain" ? text : "") });
     expect(isImageOnlyPaste(data(["image/png"]))).toBe(true);
-    expect(isImageOnlyPaste(data(["Files"]))).toBe(true);
+    expect(isImageOnlyPaste(data(["Files", "image/png"]))).toBe(true);
+    // Finder 에서 ⌘C 한 파일(이미지 데이터 없음)은 이미지 붙여넣기가 아니다.
+    expect(isImageOnlyPaste(data(["Files"]))).toBe(false);
     expect(isImageOnlyPaste(data(["text/plain", "image/png"], "caption"))).toBe(false);
     expect(isImageOnlyPaste(data(["text/plain"], "hello"))).toBe(false);
     expect(isImageOnlyPaste(data([]))).toBe(false);

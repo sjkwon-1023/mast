@@ -132,6 +132,7 @@ class App {
         console.debug("[mast] update link failed", err);
       });
     },
+    (err) => this.showError(formatCommandError(err)),
   );
 
   private agentStatuses: Map<TabId, AgentStatus> | null = null;
@@ -288,7 +289,7 @@ class App {
         handleFileDrop(
           event.payload,
           (x, y) => this.wsView.terminalAtPoint(x, y),
-          window.devicePixelRatio,
+          (message) => this.showError(message),
         );
       })
       .catch((err: unknown) => {

@@ -143,6 +143,8 @@ export class Sidebar {
     private readonly onPairing: () => void,
     /** 업데이트 릴리스 페이지를 여는 main.ts 글루. */
     private readonly onOpenUpdate: (url: string) => void,
+    /** 사용자에게 보여야 하는 실패(닫기 확인 대화상자를 못 띄움) — main.ts 글루가 상태줄에 띄운다. */
+    private readonly onError: (err: unknown) => void,
   ) {
     this.cardsEl = document.createElement("div");
     this.cardsEl.className = "sidebar-cards";
@@ -538,7 +540,8 @@ export class Sidebar {
   }
 
   /** 확인은 infrastructure/confirm.ts 의 confirmAction 이다 — macOS 의 window.confirm 은
-   *  대화상자 없이 false 라 쓰지 않는다. 확인 자체가 실패하면 닫지 않는다. */
+   *  대화상자 없이 false 라 쓰지 않는다. 확인 자체가 실패하면 닫지 않고 사유를 onError 로
+   *  사용자에게 보인다. */
   private async onClose(workspace: WorkspaceId): Promise<void> {
     const ws =
       this.lastSnapshot?.state.workspaces.find((w) => w.id === workspace) ?? null;
@@ -551,6 +554,7 @@ export class Sidebar {
         );
       } catch (err) {
         console.error("close workspace confirmation failed", err);
+        this.onError(err);
         return;
       }
       if (!ok) return;

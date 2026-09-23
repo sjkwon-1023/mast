@@ -98,6 +98,8 @@ function mount(): {
   version: () => HTMLSpanElement;
   updateBtn: () => HTMLButtonElement;
   openedUrls: string[];
+  /** 사용자에게 보일 오류 — main.ts 글루가 상태줄에 띄운다. */
+  errors: unknown[];
 } {
   const root = document.createElement("div");
   document.body.replaceChildren(root);
@@ -105,6 +107,7 @@ function mount(): {
   let newWorkspaceCalls = 0;
   let pairingCalls = 0;
   const openedUrls: string[] = [];
+  const errors: unknown[] = [];
   const sidebar = new Sidebar(
     root,
     async (cmd) => {
@@ -119,6 +122,9 @@ function mount(): {
     },
     (url) => {
       openedUrls.push(url);
+    },
+    (err) => {
+      errors.push(err);
     },
   );
   const cardsEl = root.querySelector<HTMLElement>(".sidebar-cards");
@@ -139,6 +145,7 @@ function mount(): {
     version: () => versionEl,
     updateBtn: () => updateEl,
     openedUrls,
+    errors,
   };
 }
 
@@ -436,6 +443,23 @@ describe("Sidebar close (× 버튼 · Ctrl+Shift+Q)", () => {
 
     expect(confirmSpy).toHaveBeenCalledTimes(2);
     expect(dispatched).toEqual([]);
+  });
+
+  it("확인 대화상자가 실패하면 닫지 않고 사유를 사용자에게 보인다", async () => {
+    const failure = new Error("cannot open the confirmation dialog");
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => {
+        throw failure;
+      }),
+    );
+    const { sidebar, dispatched, errors } = mount();
+    sidebar.render(snapshot(1, THREE, 2));
+
+    await sidebar.closeActive();
+
+    expect(dispatched).toEqual([]);
+    expect(errors).toEqual([failure]);
   });
 
   it("활성 워크스페이스가 없으면 조용한 no-op — confirm 도 뜨지 않는다", async () => {

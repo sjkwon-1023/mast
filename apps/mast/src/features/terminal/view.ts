@@ -336,7 +336,9 @@ export class TerminalView {
 
   private installCopyPasteKeys(): void {
     // macOS 는 네이티브 붙여넣기(paste 이벤트)를 xterm 이 처리한다(isPasteKey 참조). 이미지만
-    // 있는 붙여넣기만 xterm 보다 먼저(capture) 가로채 Ctrl+V 로 바꾼다.
+    // 있는 붙여넣기만 xterm 보다 먼저(capture) 가로채 Ctrl+V 로 바꾼다. 이 리스너가 IME
+    // 어댑터의 paste 리스너보다 먼저 등록돼 먼저 돌므로, 남은 한글 조합을 여기서 먼저 확정해야
+    // Ctrl+V 보다 앞서 간다(앞선 keydown 이 없는 Edit › Paste 경로).
     if (IS_MAC) {
       this.term.element?.addEventListener(
         "paste",
@@ -344,6 +346,7 @@ export class TerminalView {
           if (!ev.clipboardData || !isImageOnlyPaste(ev.clipboardData)) return;
           ev.preventDefault();
           ev.stopPropagation();
+          this.ime?.flush();
           this.enqueueWrite("\x16");
         },
         { capture: true },

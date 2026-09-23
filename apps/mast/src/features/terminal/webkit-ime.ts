@@ -23,6 +23,14 @@
 // stale 로 표시하고, 다음 IME 입력의 beforeinput 에서 커서 위치로 다시 맞춘다. 그 시점의
 // 커서 앞은 전부 이미 처리된 내용이다.
 //
+// 키 없이 오는 입력 — 문자 뷰어의 이모지·기호, 받아쓰기, 한자 후보의 마우스 선택은 keydown
+// 없이 insertText(또는 조합 중 음절의 교체)만 온다. 이것을 조합 중으로 잡아 두면 다음 키나
+// blur 까지 PTY 에 가지 않는다(xterm 원래 동작은 즉시 전송). 그래서:
+// - 데이터가 한글 자모·음절 한 글자가 아니면(이모지, 한자, 기호, 여러 글자) 두벌식 조합의
+//   일부일 수 없으므로 남은 조합과 함께 즉시 확정한다.
+// - 한글 한 글자면 정상 타이핑(입력창 변경 → keydown 229)과 구별할 수 없으므로 `awaitingKey`
+//   로 표시만 한다. 뒤이은 keydown 이 짧은 시간 안에 오지 않으면 어댑터의 타이머가 flush 한다.
+//
 // 비-229 keydown 뒤에 그 키가 만든 입력(예: Space 의 " ")은 xterm 몫이다 — xterm 은
 // keydown 에서 이미 보냈고 이어지는 input 은 스스로 중복 억제한다. 키 이벤트를 겹쳐
 // 누르는 경우(Space 를 떼기 전에 다음 자모)에도 가르기 위해, 그 키의 `key` 와 데이터가
@@ -54,6 +62,15 @@ function isModifierOnly(key: ImeKey): boolean {
   return MODIFIER_KEYS.has(key.key) || MODIFIER_KEY_CODES.has(key.keyCode);
 }
 
+// 두벌식 조합이 입력창에 쓰는 한 글자: 한글 자모(U+1100–11FF), 호환 자모(U+3130–318F),
+// 자모 확장 A(U+A960–A97F), 음절·자모 확장 B(U+AC00–D7FF).
+const HANGUL_CHAR = /^[\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7ff]$/;
+
+/** 두벌식 조합의 일부일 수 있는 입력인가. 빈 교체(조합 중 Backspace)도 조합의 일부다. */
+function isHangulComposition(data: string | null): boolean {
+  return data === null || data === "" || HANGUL_CHAR.test(data);
+}
+
 /** 마지막 코드 포인트의 시작 위치. 서로게이트 쌍을 가르지 않는다. */
 function lastCharStart(text: string): number {
   const last = text.length - 1;
@@ -73,8 +90,16 @@ export class WebKitImeState {
   private composing = false;
   // 직전 비-229 keydown 의 key. 그 키가 만든 입력 한 건을 xterm 몫으로 가른다.
   private ownedKey: string | null = null;
+  // 마지막 IME 입력 뒤로 keydown 이 아직 오지 않았다 (키 없이 온 입력일 수 있다).
+  private keyless = false;
 
   constructor(private readonly send: (data: string) => void) {}
+
+  /** 조합 중인 한글 한 글자가 keydown 없이 들어온 뒤 아직 키가 오지 않았다. 어댑터는 짧은
+   *  시간 뒤에도 그대로면 flush 한다 (파일 머리 주석). */
+  get awaitingKey(): boolean {
+    return this.keyless;
+  }
 
   /** 아직 확정되지 않은 조합 중 텍스트 (미리보기용). */
   pendingText(field: ImeField): string {
@@ -84,6 +109,7 @@ export class WebKitImeState {
 
   /** xterm 보다 먼저 keydown 을 본다. `block` 이면 xterm 에 넘기지 않는다. */
   keydown(key: ImeKey, field: ImeField): ImeRouting {
+    this.keyless = false;
     if (this.composing) return "pass";
 
     if (key.keyCode === IME_KEY_CODE) {
@@ -142,7 +168,17 @@ export class WebKitImeState {
       this.resyncTo(Math.max(0, length - inserted));
     }
     this.clampTo(length);
-    return isInsert ? "block" : "pass";
+    if (!isInsert) return "pass";
+    if (isHangulComposition(data)) {
+      this.keyless = true;
+    } else {
+      // 두벌식 조합일 수 없는 입력 — 남은 조합과 함께 지금 확정한다. 입력창 상태는 알고
+      // 있으므로 stale 로 만들지 않는다.
+      const rest = field.value.slice(this.committed);
+      if (rest.length > 0) this.commit(rest);
+      this.keyless = false;
+    }
+    return "block";
   }
 
   compositionStart(field: ImeField): void {
@@ -159,6 +195,7 @@ export class WebKitImeState {
   /** 남은 조합을 전부 확정한다 (blur·붙여넣기·우클릭·숨김·해제, 비-229 keydown). */
   flush(field: ImeField): void {
     this.ownedKey = null;
+    this.keyless = false;
     if (this.composing) return;
     if (!this.stale) {
       this.clampTo(field.value.length);

@@ -7,7 +7,11 @@
 // 여기서는 그 순서대로 xterm 의 textarea 에 DOM 이벤트를 디스패치하고, 백엔드 mock 의
 // writeStdin 으로 나간 바이트(= PTY 도착 바이트)를 본다. 조합 외 키는 브라우저처럼
 // keydown 이 먼저 오고, 기본 동작이 막히지 않았을 때만 입력창에 들어간다.
+//
+// xterm 은 WKWebView 와 같은 Mac 모드로 불러온다(xterm-mac-mode.test-support.ts) — 어댑터와
+// xterm 의 Mac 분기(키 처리)가 함께 도는 조합을 본다. 같은 이유로 IS_MAC 도 true 다.
 
+import { restoreProcessTitle } from "./xterm-mac-mode.test-support";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Terminal } from "@xterm/xterm";
 
@@ -31,13 +35,9 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 
-// 어댑터는 macOS 에서만 설치된다.
-vi.mock("../../shared/platform", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../shared/platform")>()),
-  IS_MAC: true,
-}));
-
 import { TerminalView } from "./view";
+
+restoreProcessTitle();
 
 /** attach 응답 `[u64 LE end_offset][u8 first_attach][replay bytes]` — 빈 재생. */
 function attachBody(): ArrayBuffer {
@@ -238,6 +238,75 @@ describe("macOS WebKit 한글 입력 (실제 xterm + TerminalView)", () => {
     type(disposed.textarea, [[ins("ㄱ")], [rep("가")]]);
     disposed.view.dispose();
     expect(await ptyBytes()).toBe("가");
+  });
+
+  it("이미지만 있는 붙여넣기(Ctrl+V 전달)는 조합 중인 한글을 먼저 보낸다", async () => {
+    const { view, textarea } = await attachedView();
+    try {
+      type(textarea, [[ins("ㅎ")], [rep("하")]]);
+      // 네이티브 Edit › Paste 처럼 앞선 keydown 없이 paste 이벤트만 온다.
+      const paste = new Event("paste", { bubbles: true, cancelable: true, composed: true });
+      Object.defineProperty(paste, "clipboardData", {
+        value: { types: ["image/png"], getData: () => "" },
+      });
+      textarea.dispatchEvent(paste);
+      expect(await ptyBytes()).toBe("하\x16");
+    } finally {
+      view.dispose();
+    }
+  });
+
+  it("키 없이 온 이모지(문자 뷰어)는 남은 조합과 함께 바로 간다", async () => {
+    const { view, textarea } = await attachedView();
+    try {
+      type(textarea, [[ins("ㅎ")], [rep("하")]]);
+      imeChange(textarea, ins("😀"));
+      expect(await ptyBytes()).toBe("하😀");
+    } finally {
+      view.dispose();
+    }
+  });
+
+  it("키 없이 온 한자(후보 마우스 선택)는 바로 간다", async () => {
+    const { view, textarea } = await attachedView();
+    try {
+      imeChange(textarea, ins("漢"));
+      expect(await ptyBytes()).toBe("漢");
+      // 조합 중인 음절을 한자로 바꾸는 교체도 같다.
+      type(textarea, [[ins("ㅎ")], [rep("하")], [rep("한")]]);
+      imeChange(textarea, rep("韓"));
+      expect(await ptyBytes()).toBe("漢韓");
+    } finally {
+      view.dispose();
+    }
+  });
+
+  it("키 없이 온 한글 한 글자(받아쓰기 등)는 뒤따르는 키가 없으면 잠시 뒤 간다", async () => {
+    const { view, textarea } = await attachedView();
+    try {
+      imeChange(textarea, ins("한"));
+      // 정상 타이핑이면 곧 keydown 229 가 온다 — 그 전에 확정하지 않는다.
+      expect(await ptyBytes()).toBe("");
+      await vi.waitFor(async () => expect(await ptyBytes()).toBe("한"), { timeout: 1000, interval: 20 });
+      // 이어서 친 글자도 온전히 간다.
+      type(textarea, [[ins("ㄱ")], [rep("가")], "Enter"]);
+      expect(await ptyBytes()).toBe("한가\r");
+    } finally {
+      view.dispose();
+    }
+  });
+
+  it("정상 타이핑의 조합은 키 사이가 길어도 확정되지 않는다", async () => {
+    const { view, textarea } = await attachedView();
+    try {
+      type(textarea, [[ins("ㅎ")], [rep("하")]]);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(await ptyBytes()).toBe("");
+      type(textarea, [[rep("한")], "Enter"]);
+      expect(await ptyBytes()).toBe("한\r");
+    } finally {
+      view.dispose();
+    }
   });
 
   it("영문 입력은 xterm 의 keydown 경로 그대로다", async () => {
