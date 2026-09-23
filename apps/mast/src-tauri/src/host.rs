@@ -64,8 +64,6 @@ pub(crate) fn resolve_distro(requested: Option<String>) -> Option<String> {
 #[cfg(target_os = "macos")]
 static MACOS_SHELL: OnceLock<Option<String>> = OnceLock::new();
 
-/// macOS 셸 설정은 부팅 때 settings.json 을 한 번 읽어 고정한다. 런타임 중 설정 파일을
-/// 바꿔도 기존 Mast 규율과 마찬가지로 재시작 전에는 반영하지 않는다.
 #[cfg(target_os = "macos")]
 pub(crate) fn configure_macos_shell(shell: Option<String>) {
     let shell = shell
@@ -78,7 +76,7 @@ pub(crate) fn configure_macos_shell(shell: Option<String>) {
 fn macos_shell() -> String {
     MACOS_SHELL
         .get()
-        .and_then(Clone::clone)
+        .and_then(|value| value.clone())
         .or_else(|| std::env::var("SHELL").ok().filter(|value| !value.trim().is_empty()))
         .unwrap_or_else(|| "/bin/zsh".to_owned())
 }
@@ -123,10 +121,6 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
     }
     #[cfg(target_os = "macos")]
     {
-        // macOS 제품 경로: /bin/bash 는 얇은 bootstrap wrapper 로만 쓰고 마지막에는
-        // 사용자가 고른 로그인 셸(zsh/bash 등)을 exec 한다. GUI 앱은 shell rc 가
-        // 만들던 PATH 를 상속하지 않을 수 있으므로 wrapper 가 ~/.mast/bin 과 Apple
-        // Silicon Homebrew 기본 경로를 먼저 보완하고 MAST/MAST_TAB/MAST_TTY 계약을 심는다.
         SpawnSpec {
             program: "/bin/bash".to_owned(),
             args: macos_shell_argv(req.history_tab, req.cwd.as_deref()),
@@ -306,23 +300,13 @@ fn macos_shell_argv(history_tab: Option<u64>, cwd: Option<&str>) -> Vec<String> 
         }
     };
 
-    // Tauri GUI apps do not reliably inherit the user's login-shell PATH. Keep the
-    // Mast helper first, then the two conventional Homebrew prefixes, then the inherited
-    // system PATH. The actual interactive shell still runs as a login shell below.
     let common = format!(
         r#"{STARTED}; {cd_clause}mkdir -p "$HOME/.mast/history" "$HOME/.mast/resume" "$HOME/.mast/agent-hooks" && MAST_TTY="$(tty 2>/dev/null || true)" && export PATH="$HOME/.mast/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" COLORTERM=truecolor MAST=1 && if [ -n "$MAST_TTY" ] && [ "$MAST_TTY" != 'not a tty' ]; then export MAST_TTY; else unset MAST_TTY; fi"#
     );
 
     let script = match history_tab {
         Some(tab) => format!(
-            r#"{common} && RESUME="$HOME/.mast/resume/tab-{tab}" && cmd= && if [ -s "$RESUME" ]; then IFS= read -r cmd < "$RESUME" || true; fi && case "$cmd" in 'claude --resume '*) expr "x$cmd" : 'xclaude --resume [A-Za-z0-9_-][A-Za-z0-9_-]*$' >/dev/null || cmd= ;; 'codex resume '*) expr "x$cmd" : 'xcodex resume [A-Za-z0-9_-][A-Za-z0-9_-]*$' >/dev/null || cmd= ;; 'opencode --session '*) expr "x$cmd" : 'xopencode --session [A-Za-z0-9_-][A-Za-z0-9_-]*$' >/dev/null || cmd= ;; *) cmd= ;; esac && if [ -n "$cmd" ]; then printf '%s\n' "$cmd" >> "$HOME/.mast/history/tab-{tab}"; printf '\033[2m[mast] resume previous agent: %s\033[0m\n' "$cmd"; fi && export MAST_TAB={tab} HISTFILE="$HOME/.mast/history/tab-{tab}" && exec {shell} -l"#
-        ),
-        None => format!(r#"{common} && exec {shell} -l"#),
-    };
-
-    vec!["-c".to_owned(), script]
-}
-
+            r#"{common} && RESUME="$HOME/.mast/resume/tab-{tab}" && cmd= && if [ -s "$RESUME" ]; then IFS= read -r cmd < "$RESUME" || true; fi && case "$cmd" in 'claude --resume '*) expr "x$cmd" : 'xclaude --resume [A-Za-z0-9_-][A-Za-z0-9_-]*
 /// 스크립트의 문법을 깨거나 명령을 주입하지 못하게 하는 유일한 방어선이다 (탭 cwd 는
 /// 셸이 OSC 7 로 보고한 값이라 이론상 무엇이든 들어올 수 있다).
 #[cfg(any(windows, target_os = "macos"))]
@@ -774,8 +758,7 @@ mod tests {
         );
     }
 }
- >/dev/null || cmd= ;; \
-             'codex resume '*) expr "x$cmd" : 'xcodex resume [A-Za-z0-9_-][A-Za-z0-9_-]*
+ >/dev/null || cmd= ;; 'codex resume '*) expr "x$cmd" : 'xcodex resume [A-Za-z0-9_-][A-Za-z0-9_-]*
 /// 스크립트의 문법을 깨거나 명령을 주입하지 못하게 하는 유일한 방어선이다 (탭 cwd 는
 /// 셸이 OSC 7 로 보고한 값이라 이론상 무엇이든 들어올 수 있다).
 #[cfg(windows)]
@@ -1194,8 +1177,7 @@ mod tests {
         );
     }
 }
- >/dev/null || cmd= ;; \
-             'opencode --session '*) expr "x$cmd" : 'xopencode --session [A-Za-z0-9_-][A-Za-z0-9_-]*
+ >/dev/null || cmd= ;; 'opencode --session '*) expr "x$cmd" : 'xopencode --session [A-Za-z0-9_-][A-Za-z0-9_-]*
 /// 스크립트의 문법을 깨거나 명령을 주입하지 못하게 하는 유일한 방어선이다 (탭 cwd 는
 /// 셸이 OSC 7 로 보고한 값이라 이론상 무엇이든 들어올 수 있다).
 #[cfg(windows)]
@@ -1614,19 +1596,11 @@ mod tests {
         );
     }
 }
- >/dev/null || cmd= ;; \
-             *) cmd= ;; esac \
-             && if [ -n "$cmd" ]; then printf '%s\\n' "$cmd" >> "$HOME/.mast/history/tab-{tab}"; \
-             printf '\\033[2m[mast] resume previous agent: %s\\033[0m\\n' "$cmd"; fi \
-             && export MAST_TAB={tab} HISTFILE="$HOME/.mast/history/tab-{tab}" \
-             && exec {shell} -l"
+ >/dev/null || cmd= ;; *) cmd= ;; esac && if [ -n "$cmd" ]; then printf '%s\n' "$cmd" >> "$HOME/.mast/history/tab-{tab}"; printf '\033[2m[mast] resume previous agent: %s\033[0m\n' "$cmd"; fi && export MAST_TAB={tab} HISTFILE="$HOME/.mast/history/tab-{tab}" && exec {shell} -l"#
         ),
-        None => format!("{common} && exec {shell} -l"),
+        None => format!(r#"{common} && exec {shell} -l"#),
     };
 
-    // PATH_PREFIX 는 문서용 상수이기도 하고 wrapper 와 값이 갈라지지 않는지 컴파일 시
-    // 눈에 보이게 유지한다. format 문자열은 export 형태가 필요해 별도로 적는다.
-    debug_assert!(PATH_PREFIX.contains("/opt/homebrew/bin"));
     vec!["-c".to_owned(), script]
 }
 
