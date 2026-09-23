@@ -1,0 +1,33 @@
+name: macOS port development workspace
+on:
+  push:
+    branches: [feat/macos-apple-silicon]
+    paths:
+      - .github/workflows/macos-port-dev.yml
+      - tooling/macos-port-apply.py
+permissions:
+  contents: write
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Apply development patch when present
+        if: ${{ hashFiles('tooling/macos-port-apply.py') != '' }}
+        run: |
+          python3 tooling/macos-port-apply.py
+          rm -f tooling/macos-port-apply.py .github/workflows/macos-port-dev.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: connect native macOS platform support'
+          git push origin HEAD:feat/macos-apple-silicon
+      - name: Export development workspace
+        run: tar --exclude=.git --exclude=node_modules --exclude=target -czf "$RUNNER_TEMP/mast-workspace.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mast-development-workspace
+          path: ${{ runner.temp }}/mast-workspace.tar.gz
+          retention-days: 1
