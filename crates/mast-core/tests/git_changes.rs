@@ -7,11 +7,18 @@ use std::process::{Command, Output};
 use mast_core::git::{self, GitChange, GitDiffRequest, GitScope};
 use tempfile::TempDir;
 
+// macOS exposes /var through /private/var. Git returns the canonical path;
+// construct fixtures there so path assertions mean the same thing on every OS.
+fn fixture_dir() -> TempDir {
+    let root = fs::canonicalize(std::env::temp_dir()).unwrap();
+    tempfile::tempdir_in(root).unwrap()
+}
+
 struct Repo(TempDir);
 
 impl Repo {
     fn new() -> Self {
-        let repo = Self(tempfile::tempdir().unwrap());
+        let repo = Self(fixture_dir());
         repo.git(&["init", "--initial-branch=main", "--template="]);
         repo.git(&["config", "user.name", "Changes test"]);
         repo.git(&["config", "user.email", "changes@example.invalid"]);
@@ -280,7 +287,7 @@ fn subdirectory_and_bare_container_resolve_to_the_default_worktree() {
             .root,
         repo.path()
     );
-    let container = tempfile::tempdir().unwrap();
+    let container = fixture_dir();
     let bare = container.path().join(".bare");
     repo.git(&["clone", "--bare", repo.path(), bare.to_str().unwrap()]);
     fs::write(container.path().join(".git"), "gitdir: ./.bare\n").unwrap();
@@ -340,7 +347,7 @@ fn staged_deletion_and_untracked_replacement_remain_distinct() {
 
 #[test]
 fn missing_repositories_and_invalid_requests_fail_loudly() {
-    let empty = tempfile::tempdir().unwrap();
+    let empty = fixture_dir();
     let error = git::status(None, empty.path().to_str().unwrap()).unwrap_err();
     assert!(error.contains("not a git repository"));
     for path in ["", "../outside", "/absolute", "a/../file", "nul\0name"] {
@@ -439,7 +446,7 @@ fn an_untracked_nested_repository_does_not_break_the_file_list() {
 
 #[test]
 fn unborn_all_uses_the_repository_object_format() {
-    let repo = Repo(tempfile::tempdir().unwrap());
+    let repo = Repo(fixture_dir());
     repo.git(&[
         "init",
         "--object-format=sha256",
