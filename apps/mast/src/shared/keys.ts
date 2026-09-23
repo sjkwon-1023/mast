@@ -70,6 +70,7 @@
 // **shift 결과 문자**(`{`·`}`)를 둘 다 매칭한다 (아래 CTRL_SHIFT_KEYS 참조).
 
 import type { Pane, PaneId, SplitDirection, StateSnapshot, TabId, Workspace, WorkspaceId } from "./types";
+import { isMacPlatform } from "./platform";
 
 /** keydown 판정 입력 — KeyboardEvent 의 구조적 부분집합 (DOM 없이 테스트하기
  *  위한 최소 형태). 실코드에서는 이벤트의 key/ctrlKey/altKey/shiftKey/isComposing
@@ -178,7 +179,7 @@ const CTRL_SHIFT_KEYS: Record<
  *  거치지 않고 단축키를 하드코딩하지 않는다 (키를 바꿔도 툴팁이 따라온다). */
 export function shortcutLabel(id: ShortcutId): string {
   const key = CTRL_SHIFT_KEYS[id].letter.toUpperCase();
-  return `Alt+Shift+${key}`;
+  return isMacPlatform() ? `⌘⇧${key}` : `Alt+Shift+${key}`;
 }
 
 /** Alt 를 누른 동안 버튼·카드 위에 뜨는 배지 문구 — 표시의 두 번째 소스가 생기지
