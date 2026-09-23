@@ -3,6 +3,10 @@
 
 #[cfg(any(windows, test))]
 use mast_core::firewall::Verdict;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::{allow, secure_allow, secure_status, status};
 #[cfg(windows)]
 use mast_core::firewall::{
     firewall_off, judge, normalize_exe, profile_names, script_text_for, Protocol, RuleRecord,
@@ -573,7 +577,7 @@ fn allow_for(protocol: Protocol, port: u16) -> AllowOutcome {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn status(port: u16) -> FirewallStatus {
     FirewallStatus::unknown(
         String::new(),
@@ -582,12 +586,12 @@ pub fn status(port: u16) -> FirewallStatus {
     )
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn secure_status(port: u16) -> FirewallStatus {
     status(port)
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn allow(port: u16) -> AllowOutcome {
     AllowOutcome {
         outcome: "failed",
@@ -596,7 +600,7 @@ pub fn allow(port: u16) -> AllowOutcome {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn secure_allow(port: u16) -> AllowOutcome {
     allow(port)
 }

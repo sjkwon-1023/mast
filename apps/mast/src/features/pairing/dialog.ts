@@ -63,6 +63,7 @@ import type {
   SecureRemoteStatus,
 } from "../../infrastructure/backend";
 import { formatCommandError } from "../../shared/command-error";
+import { IS_MAC } from "../../shared/platform";
 
 export type PairingResult =
   | { state: "on"; url: string }
@@ -104,6 +105,29 @@ export const LOCAL_HTTP_RULE_NAME = "mast remote (LAN)";
 /** Secure Remote(UDP 7331) 규칙 이름 — Rust `SECURE_RULE_NAME` 미러. 두 표면은
  *  같은 포트를 써도 규칙·판정·삭제가 완전히 별개다. */
 export const SECURE_REMOTE_RULE_NAME = "mast secure remote (LAN)";
+const MACOS_BLOCK_ALL_DETAIL = "Block all incoming connections";
+
+function macFirewallMessage(status: FirewallStatus): string {
+  if (status.state === "blocked" && status.detail === MACOS_BLOCK_ALL_DETAIL) {
+    return "Block all incoming connections is enabled in macOS Firewall. Allowing this app cannot override it; review Firewall settings in System Settings.";
+  }
+
+  switch (status.state) {
+    case "allowed":
+      return "macOS Firewall allows incoming connections to this app.";
+    case "blocked":
+      return "macOS Firewall blocks this app from accepting incoming connections.";
+    case "missing":
+      return "macOS Firewall has no explicit entry for this app. You can add one for incoming connections.";
+    case "firewallOff":
+      return "macOS Firewall is off; an app rule is not needed.";
+    case "unknown":
+      return `Could not check macOS Firewall: ${status.detail ?? "unknown error"}`;
+    case "stalePath":
+    case "profileMismatch":
+      return `Could not determine macOS Firewall status (unexpected state: ${status.state}).`;
+  }
+}
 
 /** currentProfiles 덮어쓰기는 allowed/firewallOff/blocked 에는 적용하지 않는다 —
  *  앞의 둘은 프로필과 무관하고, blocked 는 차단 규칙 이름이 이 상태가 존재하는
@@ -113,6 +137,8 @@ export function firewallMessage(
   status: FirewallStatus,
   ruleName: string = LOCAL_HTTP_RULE_NAME,
 ): string {
+  if (IS_MAC) return macFirewallMessage(status);
+
   const { state, port, currentProfiles } = status;
   const detail = status.detail ?? "?";
 
@@ -152,6 +178,12 @@ export function firewallMessage(
  *  보게 둔다(적용 스크립트는 domain,private 로 고정돼 있어 Public 가드 없이도
  *  안전하다). */
 export function firewallActionable(status: FirewallStatus): boolean {
+  if (IS_MAC) {
+    if (status.state === "allowed" || status.state === "firewallOff") return false;
+    if (status.state === "blocked") return status.detail !== MACOS_BLOCK_ALL_DETAIL;
+    return true;
+  }
+
   switch (status.state) {
     case "unknown":
       return true;
@@ -173,6 +205,21 @@ export function allowOutcomeMessage(
   outcome: AllowOutcome,
   ruleName: string = LOCAL_HTTP_RULE_NAME,
 ): string {
+  if (IS_MAC) {
+    const detectedMessage = firewallMessage(outcome.status, ruleName);
+    switch (outcome.outcome) {
+      case "declined":
+        return `Administrator approval was declined. ${detectedMessage}`;
+      case "failed":
+        return `Could not apply the macOS Firewall change: ${outcome.detail ?? "unknown error"}. ${detectedMessage}`;
+      case "applied":
+        if (outcome.status.state === "allowed" || outcome.status.state === "firewallOff") {
+          return detectedMessage;
+        }
+        return `macOS Firewall did not confirm the app is allowed. ${detectedMessage}`;
+    }
+  }
+
   switch (outcome.outcome) {
     case "declined":
       return "Not applied — the permission prompt was declined.";
@@ -685,19 +732,26 @@ interface FirewallSectionOptions {
 function installFirewallSection(screen: HTMLElement, options: FirewallSectionOptions): void {
   const line = document.createElement("p");
   line.className = "pairing-firewall";
-  line.textContent = "Checking Windows Firewall…";
+  line.textContent = IS_MAC ? "Checking macOS Firewall…" : "Checking Windows Firewall…";
 
   const allow = document.createElement("button");
   allow.type = "button";
   allow.className = "pairing-allow";
-  allow.textContent = "Allow in Windows Firewall";
+  allow.textContent = IS_MAC ? "Allow in macOS Firewall" : "Allow in Windows Firewall";
   allow.hidden = true;
 
   screen.append(line, allow);
+  if (IS_MAC) {
+    const note = document.createElement("p");
+    note.className = "pairing-firewall-note";
+    note.textContent =
+      "This app rule covers both Local HTTP (TCP) and Secure Remote (UDP). Only add it on networks you trust.";
+    screen.append(note);
+  }
 
   allow.addEventListener("click", () => {
     allow.disabled = true;
-    line.textContent = "Waiting for Windows…";
+    line.textContent = IS_MAC ? "Waiting for administrator approval…" : "Waiting for Windows…";
     void (async () => {
       try {
         const outcome = await options.allow();
