@@ -61,6 +61,28 @@ pub(crate) fn resolve_distro(requested: Option<String>) -> Option<String> {
         .or_else(|| std::env::var("MAST_DISTRO").ok().filter(|d| !d.is_empty()))
 }
 
+#[cfg(target_os = "macos")]
+static MACOS_SHELL: OnceLock<Option<String>> = OnceLock::new();
+
+/// macOS 셸 설정은 부팅 때 settings.json 을 한 번 읽어 고정한다. 런타임 중 설정 파일을
+/// 바꿔도 기존 Mast 규율과 마찬가지로 재시작 전에는 반영하지 않는다.
+#[cfg(target_os = "macos")]
+pub(crate) fn configure_macos_shell(shell: Option<String>) {
+    let shell = shell
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let _ = MACOS_SHELL.set(shell);
+}
+
+#[cfg(target_os = "macos")]
+fn macos_shell() -> String {
+    MACOS_SHELL
+        .get()
+        .and_then(Clone::clone)
+        .or_else(|| std::env::var("SHELL").ok().filter(|value| !value.trim().is_empty()))
+        .unwrap_or_else(|| "/bin/zsh".to_owned())
+}
+
 /// `ShellSpawnReq` → 플랫폼별 `SpawnSpec` 매핑.
 ///
 /// **주의: `req.cwd` 는 Linux(WSL) 경로다.** Windows 에서 `SpawnSpec.cwd`(Windows
@@ -99,12 +121,23 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
             rows: req.rows,
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
-        // unix(개발): $SHELL -l ($SHELL 없으면 bash -l), cwd 는 직접 사용.
-        // 탭별 HISTFILE 은 여기서 적용하지 않는다 — $SHELL 이 bash 라는 보장이
-        // 없어(zsh·fish 는 HISTFILE 시맨틱이 다르다) 셸 기본 history 를 그대로
-        // 쓴다. 탭별 history 는 WSL(bash 고정) 경로 한정 기능이다.
+        // macOS 제품 경로: /bin/bash 는 얇은 bootstrap wrapper 로만 쓰고 마지막에는
+        // 사용자가 고른 로그인 셸(zsh/bash 등)을 exec 한다. GUI 앱은 shell rc 가
+        // 만들던 PATH 를 상속하지 않을 수 있으므로 wrapper 가 ~/.mast/bin 과 Apple
+        // Silicon Homebrew 기본 경로를 먼저 보완하고 MAST/MAST_TAB/MAST_TTY 계약을 심는다.
+        SpawnSpec {
+            program: "/bin/bash".to_owned(),
+            args: macos_shell_argv(req.history_tab, req.cwd.as_deref()),
+            cwd: None,
+            cols: req.cols,
+            rows: req.rows,
+        }
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        // 지원 대상이 아닌 unix 개발 실행은 기존 경로를 그대로 둔다.
         let program = std::env::var("SHELL")
             .ok()
             .filter(|s| !s.is_empty())
@@ -252,6 +285,1349 @@ fn bash_argv(history_tab: Option<u64>, cwd: Option<&str>) -> Vec<String> {
         ),
     };
     vec!["bash".to_string(), "-c".to_string(), script]
+}
+
+/// macOS bootstrap. Windows WSL wrapper 와 같은 started/resume/MAST_TAB 계약만
+/// 공유하고, WSL·ConPTY 전용 테마 동기화와 PROMPT_COMMAND 는 가져오지 않는다.
+/// `MAST_TTY` 는 macOS에 /proc 이 없어서 에이전트 훅이 controlling tty 를 잃은 뒤에도
+/// 원래 pane 으로 OSC 상태를 돌려보낼 수 있게 하는 힌트다.
+#[cfg(target_os = "macos")]
+fn macos_shell_argv(history_tab: Option<u64>, cwd: Option<&str>) -> Vec<String> {
+    const STARTED: &str = r"printf '\033]777;mast-started\007'";
+    const PATH_PREFIX: &str =
+        r#"PATH="$HOME/.mast/bin:/opt/homebrew/bin:/usr/local/bin:$PATH""#;
+
+    let shell = single_quote(&macos_shell());
+    let cd_clause = match cwd {
+        None => String::new(),
+        Some(path) => {
+            let quoted = single_quote(path);
+            format!(
+                "{{ cd -- {quoted} 2>/dev/null \
+                 || {{ printf '\\033[2m[mast] %s is gone; starting in $HOME\\033[0m\\n' {quoted}; cd -- "$HOME"; }}; }}; "
+            )
+        }
+    };
+
+    let common = format!(
+        "{STARTED}; {cd_clause}mkdir -p "$HOME/.mast/history" "$HOME/.mast/resume" "$HOME/.mast/agent-hooks" \
+         && MAST_TTY="$(tty 2>/dev/null || true)" \
+         && export PATH="$HOME/.mast/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" COLORTERM=truecolor MAST=1 \
+         && if [ -n "$MAST_TTY" ] && [ "$MAST_TTY" != 'not a tty' ]; then export MAST_TTY; else unset MAST_TTY; fi"
+    );
+
+    let script = match history_tab {
+        Some(tab) => format!(
+            "{common} \
+             && RESUME="$HOME/.mast/resume/tab-{tab}" && cmd= \
+             && if [ -s "$RESUME" ]; then IFS= read -r cmd < "$RESUME" || true; fi \
+             && case "$cmd" in \
+             'claude --resume '*) expr "x$cmd" : 'xclaude --resume [A-Za-z0-9_-][A-Za-z0-9_-]*
+/// 스크립트의 문법을 깨거나 명령을 주입하지 못하게 하는 유일한 방어선이다 (탭 cwd 는
+/// 셸이 OSC 7 로 보고한 값이라 이론상 무엇이든 들어올 수 있다).
+#[cfg(any(windows, target_os = "macos"))]
+fn single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// 시작 표식을 기다리는 기본 마감. 웜 스타트 실측이 163~194ms 라 크게 여유롭지만,
+/// 값을 고르는 부담 자체가 작다 — 마감을 넘겨도 세션을 죽이지 않고 탭에 표시만 하므로
+/// 틀렸을 때의 대가가 경고 한 번뿐이다. 죽이는 설계였다면 WSL 콜드 스타트가 수 초에서
+/// 수 분까지 걸린 보고들 때문에 어떤 값도 정당화할 수 없었다.
+const STARTUP_DEADLINE: Duration = Duration::from_secs(20);
+
+/// 표식을 낼 래퍼가 있는 경로에서만 기본 활성이다. unix 개발 실행은 `$SHELL -l` 을
+/// 직접 띄워(`spawn_spec`) 표식을 낼 자리가 없으므로, 마감을 걸면 느린 rc 가 곧바로
+/// 오탐이 된다.
+#[cfg(any(windows, target_os = "macos"))]
+fn platform_startup_deadline() -> Option<Duration> {
+    Some(STARTUP_DEADLINE)
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn platform_startup_deadline() -> Option<Duration> {
+    None
+}
+
+/// 스폰 자체의 마감 — 이 값이 곧 **탭 하나 때문에 앱 전체가 멈춰 있을 수 있는 최대
+/// 시간**이다. `dispatch` 가 Dispatcher lock 을 쥔 채 스폰하므로(그 함수 주석) 상한이
+/// 없으면 무한이 된다. 프로세스 생성은 웜에서 수십 ms 라 5초는 100배 여유다.
+const SPAWN_DEADLINE: Duration = Duration::from_secs(5);
+
+/// `0` 은 "끄기". 파싱 실패는 부팅을 막지 않고 loud 하게만 알린다 — 오타 하나로
+/// 터미널을 못 쓰게 만드는 것이 잘못된 마감보다 나쁘다.
+fn env_deadline(var: &str, fallback: Option<Duration>) -> Option<Duration> {
+    let Ok(raw) = std::env::var(var) else {
+        return fallback;
+    };
+    match raw.trim().parse::<u64>() {
+        Ok(0) => None,
+        Ok(ms) => Some(Duration::from_millis(ms)),
+        Err(err) => {
+            winlog!("{var}={raw:?} is not a number ({err}); using the default");
+            fallback
+        }
+    }
+}
+
+/// `MAST_STARTUP_DEADLINE_MS` override. 실기 검증이 마감을 줄여 감지 경로를 재현하는
+/// 데 쓰고, 오탐이 잦은 환경에는 탈출구가 된다.
+fn startup_deadline() -> Option<Duration> {
+    static CACHED: OnceLock<Option<Duration>> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        env_deadline("MAST_STARTUP_DEADLINE_MS", platform_startup_deadline())
+    })
+}
+
+/// `MAST_SPAWN_DEADLINE_MS` override.
+fn spawn_deadline() -> Option<Duration> {
+    static CACHED: OnceLock<Option<Duration>> = OnceLock::new();
+    *CACHED.get_or_init(|| env_deadline("MAST_SPAWN_DEADLINE_MS", Some(SPAWN_DEADLINE)))
+}
+
+/// 세션 생성 + sink 등록의 원자 단위. `spawn_shell` 이 직접 부르거나 마감을 씌워
+/// 부르므로, 두 경로가 같은 롤백 규율을 쓰도록 함수로 뺐다.
+fn create_session(
+    sessions: &SessionManager,
+    sinks: &SinkRegistry,
+    app: &AppHandle,
+    router: &Arc<OscRouter>,
+    tab: Option<TabId>,
+    spec: SpawnSpec,
+    opts: SessionOptions,
+) -> anyhow::Result<SessionId> {
+    // sink factory 가 TerminalSink 를 만들어 레지스트리에 등록한다 (id 선발급 계약).
+    // 등록 후 스폰이 실패하면 레지스트리 엔트리를 되감아 고아 sink 를 남기지 않는다 —
+    // factory 밖으로 id 를 꺼내는 Cell.
+    let registered: Cell<Option<SessionId>> = Cell::new(None);
+    let result = sessions.create(spec, opts, |id| {
+        let sink = Arc::new(TerminalSink::new(id, tab, app.clone(), Arc::clone(router)));
+        sinks.insert(id, Arc::clone(&sink));
+        registered.set(Some(id));
+        Box::new(SinkHandle(sink))
+    });
+    if result.is_err() {
+        if let Some(id) = registered.take() {
+            sinks.remove(id);
+        }
+    }
+    result
+}
+
+impl SessionHost for TauriHost {
+    fn spawn_shell(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId> {
+        // 스폰은 Dispatcher lock 아래의 유일한 블로킹 구간이라(모듈 doc), 여기서
+        // 얼마나 걸렸는지가 "앱 전체가 멈춘 것처럼 보였다"류 신고의 첫 단서다.
+        let started = std::time::Instant::now();
+        wintrace!("spawn: starting (tab={:?})", req.history_tab);
+        let result = self.spawn_shell_inner(req);
+        match &result {
+            Ok(session) => wintrace!(
+                "spawn: session {session} up in {} ms",
+                started.elapsed().as_millis()
+            ),
+            Err(err) => wintrace!(
+                "spawn: failed after {} ms: {err:#}",
+                started.elapsed().as_millis()
+            ),
+        }
+        result
+    }
+
+    fn kill(&self, id: SessionId) {
+        // 멱등 계약 (SessionHost rustdoc): 미지·이미 종료된 id 도 무해 —
+        // 양쪽 레지스트리 remove 모두 no-op 으로 끝난다. `SessionManager::remove`
+        // 는 레지스트리 lock 을 놓은 뒤 kill 신호를 보낸다 (코어 계약).
+        self.sinks.remove(id);
+        let _ = self.sessions.remove(id);
+    }
+
+    fn release_tabs(&self, tabs: &[TabId], distro: Option<&str>) {
+        wintrace!("release: {} closed tab(s)", tabs.len());
+        release_records(Arc::clone(&self.records), tabs);
+        release_tab_files(tabs, distro);
+    }
+}
+
+impl TauriHost {
+    fn spawn_shell_inner(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId> {
+        // sink 가 들고 갈 탭 id — exit 이 기록 파일 이름을 여기서만 얻는다
+        // (`history_tab` 은 이 세션이 실릴 탭의 안정 ID 다, 코어 rustdoc).
+        let tab = req.history_tab.map(TabId);
+        let spec = spawn_spec(&req);
+        let opts = SessionOptions {
+            startup_deadline: startup_deadline(),
+            ..SessionOptions::default()
+        };
+        let Some(deadline) = spawn_deadline() else {
+            return create_session(
+                &self.sessions,
+                &self.sinks,
+                &self.app,
+                &self.router,
+                tab,
+                spec,
+                opts,
+            );
+        };
+
+        let sessions = Arc::clone(&self.sessions);
+        let sinks = Arc::clone(&self.sinks);
+        let app = self.app.clone();
+        let router = Arc::clone(&self.router);
+        let late_sessions = Arc::clone(&self.sessions);
+        let late_sinks = Arc::clone(&self.sinks);
+        call_with_deadline(
+            "mast-pty-spawn",
+            deadline,
+            move || create_session(&sessions, &sinks, &app, &router, tab, spec, opts),
+            move |late| {
+                // 마감 뒤에 끝난 스폰은 모델 어디에도 실리지 않는다 — 스폰은 이미
+                // Err 로 돌아갔다 — 그대로 두면 실기 사고에서 몇 시간을 살아남은 그
+                // 좀비가 된다. sink 는 이 경로에서도 탭 id 를 들고 있으므로, 기록을
+                // 남기지 않는 근거는 **여기서 먼저 레지스트리를 비운다**는 순서다:
+                // 뒤늦게 도는 `on_exit` 은 세션을 못 찾아 아무것도 쓰지 않는다.
+                if let Ok(id) = late {
+                    late_sinks.remove(id);
+                    late_sessions.remove(id);
+                }
+            },
+        )
+        .unwrap_or_else(|| {
+            Err(anyhow!(
+                "shell spawn did not finish within {deadline:?}; it will be cleaned up if it \
+                 ever completes"
+            ))
+        })
+    }
+}
+
+/// 닫힌 탭들의 **기록 파일** 삭제 (ADR-0018 수명 규칙) — 셸측 자원
+/// ([`release_tab_files`])과 달리 로컬 디스크라 `wsl.exe` 왕복과 무관하지만, 호출이
+/// Dispatcher lock 아래라(이 파일 모듈 doc) 여기서 동기로 지우지 않고 스레드로 넘긴다.
+/// unix 개발 실행에도 기록은 쌓이므로 cfg 로 가르지 않는다.
+///
+/// 실패는 로그로만 쓴다 — 남은 파일은 다음 부팅의 sweep([`mast_core::record::RecordStore::sweep`])
+/// 이 keep 집합 밖으로 보고 걷어 간다. **같은 sweep 이 덮는 창이 하나 더 있다**: 탭을
+/// 닫는 순간 그 탭의 세션이 막 끝나 있으면, waiter 스레드가 `take_record` 와 파일 쓰기
+/// 사이에 있을 수 있어 여기서 지운 파일이 그 뒤에 다시 쓰인다. 닫힌 탭은 keep 집합에
+/// 없으므로 다음 부팅의 sweep 이 걷어 간다 (ADR-0018 accepted limits).
+fn release_records(records: Arc<RecordStore>, tabs: &[TabId]) {
+    let tabs: Vec<TabId> = tabs.to_vec();
+    let spawned = std::thread::Builder::new()
+        .name("mast-release-records".to_string())
+        .spawn(move || {
+            for tab in tabs {
+                if let Err(err) = records.remove(tab) {
+                    winlog!("could not remove the record of closed tab {}: {err}", tab.0);
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        winlog!("could not start the record release thread: {err}");
+    }
+}
+
+/// 닫힌 탭들의 셸측 자원 삭제 — 탭별 `HISTFILE` 과 resume 힌트, 그리고 훅이
+/// 쓰다 만 힌트 임시 파일(`tab-<id>.tmp.<pid>`)까지.
+///
+/// **Windows 에서 경로를 조립하지 않고 WSL 안에서 `$HOME` 을 펼친다.** 이 디렉터리를
+/// 만드는 쪽(`bash_argv` 의 `mkdir -p`)이 같은 이유로 같은 규율을 따른다 — 리눅스
+/// 홈 위치는 배포판·사용자마다 다르고, UNC 로 추측하면 틀렸을 때 조용히 아무것도
+/// 지우지 않는다.
+///
+/// **탭 목록 전체가 한 번의 wsl.exe 왕복이다.** 워크스페이스 하나를 닫으면 탭이
+/// 열몇 개씩 사라지는데, 그때 wsl.exe 를 그만큼 동시에 띄우는 것이 부팅 재스폰
+/// 사고의 모양이었다 (ADR-0010 개정).
+///
+/// **호출은 Dispatcher lock 아래다** (이 파일 모듈 doc) — 그래서 왕복을 분리 스레드로
+/// 넘기고 즉시 돌아온다. 결과는 로그로만 쓴다 — 실패해도 사용자가 할 수 있는 일이
+/// 없다. 앱이 이 직후 종료하면 삭제가 통째로 유실되는 창도 남는데, 둘 다 부팅 시
+/// sweep 이 덮을 자리다 (백로그, ADR-0013 "Consequences").
+#[cfg(windows)]
+fn release_tab_files(tabs: &[TabId], distro: Option<&str>) {
+    use std::os::windows::process::CommandExt;
+
+    // 콘솔 창 억제 — boot.rs·commands.rs 의 wsl.exe 호출과 같은 플래그다.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let script = release_script(tabs);
+    let distro = resolve_distro(distro.map(str::to_string));
+    let count = tabs.len();
+    let spawned = std::thread::Builder::new()
+        .name("mast-release-tabs".to_string())
+        .spawn(move || {
+            let mut cmd = std::process::Command::new("wsl.exe");
+            if let Some(distro) = &distro {
+                cmd.arg("-d").arg(distro);
+            }
+            // `--exec` 인 이유는 spawn_spec 과 같다 — 명령이 배포판 기본 셸을 한 번
+            // 더 거치면 스크립트가 다른 문법으로 평가된다.
+            let status = cmd
+                .arg("--exec")
+                .arg("bash")
+                .arg("-c")
+                .arg(&script)
+                .creation_flags(CREATE_NO_WINDOW)
+                .status();
+            match status {
+                Ok(status) if status.success() => {}
+                Ok(status) => {
+                    winlog!("releasing {count} closed tab(s) exited with {status}")
+                }
+                Err(err) => winlog!("could not release {count} closed tab(s): {err}"),
+            }
+        });
+    if let Err(err) = spawned {
+        winlog!("could not start the release thread for {count} closed tab(s): {err}");
+    }
+}
+
+/// 삭제 스크립트 본문. 탭 하나가 남기는 파일은 탭별 `HISTFILE`, resume 힌트, 에이전트 훅
+/// 디스패처의 상태·lock·진단 파일(`~/.mast/agent-hooks/`), 그리고 쓰다 죽은 프로세스가 남긴
+/// 임시 파일(`<파일>.tmp.<pid>`)이다.
+///
+/// 탭 id 는 10진수 `u64` 라 셸 메타문자가 될 수 없다 — 그대로 박아도 안전하다.
+/// `.tmp.*` 만 따옴표 밖에 두어 glob 이 살아 있고, 매치가 없으면 그 리터럴이 그대로
+/// 남는데 `rm -f` 는 없는 파일에 침묵한다 (그래서 없는 파일도 조용히 지나간다).
+#[cfg(windows)]
+fn release_script(tabs: &[TabId]) -> String {
+    let mut script = String::from("rm -f --");
+    for tab in tabs {
+        let id = tab.0;
+        script.push_str(&format!(
+            r#" "$HOME/.mast/history/tab-{id}" "$HOME/.mast/resume/tab-{id}" "$HOME/.mast/resume/tab-{id}".tmp.*"#
+        ));
+        script.push_str(&format!(
+            r#" "$HOME/.mast/agent-hooks/tab-{id}.json" "$HOME/.mast/agent-hooks/tab-{id}.lock" "$HOME/.mast/agent-hooks/tab-{id}.diag" "$HOME/.mast/agent-hooks/tab-{id}.json".tmp.* "$HOME/.mast/agent-hooks/tab-{id}.diag".tmp.*"#
+        ));
+    }
+    script
+}
+
+/// macOS는 WSL 왕복 없이 사용자 홈의 Mast 전용 파일만 비동기로 정리한다.
+#[cfg(target_os = "macos")]
+fn release_tab_files(tabs: &[TabId], _distro: Option<&str>) {
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        winlog!("release: HOME is not set; macOS tab files were not removed");
+        return;
+    };
+    let tabs = tabs.to_vec();
+    let spawned = std::thread::Builder::new()
+        .name("mast-release-tabs".to_owned())
+        .spawn(move || {
+            for tab in tabs {
+                let id = tab.0;
+                let mast = home.join(".mast");
+                for path in [
+                    mast.join("history").join(format!("tab-{id}")),
+                    mast.join("resume").join(format!("tab-{id}")),
+                    mast.join("agent-hooks").join(format!("tab-{id}.json")),
+                    mast.join("agent-hooks").join(format!("tab-{id}.lock")),
+                    mast.join("agent-hooks").join(format!("tab-{id}.diag")),
+                ] {
+                    match std::fs::remove_file(&path) {
+                        Ok(()) => {}
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(err) => winlog!("could not remove {}: {err}", path.display()),
+                    }
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        winlog!("could not start the macOS tab-file release thread: {err}");
+    }
+}
+
+/// 지원 대상이 아닌 unix 개발 실행에는 탭 전용 파일이 없다.
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn release_tab_files(_tabs: &[TabId], _distro: Option<&str>) {}
+
+/// 스폰 명령 구성 테스트 — Windows 대상에서만 성립하는 argv 계약이라 그 타깃에서만
+/// 컴파일·실행된다 (unix 개발 경로는 `$SHELL -l` 무변경).
+///
+/// 단언이 통짜 문자열 비교가 아니라 조각별 계약인 이유: 종전의 통짜 비교는 **CI 가 이
+/// 크레이트의 테스트를 돌리지 않아** 시작 표식(d21d9a8)이 들어온 뒤로 조용히 낡아 있었다.
+/// 못 도는 정밀한 단언보다 무엇이 왜 필요한지 말하는 단언이 낫고, 실제로 돌리는 일은
+/// `ci.yml` 의 Windows 테스트 스텝이 맡는다.
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_tab_wraps_bash_with_mast_env_and_per_tab_histfile() {
+        let req = ShellSpawnReq {
+            cwd: Some("/home/me/proj".to_string()),
+            distro: Some("Ubuntu".to_string()),
+            history_tab: Some(7),
+            ..ShellSpawnReq::default()
+        };
+        let spec = spawn_spec(&req);
+        assert_eq!(spec.program, "wsl.exe");
+        // distro 는 `-d`, cwd 는 **`--cd ~` + 래퍼의 cd** 로 간다 (spawn_spec 주석).
+        assert_eq!(
+            &spec.args[..6],
+            &[
+                "--cd".to_string(),
+                "~".to_string(),
+                "-d".to_string(),
+                "Ubuntu".to_string(),
+                "--exec".to_string(),
+                "bash".to_string(),
+            ]
+        );
+        let script = spec.args.last().expect("script argv");
+
+        // 시작 표식은 반드시 맨 앞 — 뒤따르는 어떤 실패보다 먼저 도달을 증명해야 한다.
+        assert!(
+            script.starts_with(r"printf '\033]777;mast-started\007'; "),
+            "{script}"
+        );
+        // 목적지 cwd 는 인용된 채로 래퍼 안에서 cd 되고, 실패해도 셸은 뜬다.
+        assert!(script.contains(r"{ cd -- '/home/me/proj' 2>/dev/null"), "{script}");
+        assert!(script.contains("is gone; starting in $HOME"), "{script}");
+        // OSC 7 emitter (ADR-0011) — 이게 빠지면 탭 cwd 가 다시 얼어붙는다.
+        assert!(
+            script.contains(r#"PROMPT_COMMAND='printf "\033]7;file://%s\007" "${PWD//%/%25}"'"#),
+            "{script}"
+        );
+        // 제목(OSC 0)은 절대 같이 내지 않는다 — 에이전트가 세운 탭 제목을 덮는다.
+        assert!(!script.contains(r"\033]0;"), "{script}");
+        // 탭별 HISTFILE·resume 힌트·PATH 는 종전 계약 그대로.
+        assert!(
+            script.contains(r#"HISTFILE="$HOME/.mast/history/tab-7" exec bash -l"#),
+            "{script}"
+        );
+        assert!(
+            script.contains(r#"RESUME="$HOME/.mast/resume/tab-7""#),
+            "{script}"
+        );
+        assert!(script.contains("'opencode --session '*"), "{script}");
+        assert!(script.contains("xopencode --session [A-Za-z0-9_-]"), "{script}");
+        assert!(script.contains(r#"PATH="$HOME/.mast/bin:$PATH""#), "{script}");
+        assert!(script.contains("MAST_TAB=7"), "{script}");
+    }
+
+    /// 셸 인용 — 경로가 래퍼 문법을 깨거나 명령을 주입하지 못한다. 탭 cwd 는 셸이
+    /// OSC 7 로 보고한 값이라 이론상 무엇이든 들어올 수 있다.
+    #[test]
+    fn tab_cwd_is_single_quoted_into_the_wrapper() {
+        let req = ShellSpawnReq {
+            cwd: Some("/home/me/it's here; rm -rf /".to_string()),
+            ..ShellSpawnReq::default()
+        };
+        let spec = spawn_spec(&req);
+        let script = spec.args.last().expect("script argv");
+        assert!(
+            script.contains(r"cd -- '/home/me/it'\''s here; rm -rf /' 2>/dev/null"),
+            "{script}"
+        );
+    }
+
+    /// cwd 가 없으면 cd 절 자체가 없다 — `--cd ~` 가 이미 홈에 세워 둔다.
+    #[test]
+    fn without_cwd_there_is_no_cd_clause() {
+        let spec = spawn_spec(&ShellSpawnReq::default());
+        let script = spec.args.last().expect("script argv");
+        assert!(!script.contains("cd --"), "{script}");
+    }
+
+    #[test]
+    fn without_history_tab_the_shell_still_gets_mast_but_no_tab_id() {
+        let spec = spawn_spec(&ShellSpawnReq::default());
+        // 탭 id 가 없으면 MAST 만 물린 로그인 셸 (셸 기본 history 그대로).
+        // PATH 프리펜드는 두 경로에 다 걸린다 — mast CLI 는 탭 id 와 무관하다.
+        // resume 힌트도 없다 — 힌트 파일은 탭 id 로 주소가 정해지므로 id 가 없으면
+        // 읽을 파일 자체가 없다 (없는 id 를 지어내지 않는 규율의 연장).
+        let script = spec.args.last().expect("script argv");
+        assert!(script.contains("COLORTERM=truecolor MAST=1 "), "{script}");
+        assert!(!script.contains("MAST_TAB"), "{script}");
+        assert!(!script.contains("HISTFILE"), "{script}");
+        assert!(!script.contains("RESUME"), "{script}");
+        // OSC 7 은 탭 id 와 무관하게 두 경로 다 낸다 — cwd 추적은 history 와 별개다.
+        assert!(
+            script.contains(r#"PROMPT_COMMAND='printf "\033]7;file://%s\007" "${PWD//%/%25}"'"#),
+            "{script}"
+        );
+    }
+
+    /// 닫힌 탭 정리 스크립트 — 탭마다 history·resume·에이전트 훅 파일과 그 임시 파일을 지우고,
+    /// 여러 탭이 한 번의 `rm` 으로 들어간다 (SessionHost::release_tabs 의 배치 계약).
+    /// 닫힌 탭 정리 스크립트는 통짜로 비교한다 — 짧고 거의 변하지 않는 데다, 여기서
+    /// 틀리면 남의 파일을 지우거나 아무것도 못 지운다. `$HOME` 이 따옴표 안에서
+    /// **셸이 펼칠** 형태로 남아 있는지, glob 이 임시 파일 자리에만 있는지(탭 id 를
+    /// 접두사로 쓸어 담으면 탭 1 을 지울 때 탭 12·13 이 함께 사라진다), 탭 둘이 `rm`
+    /// 하나로 묶이는지가 한 번에 걸린다.
+    #[test]
+    fn release_script_removes_every_per_tab_file_in_one_rm() {
+        assert_eq!(
+            release_script(&[TabId(7), TabId(12)]),
+            concat!(
+                r#"rm -f --"#,
+                r#" "$HOME/.mast/history/tab-7" "$HOME/.mast/resume/tab-7" "$HOME/.mast/resume/tab-7".tmp.*"#,
+                r#" "$HOME/.mast/agent-hooks/tab-7.json" "$HOME/.mast/agent-hooks/tab-7.lock" "$HOME/.mast/agent-hooks/tab-7.diag""#,
+                r#" "$HOME/.mast/agent-hooks/tab-7.json".tmp.* "$HOME/.mast/agent-hooks/tab-7.diag".tmp.*"#,
+                r#" "$HOME/.mast/history/tab-12" "$HOME/.mast/resume/tab-12" "$HOME/.mast/resume/tab-12".tmp.*"#,
+                r#" "$HOME/.mast/agent-hooks/tab-12.json" "$HOME/.mast/agent-hooks/tab-12.lock" "$HOME/.mast/agent-hooks/tab-12.diag""#,
+                r#" "$HOME/.mast/agent-hooks/tab-12.json".tmp.* "$HOME/.mast/agent-hooks/tab-12.diag".tmp.*"#,
+            )
+        );
+    }
+}
+ >/dev/null || cmd= ;; \
+             'codex resume '*) expr "x$cmd" : 'xcodex resume [A-Za-z0-9_-][A-Za-z0-9_-]*
+/// 스크립트의 문법을 깨거나 명령을 주입하지 못하게 하는 유일한 방어선이다 (탭 cwd 는
+/// 셸이 OSC 7 로 보고한 값이라 이론상 무엇이든 들어올 수 있다).
+#[cfg(windows)]
+fn single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// 시작 표식을 기다리는 기본 마감. 웜 스타트 실측이 163~194ms 라 크게 여유롭지만,
+/// 값을 고르는 부담 자체가 작다 — 마감을 넘겨도 세션을 죽이지 않고 탭에 표시만 하므로
+/// 틀렸을 때의 대가가 경고 한 번뿐이다. 죽이는 설계였다면 WSL 콜드 스타트가 수 초에서
+/// 수 분까지 걸린 보고들 때문에 어떤 값도 정당화할 수 없었다.
+const STARTUP_DEADLINE: Duration = Duration::from_secs(20);
+
+/// 표식을 낼 래퍼가 있는 경로에서만 기본 활성이다. unix 개발 실행은 `$SHELL -l` 을
+/// 직접 띄워(`spawn_spec`) 표식을 낼 자리가 없으므로, 마감을 걸면 느린 rc 가 곧바로
+/// 오탐이 된다.
+#[cfg(windows)]
+fn platform_startup_deadline() -> Option<Duration> {
+    Some(STARTUP_DEADLINE)
+}
+
+#[cfg(not(windows))]
+fn platform_startup_deadline() -> Option<Duration> {
+    None
+}
+
+/// 스폰 자체의 마감 — 이 값이 곧 **탭 하나 때문에 앱 전체가 멈춰 있을 수 있는 최대
+/// 시간**이다. `dispatch` 가 Dispatcher lock 을 쥔 채 스폰하므로(그 함수 주석) 상한이
+/// 없으면 무한이 된다. 프로세스 생성은 웜에서 수십 ms 라 5초는 100배 여유다.
+const SPAWN_DEADLINE: Duration = Duration::from_secs(5);
+
+/// `0` 은 "끄기". 파싱 실패는 부팅을 막지 않고 loud 하게만 알린다 — 오타 하나로
+/// 터미널을 못 쓰게 만드는 것이 잘못된 마감보다 나쁘다.
+fn env_deadline(var: &str, fallback: Option<Duration>) -> Option<Duration> {
+    let Ok(raw) = std::env::var(var) else {
+        return fallback;
+    };
+    match raw.trim().parse::<u64>() {
+        Ok(0) => None,
+        Ok(ms) => Some(Duration::from_millis(ms)),
+        Err(err) => {
+            winlog!("{var}={raw:?} is not a number ({err}); using the default");
+            fallback
+        }
+    }
+}
+
+/// `MAST_STARTUP_DEADLINE_MS` override. 실기 검증이 마감을 줄여 감지 경로를 재현하는
+/// 데 쓰고, 오탐이 잦은 환경에는 탈출구가 된다.
+fn startup_deadline() -> Option<Duration> {
+    static CACHED: OnceLock<Option<Duration>> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        env_deadline("MAST_STARTUP_DEADLINE_MS", platform_startup_deadline())
+    })
+}
+
+/// `MAST_SPAWN_DEADLINE_MS` override.
+fn spawn_deadline() -> Option<Duration> {
+    static CACHED: OnceLock<Option<Duration>> = OnceLock::new();
+    *CACHED.get_or_init(|| env_deadline("MAST_SPAWN_DEADLINE_MS", Some(SPAWN_DEADLINE)))
+}
+
+/// 세션 생성 + sink 등록의 원자 단위. `spawn_shell` 이 직접 부르거나 마감을 씌워
+/// 부르므로, 두 경로가 같은 롤백 규율을 쓰도록 함수로 뺐다.
+fn create_session(
+    sessions: &SessionManager,
+    sinks: &SinkRegistry,
+    app: &AppHandle,
+    router: &Arc<OscRouter>,
+    tab: Option<TabId>,
+    spec: SpawnSpec,
+    opts: SessionOptions,
+) -> anyhow::Result<SessionId> {
+    // sink factory 가 TerminalSink 를 만들어 레지스트리에 등록한다 (id 선발급 계약).
+    // 등록 후 스폰이 실패하면 레지스트리 엔트리를 되감아 고아 sink 를 남기지 않는다 —
+    // factory 밖으로 id 를 꺼내는 Cell.
+    let registered: Cell<Option<SessionId>> = Cell::new(None);
+    let result = sessions.create(spec, opts, |id| {
+        let sink = Arc::new(TerminalSink::new(id, tab, app.clone(), Arc::clone(router)));
+        sinks.insert(id, Arc::clone(&sink));
+        registered.set(Some(id));
+        Box::new(SinkHandle(sink))
+    });
+    if result.is_err() {
+        if let Some(id) = registered.take() {
+            sinks.remove(id);
+        }
+    }
+    result
+}
+
+impl SessionHost for TauriHost {
+    fn spawn_shell(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId> {
+        // 스폰은 Dispatcher lock 아래의 유일한 블로킹 구간이라(모듈 doc), 여기서
+        // 얼마나 걸렸는지가 "앱 전체가 멈춘 것처럼 보였다"류 신고의 첫 단서다.
+        let started = std::time::Instant::now();
+        wintrace!("spawn: starting (tab={:?})", req.history_tab);
+        let result = self.spawn_shell_inner(req);
+        match &result {
+            Ok(session) => wintrace!(
+                "spawn: session {session} up in {} ms",
+                started.elapsed().as_millis()
+            ),
+            Err(err) => wintrace!(
+                "spawn: failed after {} ms: {err:#}",
+                started.elapsed().as_millis()
+            ),
+        }
+        result
+    }
+
+    fn kill(&self, id: SessionId) {
+        // 멱등 계약 (SessionHost rustdoc): 미지·이미 종료된 id 도 무해 —
+        // 양쪽 레지스트리 remove 모두 no-op 으로 끝난다. `SessionManager::remove`
+        // 는 레지스트리 lock 을 놓은 뒤 kill 신호를 보낸다 (코어 계약).
+        self.sinks.remove(id);
+        let _ = self.sessions.remove(id);
+    }
+
+    fn release_tabs(&self, tabs: &[TabId], distro: Option<&str>) {
+        wintrace!("release: {} closed tab(s)", tabs.len());
+        release_records(Arc::clone(&self.records), tabs);
+        release_tab_files(tabs, distro);
+    }
+}
+
+impl TauriHost {
+    fn spawn_shell_inner(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId> {
+        // sink 가 들고 갈 탭 id — exit 이 기록 파일 이름을 여기서만 얻는다
+        // (`history_tab` 은 이 세션이 실릴 탭의 안정 ID 다, 코어 rustdoc).
+        let tab = req.history_tab.map(TabId);
+        let spec = spawn_spec(&req);
+        let opts = SessionOptions {
+            startup_deadline: startup_deadline(),
+            ..SessionOptions::default()
+        };
+        let Some(deadline) = spawn_deadline() else {
+            return create_session(
+                &self.sessions,
+                &self.sinks,
+                &self.app,
+                &self.router,
+                tab,
+                spec,
+                opts,
+            );
+        };
+
+        let sessions = Arc::clone(&self.sessions);
+        let sinks = Arc::clone(&self.sinks);
+        let app = self.app.clone();
+        let router = Arc::clone(&self.router);
+        let late_sessions = Arc::clone(&self.sessions);
+        let late_sinks = Arc::clone(&self.sinks);
+        call_with_deadline(
+            "mast-pty-spawn",
+            deadline,
+            move || create_session(&sessions, &sinks, &app, &router, tab, spec, opts),
+            move |late| {
+                // 마감 뒤에 끝난 스폰은 모델 어디에도 실리지 않는다 — 스폰은 이미
+                // Err 로 돌아갔다 — 그대로 두면 실기 사고에서 몇 시간을 살아남은 그
+                // 좀비가 된다. sink 는 이 경로에서도 탭 id 를 들고 있으므로, 기록을
+                // 남기지 않는 근거는 **여기서 먼저 레지스트리를 비운다**는 순서다:
+                // 뒤늦게 도는 `on_exit` 은 세션을 못 찾아 아무것도 쓰지 않는다.
+                if let Ok(id) = late {
+                    late_sinks.remove(id);
+                    late_sessions.remove(id);
+                }
+            },
+        )
+        .unwrap_or_else(|| {
+            Err(anyhow!(
+                "shell spawn did not finish within {deadline:?}; it will be cleaned up if it \
+                 ever completes"
+            ))
+        })
+    }
+}
+
+/// 닫힌 탭들의 **기록 파일** 삭제 (ADR-0018 수명 규칙) — 셸측 자원
+/// ([`release_tab_files`])과 달리 로컬 디스크라 `wsl.exe` 왕복과 무관하지만, 호출이
+/// Dispatcher lock 아래라(이 파일 모듈 doc) 여기서 동기로 지우지 않고 스레드로 넘긴다.
+/// unix 개발 실행에도 기록은 쌓이므로 cfg 로 가르지 않는다.
+///
+/// 실패는 로그로만 쓴다 — 남은 파일은 다음 부팅의 sweep([`mast_core::record::RecordStore::sweep`])
+/// 이 keep 집합 밖으로 보고 걷어 간다. **같은 sweep 이 덮는 창이 하나 더 있다**: 탭을
+/// 닫는 순간 그 탭의 세션이 막 끝나 있으면, waiter 스레드가 `take_record` 와 파일 쓰기
+/// 사이에 있을 수 있어 여기서 지운 파일이 그 뒤에 다시 쓰인다. 닫힌 탭은 keep 집합에
+/// 없으므로 다음 부팅의 sweep 이 걷어 간다 (ADR-0018 accepted limits).
+fn release_records(records: Arc<RecordStore>, tabs: &[TabId]) {
+    let tabs: Vec<TabId> = tabs.to_vec();
+    let spawned = std::thread::Builder::new()
+        .name("mast-release-records".to_string())
+        .spawn(move || {
+            for tab in tabs {
+                if let Err(err) = records.remove(tab) {
+                    winlog!("could not remove the record of closed tab {}: {err}", tab.0);
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        winlog!("could not start the record release thread: {err}");
+    }
+}
+
+/// 닫힌 탭들의 셸측 자원 삭제 — 탭별 `HISTFILE` 과 resume 힌트, 그리고 훅이
+/// 쓰다 만 힌트 임시 파일(`tab-<id>.tmp.<pid>`)까지.
+///
+/// **Windows 에서 경로를 조립하지 않고 WSL 안에서 `$HOME` 을 펼친다.** 이 디렉터리를
+/// 만드는 쪽(`bash_argv` 의 `mkdir -p`)이 같은 이유로 같은 규율을 따른다 — 리눅스
+/// 홈 위치는 배포판·사용자마다 다르고, UNC 로 추측하면 틀렸을 때 조용히 아무것도
+/// 지우지 않는다.
+///
+/// **탭 목록 전체가 한 번의 wsl.exe 왕복이다.** 워크스페이스 하나를 닫으면 탭이
+/// 열몇 개씩 사라지는데, 그때 wsl.exe 를 그만큼 동시에 띄우는 것이 부팅 재스폰
+/// 사고의 모양이었다 (ADR-0010 개정).
+///
+/// **호출은 Dispatcher lock 아래다** (이 파일 모듈 doc) — 그래서 왕복을 분리 스레드로
+/// 넘기고 즉시 돌아온다. 결과는 로그로만 쓴다 — 실패해도 사용자가 할 수 있는 일이
+/// 없다. 앱이 이 직후 종료하면 삭제가 통째로 유실되는 창도 남는데, 둘 다 부팅 시
+/// sweep 이 덮을 자리다 (백로그, ADR-0013 "Consequences").
+#[cfg(windows)]
+fn release_tab_files(tabs: &[TabId], distro: Option<&str>) {
+    use std::os::windows::process::CommandExt;
+
+    // 콘솔 창 억제 — boot.rs·commands.rs 의 wsl.exe 호출과 같은 플래그다.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let script = release_script(tabs);
+    let distro = resolve_distro(distro.map(str::to_string));
+    let count = tabs.len();
+    let spawned = std::thread::Builder::new()
+        .name("mast-release-tabs".to_string())
+        .spawn(move || {
+            let mut cmd = std::process::Command::new("wsl.exe");
+            if let Some(distro) = &distro {
+                cmd.arg("-d").arg(distro);
+            }
+            // `--exec` 인 이유는 spawn_spec 과 같다 — 명령이 배포판 기본 셸을 한 번
+            // 더 거치면 스크립트가 다른 문법으로 평가된다.
+            let status = cmd
+                .arg("--exec")
+                .arg("bash")
+                .arg("-c")
+                .arg(&script)
+                .creation_flags(CREATE_NO_WINDOW)
+                .status();
+            match status {
+                Ok(status) if status.success() => {}
+                Ok(status) => {
+                    winlog!("releasing {count} closed tab(s) exited with {status}")
+                }
+                Err(err) => winlog!("could not release {count} closed tab(s): {err}"),
+            }
+        });
+    if let Err(err) = spawned {
+        winlog!("could not start the release thread for {count} closed tab(s): {err}");
+    }
+}
+
+/// 삭제 스크립트 본문. 탭 하나가 남기는 파일은 탭별 `HISTFILE`, resume 힌트, 에이전트 훅
+/// 디스패처의 상태·lock·진단 파일(`~/.mast/agent-hooks/`), 그리고 쓰다 죽은 프로세스가 남긴
+/// 임시 파일(`<파일>.tmp.<pid>`)이다.
+///
+/// 탭 id 는 10진수 `u64` 라 셸 메타문자가 될 수 없다 — 그대로 박아도 안전하다.
+/// `.tmp.*` 만 따옴표 밖에 두어 glob 이 살아 있고, 매치가 없으면 그 리터럴이 그대로
+/// 남는데 `rm -f` 는 없는 파일에 침묵한다 (그래서 없는 파일도 조용히 지나간다).
+#[cfg(windows)]
+fn release_script(tabs: &[TabId]) -> String {
+    let mut script = String::from("rm -f --");
+    for tab in tabs {
+        let id = tab.0;
+        script.push_str(&format!(
+            r#" "$HOME/.mast/history/tab-{id}" "$HOME/.mast/resume/tab-{id}" "$HOME/.mast/resume/tab-{id}".tmp.*"#
+        ));
+        script.push_str(&format!(
+            r#" "$HOME/.mast/agent-hooks/tab-{id}.json" "$HOME/.mast/agent-hooks/tab-{id}.lock" "$HOME/.mast/agent-hooks/tab-{id}.diag" "$HOME/.mast/agent-hooks/tab-{id}.json".tmp.* "$HOME/.mast/agent-hooks/tab-{id}.diag".tmp.*"#
+        ));
+    }
+    script
+}
+
+/// unix 개발 실행에는 지울 것이 없다 — `spawn_spec` 이 탭별 `HISTFILE` 을 물리지
+/// 않으므로(그 함수 주석) 탭 전용 파일 자체가 만들어지지 않는다.
+#[cfg(not(windows))]
+fn release_tab_files(_tabs: &[TabId], _distro: Option<&str>) {}
+
+/// 스폰 명령 구성 테스트 — Windows 대상에서만 성립하는 argv 계약이라 그 타깃에서만
+/// 컴파일·실행된다 (unix 개발 경로는 `$SHELL -l` 무변경).
+///
+/// 단언이 통짜 문자열 비교가 아니라 조각별 계약인 이유: 종전의 통짜 비교는 **CI 가 이
+/// 크레이트의 테스트를 돌리지 않아** 시작 표식(d21d9a8)이 들어온 뒤로 조용히 낡아 있었다.
+/// 못 도는 정밀한 단언보다 무엇이 왜 필요한지 말하는 단언이 낫고, 실제로 돌리는 일은
+/// `ci.yml` 의 Windows 테스트 스텝이 맡는다.
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_tab_wraps_bash_with_mast_env_and_per_tab_histfile() {
+        let req = ShellSpawnReq {
+            cwd: Some("/home/me/proj".to_string()),
+            distro: Some("Ubuntu".to_string()),
+            history_tab: Some(7),
+            ..ShellSpawnReq::default()
+        };
+        let spec = spawn_spec(&req);
+        assert_eq!(spec.program, "wsl.exe");
+        // distro 는 `-d`, cwd 는 **`--cd ~` + 래퍼의 cd** 로 간다 (spawn_spec 주석).
+        assert_eq!(
+            &spec.args[..6],
+            &[
+                "--cd".to_string(),
+                "~".to_string(),
+                "-d".to_string(),
+                "Ubuntu".to_string(),
+                "--exec".to_string(),
+                "bash".to_string(),
+            ]
+        );
+        let script = spec.args.last().expect("script argv");
+
+        // 시작 표식은 반드시 맨 앞 — 뒤따르는 어떤 실패보다 먼저 도달을 증명해야 한다.
+        assert!(
+            script.starts_with(r"printf '\033]777;mast-started\007'; "),
+            "{script}"
+        );
+        // 목적지 cwd 는 인용된 채로 래퍼 안에서 cd 되고, 실패해도 셸은 뜬다.
+        assert!(script.contains(r"{ cd -- '/home/me/proj' 2>/dev/null"), "{script}");
+        assert!(script.contains("is gone; starting in $HOME"), "{script}");
+        // OSC 7 emitter (ADR-0011) — 이게 빠지면 탭 cwd 가 다시 얼어붙는다.
+        assert!(
+            script.contains(r#"PROMPT_COMMAND='printf "\033]7;file://%s\007" "${PWD//%/%25}"'"#),
+            "{script}"
+        );
+        // 제목(OSC 0)은 절대 같이 내지 않는다 — 에이전트가 세운 탭 제목을 덮는다.
+        assert!(!script.contains(r"\033]0;"), "{script}");
+        // 탭별 HISTFILE·resume 힌트·PATH 는 종전 계약 그대로.
+        assert!(
+            script.contains(r#"HISTFILE="$HOME/.mast/history/tab-7" exec bash -l"#),
+            "{script}"
+        );
+        assert!(
+            script.contains(r#"RESUME="$HOME/.mast/resume/tab-7""#),
+            "{script}"
+        );
+        assert!(script.contains("'opencode --session '*"), "{script}");
+        assert!(script.contains("xopencode --session [A-Za-z0-9_-]"), "{script}");
+        assert!(script.contains(r#"PATH="$HOME/.mast/bin:$PATH""#), "{script}");
+        assert!(script.contains("MAST_TAB=7"), "{script}");
+    }
+
+    /// 셸 인용 — 경로가 래퍼 문법을 깨거나 명령을 주입하지 못한다. 탭 cwd 는 셸이
+    /// OSC 7 로 보고한 값이라 이론상 무엇이든 들어올 수 있다.
+    #[test]
+    fn tab_cwd_is_single_quoted_into_the_wrapper() {
+        let req = ShellSpawnReq {
+            cwd: Some("/home/me/it's here; rm -rf /".to_string()),
+            ..ShellSpawnReq::default()
+        };
+        let spec = spawn_spec(&req);
+        let script = spec.args.last().expect("script argv");
+        assert!(
+            script.contains(r"cd -- '/home/me/it'\''s here; rm -rf /' 2>/dev/null"),
+            "{script}"
+        );
+    }
+
+    /// cwd 가 없으면 cd 절 자체가 없다 — `--cd ~` 가 이미 홈에 세워 둔다.
+    #[test]
+    fn without_cwd_there_is_no_cd_clause() {
+        let spec = spawn_spec(&ShellSpawnReq::default());
+        let script = spec.args.last().expect("script argv");
+        assert!(!script.contains("cd --"), "{script}");
+    }
+
+    #[test]
+    fn without_history_tab_the_shell_still_gets_mast_but_no_tab_id() {
+        let spec = spawn_spec(&ShellSpawnReq::default());
+        // 탭 id 가 없으면 MAST 만 물린 로그인 셸 (셸 기본 history 그대로).
+        // PATH 프리펜드는 두 경로에 다 걸린다 — mast CLI 는 탭 id 와 무관하다.
+        // resume 힌트도 없다 — 힌트 파일은 탭 id 로 주소가 정해지므로 id 가 없으면
+        // 읽을 파일 자체가 없다 (없는 id 를 지어내지 않는 규율의 연장).
+        let script = spec.args.last().expect("script argv");
+        assert!(script.contains("COLORTERM=truecolor MAST=1 "), "{script}");
+        assert!(!script.contains("MAST_TAB"), "{script}");
+        assert!(!script.contains("HISTFILE"), "{script}");
+        assert!(!script.contains("RESUME"), "{script}");
+        // OSC 7 은 탭 id 와 무관하게 두 경로 다 낸다 — cwd 추적은 history 와 별개다.
+        assert!(
+            script.contains(r#"PROMPT_COMMAND='printf "\033]7;file://%s\007" "${PWD//%/%25}"'"#),
+            "{script}"
+        );
+    }
+
+    /// 닫힌 탭 정리 스크립트 — 탭마다 history·resume·에이전트 훅 파일과 그 임시 파일을 지우고,
+    /// 여러 탭이 한 번의 `rm` 으로 들어간다 (SessionHost::release_tabs 의 배치 계약).
+    /// 닫힌 탭 정리 스크립트는 통짜로 비교한다 — 짧고 거의 변하지 않는 데다, 여기서
+    /// 틀리면 남의 파일을 지우거나 아무것도 못 지운다. `$HOME` 이 따옴표 안에서
+    /// **셸이 펼칠** 형태로 남아 있는지, glob 이 임시 파일 자리에만 있는지(탭 id 를
+    /// 접두사로 쓸어 담으면 탭 1 을 지울 때 탭 12·13 이 함께 사라진다), 탭 둘이 `rm`
+    /// 하나로 묶이는지가 한 번에 걸린다.
+    #[test]
+    fn release_script_removes_every_per_tab_file_in_one_rm() {
+        assert_eq!(
+            release_script(&[TabId(7), TabId(12)]),
+            concat!(
+                r#"rm -f --"#,
+                r#" "$HOME/.mast/history/tab-7" "$HOME/.mast/resume/tab-7" "$HOME/.mast/resume/tab-7".tmp.*"#,
+                r#" "$HOME/.mast/agent-hooks/tab-7.json" "$HOME/.mast/agent-hooks/tab-7.lock" "$HOME/.mast/agent-hooks/tab-7.diag""#,
+                r#" "$HOME/.mast/agent-hooks/tab-7.json".tmp.* "$HOME/.mast/agent-hooks/tab-7.diag".tmp.*"#,
+                r#" "$HOME/.mast/history/tab-12" "$HOME/.mast/resume/tab-12" "$HOME/.mast/resume/tab-12".tmp.*"#,
+                r#" "$HOME/.mast/agent-hooks/tab-12.json" "$HOME/.mast/agent-hooks/tab-12.lock" "$HOME/.mast/agent-hooks/tab-12.diag""#,
+                r#" "$HOME/.mast/agent-hooks/tab-12.json".tmp.* "$HOME/.mast/agent-hooks/tab-12.diag".tmp.*"#,
+            )
+        );
+    }
+}
+ >/dev/null || cmd= ;; \
+             'opencode --session '*) expr "x$cmd" : 'xopencode --session [A-Za-z0-9_-][A-Za-z0-9_-]*
+/// 스크립트의 문법을 깨거나 명령을 주입하지 못하게 하는 유일한 방어선이다 (탭 cwd 는
+/// 셸이 OSC 7 로 보고한 값이라 이론상 무엇이든 들어올 수 있다).
+#[cfg(windows)]
+fn single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// 시작 표식을 기다리는 기본 마감. 웜 스타트 실측이 163~194ms 라 크게 여유롭지만,
+/// 값을 고르는 부담 자체가 작다 — 마감을 넘겨도 세션을 죽이지 않고 탭에 표시만 하므로
+/// 틀렸을 때의 대가가 경고 한 번뿐이다. 죽이는 설계였다면 WSL 콜드 스타트가 수 초에서
+/// 수 분까지 걸린 보고들 때문에 어떤 값도 정당화할 수 없었다.
+const STARTUP_DEADLINE: Duration = Duration::from_secs(20);
+
+/// 표식을 낼 래퍼가 있는 경로에서만 기본 활성이다. unix 개발 실행은 `$SHELL -l` 을
+/// 직접 띄워(`spawn_spec`) 표식을 낼 자리가 없으므로, 마감을 걸면 느린 rc 가 곧바로
+/// 오탐이 된다.
+#[cfg(windows)]
+fn platform_startup_deadline() -> Option<Duration> {
+    Some(STARTUP_DEADLINE)
+}
+
+#[cfg(not(windows))]
+fn platform_startup_deadline() -> Option<Duration> {
+    None
+}
+
+/// 스폰 자체의 마감 — 이 값이 곧 **탭 하나 때문에 앱 전체가 멈춰 있을 수 있는 최대
+/// 시간**이다. `dispatch` 가 Dispatcher lock 을 쥔 채 스폰하므로(그 함수 주석) 상한이
+/// 없으면 무한이 된다. 프로세스 생성은 웜에서 수십 ms 라 5초는 100배 여유다.
+const SPAWN_DEADLINE: Duration = Duration::from_secs(5);
+
+/// `0` 은 "끄기". 파싱 실패는 부팅을 막지 않고 loud 하게만 알린다 — 오타 하나로
+/// 터미널을 못 쓰게 만드는 것이 잘못된 마감보다 나쁘다.
+fn env_deadline(var: &str, fallback: Option<Duration>) -> Option<Duration> {
+    let Ok(raw) = std::env::var(var) else {
+        return fallback;
+    };
+    match raw.trim().parse::<u64>() {
+        Ok(0) => None,
+        Ok(ms) => Some(Duration::from_millis(ms)),
+        Err(err) => {
+            winlog!("{var}={raw:?} is not a number ({err}); using the default");
+            fallback
+        }
+    }
+}
+
+/// `MAST_STARTUP_DEADLINE_MS` override. 실기 검증이 마감을 줄여 감지 경로를 재현하는
+/// 데 쓰고, 오탐이 잦은 환경에는 탈출구가 된다.
+fn startup_deadline() -> Option<Duration> {
+    static CACHED: OnceLock<Option<Duration>> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        env_deadline("MAST_STARTUP_DEADLINE_MS", platform_startup_deadline())
+    })
+}
+
+/// `MAST_SPAWN_DEADLINE_MS` override.
+fn spawn_deadline() -> Option<Duration> {
+    static CACHED: OnceLock<Option<Duration>> = OnceLock::new();
+    *CACHED.get_or_init(|| env_deadline("MAST_SPAWN_DEADLINE_MS", Some(SPAWN_DEADLINE)))
+}
+
+/// 세션 생성 + sink 등록의 원자 단위. `spawn_shell` 이 직접 부르거나 마감을 씌워
+/// 부르므로, 두 경로가 같은 롤백 규율을 쓰도록 함수로 뺐다.
+fn create_session(
+    sessions: &SessionManager,
+    sinks: &SinkRegistry,
+    app: &AppHandle,
+    router: &Arc<OscRouter>,
+    tab: Option<TabId>,
+    spec: SpawnSpec,
+    opts: SessionOptions,
+) -> anyhow::Result<SessionId> {
+    // sink factory 가 TerminalSink 를 만들어 레지스트리에 등록한다 (id 선발급 계약).
+    // 등록 후 스폰이 실패하면 레지스트리 엔트리를 되감아 고아 sink 를 남기지 않는다 —
+    // factory 밖으로 id 를 꺼내는 Cell.
+    let registered: Cell<Option<SessionId>> = Cell::new(None);
+    let result = sessions.create(spec, opts, |id| {
+        let sink = Arc::new(TerminalSink::new(id, tab, app.clone(), Arc::clone(router)));
+        sinks.insert(id, Arc::clone(&sink));
+        registered.set(Some(id));
+        Box::new(SinkHandle(sink))
+    });
+    if result.is_err() {
+        if let Some(id) = registered.take() {
+            sinks.remove(id);
+        }
+    }
+    result
+}
+
+impl SessionHost for TauriHost {
+    fn spawn_shell(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId> {
+        // 스폰은 Dispatcher lock 아래의 유일한 블로킹 구간이라(모듈 doc), 여기서
+        // 얼마나 걸렸는지가 "앱 전체가 멈춘 것처럼 보였다"류 신고의 첫 단서다.
+        let started = std::time::Instant::now();
+        wintrace!("spawn: starting (tab={:?})", req.history_tab);
+        let result = self.spawn_shell_inner(req);
+        match &result {
+            Ok(session) => wintrace!(
+                "spawn: session {session} up in {} ms",
+                started.elapsed().as_millis()
+            ),
+            Err(err) => wintrace!(
+                "spawn: failed after {} ms: {err:#}",
+                started.elapsed().as_millis()
+            ),
+        }
+        result
+    }
+
+    fn kill(&self, id: SessionId) {
+        // 멱등 계약 (SessionHost rustdoc): 미지·이미 종료된 id 도 무해 —
+        // 양쪽 레지스트리 remove 모두 no-op 으로 끝난다. `SessionManager::remove`
+        // 는 레지스트리 lock 을 놓은 뒤 kill 신호를 보낸다 (코어 계약).
+        self.sinks.remove(id);
+        let _ = self.sessions.remove(id);
+    }
+
+    fn release_tabs(&self, tabs: &[TabId], distro: Option<&str>) {
+        wintrace!("release: {} closed tab(s)", tabs.len());
+        release_records(Arc::clone(&self.records), tabs);
+        release_tab_files(tabs, distro);
+    }
+}
+
+impl TauriHost {
+    fn spawn_shell_inner(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId> {
+        // sink 가 들고 갈 탭 id — exit 이 기록 파일 이름을 여기서만 얻는다
+        // (`history_tab` 은 이 세션이 실릴 탭의 안정 ID 다, 코어 rustdoc).
+        let tab = req.history_tab.map(TabId);
+        let spec = spawn_spec(&req);
+        let opts = SessionOptions {
+            startup_deadline: startup_deadline(),
+            ..SessionOptions::default()
+        };
+        let Some(deadline) = spawn_deadline() else {
+            return create_session(
+                &self.sessions,
+                &self.sinks,
+                &self.app,
+                &self.router,
+                tab,
+                spec,
+                opts,
+            );
+        };
+
+        let sessions = Arc::clone(&self.sessions);
+        let sinks = Arc::clone(&self.sinks);
+        let app = self.app.clone();
+        let router = Arc::clone(&self.router);
+        let late_sessions = Arc::clone(&self.sessions);
+        let late_sinks = Arc::clone(&self.sinks);
+        call_with_deadline(
+            "mast-pty-spawn",
+            deadline,
+            move || create_session(&sessions, &sinks, &app, &router, tab, spec, opts),
+            move |late| {
+                // 마감 뒤에 끝난 스폰은 모델 어디에도 실리지 않는다 — 스폰은 이미
+                // Err 로 돌아갔다 — 그대로 두면 실기 사고에서 몇 시간을 살아남은 그
+                // 좀비가 된다. sink 는 이 경로에서도 탭 id 를 들고 있으므로, 기록을
+                // 남기지 않는 근거는 **여기서 먼저 레지스트리를 비운다**는 순서다:
+                // 뒤늦게 도는 `on_exit` 은 세션을 못 찾아 아무것도 쓰지 않는다.
+                if let Ok(id) = late {
+                    late_sinks.remove(id);
+                    late_sessions.remove(id);
+                }
+            },
+        )
+        .unwrap_or_else(|| {
+            Err(anyhow!(
+                "shell spawn did not finish within {deadline:?}; it will be cleaned up if it \
+                 ever completes"
+            ))
+        })
+    }
+}
+
+/// 닫힌 탭들의 **기록 파일** 삭제 (ADR-0018 수명 규칙) — 셸측 자원
+/// ([`release_tab_files`])과 달리 로컬 디스크라 `wsl.exe` 왕복과 무관하지만, 호출이
+/// Dispatcher lock 아래라(이 파일 모듈 doc) 여기서 동기로 지우지 않고 스레드로 넘긴다.
+/// unix 개발 실행에도 기록은 쌓이므로 cfg 로 가르지 않는다.
+///
+/// 실패는 로그로만 쓴다 — 남은 파일은 다음 부팅의 sweep([`mast_core::record::RecordStore::sweep`])
+/// 이 keep 집합 밖으로 보고 걷어 간다. **같은 sweep 이 덮는 창이 하나 더 있다**: 탭을
+/// 닫는 순간 그 탭의 세션이 막 끝나 있으면, waiter 스레드가 `take_record` 와 파일 쓰기
+/// 사이에 있을 수 있어 여기서 지운 파일이 그 뒤에 다시 쓰인다. 닫힌 탭은 keep 집합에
+/// 없으므로 다음 부팅의 sweep 이 걷어 간다 (ADR-0018 accepted limits).
+fn release_records(records: Arc<RecordStore>, tabs: &[TabId]) {
+    let tabs: Vec<TabId> = tabs.to_vec();
+    let spawned = std::thread::Builder::new()
+        .name("mast-release-records".to_string())
+        .spawn(move || {
+            for tab in tabs {
+                if let Err(err) = records.remove(tab) {
+                    winlog!("could not remove the record of closed tab {}: {err}", tab.0);
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        winlog!("could not start the record release thread: {err}");
+    }
+}
+
+/// 닫힌 탭들의 셸측 자원 삭제 — 탭별 `HISTFILE` 과 resume 힌트, 그리고 훅이
+/// 쓰다 만 힌트 임시 파일(`tab-<id>.tmp.<pid>`)까지.
+///
+/// **Windows 에서 경로를 조립하지 않고 WSL 안에서 `$HOME` 을 펼친다.** 이 디렉터리를
+/// 만드는 쪽(`bash_argv` 의 `mkdir -p`)이 같은 이유로 같은 규율을 따른다 — 리눅스
+/// 홈 위치는 배포판·사용자마다 다르고, UNC 로 추측하면 틀렸을 때 조용히 아무것도
+/// 지우지 않는다.
+///
+/// **탭 목록 전체가 한 번의 wsl.exe 왕복이다.** 워크스페이스 하나를 닫으면 탭이
+/// 열몇 개씩 사라지는데, 그때 wsl.exe 를 그만큼 동시에 띄우는 것이 부팅 재스폰
+/// 사고의 모양이었다 (ADR-0010 개정).
+///
+/// **호출은 Dispatcher lock 아래다** (이 파일 모듈 doc) — 그래서 왕복을 분리 스레드로
+/// 넘기고 즉시 돌아온다. 결과는 로그로만 쓴다 — 실패해도 사용자가 할 수 있는 일이
+/// 없다. 앱이 이 직후 종료하면 삭제가 통째로 유실되는 창도 남는데, 둘 다 부팅 시
+/// sweep 이 덮을 자리다 (백로그, ADR-0013 "Consequences").
+#[cfg(windows)]
+fn release_tab_files(tabs: &[TabId], distro: Option<&str>) {
+    use std::os::windows::process::CommandExt;
+
+    // 콘솔 창 억제 — boot.rs·commands.rs 의 wsl.exe 호출과 같은 플래그다.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let script = release_script(tabs);
+    let distro = resolve_distro(distro.map(str::to_string));
+    let count = tabs.len();
+    let spawned = std::thread::Builder::new()
+        .name("mast-release-tabs".to_string())
+        .spawn(move || {
+            let mut cmd = std::process::Command::new("wsl.exe");
+            if let Some(distro) = &distro {
+                cmd.arg("-d").arg(distro);
+            }
+            // `--exec` 인 이유는 spawn_spec 과 같다 — 명령이 배포판 기본 셸을 한 번
+            // 더 거치면 스크립트가 다른 문법으로 평가된다.
+            let status = cmd
+                .arg("--exec")
+                .arg("bash")
+                .arg("-c")
+                .arg(&script)
+                .creation_flags(CREATE_NO_WINDOW)
+                .status();
+            match status {
+                Ok(status) if status.success() => {}
+                Ok(status) => {
+                    winlog!("releasing {count} closed tab(s) exited with {status}")
+                }
+                Err(err) => winlog!("could not release {count} closed tab(s): {err}"),
+            }
+        });
+    if let Err(err) = spawned {
+        winlog!("could not start the release thread for {count} closed tab(s): {err}");
+    }
+}
+
+/// 삭제 스크립트 본문. 탭 하나가 남기는 파일은 탭별 `HISTFILE`, resume 힌트, 에이전트 훅
+/// 디스패처의 상태·lock·진단 파일(`~/.mast/agent-hooks/`), 그리고 쓰다 죽은 프로세스가 남긴
+/// 임시 파일(`<파일>.tmp.<pid>`)이다.
+///
+/// 탭 id 는 10진수 `u64` 라 셸 메타문자가 될 수 없다 — 그대로 박아도 안전하다.
+/// `.tmp.*` 만 따옴표 밖에 두어 glob 이 살아 있고, 매치가 없으면 그 리터럴이 그대로
+/// 남는데 `rm -f` 는 없는 파일에 침묵한다 (그래서 없는 파일도 조용히 지나간다).
+#[cfg(windows)]
+fn release_script(tabs: &[TabId]) -> String {
+    let mut script = String::from("rm -f --");
+    for tab in tabs {
+        let id = tab.0;
+        script.push_str(&format!(
+            r#" "$HOME/.mast/history/tab-{id}" "$HOME/.mast/resume/tab-{id}" "$HOME/.mast/resume/tab-{id}".tmp.*"#
+        ));
+        script.push_str(&format!(
+            r#" "$HOME/.mast/agent-hooks/tab-{id}.json" "$HOME/.mast/agent-hooks/tab-{id}.lock" "$HOME/.mast/agent-hooks/tab-{id}.diag" "$HOME/.mast/agent-hooks/tab-{id}.json".tmp.* "$HOME/.mast/agent-hooks/tab-{id}.diag".tmp.*"#
+        ));
+    }
+    script
+}
+
+/// unix 개발 실행에는 지울 것이 없다 — `spawn_spec` 이 탭별 `HISTFILE` 을 물리지
+/// 않으므로(그 함수 주석) 탭 전용 파일 자체가 만들어지지 않는다.
+#[cfg(not(windows))]
+fn release_tab_files(_tabs: &[TabId], _distro: Option<&str>) {}
+
+/// 스폰 명령 구성 테스트 — Windows 대상에서만 성립하는 argv 계약이라 그 타깃에서만
+/// 컴파일·실행된다 (unix 개발 경로는 `$SHELL -l` 무변경).
+///
+/// 단언이 통짜 문자열 비교가 아니라 조각별 계약인 이유: 종전의 통짜 비교는 **CI 가 이
+/// 크레이트의 테스트를 돌리지 않아** 시작 표식(d21d9a8)이 들어온 뒤로 조용히 낡아 있었다.
+/// 못 도는 정밀한 단언보다 무엇이 왜 필요한지 말하는 단언이 낫고, 실제로 돌리는 일은
+/// `ci.yml` 의 Windows 테스트 스텝이 맡는다.
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_tab_wraps_bash_with_mast_env_and_per_tab_histfile() {
+        let req = ShellSpawnReq {
+            cwd: Some("/home/me/proj".to_string()),
+            distro: Some("Ubuntu".to_string()),
+            history_tab: Some(7),
+            ..ShellSpawnReq::default()
+        };
+        let spec = spawn_spec(&req);
+        assert_eq!(spec.program, "wsl.exe");
+        // distro 는 `-d`, cwd 는 **`--cd ~` + 래퍼의 cd** 로 간다 (spawn_spec 주석).
+        assert_eq!(
+            &spec.args[..6],
+            &[
+                "--cd".to_string(),
+                "~".to_string(),
+                "-d".to_string(),
+                "Ubuntu".to_string(),
+                "--exec".to_string(),
+                "bash".to_string(),
+            ]
+        );
+        let script = spec.args.last().expect("script argv");
+
+        // 시작 표식은 반드시 맨 앞 — 뒤따르는 어떤 실패보다 먼저 도달을 증명해야 한다.
+        assert!(
+            script.starts_with(r"printf '\033]777;mast-started\007'; "),
+            "{script}"
+        );
+        // 목적지 cwd 는 인용된 채로 래퍼 안에서 cd 되고, 실패해도 셸은 뜬다.
+        assert!(script.contains(r"{ cd -- '/home/me/proj' 2>/dev/null"), "{script}");
+        assert!(script.contains("is gone; starting in $HOME"), "{script}");
+        // OSC 7 emitter (ADR-0011) — 이게 빠지면 탭 cwd 가 다시 얼어붙는다.
+        assert!(
+            script.contains(r#"PROMPT_COMMAND='printf "\033]7;file://%s\007" "${PWD//%/%25}"'"#),
+            "{script}"
+        );
+        // 제목(OSC 0)은 절대 같이 내지 않는다 — 에이전트가 세운 탭 제목을 덮는다.
+        assert!(!script.contains(r"\033]0;"), "{script}");
+        // 탭별 HISTFILE·resume 힌트·PATH 는 종전 계약 그대로.
+        assert!(
+            script.contains(r#"HISTFILE="$HOME/.mast/history/tab-7" exec bash -l"#),
+            "{script}"
+        );
+        assert!(
+            script.contains(r#"RESUME="$HOME/.mast/resume/tab-7""#),
+            "{script}"
+        );
+        assert!(script.contains("'opencode --session '*"), "{script}");
+        assert!(script.contains("xopencode --session [A-Za-z0-9_-]"), "{script}");
+        assert!(script.contains(r#"PATH="$HOME/.mast/bin:$PATH""#), "{script}");
+        assert!(script.contains("MAST_TAB=7"), "{script}");
+    }
+
+    /// 셸 인용 — 경로가 래퍼 문법을 깨거나 명령을 주입하지 못한다. 탭 cwd 는 셸이
+    /// OSC 7 로 보고한 값이라 이론상 무엇이든 들어올 수 있다.
+    #[test]
+    fn tab_cwd_is_single_quoted_into_the_wrapper() {
+        let req = ShellSpawnReq {
+            cwd: Some("/home/me/it's here; rm -rf /".to_string()),
+            ..ShellSpawnReq::default()
+        };
+        let spec = spawn_spec(&req);
+        let script = spec.args.last().expect("script argv");
+        assert!(
+            script.contains(r"cd -- '/home/me/it'\''s here; rm -rf /' 2>/dev/null"),
+            "{script}"
+        );
+    }
+
+    /// cwd 가 없으면 cd 절 자체가 없다 — `--cd ~` 가 이미 홈에 세워 둔다.
+    #[test]
+    fn without_cwd_there_is_no_cd_clause() {
+        let spec = spawn_spec(&ShellSpawnReq::default());
+        let script = spec.args.last().expect("script argv");
+        assert!(!script.contains("cd --"), "{script}");
+    }
+
+    #[test]
+    fn without_history_tab_the_shell_still_gets_mast_but_no_tab_id() {
+        let spec = spawn_spec(&ShellSpawnReq::default());
+        // 탭 id 가 없으면 MAST 만 물린 로그인 셸 (셸 기본 history 그대로).
+        // PATH 프리펜드는 두 경로에 다 걸린다 — mast CLI 는 탭 id 와 무관하다.
+        // resume 힌트도 없다 — 힌트 파일은 탭 id 로 주소가 정해지므로 id 가 없으면
+        // 읽을 파일 자체가 없다 (없는 id 를 지어내지 않는 규율의 연장).
+        let script = spec.args.last().expect("script argv");
+        assert!(script.contains("COLORTERM=truecolor MAST=1 "), "{script}");
+        assert!(!script.contains("MAST_TAB"), "{script}");
+        assert!(!script.contains("HISTFILE"), "{script}");
+        assert!(!script.contains("RESUME"), "{script}");
+        // OSC 7 은 탭 id 와 무관하게 두 경로 다 낸다 — cwd 추적은 history 와 별개다.
+        assert!(
+            script.contains(r#"PROMPT_COMMAND='printf "\033]7;file://%s\007" "${PWD//%/%25}"'"#),
+            "{script}"
+        );
+    }
+
+    /// 닫힌 탭 정리 스크립트 — 탭마다 history·resume·에이전트 훅 파일과 그 임시 파일을 지우고,
+    /// 여러 탭이 한 번의 `rm` 으로 들어간다 (SessionHost::release_tabs 의 배치 계약).
+    /// 닫힌 탭 정리 스크립트는 통짜로 비교한다 — 짧고 거의 변하지 않는 데다, 여기서
+    /// 틀리면 남의 파일을 지우거나 아무것도 못 지운다. `$HOME` 이 따옴표 안에서
+    /// **셸이 펼칠** 형태로 남아 있는지, glob 이 임시 파일 자리에만 있는지(탭 id 를
+    /// 접두사로 쓸어 담으면 탭 1 을 지울 때 탭 12·13 이 함께 사라진다), 탭 둘이 `rm`
+    /// 하나로 묶이는지가 한 번에 걸린다.
+    #[test]
+    fn release_script_removes_every_per_tab_file_in_one_rm() {
+        assert_eq!(
+            release_script(&[TabId(7), TabId(12)]),
+            concat!(
+                r#"rm -f --"#,
+                r#" "$HOME/.mast/history/tab-7" "$HOME/.mast/resume/tab-7" "$HOME/.mast/resume/tab-7".tmp.*"#,
+                r#" "$HOME/.mast/agent-hooks/tab-7.json" "$HOME/.mast/agent-hooks/tab-7.lock" "$HOME/.mast/agent-hooks/tab-7.diag""#,
+                r#" "$HOME/.mast/agent-hooks/tab-7.json".tmp.* "$HOME/.mast/agent-hooks/tab-7.diag".tmp.*"#,
+                r#" "$HOME/.mast/history/tab-12" "$HOME/.mast/resume/tab-12" "$HOME/.mast/resume/tab-12".tmp.*"#,
+                r#" "$HOME/.mast/agent-hooks/tab-12.json" "$HOME/.mast/agent-hooks/tab-12.lock" "$HOME/.mast/agent-hooks/tab-12.diag""#,
+                r#" "$HOME/.mast/agent-hooks/tab-12.json".tmp.* "$HOME/.mast/agent-hooks/tab-12.diag".tmp.*"#,
+            )
+        );
+    }
+}
+ >/dev/null || cmd= ;; \
+             *) cmd= ;; esac \
+             && if [ -n "$cmd" ]; then printf '%s\\n' "$cmd" >> "$HOME/.mast/history/tab-{tab}"; \
+             printf '\\033[2m[mast] resume previous agent: %s\\033[0m\\n' "$cmd"; fi \
+             && export MAST_TAB={tab} HISTFILE="$HOME/.mast/history/tab-{tab}" \
+             && exec {shell} -l"
+        ),
+        None => format!("{common} && exec {shell} -l"),
+    };
+
+    // PATH_PREFIX 는 문서용 상수이기도 하고 wrapper 와 값이 갈라지지 않는지 컴파일 시
+    // 눈에 보이게 유지한다. format 문자열은 export 형태가 필요해 별도로 적는다.
+    debug_assert!(PATH_PREFIX.contains("/opt/homebrew/bin"));
+    vec!["-c".to_owned(), script]
 }
 
 /// 셸 작은따옴표 인용 — 값 안의 `'` 를 `'\''` 로 끊어 붙인다. 경로가 우리 래퍼
