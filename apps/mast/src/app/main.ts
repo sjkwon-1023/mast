@@ -47,6 +47,7 @@ import type {
 } from "../shared/types";
 import { initUpdateNotice as startUpdateNotice } from "./update-notice";
 import { installShortcutGuide } from "./shortcut-guide";
+import { primaryModifier } from "../shared/platform";
 
 declare global {
   interface Window {
@@ -65,12 +66,12 @@ declare global {
   }
 }
 
-// F5는 터미널 앱에 전달하고 Ctrl+Shift+R만 WebView 리로드로 가로챈다.
+// F5는 터미널 앱에 전달하고 primary+Shift+R만 WebView 리로드로 가로챈다.
 function installReloadKey(): void {
   window.addEventListener(
     "keydown",
     (ev) => {
-      if (ev.ctrlKey && ev.shiftKey && !ev.altKey && ev.code === "KeyR") {
+      if (primaryModifier(ev) && ev.shiftKey && !ev.altKey && ev.code === "KeyR") {
         ev.preventDefault();
         if (!hasMarkdownDrafts() || window.confirm("Reload with unsaved Markdown edits? Drafts will be restored from this session.")) location.reload();
       }
