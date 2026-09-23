@@ -288,14 +288,12 @@ fn bash_argv(history_tab: Option<u64>, cwd: Option<&str>) -> Vec<String> {
 }
 
 /// macOS bootstrap. Windows WSL wrapper 와 같은 started/resume/MAST_TAB 계약만
-/// 공유하고, WSL·ConPTY 전용 테마 동기화와 PROMPT_COMMAND 는 가져오지 않는다.
+/// 공유하고, WSL·ConPTY 전용 테마 동기화는 가져오지 않는다.
 /// `MAST_TTY` 는 macOS에 /proc 이 없어서 에이전트 훅이 controlling tty 를 잃은 뒤에도
 /// 원래 pane 으로 OSC 상태를 돌려보낼 수 있게 하는 힌트다.
 #[cfg(target_os = "macos")]
 fn macos_shell_argv(history_tab: Option<u64>, cwd: Option<&str>) -> Vec<String> {
     const STARTED: &str = r"printf '\033]777;mast-started\007'";
-    const PATH_PREFIX: &str =
-        r#"PATH="$HOME/.mast/bin:/opt/homebrew/bin:/usr/local/bin:$PATH""#;
 
     let shell = single_quote(&macos_shell());
     let cd_clause = match cwd {
@@ -303,26 +301,28 @@ fn macos_shell_argv(history_tab: Option<u64>, cwd: Option<&str>) -> Vec<String> 
         Some(path) => {
             let quoted = single_quote(path);
             format!(
-                "{{ cd -- {quoted} 2>/dev/null \
-                 || {{ printf '\\033[2m[mast] %s is gone; starting in $HOME\\033[0m\\n' {quoted}; cd -- "$HOME"; }}; }}; "
+                r#"{{ cd -- {quoted} 2>/dev/null || {{ printf '\033[2m[mast] %s is gone; starting in $HOME\033[0m\n' {quoted}; cd -- "$HOME"; }}; }}; "#
             )
         }
     };
 
+    // Tauri GUI apps do not reliably inherit the user's login-shell PATH. Keep the
+    // Mast helper first, then the two conventional Homebrew prefixes, then the inherited
+    // system PATH. The actual interactive shell still runs as a login shell below.
     let common = format!(
-        "{STARTED}; {cd_clause}mkdir -p "$HOME/.mast/history" "$HOME/.mast/resume" "$HOME/.mast/agent-hooks" \
-         && MAST_TTY="$(tty 2>/dev/null || true)" \
-         && export PATH="$HOME/.mast/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" COLORTERM=truecolor MAST=1 \
-         && if [ -n "$MAST_TTY" ] && [ "$MAST_TTY" != 'not a tty' ]; then export MAST_TTY; else unset MAST_TTY; fi"
+        r#"{STARTED}; {cd_clause}mkdir -p "$HOME/.mast/history" "$HOME/.mast/resume" "$HOME/.mast/agent-hooks" && MAST_TTY="$(tty 2>/dev/null || true)" && export PATH="$HOME/.mast/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" COLORTERM=truecolor MAST=1 && if [ -n "$MAST_TTY" ] && [ "$MAST_TTY" != 'not a tty' ]; then export MAST_TTY; else unset MAST_TTY; fi"#
     );
 
     let script = match history_tab {
         Some(tab) => format!(
-            "{common} \
-             && RESUME="$HOME/.mast/resume/tab-{tab}" && cmd= \
-             && if [ -s "$RESUME" ]; then IFS= read -r cmd < "$RESUME" || true; fi \
-             && case "$cmd" in \
-             'claude --resume '*) expr "x$cmd" : 'xclaude --resume [A-Za-z0-9_-][A-Za-z0-9_-]*
+            r#"{common} && RESUME="$HOME/.mast/resume/tab-{tab}" && cmd= && if [ -s "$RESUME" ]; then IFS= read -r cmd < "$RESUME" || true; fi && case "$cmd" in 'claude --resume '*) expr "x$cmd" : 'xclaude --resume [A-Za-z0-9_-][A-Za-z0-9_-]*$' >/dev/null || cmd= ;; 'codex resume '*) expr "x$cmd" : 'xcodex resume [A-Za-z0-9_-][A-Za-z0-9_-]*$' >/dev/null || cmd= ;; 'opencode --session '*) expr "x$cmd" : 'xopencode --session [A-Za-z0-9_-][A-Za-z0-9_-]*$' >/dev/null || cmd= ;; *) cmd= ;; esac && if [ -n "$cmd" ]; then printf '%s\n' "$cmd" >> "$HOME/.mast/history/tab-{tab}"; printf '\033[2m[mast] resume previous agent: %s\033[0m\n' "$cmd"; fi && export MAST_TAB={tab} HISTFILE="$HOME/.mast/history/tab-{tab}" && exec {shell} -l"#
+        ),
+        None => format!(r#"{common} && exec {shell} -l"#),
+    };
+
+    vec!["-c".to_owned(), script]
+}
+
 /// 스크립트의 문법을 깨거나 명령을 주입하지 못하게 하는 유일한 방어선이다 (탭 cwd 는
 /// 셸이 OSC 7 로 보고한 값이라 이론상 무엇이든 들어올 수 있다).
 #[cfg(any(windows, target_os = "macos"))]
