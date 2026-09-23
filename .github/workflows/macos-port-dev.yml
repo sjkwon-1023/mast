@@ -1,4 +1,4 @@
-name: macOS port development workspace
+name: macOS port development validation
 on:
   push:
     branches: [feat/macos-apple-silicon]
@@ -7,23 +7,38 @@ on:
       - tooling/macos-port-apply.py
 permissions:
   contents: write
+concurrency:
+  group: mast-native-port-development
+  cancel-in-progress: true
 jobs:
   workspace:
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.head.outputs.sha }}
+      ready: ${{ steps.head.outputs.ready }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
+          ref: feat/macos-apple-silicon
           fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - name: Apply development patch when present
         if: ${{ hashFiles('tooling/macos-port-apply.py') != '' }}
         run: |
           python3 tooling/macos-port-apply.py
-          rm -f tooling/macos-port-apply.py .github/workflows/macos-port-dev.yml
+          rm tooling/macos-port-apply.py
+          rustfmt --edition 2021 --config skip_children=true crates/mast-core/src/platform/*.rs crates/mast-core/tests/session_macos.rs apps/mast/src-tauri/src/platform/*.rs
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git commit -m 'feat: connect native macOS platform support'
           git push origin HEAD:feat/macos-apple-silicon
+      - id: head
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if test -f apps/mast/src-tauri/src/platform/macos.rs; then echo 'ready=true' >> "$GITHUB_OUTPUT"; fi
       - name: Export development workspace
         run: tar --exclude=.git --exclude=node_modules --exclude=target -czf "$RUNNER_TEMP/mast-workspace.tar.gz" .
       - uses: actions/upload-artifact@v4
@@ -31,3 +46,62 @@ jobs:
           name: mast-development-workspace
           path: ${{ runner.temp }}/mast-workspace.tar.gz
           retention-days: 1
+  native:
+    needs: workspace
+    if: needs.workspace.outputs.ready == 'true'
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.workspace.outputs.sha }}
+      - name: Verify native architecture
+        run: test "$(uname -m)" = arm64
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/mast/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Native core tests
+        id: core
+        continue-on-error: true
+        run: cargo test -p mast-core --locked
+      - name: Native desktop compile and tests
+        id: desktop
+        continue-on-error: true
+        run: cargo test -p mast-app --locked
+      - name: Shell, CLI, agent and setup adapter tests
+        id: adapters
+        continue-on-error: true
+        run: python3 -m unittest discover -s scripts/macos/tests -v
+      - name: Frontend build and tests
+        id: frontend
+        continue-on-error: true
+        working-directory: apps/mast
+        run: |
+          npm ci
+          npm run build
+          npm test
+      - name: Native core clippy
+        id: clippy
+        continue-on-error: true
+        run: cargo clippy -p mast-core --all-targets --locked -- -D warnings
+      - name: Validate lockfile remains unchanged
+        id: lock
+        continue-on-error: true
+        run: git diff --exit-code -- Cargo.lock
+      - name: Require all native validation steps
+        if: always()
+        env:
+          RESULTS: '${{ steps.core.outcome }} ${{ steps.desktop.outcome }} ${{ steps.adapters.outcome }} ${{ steps.frontend.outcome }} ${{ steps.clippy.outcome }} ${{ steps.lock.outcome }}'
+        run: |
+          echo "$RESULTS"
+          for result in $RESULTS; do test "$result" = success || exit 1; done
