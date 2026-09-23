@@ -57,10 +57,21 @@ export function isCopySelectionKey(ev: KeyboardEvent, hasSelection: boolean, mac
   return ev.key.toLowerCase() === "c";
 }
 
+// 키를 가로채 클립보드를 직접 읽어 붙여넣을지. macOS 에서는 가로채지 않는다 — WebKit 은
+// 스크립트의 클립보드 읽기(`navigator.clipboard.readText`)마다 "Paste" 확인 버튼을 띄운다.
+// 대신 Cmd+V 가 Edit 메뉴의 네이티브 붙여넣기로 가서 xterm 입력창에 `paste` 이벤트로
+// 도착하고, xterm 이 bracketed paste 로 처리한다(이미지만 있는 경우는 isImageOnlyPaste).
 export function isPasteKey(ev: KeyboardEvent, mac = IS_MAC): boolean {
-  if (ev.isComposing) return false;
+  if (mac || ev.isComposing) return false;
   if (primaryModifier(ev, mac) && ev.key.toLowerCase() === "v") return true;
-  return !mac && ev.key === "Insert" && ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey;
+  return ev.key === "Insert" && ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey;
+}
+
+// 붙여넣기 데이터에 텍스트가 없고 이미지만 있는지. 그때는 Ctrl+V(\x16)를 PTY 로 보내
+// 에이전트가 클립보드 이미지를 직접 읽게 한다 — Windows 경로의 clipboardHasImage 와 같은 규칙.
+export function isImageOnlyPaste(data: Pick<DataTransfer, "types" | "getData">): boolean {
+  if (data.getData("text/plain").length > 0) return false;
+  return Array.from(data.types).some((type) => type.startsWith("image/") || type === "Files");
 }
 
 export async function copyTerminalSelection(term: Terminal): Promise<void> {

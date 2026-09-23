@@ -24,10 +24,12 @@ import {
   unregisterTerminalFontTarget,
 } from "./settings";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { IS_MAC } from "../../shared/platform";
 import {
   shouldOpenLink,
   isCopySelectionKey,
   isPasteKey,
+  isImageOnlyPaste,
   copyTerminalSelection,
   clipboardHasImage,
   altArrowSequence,
@@ -318,6 +320,20 @@ export class TerminalView {
   }
 
   private installCopyPasteKeys(): void {
+    // macOS 는 네이티브 붙여넣기(paste 이벤트)를 xterm 이 처리한다(isPasteKey 참조). 이미지만
+    // 있는 붙여넣기만 xterm 보다 먼저(capture) 가로채 Ctrl+V 로 바꾼다.
+    if (IS_MAC) {
+      this.term.element?.addEventListener(
+        "paste",
+        (ev) => {
+          if (!ev.clipboardData || !isImageOnlyPaste(ev.clipboardData)) return;
+          ev.preventDefault();
+          ev.stopPropagation();
+          this.enqueueWrite("\x16");
+        },
+        { capture: true },
+      );
+    }
     this.term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown" || ev.isComposing) return true;
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { keyAction, shortcutBadge, shortcutLabel, type KeySpec } from "./keys";
-import { isCopySelectionKey, isPasteKey } from "../features/terminal/interaction";
+import { isCopySelectionKey, isImageOnlyPaste, isPasteKey } from "../features/terminal/interaction";
 
 const key = (value: string, extra: Partial<KeySpec> = {}): KeySpec => ({
   key: value, ctrl: false, alt: false, shift: false, meta: false, isComposing: false, ...extra,
@@ -61,12 +61,19 @@ describe("native Mac shortcuts", () => {
     expect(isCopySelectionKey(event("c", { ctrlKey: true }), true, false)).toBe(true);
     expect(isCopySelectionKey(event("c", { metaKey: true, isComposing: true }), true, true)).toBe(false);
   });
-  it("pastes with Cmd on Mac, retaining the existing Windows aliases", () => {
-    expect(isPasteKey(event("v", { metaKey: true }), true)).toBe(true);
+  it("leaves Cmd+V to the native paste on Mac and keeps the Windows paste keys", () => {
+    expect(isPasteKey(event("v", { metaKey: true }), true)).toBe(false);
     expect(isPasteKey(event("v", { ctrlKey: true }), true)).toBe(false);
     expect(isPasteKey(event("v", { ctrlKey: true }), false)).toBe(true);
     expect(isPasteKey(event("Insert", { shiftKey: true }), false)).toBe(true);
     expect(isPasteKey(event("Insert", { shiftKey: true }), true)).toBe(false);
-    expect(isPasteKey(event("v", { metaKey: true, isComposing: true }), true)).toBe(false);
+  });
+  it("treats a paste with no text but an image as an image paste", () => {
+    const data = (types: string[], text = "") => ({ types, getData: (t: string) => (t === "text/plain" ? text : "") });
+    expect(isImageOnlyPaste(data(["image/png"]))).toBe(true);
+    expect(isImageOnlyPaste(data(["Files"]))).toBe(true);
+    expect(isImageOnlyPaste(data(["text/plain", "image/png"], "caption"))).toBe(false);
+    expect(isImageOnlyPaste(data(["text/plain"], "hello"))).toBe(false);
+    expect(isImageOnlyPaste(data([]))).toBe(false);
   });
 });
