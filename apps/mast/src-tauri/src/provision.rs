@@ -33,7 +33,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 18;
+const SETUP_VERSION: u32 = 19;
 
 /// 설치 스크립트 heredoc 에 통째로 들어가는 레포 파일들: (자리표시자, heredoc 종결 줄, 내용).
 ///
@@ -266,7 +266,7 @@ fn default_distro_name() -> Option<String> {
     crate::commands::default_distro().ok()
 }
 
-/// unix 에는 WSL 기본 배포판 개념이 없다 (`run` 의 no-op 과 같은 대칭).
+/// macOS와 개발용 unix에는 WSL 기본 배포판 개념이 없다.
 #[cfg(not(windows))]
 fn default_distro_name() -> Option<String> {
     None
@@ -338,7 +338,7 @@ fn run(distro: Option<&str>) -> Result<(), String> {
 /// 체크아웃(core.autocrlf)이 임베드한 .py 를 CRLF 로 물고 오면 WSL 안의 bash·python 이 '\r' 를
 /// 토큰의 일부로 읽으므로 (.gitattributes 가 커버하는 건 *.sh 뿐이다) 치환 뒤에 LF 로 정규화한다.
 /// `apps/mast/tests/setup-script.ts` 가 같은 치환을 따른다.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn setup_script() -> String {
     let mut script = SETUP_SCRIPT.replace(VERSION_PLACEHOLDER, &SETUP_VERSION.to_string());
     for (placeholder, _delimiter, file) in EMBEDDED_FILES {
@@ -365,10 +365,60 @@ fn decode_message(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// unix(개발 실행)에는 프로비저닝 대상이 없다 — WSL distro 개념이 없고, 개발자
-/// 자신의 `~/.claude` 를 앱이 말없이 고치는 것은 원치 않는 부수효과다. 이 기능의
-/// 실제 대상은 Windows 실행이다 (`host.rs::spawn_spec` 의 cfg 분기와 같은 대칭).
-#[cfg(not(windows))]
+/// macOS 제품 경로는 WSL을 거치지 않고 같은 설치 스크립트를 로컬 bash에 흘린다.
+/// GUI 앱의 PATH는 로그인 셸과 다를 수 있으므로 Apple Silicon Homebrew 위치를
+/// 프로비저닝 프로세스에도 보완한다.
+#[cfg(target_os = "macos")]
+fn run(_distro: Option<&str>) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let inherited = std::env::var("PATH").unwrap_or_default();
+    let path = format!("/opt/homebrew/bin:/usr/local/bin:{inherited}");
+    let mut child = Command::new("/bin/bash")
+        .arg("-s")
+        .env("PATH", path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("cannot run /bin/bash for macOS provisioning: {err}"))?;
+
+    let script = setup_script();
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "macOS provisioning stdin pipe missing".to_owned())?;
+        if let Err(err) = stdin.write_all(script.as_bytes()) {
+            if err.kind() != std::io::ErrorKind::BrokenPipe {
+                return Err(format!("cannot stream the macOS setup script: {err}"));
+            }
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|err| format!("cannot wait for macOS provisioning: {err}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.trim();
+    if output.status.success() {
+        if !stderr.is_empty() {
+            winlog!("provisioning notice: {stderr}");
+        }
+        Ok(())
+    } else {
+        Err(format!(
+            "'/bin/bash -s' exited with {}{}{}",
+            output.status,
+            if stderr.is_empty() { "" } else { ": " },
+            stderr
+        ))
+    }
+}
+
+/// 지원 대상이 아닌 unix 개발 실행은 기존의 no-op 규율을 유지한다.
+#[cfg(all(not(windows), not(target_os = "macos")))]
 fn run(_distro: Option<&str>) -> Result<(), String> {
     Ok(())
 }
