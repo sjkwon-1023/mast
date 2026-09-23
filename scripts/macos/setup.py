@@ -36,10 +36,10 @@ def atomic(path, data, mode=0o600):
             os.unlink(temporary)
 
 
-def bounded_run(args, seconds=8):
+def bounded_run(args, seconds=8, env=None):
     # 깨진 버전 shim 때문에 자식이 우리 출력 파이프를 연 채 남으면 안 된다.
     process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, start_new_session=True)
+                               stderr=subprocess.STDOUT, start_new_session=True, env=env)
     try:
         output, _ = process.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
@@ -188,6 +188,77 @@ def connect_agents(errors):
             atomic(marker, b"native agent integration installed\n")
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             errors.append(agent + ": " + str(error))
+
+    connect_agy(errors)
+
+
+def connect_agy(errors):
+    home = HOME / ".gemini/antigravity-cli"
+    marker = MAST / (".setup-macos-v%s-agy" % VERSION)
+    if not home.is_dir() or marker.exists():
+        return
+
+    if (MAST / "no-agy-hooks").exists():
+        try:
+            atomic(marker, b"native agy integration opted out\n")
+        except OSError as error:
+            errors.append("agy: " + str(error))
+        return
+
+    readable = []
+    paths = list(candidates("agy"))
+    for path in paths:
+        env = dict(os.environ)
+        search_path = [str(Path(path).parent)]
+        if env.get("PATH"):
+            search_path.append(env["PATH"])
+        env["PATH"] = os.pathsep.join(search_path)
+        try:
+            code, output = bounded_run([path, "--version"], seconds=2, env=env)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            print("agy: could not read version from %s: %s" % (path, error))
+            continue
+
+        version = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", output)
+        if code or not version:
+            reason = "command exited %d" % code if code else "no x.y.z version found"
+            print("agy: could not read version from %s (%s)" % (path, reason))
+            continue
+        readable.append((tuple(map(int, version.groups())), path))
+
+    if not paths:
+        print("agy version unknown: no executable candidates found; continuing hook setup")
+    elif not readable:
+        print("agy version unknown: no readable candidate; continuing hook setup")
+    else:
+        version, path = min(readable, key=lambda item: item[0])
+        if version < (1, 1, 10):
+            print(
+                "agy %s at %s is below 1.1.10; its Stop hook may not run. "
+                "Update this copy or remove it. Continuing hook installation."
+                % (".".join(map(str, version)), path)
+            )
+
+    config = HOME / ".gemini/config/hooks.json"
+    try:
+        code, output = bounded_run(
+            [sys.executable, "-I", str(BIN / "mast-hooks-merge.py"), "agy", str(config)]
+        )
+        if output.strip():
+            print(output.strip())
+        if code == 3:
+            marker_contents = b"native agy integration completed after content refusal\n"
+            print(
+                "agy hooks were left unchanged. Repair the hooks file, then remove %s "
+                "to retry Mast's agy integration." % marker
+            )
+        elif code:
+            raise ValueError("agy hooks were not merged (exit %d)" % code)
+        else:
+            marker_contents = b"native agy integration installed\n"
+        atomic(marker, marker_contents)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        errors.append("agy: " + str(error))
 
 
 if __name__ == "__main__":

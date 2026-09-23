@@ -47,6 +47,7 @@ const ASSETS: &[(&str, &str)] = &[
     asset!("bin/mast-setup.py", "macos/setup.py"),
     asset!("bin/mast-agent-hook.py", "wsl/mast-agent-hook.py"),
     asset!("bin/mast-hooks-merge.py", "wsl/mast-hooks-merge.py"),
+    asset!("bin/mast-agy-hook.sh", "wsl/mast-agy-hook.sh"),
     asset!("bin/mast-config.py", "wsl/mast-config.py"),
     asset!("bin/mast-claude-hook.sh", "wsl/mast-claude-hook.sh"),
     asset!("bin/mast-codex-hook.sh", "wsl/mast-codex-hook.sh"),
@@ -499,6 +500,19 @@ mod tests {
             assert!(!content.is_empty(), "{name}");
             assert!(!content.contains("@SETUP_VERSION@"), "{name}");
         }
+    }
+
+    #[test]
+    fn agy_asset_is_embedded_with_the_shared_payload() {
+        let agy_assets: Vec<_> = ASSETS
+            .iter()
+            .filter(|(destination, _)| *destination == "bin/mast-agy-hook.sh")
+            .collect();
+        assert_eq!(agy_assets.len(), 1);
+        assert_eq!(
+            agy_assets[0].1,
+            include_str!("../../../../../scripts/wsl/mast-agy-hook.sh")
+        );
     }
 }
 
