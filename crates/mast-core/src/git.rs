@@ -508,7 +508,7 @@ u AA N... 000000 100644 100644 100644 aaa bbb ccc conflict file\0";
     }
 
     #[test]
-    fn command_keeps_paths_as_arguments_and_uses_nonzero_linux_supervision() {
+    fn command_keeps_paths_as_arguments_and_uses_platform_supervision() {
         let command = git_command(
             Some("Ubuntu"),
             "/repo ' $(name)",
@@ -525,7 +525,18 @@ u AA N... 000000 100644 100644 100644 aaa bbb ccc conflict file\0";
                 &["--distribution", "Ubuntu", "--exec", "/usr/bin/timeout"]
             );
         }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        assert_eq!(command.get_program(), "/usr/bin/timeout");
+        #[cfg(not(target_os = "macos"))]
         assert!(args.windows(2).any(|p| p == ["--kill-after=1s", "0.001s"]));
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(command.get_program(), "/usr/bin/env");
+            assert!(!args.iter().any(|arg| arg.starts_with("--kill-after=")));
+            assert!(!args.contains(&"/usr/bin/timeout"));
+            assert!(!args.contains(&"--distribution"));
+            assert!(args.windows(2).any(|p| p == ["-u", "GIT_DIR"]));
+        }
         assert!(args.contains(&"--no-optional-locks"));
         assert!(args.contains(&"--literal-pathspecs"));
         assert!(args.windows(2).any(|p| p == ["-C", "/repo ' $(name)"]));
