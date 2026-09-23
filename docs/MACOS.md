@@ -122,6 +122,12 @@ Up/Enter when you are ready. IDs are strictly validated before saving or loading
 hints. Closing a tab deletes its owned history/resume files; quitting the app
 keeps them for restoration.
 
+`mast send` reports a nonzero exit status when it cannot write to the terminal.
+A failed payload is never followed by Enter or automatically retried: delivery
+may be partial, so inspect the receiving tab before retrying. Successful TTY
+writes are not a receiver acknowledgement. `mast ls` reports a failed query
+write immediately and removes its private reply directory.
+
 ## Keyboard
 
 | Action | macOS binding |
@@ -170,7 +176,8 @@ normal-shutdown guarantee. Mast itself does not create such persistent sessions.
 Automated native tests cover PTY child cleanup (including HUP-ignoring background
 jobs), shutdown/restoration callback suppression, zsh startup ordering/custom
 ZDOTDIR, bash profile/history isolation, missing-directory fallback, resume hint
-validation, native CLI protocol/quoting, safe config merging, and Mac key maps.
+validation, native CLI protocol/quoting and failed-send handling, safe config
+merging, and Mac key maps.
 
 ```sh
 cargo test -p mast-core --locked
