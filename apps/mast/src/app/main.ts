@@ -195,7 +195,7 @@ class App {
         () => {},
       );
     }
-    if (!IS_MAC) this.initUpdateNotice();
+    this.initUpdateNotice();
     installReloadKey((err) => {
       console.error("reload confirmation failed", err);
       this.showError(formatCommandError(err));
