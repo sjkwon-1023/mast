@@ -698,3 +698,26 @@ Antigravity CLI가 있을 때의 `~/.gemini/config/skills`.
 
 검증: 실제 bash 설치에서 원본 포함, 마커가 있는 상태의 수정본 덮어쓰기,
 링크 대상 파일 보존, 훅 opt-out 보존, 수동 누락 복구, 잘못된 인자 거부.
+
+## Amendment (2026-09-24) — native macOS Antigravity CLI hook
+
+On macOS, setup reuses the shared Bash `mast-agy-hook.sh` and hooks merger, while notification
+travels through the native `mast-notify.sh` wrapper, `scripts/macos/notify.py` and the validated
+`MAST_TTY` path in the shared agent hook. The fallback accepts only the Mast-provided same-user
+terminal device; it does not use Linux `/proc`. `PreInvocation` reports running and `Stop`
+reports idle with the first line of `finalModelOutput` or `done`. The handler preserves agy's
+required `{}` stdout response. It does not report needs-input, create resume hints or replace an
+existing user notification command.
+
+Setup runs only when `~/.gemini/antigravity-cli` exists and the integration is not opted out by
+`~/.mast/no-agy-hooks`. It merges `~/.gemini/config/hooks.json` and records the result in
+`~/.mast/.setup-macos-v<version>-agy`. A detected version below 1.1.10 warns that the Stop hook
+may not run, then continues installation; an unknown version also does not block setup. If the
+merger returns exit 3 for existing content it refuses, the file is left unchanged and the marker
+records that refusal. Repair the file, remove the marker and relaunch Mast to retry. Other setup
+failures leave no completion marker and are retried at a later launch. Removing the opt-out
+marker and the setup marker re-enables a skipped integration.
+
+Automated tests cover the shared hook and merge behavior plus macOS setup with isolated PATH and
+temporary configuration. A real agy turn and the below-1.1.10 warning remain device checks; they
+are not recorded as passed here.

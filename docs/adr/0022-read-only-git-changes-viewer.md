@@ -137,6 +137,26 @@ compilation do not establish WebView2 behavior or WSL relay cleanup on a real Wi
 The compatibility release must precede the Changes release (ADR-0021). The new kind does
 not make older, unprotected builds safe to downgrade to.
 
+## Amendment (2026-09-24) — native macOS Git queries
+
+The native Apple Silicon build now exposes the same Changes viewer. macOS invokes Git directly
+through `/usr/bin/env git`; it does not use the WSL relay or GNU `timeout`. The existing
+process-capture deadline owns the native Git process group. Repository discovery and status share
+one 10-second capture budget; each diff has its own 10-second budget. Output and metadata caps,
+the four-request concurrency limit, fixed read-only Git arguments and bare-container
+branch-matched worktree resolution remain unchanged. The 512 KiB diff cap and 5,000 displayed
+input-line cap still apply.
+
+Git content lookup continues to validate roots with `validate_root` and files with
+`validate_file`: roots are absolute POSIX paths without NUL, `.` or `..` components, and file
+paths are repository-relative. This is separate from the platform path validator used when
+creating a viewer tab. The UI enables the viewer on macOS; no Git query becomes a write
+operation. Windows retains its WSL transport and its WSL-specific timeout/relay limits.
+
+Automated macOS frontend tests exercise the enabled Changes-viewer path, and the real-Git suite
+already passed on macOS with PR #53. That backend coverage does not establish integrated native
+WebView behavior, which remains a device check.
+
 ## References
 
 - [Git status porcelain v2](https://git-scm.com/docs/git-status#_porcelain_format_version_2)

@@ -46,3 +46,25 @@ conditional link, fixed destination and event/snapshot ordering. The ignored Win
 `update::tests::github_release_probe` exercises the actual native request without launching the
 GUI. Manual checks cover offline launch, a WebView reload after completion and opening the link
 without ending a terminal session.
+
+## Amendment (2026-09-24) — native macOS request
+
+The native Apple Silicon build makes the same single startup check and uses the same
+process-lifetime cache and fixed release-page link. It invokes `/usr/bin/curl` with a cleared
+environment, `--disable` (no `.curlrc`), HTTPS-only protocol selection, TLS 1.2 or later,
+HTTP/1.1 and the fixed `api.github.com/repos/sjkwon-1023/mast/releases/latest` endpoint. It
+does not follow redirects, send credentials or use environment proxy settings. Response headers
+are captured on stderr and capped at 16 KiB; the body is captured on stdout and capped at 64 KiB.
+The version parser still accepts only a newer three-component stable tag, optionally prefixed
+with `v`. Both streams are bounded in-memory captures; no response file is written.
+
+The approved macOS timeout policy is deliberately bounded and differs from WinHTTP's stage
+timeouts: curl uses a 3-second connect timeout, a 3-second low-speed timeout below 1 byte per
+second, and an 11-second total request timeout; the process capture has a 12-second deadline.
+This does not reproduce separate 3-second DNS/connect/send/receive stages or the Windows
+additional 8-second body budget. Network failures, redirects, malformed responses and limit
+exceedance do not produce an update label; errors are recorded when optional runtime logging is
+enabled. The request remains a release notice, not an updater.
+
+The ignored live macOS curl probe and offline/reload/link device checks are separate from the
+document-link gate; this amendment does not claim that those checks have passed.

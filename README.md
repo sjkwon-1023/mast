@@ -13,9 +13,11 @@ Check terminal output and send input from your phone on the same trusted local n
 ## macOS (Apple Silicon, source builds)
 
 The native macOS port shares the same workspace, pane, tab and terminal core as Windows.
-See [the macOS guide](docs/MACOS.md) for prerequisites, shell selection, agent integration,
-native shortcuts, supported scope and the device-verification checklist. Mac packaging,
-remote control and signed releases are not included in this initial port.
+The source build includes the Git Changes viewer, a startup-only release notice, opt-in Local
+HTTP, on-demand Secure Remote pairing, and Antigravity CLI running/idle hooks. See
+[the macOS guide](docs/MACOS.md) for prerequisites, configuration, limits and the device
+verification checklist. Signed Mac distribution, packaging and automatic binary updates are
+not included.
 
 ## What it's for
 
@@ -42,8 +44,8 @@ notifies you when one starts waiting, and lets you answer from your phone even w
 - **Portable** — a single executable. No installer, no setup wizard.
 - **Reload any time** — `Ctrl+Shift+R` rebuilds the window; the shells and agents keep running.
 
-Most agent multiplexers are built for macOS and Linux terminals. mast is the one built for Windows
-and WSL2.
+Most agent multiplexers are built for macOS and Linux terminals. Mast began as an agent terminal
+for Windows + WSL2; an Apple Silicon native source build is also available.
 
 ## Features
 
@@ -55,10 +57,11 @@ and WSL2.
   tab, the waiting tab gets its own badge, and a Windows toast names the tab that starts waiting.
 - **Agent-to-agent communication** — `mast ls` discovers tabs and `mast send '#<id>' 'text'`
   sends input to another agent or shell in the same workspace (`-l` pre-fills without submitting).
-- **Viewer tabs** — folder browser, text viewer and Markdown viewer for files inside WSL.
-  The pane-header Changes button opens changed files and a selected unified diff, with
-  Working / Staged / All scopes. It is read-only, refreshes when reopened or with Refresh,
-  and limits each diff to 512 KiB. Git and GNU `timeout` must be installed in that WSL distro.
+- **Viewer tabs** — the Windows build has a folder browser, text viewer and Markdown viewer for
+  files inside WSL. The pane-header Changes button opens changed files and a selected unified
+  diff, with Working / Staged / All scopes. It is read-only, refreshes when reopened or with
+  Refresh, and limits each diff to 512 KiB. Git and GNU `timeout` must be installed in that WSL
+  distro. The macOS source build runs Git directly; see [the macOS guide](docs/MACOS.md).
 - **Phone terminal control (opt-in)** — pair by QR, then read output, scroll a full-screen TUI,
   or send input to an agent CLI or a regular Bash shell. It is not limited to agent prompts.
   *Pair phone* always offers two working modes and a disabled `Tailscale — Planned` entry:
@@ -85,9 +88,10 @@ and WSL2.
   same trusted LAN, typically the same home router; mobile data (4G/5G) or an unrelated Wi-Fi
   network reaches the PC only through a separate path you set up yourself — VPN, Tailscale or
   port forwarding — never automatically. Guest Wi-Fi or client isolation can block access even
-  on the same router. If the phone cannot connect, the pairing dialog says whether Windows
-  Firewall allows the app — TCP for Local HTTP, UDP 7331 for Secure Remote — and offers to
-  write that rule behind one UAC prompt. See [`docs/SETTINGS.md`](./docs/SETTINGS.md).
+  on the same router. On Windows, the pairing dialog checks TCP/UDP-specific Windows Firewall
+  rules and offers to write the applicable rule behind a UAC prompt. On macOS, it checks an
+  app-level macOS Firewall rule shared by Local HTTP and Secure Remote; administrator approval
+  is requested only after you click its allow button. See [`docs/SETTINGS.md`](./docs/SETTINGS.md).
 - **Layout persistence** — workspaces, splits and tabs come back, each shell respawned where it was,
   and a tab that was running an agent returns with its resume command one `Up` away.
 

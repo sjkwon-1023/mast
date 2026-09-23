@@ -408,3 +408,25 @@ mast 실행 파일에 대한 규칙은 기존 프로토콜·포트·프로필·�
 검증은 TCP·UDP 각각에 대해 패키지·소유자·서비스 전용 규칙의 거부와 일반 규칙의
 허용을 확인한다. Windows 네이티브 테스트는 정책에 등록하지 않은 COM 규칙으로
 소유자 범위 수집과 판정을 검증한다. 실제 UAC 및 휴대폰 재연결은 별도 실기 확인이다.
+
+## Amendment (2026-09-24) — native macOS host and application firewall
+
+The same `remote` settings key enables Local HTTP in the native Apple Silicon build. It remains
+off by default: with no key, macOS starts no listener or listener thread and creates no token
+file. When enabled, the host stores the token as `remote-token` in the app data directory beside
+`state.json`; the path is normally `~/Library/Application Support/app.mast.desktop/remote-token`.
+The phone keeps its Local HTTP pairing token in browser local storage. Local HTTP remains plain
+HTTP and is intended for a trusted LAN.
+
+macOS Application Firewall decisions are application-scoped, not port- or protocol-scoped.
+The pairing dialog reads the global firewall state, block-all state and rule for the current
+executable. Its status covers both Local HTTP over TCP and Secure Remote over UDP, and an allow
+rule can cover other incoming connections for that executable as well. Mast requests administrator
+approval only after the user presses **Allow in macOS Firewall**; it adds and unblocks the current
+executable, then re-reads the status. It does not change global firewall state or block-all. The
+separate macOS incoming-connection prompt, when shown by the OS, is not the same flow. Windows
+continues to use its existing port, profile and rule-name checks without change.
+
+Automated macOS tests cover parsing known `socketfilterfw` responses, unknown output, application
+scope, argument quoting and post-allow re-detection. A real allow/decline prompt and enabled,
+blocked and block-all system states remain device checks; they are not recorded as passed here.

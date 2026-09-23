@@ -1,9 +1,12 @@
 # settings.json reference
 
-Use `mast config` in a mast Bash pane, or edit
-`%AppData%\app.mast.desktop\settings.json` by hand. There is no settings screen.
-After saving, fully quit and relaunch mast; `Ctrl+Shift+R` is only a window reload.
-Restarting ends running terminal processes, so finish or save work first.
+Use `mast config` in a Mast Bash or zsh pane, or edit the settings file by hand.
+On Windows the file is `%AppData%\app.mast.desktop\settings.json`; on macOS it
+is `~/Library/Application Support/app.mast.desktop/settings.json`. There is no
+settings screen. The macOS shell exports the resolved path as `MAST_CONFIG_PATH`
+for the native Python CLI. After saving, fully quit and relaunch Mast;
+`Ctrl+Shift+R` is only a window reload. Restarting ends running terminal
+processes, so finish or save work first.
 
 Three rules hold for every key below:
 
@@ -40,10 +43,11 @@ mast or open a firewall rule. `set remote` always chooses 7331 when `--port` is 
 even if an older saved override used another port. `set remote.port N` also enables remote
 access on that port. `false` cannot be combined with a port. Unknown setting names are errors.
 
-The helper uses Python 3's standard library, Windows PowerShell and `wslpath`; Windows interop
-and access to the Windows drive must be enabled. No daemon, socket or settings-write OSC command
-is installed. Once provisioned, `~/.mast/bin/mast config` can also run from an ordinary WSL shell.
-If Windows access is disabled in your distribution, edit the file from Windows instead.
+The helper uses Python 3's standard library. On Windows it also uses PowerShell
+and `wslpath`; Windows interop and access to the Windows drive must be enabled.
+On macOS, `~/.mast/bin/mast config` runs the native helper against
+`MAST_CONFIG_PATH`. No daemon, socket or settings-write OSC command is installed.
+Once provisioned on Windows, the same command can run from an ordinary WSL shell.
 
 Mutations validate the existing file and the proposed result, preserving unknown keys (also
 inside `remote` when enabling or changing its port). Disabling/resetting a field intentionally
@@ -175,41 +179,54 @@ Changing this takes a restart, like `log`.
 
 Pair a phone from the sidebar's *Pair phone* QR, choosing **Local HTTP**. The pairing token
 arrives in the URL fragment and is kept in the phone browser's local storage, so a new browser —
-or a cleared one — needs a fresh QR. The same dialog says whether Windows Firewall lets this exe
-receive on the port — the allow rule is bound to the exe's path, so a moved or renamed exe loses
-it — and offers to write the rule behind one UAC prompt; it never opens the port on a public
-network.
+or a cleared one — needs a fresh QR. On Windows, the dialog reports whether Windows Firewall
+allows this executable on the configured port and can add a port-specific rule after a UAC
+prompt. On macOS, the dialog reports the app-level macOS Firewall rule and can add/allow the
+current executable after administrator approval; this app rule covers both Local HTTP (TCP) and
+Secure Remote (UDP), not just the configured port. A macOS system incoming-connection prompt, if
+shown, is separate from Mast's firewall status and button.
+
+If macOS Firewall's block-all mode is enabled, adding an app allow rule cannot override it; review
+Firewall settings in System Settings. The rule is keyed to the current executable, so a moved
+copy may need its own approval. Mast does not change the global firewall or block-all mode.
 
 This is **plain HTTP on your own LAN**, off by default, and deliberately not hardened for a
-hostile network. The accepted limits are recorded in
+hostile network. The same `remote` setting is supported on macOS. With the key omitted, Mast
+creates no Local HTTP listener, listener thread or token file. When enabled on macOS, the token
+file is `remote-token` in the app data directory, normally
+`~/Library/Application Support/app.mast.desktop/remote-token`; it is separate from the phone
+browser's local-storage copy of the pairing token. The accepted limits are recorded in
 [ADR-0016](./adr/0016-remote-surface-over-lan.md).
 
 ## Secure Remote
 
 A second phone mode, always available from *Pair phone* → **Secure Remote**. It needs no
-`settings.json` key and no restart: nothing exists until you select it, and everything is torn
-down when the pairing or its connection ends.
+`settings.json` key and no restart: nothing exists until you select it. It is independent of
+Local HTTP's `remote` setting and token file.
 
 - **Lifetime.** Selecting it creates a new self-signed certificate in memory, binds **UDP 7331**,
-  and shows a QR. Unscanned, the QR waits up to two minutes; closing the dialog with no
-  authenticated phone closes the listener immediately. Exactly **one** phone can be connected.
-  When that connection ends (the phone closes the page, the network drops, or 30 seconds pass
-  without a request or heartbeat), the endpoint, the TLS state and the private key are released,
-  and the next pairing gets a new token and a new QR. The dialog polls the pairing every two
+  and shows a QR. Before the first authenticated phone, the QR waits up to two minutes;
+  cancelling or letting that window expire closes the listener. Exactly **one** phone can be
+  connected at a time. After authentication, the same phone may reconnect until the certificate
+  expires or Mast exits. The certificate is valid for at most 14 days and the host keeps the
+  certificate, private key and token in memory only. The dialog polls the pairing every two
   seconds: once the phone connects — or the pairing expires, fails or ends — the QR and URL are
   removed from the screen, so a dead QR is never left on display.
 - **How it connects.** The phone opens the public HTTPS page at
-  `https://sjkwon-1023.github.io/mast/`, reads the IPv4 address, port and one-time token from the
+  `https://sjkwon-1023.github.io/mast/`, reads the IPv4 address, port and pairing token from the
   QR's URL fragment, and opens WebTransport to this PC's UDP port; it shows the `host:port` it
   is opening and keeps that line visible afterwards, so a QR naming another machine is visible
   before any input goes anywhere. The QR's SHA-256 fingerprint pins the pairing certificate for
   that connection only — it is **not** added to the browser's trust store. The page removes the
   fragment from the address bar as soon as it loads. The page's origin is public and shared by
   every GitHub Pages site on that account; it narrows what a browser lets the page reach, but
-  the one-time token — not the origin — is what authorizes this connection.
-- **Nothing is stored on the phone.** The token and fingerprint live in page memory only — not in
-  local storage, session storage, cookies or IndexedDB — so reloading the page does not
-  reconnect: scan a fresh QR from mast. Reopening the dialog also discards the old QR.
+  the pairing token — not the origin — is what authorizes the connection.
+- **Remembered authentication.** After the first successful authentication, the phone stores the
+  target IP, port, certificate fingerprint, token and fixed expiry in local storage under
+  `mast.secure-remote.pairing.v1`. Reloading or returning to the page can reconnect with that
+  pairing until it expires. A new QR replaces the saved pairing; explicit rejection or expiry
+  clears it. The host certificate, private key and token remain memory-only and are discarded
+  when Mast exits.
 - **Browsers.** Recent Chrome or Edge are the initial phone test targets, but no real-phone
   browser has yet been verified. A browser without `WebTransport` shows an explicit error. A
   browser that has `WebTransport` but does not know `serverCertificateHashes` does not fail when
@@ -217,12 +234,14 @@ down when the pairing or its connection ends.
   later at the TLS step as a plain connection error; there is no separate "cannot pin" message.
   The browser may ask for permission to access your local network; allow it for the page.
 - **Firewall.** The listener is UDP 7331, independent of Local HTTP's TCP port (the two can run
-  side by side, and the app's fixed secure port does not silently fall back to another one). The
-  dialog shows whether Windows Firewall currently allows this exe on UDP 7331 and offers
-  **Allow in Windows Firewall**, which writes a rule named `mast secure remote (LAN)` — UDP only,
-  `domain,private` profiles only — behind one UAC prompt. The prompt appears only when you press
-  that button; opening the dialog or creating a QR never elevates. A port conflict with another
-  program is reported as an explicit failure.
+  side by side, and the app's fixed secure port does not silently fall back to another one). On
+  Windows, the dialog checks UDP 7331 and offers a rule limited to `domain,private` profiles after
+  one UAC prompt. On macOS, the dialog checks an application rule and offers **Allow in macOS
+  Firewall** after an administrator prompt. That rule covers incoming traffic for the Mast
+  executable, including both Local HTTP and Secure Remote; it is not limited to UDP 7331. Neither
+  dialog elevates when it opens or when a QR is created. The macOS system incoming-connection
+  prompt, if shown, is separate. A port conflict with another program is reported as an explicit
+  failure.
 - **Reach.** Each QR carries this PC's **LAN IPv4 address**, so pairing as generated works on
   the same network, and mast opens no path of its own beyond it — no cloud relay, no automatic
   VPN or port forwarding. Reaching this PC from outside the network requires a separate path
@@ -239,8 +258,9 @@ down when the pairing or its connection ends.
   firewall state in the dialog, confirm both devices are on the same Wi-Fi, and allow the
   local-network permission prompt.
 
-Secure Remote does not change Local HTTP: its token file, `remote` setting and TCP firewall rule
-stay as they were. Decisions and limits are recorded in
+Secure Remote does not change Local HTTP's token file, `remote` setting or TCP listener. The
+macOS application firewall rule is shared by both incoming transports; Windows keeps its
+separate firewall rules. Decisions and limits are recorded in
 [ADR-0028](./adr/0028-secure-remote-webtransport.md); the Windows field checklist is
 `WINDOWS-BUILD.md` §17.
 
