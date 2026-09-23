@@ -381,6 +381,9 @@ fn main() {
             commands::fs_stat,
             commands::fs_read_chunk,
             commands::fs_save_markdown,
+            // Markdown draft 유무 — macOS Dock Quit·로그아웃 종료 판정의 근거다.
+            #[cfg(target_os = "macos")]
+            commands::set_markdown_draft_state,
             git::git_status,
             git::git_diff,
             // 끝난 터미널 탭의 기록 바이트 (ADR-0018) — 기록 뷰가 마운트 때 1회.

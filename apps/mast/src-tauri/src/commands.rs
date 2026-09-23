@@ -1257,3 +1257,12 @@ pub async fn notify_toast(title: String, body: String, log_label: String) -> Res
     }
     result
 }
+
+/// 프론트엔드의 Markdown draft 상태를 받아 둔다. Dock Quit·로그아웃·AppleScript quit
+/// 이 부르는 `applicationShouldTerminate:` 판정이 이 값을 읽는다
+/// ([`crate::platform::macos::set_draft_state`]). 값은 idempotent 라 재전송해도 된다.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn set_markdown_draft_state(state: crate::platform::macos::DraftState) {
+    crate::platform::macos::set_draft_state(state);
+}

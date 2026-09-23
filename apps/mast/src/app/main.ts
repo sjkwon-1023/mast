@@ -1,6 +1,7 @@
 import { IS_MAC, primaryModifier } from "../shared/platform";
-import { closingMarkdownDrafts, discardMarkdownDraft, hasMarkdownDrafts } from "../features/viewers/markdown/drafts";
+import { closingMarkdownDrafts, discardMarkdownDraft, hasMarkdownDrafts, reportMarkdownDraftState } from "../features/viewers/markdown/drafts";
 import { installNavKeys } from "./navigation/actions";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -144,6 +145,9 @@ class App {
     };
 
     document.body.classList.toggle("platform-macos", IS_MAC);
+    // macOS 의 Dock Quit·로그아웃은 창 close 를 거치지 않고 백엔드의 종료 판정으로
+    // 간다. 그 판정이 draft 유무를 알도록 첫 await 전에 seed 하고 변화마다 보고한다.
+    if (IS_MAC) reportMarkdownDraftState((state) => invoke("set_markdown_draft_state", { state }));
     if (!IS_MAC) this.initUpdateNotice();
     installReloadKey();
     installShortcutGuide();

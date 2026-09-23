@@ -1550,4 +1550,3 @@ body {
 .platform-macos.shortcut-guide::after {
   content: "⌘1–9: workspace  ·  ⌘⇧[ / ]: cycle  ·  ⌘D: auto split  ·  ⌘⌥arrows: pane";
 }
-.platform-macos .sidebar-pair { display: none; }
