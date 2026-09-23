@@ -21,6 +21,12 @@ mast-core = { path = "../../../crates/mast-core" }
 # 줄도 돌릴 수 없기 때문이다.
 mast-remote = { path = "../../../crates/mast-remote" }
 
+# macOS uses rfd's native NSOpenPanel backend for workspace selection. Keep this
+# target-scoped so the existing Linux developer build does not gain a desktop portal
+# dependency. Windows keeps its own target dependency below.
+[target.'cfg(target_os = "macos")'.dependencies]
+rfd = { version = "0.17", default-features = false }
+
 # 메모리 워치독 (계획 16단계 C-2) — Toolhelp 자손 스캔 + PrivateUsage 조회.
 # 직접 의존 + features 명시 (계획 0장 — Cargo.lock 전이 의존은 feature 활성이
 # 아니다). Win32_System_Threading 은 OpenProcess/PROCESS_QUERY_LIMITED_INFORMATION
