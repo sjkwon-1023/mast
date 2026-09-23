@@ -206,7 +206,7 @@ fn create_workspace_with_tab_creates_tab_atomically() {
     // 기본값 — CreateTab·SplitPane 과 공유하는 스폰 경로.
     assert_eq!(cwd.as_deref(), Some("/proj"));
     assert_eq!(host.spawns()[0].cwd.as_deref(), Some("/proj"));
-    assert_eq!(host.spawns()[0].distro.as_deref(), Some("Ubuntu"));
+    assert_eq!(host.spawns()[0].distro, expected_distro("Ubuntu"));
     assert_eq!(d.state().active_workspace, Some(workspace));
     assert_eq!(d.state().revision, 1);
 }
@@ -319,7 +319,7 @@ fn closing_an_exited_tab_releases_its_files_without_a_kill() {
     });
     d.dispatch(Command::CloseTab { tab }).unwrap();
     assert!(host.kills().is_empty());
-    assert_eq!(host.releases(), vec![(vec![tab], Some("Ubuntu".into()))]);
+    assert_eq!(host.releases(), vec![(vec![tab], expected_distro("Ubuntu"))]);
 }
 
 #[test]
@@ -547,7 +547,7 @@ fn split_pane_with_tab_creates_pane_and_tab_atomically() {
     // 워크스페이스 기본값(cwd·distro) 적용 — CreateTab 과 공유하는 스폰 경로.
     assert_eq!(cwd.as_deref(), Some("/proj"));
     assert_eq!(host.spawns()[0].cwd.as_deref(), Some("/proj"));
-    assert_eq!(host.spawns()[0].distro.as_deref(), Some("Ubuntu"));
+    assert_eq!(host.spawns()[0].distro, expected_distro("Ubuntu"));
 }
 
 #[test]
@@ -666,7 +666,7 @@ fn create_tab_uses_workspace_defaults_for_spawn() {
         spawns[0],
         ShellSpawnReq {
             cwd: Some("/proj".into()),
-            distro: Some("Ubuntu".into()),
+            distro: expected_distro("Ubuntu"),
             cols: 80,
             rows: 24,
             // 워크스페이스(1)·pane(2) 다음 발급이므로 첫 탭은 3.
@@ -1878,6 +1878,12 @@ fn close_pane_drops_agent_state_of_every_removed_tab() {
     assert_eq!(agent(&d, ws), (AgentStatus::Idle, None));
 }
 
+/// WSL distro is forwarded on Windows/Linux, but newly created native Mac
+/// workspaces intentionally have no distro. Keep testing both platform contracts.
+fn expected_distro(name: &str) -> Option<String> {
+    if cfg!(target_os = "macos") { None } else { Some(name.to_owned()) }
+}
+
 /// distro 를 단 워크스페이스 헬퍼 — 해제 통지가 어느 배포판으로 가야 하는지
 /// 검사하려면 distro 가 실려 있어야 한다.
 fn create_ws_on(d: &mut Dispatcher, name: &str, distro: &str) -> (WorkspaceId, PaneId) {
@@ -2023,7 +2029,7 @@ fn closing_a_tab_releases_its_shell_side_files() {
 
     assert_eq!(
         host.releases(),
-        vec![(vec![tab], Some("Ubuntu".to_string()))]
+        vec![(vec![tab], expected_distro("Ubuntu"))]
     );
 }
 
@@ -2038,7 +2044,7 @@ fn a_pane_or_workspace_releases_all_of_its_tabs_in_one_call() {
     let (b, _sb) = create_terminal_tab(&mut d, pane2);
 
     d.dispatch(Command::ClosePane { pane: pane2 }).unwrap();
-    assert_eq!(host.releases(), vec![(vec![a, b], Some("Ubuntu".into()))]);
+    assert_eq!(host.releases(), vec![(vec![a, b], expected_distro("Ubuntu"))]);
 
     let (ws2, pane3) = create_ws_on(&mut d, "ws2", "Debian");
     let (c, _sc) = create_terminal_tab(&mut d, pane3);
@@ -2047,7 +2053,7 @@ fn a_pane_or_workspace_releases_all_of_its_tabs_in_one_call() {
         .unwrap();
     assert_eq!(
         host.releases().last().cloned(),
-        Some((vec![c, dd], Some("Debian".into())))
+        Some((vec![c, dd], expected_distro("Debian")))
     );
 }
 
@@ -2085,7 +2091,7 @@ fn a_terminal_tab_with_no_session_is_still_released() {
     assert!(d.respawn_tab(tab).is_err());
 
     d.dispatch(Command::CloseTab { tab }).unwrap();
-    assert_eq!(host.releases(), vec![(vec![tab], Some("Ubuntu".into()))]);
+    assert_eq!(host.releases(), vec![(vec![tab], expected_distro("Ubuntu"))]);
 }
 
 #[test]

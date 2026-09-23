@@ -6,18 +6,23 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeTerminalCwd,
-  keyAction,
+  keyAction as platformKeyAction,
   nextTab,
   nextWorkspace,
   paneInDirection,
   paneTerminalCwd,
   pathBasename,
-  shortcutBadge,
-  shortcutLabel,
+  shortcutBadge as platformShortcutBadge,
+  shortcutLabel as platformShortcutLabel,
   workspaceAtOrdinal,
 } from "./keys";
 import type { KeySpec, PaneRect } from "./keys";
 import type { Pane, Workspace } from "./types";
+
+// This suite describes the existing Windows keymap, on every test host.
+const keyAction = (key: KeySpec) => platformKeyAction(key, false);
+const shortcutBadge = (id: Parameters<typeof platformShortcutBadge>[0]) => platformShortcutBadge(id, false);
+const shortcutLabel = (id: Parameters<typeof platformShortcutLabel>[0]) => platformShortcutLabel(id, false);
 
 function spec(over: Partial<KeySpec> & { key: string }): KeySpec {
   return { ctrl: false, alt: false, shift: false, isComposing: false, ...over };

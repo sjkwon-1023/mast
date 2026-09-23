@@ -74,7 +74,7 @@ fn session_members(root: libc::pid_t) -> io::Result<Vec<libc::pid_t>> {
         let bytes = (pids.len() * std::mem::size_of::<libc::pid_t>()) as i32;
         // SAFETY: writable, properly aligned buffer of the advertised byte size.
         let count = unsafe { proc_listpids(1, 0, pids.as_mut_ptr().cast(), bytes) };
-        if count < 0 {
+        if count <= 0 {
             return Err(io::Error::last_os_error());
         }
         if count < bytes || pids.len() >= 262_144 {

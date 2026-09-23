@@ -25,6 +25,7 @@ use mast_core::command::{Command, CommandError, CommandOutput};
 use mast_core::model::TabId;
 use mast_core::record::RecordStore;
 use mast_core::session::{PtySession, SessionId};
+#[cfg(not(target_os = "macos"))]
 use mast_core::wslpath;
 
 use crate::state::{publish_state, AppState};

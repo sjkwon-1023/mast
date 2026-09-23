@@ -28,6 +28,7 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 use tauri::AppHandle;
+#[cfg(windows)]
 use crate::winlog;
 
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트

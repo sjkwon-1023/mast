@@ -10,7 +10,10 @@ import {
   scrollbackWipeRestoreOffset,
 } from "./scroll";
 import { clampFontSize } from "../../shared/font-size";
-import { altArrowSequence, isCopySelectionKey, shouldOpenLink } from "./interaction";
+import { altArrowSequence, isCopySelectionKey as platformCopySelectionKey, shouldOpenLink } from "./interaction";
+
+// Explicitly retain the Windows copy-selection contract; Mac is tested separately.
+const isCopySelectionKey = (event: KeyboardEvent, selected: boolean) => platformCopySelectionKey(event, selected, false);
 
 describe("clampFontSize", () => {
   it("범위 안의 값은 그대로 통과한다", () => {

@@ -587,7 +587,7 @@ pythonSuite("mast-hooks-merge.py", () => {
 
     expect(run.status).toBe(1);
     expect(run.lines.at(-1)).toMatch(new RegExp(`^${mode}: result=failed reason=`));
-    expect(run.stderr).toContain(`cannot read ${path} (`);
+    expect(run.stderr).toContain(`cannot read ${realpathSync(path)} (`);
     expect(run.stderr).toContain(`left untouched. ${consequence}; mast retries on its next launch.`);
   });
 
