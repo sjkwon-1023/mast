@@ -861,11 +861,14 @@ impl PtySession {
     /// leader 는 분리 스레드가 grace 뒤 SIGKILL 한다 — 호출자가 Dispatcher lock 아래에
     /// 있어도 grace 를 기다리지 않는다.
     pub fn kill(&self) {
-        if !self.hang_up() {
-            return;
-        }
+        let first = self.hang_up();
         #[cfg(target_os = "macos")]
-        crate::platform::macos::escalate_in_background(Arc::clone(&self.process_scope));
+        if first {
+            crate::platform::macos::escalate_in_background(Arc::clone(&self.process_scope));
+        }
+        // macOS 밖에서는 에스컬레이션이 없으므로 결과를 쓰지 않는다.
+        #[cfg(not(target_os = "macos"))]
+        let _ = first;
     }
 
     /// [`kill`](Self::kill) 의 동기 부분 — killed 확정, 리더 깨우기, 종료 신호, PTY fd 회수.
