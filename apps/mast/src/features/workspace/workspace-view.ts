@@ -1,4 +1,3 @@
-import { IS_MAC } from "../../shared/platform";
 // 활성 워크스페이스의 split tree 렌더 진입점 (11단계 청크 B → 12단계 청크 C).
 //
 // 렌더 전략 (계획 1-B):
@@ -584,14 +583,6 @@ export class WorkspaceView {
             new MarkdownView(host, target.tab, target.pane, distro, kind, this.dispatch);
         }
         case "changesViewer": {
-          if (IS_MAC) return (host) => {
-            const root = document.createElement("div");
-            root.className = "pane-placeholder";
-            root.tabIndex = -1;
-            root.textContent = "Git changes / diff viewing is deferred in the initial macOS version. This saved tab has been preserved.";
-            host.append(root);
-            return { root, update: () => {}, flushScroll: () => {}, dispose: () => root.remove(), focus: () => root.focus() };
-          };
           const { ChangesView } = await import("../changes/changes-view");
           return (host, kind) => new ChangesView(host, target.tab, distro, kind);
         }
