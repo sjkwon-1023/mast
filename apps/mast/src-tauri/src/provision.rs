@@ -958,6 +958,14 @@ mast_emit() {
     return 0
   fi
 
+  # macOS has no /proc. Mast exports the pane PTY before exec'ing the user's shell,
+  # so hooks that lose their controlling tty can still return OSC status to the pane.
+  if [[ -n "${MAST_TTY:-}" && "$MAST_TTY" == /dev/* ]]; then
+    if { printf '%s' "$payload" > "$MAST_TTY"; } 2>/dev/null; then
+      return 0
+    fi
+  fi
+
   local pid=$$ depth=0 fd target stat ppid
   while [[ "$pid" -gt 1 && "$depth" -lt 8 ]]; do
     for fd in 0 1 2; do
@@ -1213,18 +1221,24 @@ most shells: mast send '#176' 'cargo test'. A bare word is matched case-insensit
 against tab titles instead, which is less stable: a prompt hook may rewrite a title on every
 prompt. '*' in the TAB column marks your own tab, and send never delivers to it.
 
-COMMAND is read from /proc in this distro: '-' means the tab sits at its shell prompt, '?'
-means its shell is out of reach (another WSL distro, a Windows shell). send is silent — it
-never reports back, so 'ls' is how you check that the target exists.
+COMMAND is read from /proc when available: '-' means the tab sits at its shell prompt, '?'
+means process details are unavailable (including macOS, which has no /proc). send is silent —
+it never reports back, so 'ls' is how you check that the target exists.
 MAST_USAGE_EOF
 }
 
 # Not a delivery failure but a broken environment, so this one is loud rather than silent.
 require_base64() {
   if ! command -v base64 > /dev/null 2>&1; then
-    echo 'mast: base64 not found; install coreutils' >&2
+    echo 'mast: base64 not found' >&2
     exit 1
   fi
+}
+
+# GNU base64 needs -w0 to suppress wrapping while BSD/macOS base64 has no -w flag.
+# Stripping line endings works on both and OSC payloads are base64 ASCII only.
+mast_base64() {
+  base64 | tr -d '\r\n'
 }
 
 # Same tty resolution discipline as ~/.mast/bin/mast-notify.sh — keep both copies in
@@ -1239,6 +1253,14 @@ mast_emit() {
 
   if { printf '%s' "$payload" > /dev/tty; } 2>/dev/null; then
     return 0
+  fi
+
+  # macOS has no /proc. Mast exports the pane PTY before exec'ing the user's shell,
+  # so hooks that lose their controlling tty can still return OSC status to the pane.
+  if [[ -n "${MAST_TTY:-}" && "$MAST_TTY" == /dev/* ]]; then
+    if { printf '%s' "$payload" > "$MAST_TTY"; } 2>/dev/null; then
+      return 0
+    fi
   fi
 
   local pid=$$ depth=0 fd target stat ppid
@@ -1292,7 +1314,7 @@ cmd_send() {
   require_base64
   # OSC 777 format: ESC ] 777 ; mast-send ; target ; base64 BEL
   if [[ -n "$text" ]]; then
-    mast_emit "$(printf '\033]777;mast-send;%s;%s\007' "$target" "$(printf '%s' "$text" | base64 -w0)")" || true
+    mast_emit "$(printf '\033]777;mast-send;%s;%s\007' "$target" "$(printf '%s' "$text" | mast_base64)")" || true
   fi
   if [[ "$submit" -eq 1 ]]; then
     # Enter is a separate write, a beat after the text. It has to be CR, not LF: a raw-mode
@@ -1303,7 +1325,7 @@ cmd_send() {
     # long line arriving intact with the Enter swallowed. The app writes each OSC send to the
     # PTY as soon as it arrives, so the pause here is the gap on the wire.
     sleep 0.2
-    mast_emit "$(printf '\033]777;mast-send;%s;%s\007' "$target" "$(printf '\r' | base64 -w0)")" || true
+    mast_emit "$(printf '\033]777;mast-send;%s;%s\007' "$target" "$(printf '\r' | mast_base64)")" || true
   fi
   exit 0
 }
@@ -1328,7 +1350,7 @@ cmd_ls() {
   # the app's rename lands on a free path, so the file *appearing* is itself the signal that
   # the JSON is complete (the app writes '<path>.partial' and renames it into place).
   local reply
-  if ! reply="$(mktemp -p /tmp mast-query-XXXXXX 2>/dev/null)"; then
+  if ! reply="$(mktemp /tmp/mast-query.XXXXXX 2>/dev/null)"; then
     echo 'mast: cannot create a reply file in /tmp' >&2
     exit 1
   fi
@@ -1336,7 +1358,7 @@ cmd_ls() {
 
   # OSC 777 format: ESC ] 777 ; mast-query ; list-tabs ; base64 of the reply path BEL
   mast_emit "$(printf '\033]777;mast-query;list-tabs;%s\007' \
-    "$(printf '%s' "$reply" | base64 -w0)")" || true
+    "$(printf '%s' "$reply" | mast_base64)")" || true
 
   local ticks=0
   while [[ ! -e "$reply" ]]; do
@@ -1363,12 +1385,10 @@ cmd_ls() {
 # comment inside the python program for what that column can and cannot know.
 render_tabs() {
   python3 - "$1" <<'MAST_LS_PY_EOF'
-"""Render mast's list-tabs reply as a table, filling COMMAND from /proc.
+"""Render mast's list-tabs reply as a table.
 
-The reply carries only what the app knows (id, title, workspace, status). What actually
-*runs* in a tab is a /proc question, and it can only be answered for tabs whose shell lives
-in this distro: a tab in another WSL distro, or one running a Windows shell, has no process
-here and shows '?'.
+The reply carries id/title/workspace/status. On Linux/WSL COMMAND is enriched from /proc;
+on macOS (no /proc) running terminals deliberately show '?' rather than guessing.
 """
 import json
 import os
@@ -1434,7 +1454,7 @@ def cmdline_of(pid):
 # readable environ, and those are exactly the ones that can be in a mast tab of ours.
 procs = {}
 tagged = {}
-for entry in os.listdir("/proc"):
+for entry in (os.listdir("/proc") if os.path.isdir("/proc") else []):
     if not entry.isdigit():
         continue
     pid = int(entry)
