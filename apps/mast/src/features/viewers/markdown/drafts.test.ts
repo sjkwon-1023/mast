@@ -2,7 +2,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MarkdownDraftState } from "./drafts";
 
-afterEach(() => { sessionStorage.clear(); });
+afterEach(() => {
+  sessionStorage.clear();
+  vi.useRealTimers();
+});
 
 it("새 JS 컨텍스트에서 sessionStorage의 원문과 편집 내용을 복원한다", async () => {
   const first = await import("./drafts");
@@ -20,7 +23,6 @@ it("새 JS 컨텍스트에서 sessionStorage의 원문과 편집 내용을 복�
 const draft = (text: string) => ({ path: "/tmp/note.md", distro: null, base: "# 원문\n", text });
 let backend: MarkdownDraftState | null;
 const send = async (state: MarkdownDraftState) => { backend = state; };
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 beforeEach(() => {
   backend = null;
@@ -74,12 +76,13 @@ it("페이지가 내려가면(WebView 리로드 시작) unknown 으로 되돌린
   stop();
 });
 
-it("통지가 실패하면 다음 변화 때 현재 값을 다시 보낸다", async () => {
+it("첫 dirty 통지가 실패해도 추가 변화 없이 결국 backend 가 dirty 를 받는다", async () => {
+  vi.useFakeTimers();
   const drafts = await import("./drafts");
-  let failNext = false;
+  let failures = 0;
   const flaky = async (state: MarkdownDraftState) => {
-    if (failNext) {
-      failNext = false;
+    if (state === "dirty" && failures < 3) {
+      failures += 1;
       throw new Error("ipc down");
     }
     backend = state;
@@ -87,13 +90,50 @@ it("통지가 실패하면 다음 변화 때 현재 값을 다시 보낸다", as
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
   const stop = drafts.reportMarkdownDraftState(flaky);
   expect(backend).toBe("clean");
-  failNext = true;
   drafts.keepMarkdownDraft(1, draft("# 수정\n"));
-  await flush();
-  expect(backend).toBe("clean");
-  drafts.keepMarkdownDraft(1, draft("# 수정 더\n"));
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(backend).toBe("dirty");
   stop();
+  error.mockRestore();
+});
+
+it("통지가 한동안 실패하면 재시도는 실패한 값이 아니라 그때의 현재 값을 보낸다", async () => {
+  vi.useFakeTimers();
+  const drafts = await import("./drafts");
+  let down = false;
+  const flaky = async (state: MarkdownDraftState) => {
+    if (down) throw new Error("ipc down");
+    backend = state;
+  };
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const stop = drafts.reportMarkdownDraftState(flaky);
+  down = true;
+  drafts.keepMarkdownDraft(1, draft("# 수정\n"));
+  drafts.discardMarkdownDraft(1);
+  drafts.keepMarkdownDraft(2, draft("# 둘\n"));
+  await vi.advanceTimersByTimeAsync(1_000);
+  down = false;
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(backend).toBe("dirty");
+  stop();
+  error.mockRestore();
+});
+
+it("구독을 해제하면 대기 중인 재시도도 보내지 않는다", async () => {
+  vi.useFakeTimers();
+  const drafts = await import("./drafts");
+  const sent: MarkdownDraftState[] = [];
+  const failing = async (state: MarkdownDraftState) => {
+    sent.push(state);
+    throw new Error("ipc down");
+  };
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const stop = drafts.reportMarkdownDraftState(failing);
+  await vi.advanceTimersByTimeAsync(0);
+  stop();
+  const attempts = sent.length;
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(sent.length).toBe(attempts);
   error.mockRestore();
 });
 

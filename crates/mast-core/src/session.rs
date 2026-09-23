@@ -1190,6 +1190,67 @@ pub struct SessionManager {
     /// 추가 때 걸러 낸다. lock 순서: `sessions` → `closing`.
     #[cfg(target_os = "macos")]
     closing: Mutex<Vec<Arc<crate::platform::macos::ProcessScope>>>,
+    /// 진행 중인 [`create`](Self::create). shutdown 이 시작된 뒤 끝난 스폰은 create 가
+    /// 스스로 정리하는데, shutdown 이 그 정리를 기다리지 않고 반환하면 곧 올
+    /// `process::exit` 가 정리를 끊는다.
+    #[cfg(target_os = "macos")]
+    spawns: SpawnsInFlight,
+}
+
+/// shutdown 이 진행 중인 스폰을 기다리는 상한. 글루의 스폰 마감(5s)에 create 자신의
+/// HUP → grace(500ms) → KILL 정리를 더한 값을 덮는다. 넘기면 기록만 남기고 진행한다 —
+/// 앱 종료를 무기한 막지 않는다.
+#[cfg(target_os = "macos")]
+const SPAWN_DRAIN_LIMIT: Duration = Duration::from_secs(6);
+
+/// 진행 중인 `create()` 수와 그 수가 0 이 됐음을 알리는 condvar.
+///
+/// stopping 확인과 증가를 같은 lock 아래에서 한다. shutdown 은 stopping 을 세운 **뒤에**
+/// 같은 lock 으로 수를 읽으므로, 입장한 create 는 shutdown 이 반드시 보고, shutdown 이
+/// 수를 읽은 뒤 들어오려는 create 는 stopping 을 반드시 보고 거절된다.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct SpawnsInFlight {
+    count: Mutex<usize>,
+    idle: Condvar,
+}
+
+#[cfg(target_os = "macos")]
+impl SpawnsInFlight {
+    fn enter<'a>(&'a self, stopping: &AtomicBool) -> anyhow::Result<SpawnInFlight<'a>> {
+        let mut count = self.count.lock().unwrap();
+        ensure!(!stopping.load(Ordering::Acquire), "session manager is shutting down");
+        *count += 1;
+        Ok(SpawnInFlight(self))
+    }
+
+    /// 진행 중인 create 가 모두 끝날 때까지 `deadline` 까지만 기다린다. 다 끝났으면 true.
+    fn wait_idle(&self, deadline: Instant) -> bool {
+        let mut count = self.count.lock().unwrap();
+        while *count > 0 {
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            count = self.idle.wait_timeout(count, deadline - now).unwrap().0;
+        }
+        true
+    }
+}
+
+/// create 가 끝날 때(성공·실패·정리 모두) 진행 중 수를 되돌리는 RAII guard.
+#[cfg(target_os = "macos")]
+struct SpawnInFlight<'a>(&'a SpawnsInFlight);
+
+#[cfg(target_os = "macos")]
+impl Drop for SpawnInFlight<'_> {
+    fn drop(&mut self) {
+        let mut count = self.0.count.lock().unwrap();
+        *count -= 1;
+        if *count == 0 {
+            self.0.idle.notify_all();
+        }
+    }
 }
 
 impl SessionManager {
@@ -1200,6 +1261,8 @@ impl SessionManager {
             sessions: Mutex::new(HashMap::new()),
             #[cfg(target_os = "macos")]
             closing: Mutex::new(Vec::new()),
+            #[cfg(target_os = "macos")]
+            spawns: SpawnsInFlight::default(),
         }
     }
 
@@ -1216,6 +1279,10 @@ impl SessionManager {
         make_sink: impl FnOnce(SessionId) -> Box<dyn SessionSink>,
     ) -> anyhow::Result<SessionId> {
         ensure!(!self.stopping.load(Ordering::Acquire), "session manager is shutting down");
+        // 함수가 끝날 때(아래 stopping 재검사 경로의 동기 정리까지 마친 뒤) 풀린다 —
+        // 다른 지역 변수보다 먼저 선언해 가장 나중에 drop 되게 한다.
+        #[cfg(target_os = "macos")]
+        let _in_flight = self.spawns.enter(&self.stopping)?;
         let id = {
             let mut next = self.next_id.lock().unwrap();
             let id = *next;
@@ -1253,7 +1320,10 @@ impl SessionManager {
     /// macOS 에서는 동기로 끝낸다 — 호출 직후 `process::exit` 가 오므로 에스컬레이션
     /// 스레드에 맡기면 SIGKILL 이 영영 가지 않는다. 레지스트리의 모든 leader 와 탭 닫기로
     /// 빠졌지만 아직 reap 되지 않은 leader 에 SIGHUP 을 보내고, grace 를 전체에서 한 번만
-    /// 기다린 뒤 아직 reap 되지 않은 leader 만 SIGKILL 한다.
+    /// 기다린 뒤 아직 reap 되지 않은 leader 만 SIGKILL 한다. 이어서 shutdown 이 시작될 때
+    /// 진행 중이던 스폰이 끝나기를 상한([`SPAWN_DRAIN_LIMIT`]) 안에서 기다린다 — 그 스폰은
+    /// 끝난 뒤 stopping 을 보고 자기 leader 를 동기로 정리하므로, 반환할 때는 그 정리도
+    /// 끝나 있다.
     pub fn shutdown(&self) {
         let sessions = {
             let mut guard = self.sessions.lock().unwrap();
@@ -1262,6 +1332,7 @@ impl SessionManager {
         };
         #[cfg(target_os = "macos")]
         {
+            let drain_deadline = Instant::now() + SPAWN_DRAIN_LIMIT;
             let mut scopes = std::mem::take(&mut *self.closing.lock().unwrap());
             for scope in &scopes {
                 scope.hang_up();
@@ -1271,6 +1342,12 @@ impl SessionManager {
                 scopes.push(Arc::clone(&session.process_scope));
             }
             crate::platform::macos::kill_unreaped_after_grace(&scopes);
+            if !self.spawns.wait_idle(drain_deadline) {
+                eprintln!(
+                    "[mast] shutdown: a shell spawn still running after {SPAWN_DRAIN_LIMIT:?}; \
+                     exiting without its cleanup"
+                );
+            }
         }
         #[cfg(not(target_os = "macos"))]
         for session in sessions.into_values() { session.kill(); }

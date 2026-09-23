@@ -555,8 +555,9 @@ pub(crate) fn install_menu(app: &AppHandle) -> tauri::Result<()> {
 }
 
 /// 프론트엔드가 알려 준 Markdown draft 상태. 프론트가 부팅 seed 를 보내기 전·WebView
-/// 리로드 중·통지가 실패한 뒤에는 `Unknown` 이고, 종료 판정은 이를 dirty 와 같이
-/// 안전한 쪽(확인 경로)으로 다룬다.
+/// 리로드 중에는 `Unknown` 이고, 종료 판정은 이를 dirty 와 같이 안전한 쪽(확인 경로)으로
+/// 다룬다. 통지가 실패하면 마지막으로 받은 값이 그대로 남으므로, 프론트는 성공할 때까지
+/// 다시 보낸다.
 #[derive(Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum DraftState {

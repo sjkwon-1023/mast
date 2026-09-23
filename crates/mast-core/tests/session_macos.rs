@@ -104,13 +104,36 @@ fn ended(pid: libc::pid_t) -> bool {
     written <= 0
 }
 
-/// 테스트가 만든 프로세스를 단언 실패와 무관하게 치운다.
-struct KillOnDrop(Vec<libc::pid_t>);
+/// 프로세스 시작 시각(초, 마이크로초). 없는 프로세스와 zombie 에는 `None`.
+fn start_time(pid: libc::pid_t) -> Option<(u64, u64)> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: 쓰기 가능한 버퍼와 그 크기를 넘긴다.
+    let written = unsafe {
+        libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size)
+    };
+    if written < size {
+        return None;
+    }
+    // SAFETY: 커널이 구조체 전체를 채웠다(0 초기화 위에 덮어쓴다).
+    let info = unsafe { info.assume_init() };
+    Some((info.pbi_start_tvsec, info.pbi_start_tvusec))
+}
+
+/// 테스트가 만든 프로세스를 단언 실패와 무관하게 치운다. PID 는 그 프로세스가 끝나고
+/// reap 되면 다른 프로세스에 재사용될 수 있으므로, 만들 때 시작 시각을 적어 두고 drop 때
+/// 같은 PID 의 시작 시각이 그대로일 때만 SIGKILL 한다 — 재사용된 PID 는 건드리지 않는다.
+struct KillOnDrop(Vec<(libc::pid_t, Option<(u64, u64)>)>);
+impl KillOnDrop {
+    fn new(pids: Vec<libc::pid_t>) -> Self {
+        Self(pids.into_iter().map(|pid| (pid, start_time(pid))).collect())
+    }
+}
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
-        for &pid in &self.0 {
-            if !ended(pid) {
-                // SAFETY: 이 테스트가 만든 프로세스의 PID 다.
+        for &(pid, started) in &self.0 {
+            if started.is_some() && start_time(pid) == started {
+                // SAFETY: 시작 시각까지 같으니 이 테스트가 만든 바로 그 프로세스다.
                 unsafe {
                     libc::kill(pid, libc::SIGKILL);
                 }
@@ -155,7 +178,7 @@ fn closing_tab_hangs_up_ordinary_jobs_and_spares_hup_ignoring_ones() {
     tab.type_line(START_HUP_IGNORING_JOB);
     tab.type_line(&report("KEEPER", "$!"));
     let keeper = marker(&tab.output, "KEEPER");
-    let _cleanup = KillOnDrop(vec![job, keeper]);
+    let _cleanup = KillOnDrop::new(vec![job, keeper]);
     // echo 를 끈다 — 에이전트 TUI 처럼 echo 가 꺼진 전경 프로그램이면 kill 이 보내는 EOF 가
     // 출력으로 돌아오지 않아, PTY 가 완전히 닫히며 커널이 보내는 hangup 도 오지 않는다.
     // 그래도 탭 닫기는 셸을 통해 job 을 끝내야 한다.
@@ -181,7 +204,7 @@ fn kill_returns_at_once_and_a_hup_ignoring_leader_is_killed_later() {
         .iter()
         .map(|tab| busy_hup_ignoring_leader(|line| tab.type_line(line), &tab.output))
         .collect();
-    let _cleanup = KillOnDrop(leaders.clone());
+    let _cleanup = KillOnDrop::new(leaders.clone());
 
     for tab in &tabs {
         tab.session.kill();
@@ -212,7 +235,7 @@ fn natural_shell_exit_leaves_job_handling_to_the_shell() {
     tab.type_line(START_HUP_IGNORING_JOB);
     tab.type_line(&report("KEEPER", "$!"));
     let keeper = marker(&tab.output, "KEEPER");
-    let _cleanup = KillOnDrop(vec![job, keeper]);
+    let _cleanup = KillOnDrop::new(vec![job, keeper]);
 
     tab.type_line("setopt no_check_jobs; exit\n");
 
@@ -242,7 +265,7 @@ fn app_shutdown_also_ends_a_leader_whose_tab_was_just_closed() {
     let manager = SessionManager::new();
     let (id, session, output) = manager_tab(&manager);
     let leader = busy_hup_ignoring_leader(|line| session.write(line.as_bytes()).unwrap(), &output);
-    let _cleanup = KillOnDrop(vec![leader]);
+    let _cleanup = KillOnDrop::new(vec![leader]);
     drop(session);
 
     assert!(manager.remove(id));
@@ -266,7 +289,7 @@ fn app_shutdown_ends_hup_ignoring_leaders_after_one_shared_grace() {
             busy_hup_ignoring_leader(|line| session.write(line.as_bytes()).unwrap(), output)
         })
         .collect();
-    let _cleanup = KillOnDrop(leaders.clone());
+    let _cleanup = KillOnDrop::new(leaders.clone());
 
     let started = Instant::now();
     manager.shutdown();
@@ -308,7 +331,7 @@ fn app_shutdown_ends_owned_jobs_without_changing_restorable_tab_state() {
     retained_handle.write(START_JOB.as_bytes()).unwrap();
     retained_handle.write(report("JOB", "$!").as_bytes()).unwrap();
     let job = marker(&output, "JOB");
-    let _cleanup = KillOnDrop(vec![job]);
+    let _cleanup = KillOnDrop::new(vec![job]);
     assert!(manager.ids().contains(&id));
 
     manager.shutdown();
@@ -327,4 +350,41 @@ fn app_shutdown_ends_owned_jobs_without_changing_restorable_tab_state() {
         0,
         "shutdown must not mark saved Running tabs Exited"
     );
+}
+
+#[test]
+fn app_shutdown_waits_for_a_spawn_already_in_progress() {
+    // 스폰이 진행 중일 때 앱 종료가 시작되면, 그 스폰은 끝난 뒤 shutdown 을 보고 스스로
+    // 셸을 정리한다. shutdown 이 그 정리를 기다리지 않고 반환하면 곧 올 `process::exit` 가
+    // 정리를 끊어 셸이 남는다. sink 를 만드는 단계에서 스폰을 붙잡아 진행 중 상태를 만든다.
+    let manager = Arc::new(SessionManager::new());
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let spawning = std::thread::spawn({
+        let manager = Arc::clone(&manager);
+        move || {
+            manager.create(bash(), SessionOptions::default(), move |_| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Box::new(Sink(Arc::new(Mutex::new(Captured::default()))))
+            })
+        }
+    });
+    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+    let shutting_down = std::thread::spawn({
+        let manager = Arc::clone(&manager);
+        move || manager.shutdown()
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    let returned_early = shutting_down.is_finished();
+    release_tx.send(()).unwrap();
+    assert!(!returned_early, "shutdown returned while a spawn was still in progress");
+
+    until("shutdown never returned after the spawn finished", || {
+        shutting_down.is_finished()
+    });
+    shutting_down.join().unwrap();
+    let _ = spawning.join().unwrap();
+    assert!(manager.ids().is_empty(), "a spawn racing shutdown must not stay registered");
 }

@@ -185,13 +185,18 @@ existing Ctrl/Alt bindings and terminal copy/paste behavior.
 
 Dock Quit, logout, restart and AppleScript `quit` go through the same
 unsaved-Markdown confirmation as Cmd+Q. With no Markdown drafts Mast quits
-immediately and never delays a logout. With unsaved drafts — or before the
-window has reported its draft state, for example while it is loading or
-reloading — Mast cancels the quit, which cancels a logout or restart the way
-other macOS apps do, and shows the quit confirmation; save or discard, then quit
-or log out again. Mast does not defer termination (`NSTerminateLater`). A quit
-that arrives within milliseconds of the first edit, before the window has
-reported it, can still quit without the confirmation.
+immediately and never delays a logout. With unsaved drafts Mast cancels the
+quit, which cancels a logout or restart the way other macOS apps do, and shows
+the quit confirmation; save or discard, then quit or log out again. Mast does not
+defer termination (`NSTerminateLater`). If reporting the draft state to the app
+fails, the window keeps retrying until it succeeds.
+
+Two short windows are not protected. Right after the window loads or reloads,
+until it has installed its close confirmation and reported its draft state, a
+quit is still turned into a window close, but nothing is there yet to confirm
+it, so Mast can quit without asking. And a quit that arrives within
+milliseconds of the first edit, before the window has reported it, can quit
+without the confirmation.
 
 ## Shutdown contract
 
@@ -208,7 +213,9 @@ login shells, so a Mast bash tab leaves background jobs running after `exit`).
 App quit, including closing the last window, sends SIGHUP to every shell it owns,
 including shells of tabs that were just closed and whose shell has not exited
 yet, waits one shared grace period and sends SIGKILL to any shell still running,
-before the process exits. The shell's PID is kept unreaped until Mast has
+before the process exits. A shell whose spawn was still in progress when quit
+began gets the same SIGHUP, grace and SIGKILL once the spawn finishes, and quit
+waits for that — up to 6 seconds, after which it exits without it. The shell's PID is kept unreaped until Mast has
 finished signalling it, so a reused PID is never signalled. A HUP-ignoring job
 that keeps the terminal open and prints nothing holds that tab's output reader
 thread until it writes or exits. No daemon, tmux server or always-on process

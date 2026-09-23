@@ -145,9 +145,24 @@ class App {
     };
 
     document.body.classList.toggle("platform-macos", IS_MAC);
-    // macOS 의 Dock Quit·로그아웃은 창 close 를 거치지 않고 백엔드의 종료 판정으로
-    // 간다. 그 판정이 draft 유무를 알도록 첫 await 전에 seed 하고 변화마다 보고한다.
-    if (IS_MAC) reportMarkdownDraftState((state) => invoke("set_markdown_draft_state", { state }));
+    // 창 close 확인 가드는 한 번만 등록한다. 등록은 여기서 시작하고 완료는 아래에서 기다린다 —
+    // 그 사이의 초기화 순서와 동작은 바꾸지 않는다.
+    const closeGuard = getCurrentWindow().onCloseRequested((event) => {
+      if (hasMarkdownDrafts() && !window.confirm("Quit mast and discard unsaved Markdown edits?")) event.preventDefault();
+    });
+    // macOS 의 Dock Quit·로그아웃은 창 close 를 거치지 않고 백엔드의 종료 판정으로 간다.
+    // 판정은 Clean 일 때만 확인 없이 끝내고, 그 밖에는 창 close 로 위 가드를 태운다. 그래서
+    // 보고는 가드 등록이 끝난 **뒤에만** 시작한다(순서가 계약이다): 백엔드가 Clean·Dirty 를
+    // 받은 시점에는 JS 가드가 이미 있다. 등록이 끝나기 전의 짧은 구간에는 백엔드가 Unknown 이라
+    // 창 close 를 요청하지만 그 close 를 막을 가드가 아직 없어 확인 없이 끝날 수 있다 —
+    // docs/MACOS.md 에 적은 한계다. 등록 실패는 아래의 await 가 드러내며, 그때 보고는
+    // 시작하지 않는다.
+    if (IS_MAC) {
+      closeGuard.then(
+        () => reportMarkdownDraftState((state) => invoke("set_markdown_draft_state", { state })),
+        () => {},
+      );
+    }
     if (!IS_MAC) this.initUpdateNotice();
     installReloadKey();
     installShortcutGuide();
@@ -160,9 +175,7 @@ class App {
       this.showError(formatCommandError(err));
     }
     this.installWindowFocus();
-    await getCurrentWindow().onCloseRequested((event) => {
-      if (hasMarkdownDrafts() && !window.confirm("Quit mast and discard unsaved Markdown edits?")) event.preventDefault();
-    });
+    await closeGuard;
 
     initWindowVisibility().catch((err: unknown) => {
       console.error("window visibility listen failed", err);

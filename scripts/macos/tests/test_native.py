@@ -126,12 +126,25 @@ class NativeInstaller(unittest.TestCase):
         return result.returncode, result.stderr, config / "opencode/plugins/mast.js"
 
     def test_timed_out_command_ends_even_if_a_detached_descendant_keeps_the_pipe(self):
-        # 새 세션으로 빠져나간 손자는 killpg 에 걸리지 않고 출력 파이프를 계속 쥔다.
-        detached = "import os, time; os.setsid(); time.sleep(30)"
-        started = time.monotonic()
-        with self.assertRaises(ValueError):
-            setup.bounded_run(["/bin/sh", "-c", '"$0" -c "$1" & sleep 30', sys.executable, detached], 0.5)
-        self.assertLess(time.monotonic() - started, 10)
+        # 새 세션으로 빠져나간 손자는 killpg 에 걸리지 않고 출력 파이프를 계속 쥔다. 손자의
+        # 수명(LIFETIME)은 판정 상한(LIMIT)보다 길어서, bounded_run 이 손자를 기다리면 실패한다.
+        # 손자는 끝에서 직접 치우고, 치우지 못해도 LIFETIME 뒤에는 스스로 끝난다.
+        LIMIT, LIFETIME = 5, 12
+        detached = ("import os, sys, time; os.setsid(); "
+                    "open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(float(sys.argv[2]))")
+        with tempfile.TemporaryDirectory() as scratch:
+            pid_file = Path(scratch) / "detached.pid"
+            started = time.monotonic()
+            try:
+                with self.assertRaises(ValueError):
+                    setup.bounded_run(["/bin/sh", "-c", '"$0" -c "$1" "$2" "$3" & sleep 30',
+                                       sys.executable, detached, str(pid_file), str(LIFETIME)], 0.5)
+                self.assertLess(time.monotonic() - started, LIMIT)
+            finally:
+                # 손자가 아직 살아 있을 시간 안에서만 신호를 보낸다 — 끝난 뒤의 PID 는 재사용될 수 있다.
+                if pid_file.exists() and pid_file.read_text() and time.monotonic() - started < LIFETIME - 1:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(int(pid_file.read_text()), 9)
 
     def test_skill_failure_is_reported_and_agents_are_still_connected(self):
         elsewhere = self.symlinked_skill_home()

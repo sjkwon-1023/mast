@@ -146,8 +146,18 @@ impl Drop for SpawnGuard {
         let pid = self.scope.pid;
         self.scope.hang_up();
         let deadline = Instant::now() + GRACE;
-        while Instant::now() < deadline && !exited_unreaped(pid) {
-            std::thread::sleep(POLL);
+        while Instant::now() < deadline {
+            match child_state(pid) {
+                ChildState::Running => std::thread::sleep(POLL),
+                ChildState::Exited => break,
+                ChildState::Unobservable(error) => {
+                    // 누군가 이미 reap 했을 수 있다 — 그러면 이 숫자 PID 는 재사용됐을 수 있으므로
+                    // before_reap 의 실패 경로처럼 권한만 닫고 KILL 도 reap 도 하지 않는다.
+                    *self.scope.root.lock().unwrap() = None;
+                    eprintln!("[mast] cannot observe child {pid} during spawn cleanup: {error}");
+                    return;
+                }
+            }
         }
         // 권한을 닫기 전에 KILL 한다 — 여기까지 reap 한 주체가 없으니 PID 는 아직 우리 자식이다.
         self.scope.signal(libc::SIGKILL);
@@ -162,10 +172,19 @@ impl Drop for SpawnGuard {
     }
 }
 
+enum ChildState {
+    /// 아직 끝나지 않았다(EINTR 로 확인하지 못한 경우도 다음 확인으로 넘긴다).
+    Running,
+    /// 끝났고 아직 reap 되지 않았다.
+    Exited,
+    /// waitid 가 EINTR 외 오류(ECHILD 등)를 냈다 — 더는 우리 미reap 자식이라고 볼 수 없다.
+    Unobservable(io::Error),
+}
+
 /// 자식이 끝났는지 reap 하지 않고(WNOWAIT) 기다림 없이(WNOHANG) 확인한다.
-fn exited_unreaped(pid: libc::pid_t) -> bool {
+fn child_state(pid: libc::pid_t) -> ChildState {
     let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-    // SAFETY: 초기화된 출력 버퍼이고 pid 는 아직 reap 되지 않은 우리 직계 자식이다.
+    // SAFETY: 초기화된 출력 버퍼다. pid 가 우리 자식이 아니면 커널이 ECHILD 로 거절한다.
     let result = unsafe {
         libc::waitid(
             libc::P_PID,
@@ -174,12 +193,62 @@ fn exited_unreaped(pid: libc::pid_t) -> bool {
             libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
         )
     };
-    // WNOHANG 에서 아직 끝나지 않았으면 0 을 반환하고 si_pid 는 0 으로 남는다(버퍼를 0 으로 초기화했다).
-    // EINTR 은 다음 확인으로 넘기고, 그 밖의 오류(ECHILD 등)는 더 기다릴 대상이 없다는 뜻이라
-    // 끝난 것으로 본다.
     if result != 0 {
-        return io::Error::last_os_error().kind() != io::ErrorKind::Interrupted;
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::Interrupted {
+            return ChildState::Running;
+        }
+        return ChildState::Unobservable(error);
     }
+    // WNOHANG 에서 아직 끝나지 않았으면 0 을 반환하고 si_pid 는 0 으로 남는다(버퍼를 0 으로 초기화했다).
     // SAFETY: waitid 가 성공했으므로 버퍼는 초기화돼 있다(0 초기화 위에 커널이 채운다).
-    unsafe { info.assume_init().si_pid != 0 }
+    if unsafe { info.assume_init().si_pid } != 0 {
+        ChildState::Exited
+    } else {
+        ChildState::Running
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    fn running(pid: libc::pid_t) -> bool {
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        // SAFETY: 쓰기 가능한 버퍼와 그 크기를 넘긴다.
+        let written = unsafe {
+            libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size)
+        };
+        written > 0
+    }
+
+    #[test]
+    fn spawn_cleanup_never_kills_a_pid_it_cannot_observe_as_its_child() {
+        // 우리 자식이 아닌(이미 다른 쪽이 reap 한 PID 를 재사용한 것과 같은) 프로세스를
+        // 스폰 실패 정리에 넘긴다. waitid 가 ECHILD 를 내는 대상이므로 정리는 신호 권한을
+        // 닫고 물러나야 한다. HUP 은 무시하도록 만들어, 살아 있는지로 SIGKILL 여부를 본다.
+        let mut shell = Command::new("/bin/sh")
+            .args(["-c", "trap '' HUP; /bin/sleep 30 </dev/null >/dev/null 2>&1 & echo $!"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(shell.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        shell.wait().unwrap();
+        let stranger: libc::pid_t = line.trim().parse().unwrap();
+        assert!(running(stranger));
+
+        drop(SpawnGuard::new(Arc::new(ProcessScope::new(stranger as u32))));
+
+        std::thread::sleep(Duration::from_millis(100));
+        let survived = running(stranger);
+        // SAFETY: 방금 살아 있음을 확인한, 이 테스트가 만든 프로세스다.
+        unsafe {
+            libc::kill(stranger, libc::SIGKILL);
+        }
+        assert!(survived, "spawn cleanup killed a process that is not its unreaped child");
+    }
 }
