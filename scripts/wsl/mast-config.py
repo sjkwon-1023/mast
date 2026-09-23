@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mast의 저장된 Windows 설정을 수정한다. 실행 중인 앱에는 요청하지 않는다."""
+"""mast의 저장된 데스크톱 설정을 수정한다. 실행 중인 앱에는 요청하지 않는다."""
 
 import copy
 import json
@@ -15,7 +15,7 @@ import tempfile
 MAX_BYTES = 1024 * 1024
 DEFAULT_PORT = 7331
 LANGUAGES = ["css", "html", "javascript", "json", "python", "rust", "toml", "typescript"]
-KEYS = {"fontFamily", "fontSize", "highlightLanguages", "log", "remote", "remote.port", "showTabIds"}
+KEYS = {"fontFamily", "fontSize", "highlightLanguages", "log", "remote", "remote.port", "showTabIds", "shell"}
 DEFAULTS = {
     "fontFamily": "terminal: Consolas, 'Cascadia Mono', monospace; viewers: monospace",
     "fontSize": "terminal: 13px; viewers: 12px",
@@ -24,6 +24,7 @@ DEFAULTS = {
     "remote": False,
     "remote.port": "none while remote is off; set remote defaults to 7331",
     "showTabIds": True,
+    "shell": "$SHELL on macOS, falling back to /bin/zsh; ignored on Windows",
 }
 HELP = """usage:
   mast config                         show saved overrides, defaults and help
@@ -33,6 +34,7 @@ HELP = """usage:
   mast config set highlightLanguages '["python","rust"]'
   mast config set log <true|false>
   mast config set showTabIds <true|false>
+  mast config set shell <zsh|bash|absolute-path>
   mast config set remote [true|false] [--port <1024-65535>]
   mast config set remote.port <1024-65535>
   mast config reset <key>              remove an override; reset remote disables it
@@ -40,7 +42,7 @@ HELP = """usage:
 set remote enables port 7331 unless --port is given. false cannot take a port.
 showTabIds defaults to true; set it to false to hide the #id badges on tab titles.
 Changes require a full mast restart, which ends running terminal processes.
-Ctrl+Shift+R only reloads the window. No command restarts mast automatically.
+Reloading the window is not enough. No command restarts mast automatically.
 """
 
 
@@ -61,6 +63,9 @@ def validate(data):
         raise ValueError("log must be true or false")
     if data.get("showTabIds") is not None and type(data["showTabIds"]) is not bool:
         raise ValueError("showTabIds must be true or false")
+    shell = data.get("shell")
+    if shell is not None and (not isinstance(shell, str) or not shell.strip() or "\0" in shell):
+        raise ValueError("shell must be a non-blank string without NUL bytes")
     languages = data.get("highlightLanguages")
     if languages is not None and (
         not isinstance(languages, list)
@@ -234,7 +239,11 @@ def execute(args, path):
     print("Saved settings to " + json.dumps(str(path)))
     if change[0] in ("remote", "remote.port") and not change[2]:
         print(f"Phone access will use port {change[1]} after restart. Plain HTTP: use only a trusted LAN, never public internet exposure or port forwarding.")
-    print("Restart mast fully to apply changes. Restarting ends running terminal processes; finish or save work first. Ctrl+Shift+R is not enough. No restart was performed.")
+    print("Restart mast fully to apply changes. Restarting ends running terminal processes; finish or save work first. Reloading the window is not enough. No restart was performed.")
+
+
+def macos_settings_path():
+    return Path.home() / "Library" / "Application Support" / "app.mast.desktop" / "settings.json"
 
 
 def windows_settings_path():
@@ -271,7 +280,8 @@ def main():
                     raise ValueError("get accepts one optional known setting name")
             else:
                 mutation(args)
-        execute(args, windows_settings_path())
+        path = macos_settings_path() if sys.platform == "darwin" else windows_settings_path()
+        execute(args, path)
         return 0
     except (ValueError, OSError, RecursionError, subprocess.SubprocessError) as error:
         print("mast config: " + ascii(str(error)), file=sys.stderr)
