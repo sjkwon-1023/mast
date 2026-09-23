@@ -87,7 +87,8 @@ def list_tabs(args):
     directory = Path(tempfile.mkdtemp(prefix="mast-query-", dir="/tmp"))
     reply = directory / "tabs.json"
     try:
-        emit(("\x1b]777;mast-query;list-tabs;%s\x07" % encode(str(reply))).encode())
+        if not emit(("\x1b]777;mast-query;list-tabs;%s\x07" % encode(str(reply))).encode()):
+            raise ValueError("cannot query Mast: terminal write failed (check TTY permissions)")
         deadline = time.monotonic() + 2
         while not reply.exists():
             if time.monotonic() >= deadline:
@@ -136,7 +137,8 @@ def send(args):
     if len(text.encode("utf-8")) > 24 * 1024:
         raise ValueError("send text exceeds 24 KiB; split it into smaller messages")
     def write(value):
-        emit(("\x1b]777;mast-send;%s;%s\x07" % (target, encode(value))).encode("utf-8"))
+        if not emit(("\x1b]777;mast-send;%s;%s\x07" % (target, encode(value))).encode("utf-8")):
+            raise ValueError("cannot write to the Mast terminal; delivery is unconfirmed (check TTY permissions)")
     if text:
         write(text)
     if submit:
