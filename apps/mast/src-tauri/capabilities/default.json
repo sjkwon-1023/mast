@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Main window capability — core APIs only (event listen for state-changed/osc-event/window-hidden/window-focus, the window focus query main.ts seeds its flag from, and invoke of our own commands; core:default covers these APIs; core:window:allow-destroy completes onCloseRequested after the unsaved Markdown confirmation). Without core:default the ACL rejects listen() and the whole frontend dies (spike 회귀 교훈). The notification plugin and its notification:default permission were dropped in v0.3.7: toasts are raised by the Rust-side notify_toast command through tauri-winrt-notification, so no plugin JS surface exists to authorize.",
-  "windows": ["main"],
+  "webviews": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-destroy"

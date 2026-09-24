@@ -132,6 +132,14 @@ impl Dispatcher {
         history_tab: u64,
     ) -> Result<PreparedTab, CommandError> {
         match spec {
+            NewTab::Browser { url } => {
+                if !self.host.browser_enabled() {
+                    return Err(CommandError::InvalidName { message: "browser is disabled in settings".into() });
+                }
+                let url = crate::browser::normalize_url(&url)
+                    .map_err(|message| CommandError::InvalidPath { message })?;
+                Ok(PreparedTab::Viewer { title: "Browser".into(), kind: TabKind::Browser { url } })
+            }
             NewTab::Terminal { cwd } => {
                 let (session, cwd) =
                     self.spawn_terminal_with(root_path, distro, cwd, history_tab)?;

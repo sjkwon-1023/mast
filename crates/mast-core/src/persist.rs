@@ -170,7 +170,7 @@ struct RemovedUnknownTab {
 fn is_known_tab_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "terminal" | "folderBrowser" | "textViewer" | "markdownViewer" | "changesViewer"
+        "terminal" | "folderBrowser" | "textViewer" | "markdownViewer" | "changesViewer" | "browser"
     )
 }
 

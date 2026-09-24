@@ -666,18 +666,19 @@ describe("PaneView header buttons", () => {
     );
   }
 
-  it("has the five working buttons — the send pair is retired", () => {
+  it("has the six working buttons — the send pair is retired", () => {
     const { view } = mount();
     view.update(pane(THREE, 10), true, null, null);
 
     const titles = headerButtons(view).map((b) => b.title);
-    expect(titles).toHaveLength(5);
+    expect(titles).toHaveLength(6);
     expect(titles.filter((t) => t.toLowerCase().includes("send"))).toEqual([]);
     // 툴팁의 기능 설명 부분만 본다 — 뒤에 붙는 단축키 표기는 shared/keys.ts 소유.
     expect(titles.map((t) => t.replace(/ \(.*\)$/, ""))).toEqual([
       "New terminal tab",
       "New folder browser tab",
       "New changes viewer tab",
+      "New browser tab",
       "Split left/right",
       "Split top/bottom",
     ]);
@@ -687,7 +688,7 @@ describe("PaneView header buttons", () => {
     const { view } = mount();
     view.update(pane(THREE, 10), true, null, null);
 
-    const [plus, ...icons] = headerButtons(view);
+    const [plus, ...icons] = headerButtons(view).filter(b => b.title !== "New browser tab");
     // + 는 텍스트 라벨 그대로다 (판단: 기호가 이미 자명하다).
     expect(plus.textContent).toBe("+");
     expect(icons).toHaveLength(4);
@@ -735,6 +736,30 @@ describe("PaneView header buttons", () => {
     const tab = { type: "terminal", cwd: "/home/u/proj" } as const;
     expect(dispatched).toEqual([
       { type: "createTab", pane: 4, tab },
+      { type: "splitPane", pane: 4, direction: "horizontal", tab },
+      { type: "splitPane", pane: 4, direction: "vertical", tab },
+    ]);
+  });
+
+  // 브라우저 탭을 보고 있어도 분할은 키보드 분할과 같이 새 터미널을 연다.
+  it("splits a pane showing a browser tab into a new terminal, not another browser", () => {
+    const { view, headerButton, dispatched } = mount(4);
+    const browser: Tab = {
+      id: 20,
+      title: "Browser",
+      kind: { type: "browser", url: "http://localhost:3000" },
+      notification: "none",
+      lastActivityMs: null,
+      agentStatus: "idle",
+      lastAgentMessage: null,
+    };
+    view.update(pane([browser], 20), true, null, null);
+
+    headerButton("Split left/right").click();
+    headerButton("Split top/bottom").click();
+
+    const tab = { type: "terminal", cwd: null } as const;
+    expect(dispatched).toEqual([
       { type: "splitPane", pane: 4, direction: "horizontal", tab },
       { type: "splitPane", pane: 4, direction: "vertical", tab },
     ]);

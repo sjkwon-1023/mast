@@ -14,14 +14,23 @@ import {
   getState,
   getUpdateInfo,
   getUiSettings,
+  getWslStatus,
   notifyToast,
   onUpdateChecked,
+  onWslStatusChanged,
+  openSettingsFile,
   openUrl,
   pickWorkspaceFolder,
+  recheckWsl,
   remoteStatus,
   resetUi,
   userActivity,
 } from "../infrastructure/backend";
+import type { WslStatus } from "../infrastructure/backend";
+import { applyBrowserSettings } from "../features/browser/settings";
+import { WslBanner } from "../features/wsl/banner";
+import { copyText } from "../features/wsl/clipboard";
+import { WSL_INSTALL_URL } from "../features/wsl/notice";
 import {
   detectNeedsInputOnset,
   needsInputToasts,
@@ -95,6 +104,9 @@ function installReloadKey(onError: (err: unknown) => void): void {
 
 const ERROR_TTL_MS = 5000;
 
+/** 복사 확인 같은 정보성 안내가 상태 라인에 머무는 시간. */
+const INFO_TTL_MS = 4000;
+
 const WINDOW_FOCUS_EVENT = "window-focus";
 
 function requireElement(id: string): HTMLElement {
@@ -135,13 +147,40 @@ class App {
     (err) => this.showError(formatCommandError(err)),
   );
 
+  // WSL 준비 안내 배너 — 상태 판정은 백엔드 진단(`get_wsl_status`)이 하고 여기는
+  // 문구·버튼만 그린다 (features/wsl/*).
+  private readonly wslBanner = new WslBanner(requireElement("wsl-notice"), {
+    copy: copyText,
+    guide: () => {
+      void openUrl(WSL_INSTALL_URL).catch((err: unknown) => {
+        console.debug("[mast] WSL install guide failed to open", err);
+      });
+    },
+    recheck: async () => {
+      try {
+        this.applyWslStatus(await recheckWsl());
+      } catch (err) {
+        this.showError(formatCommandError(err));
+      }
+    },
+    settings: () => {
+      void openSettingsFile().catch((err: unknown) => {
+        this.showError(formatCommandError(err));
+      });
+    },
+    notice: (text) => this.flashInfo(text),
+  });
+
   private agentStatuses: Map<TabId, AgentStatus> | null = null;
 
   private windowFocused = true;
 
   private focusEventSeen = false;
+  private wslStatus: WslStatus | null = null;
   private errorText: string | null = null;
   private errorTimer: ReturnType<typeof setTimeout> | null = null;
+  private infoText: string | null = null;
+  private infoTimer: ReturnType<typeof setTimeout> | null = null;
 
   private picking = false;
 
@@ -216,6 +255,7 @@ class App {
     initWindowVisibility().catch((err: unknown) => {
       console.error("window visibility listen failed", err);
     });
+    this.initWslNotice();
     installNavKeys({
       getSnapshot: () => this.store.snapshot,
       paneRects: () => this.wsView.paneRects(),
@@ -231,6 +271,7 @@ class App {
       // 첫 스냅샷이 뷰를 만들기 전에 설정과 로그를 적용한다.
       installFrontEndLogging(settings);
       applyTerminalSettings(settings);
+      applyBrowserSettings(settings);
       applyViewerFontSettings(settings);
       applyHighlightSettings(settings);
       applyTabIdSettings(settings);
@@ -238,6 +279,14 @@ class App {
       console.error("get_ui_settings failed", err);
       this.showError(formatCommandError(err));
     }
+    const browserButton = document.createElement("button");
+    browserButton.textContent = "New browser tab";
+    browserButton.className = "new-browser-tab";
+    browserButton.id = "empty-browser-button";
+    browserButton.addEventListener("click", () => {
+      void invoke("browser_request", {request: {action: "open", url: ""}}).catch(err => this.showError(formatCommandError(err)));
+    });
+    requireElement("wsl-notice").after(browserButton);
     await this.initRemote();
     this.store.subscribe((snapshot) => this.render(snapshot));
     await this.store.init();
@@ -246,6 +295,47 @@ class App {
   private initUpdateNotice(): void {
     startUpdateNotice(onUpdateChecked, getUpdateInfo, (info) =>
       this.sidebar.setUpdateInfo(info),
+    );
+  }
+
+  /** WSL 진단 상태 구독 — **이벤트를 먼저 걸고 캐시를 읽는다** (update notice 와
+   *  같은 규율: 부팅 진단이 그 사이에 끝나도 놓치지 않는다). */
+  private initWslNotice(): void {
+    void (async () => {
+      let eventSeen = false;
+      try {
+        await onWslStatusChanged((status) => {
+          eventSeen = true;
+          this.applyWslStatus(status);
+        });
+      } catch (err) {
+        console.error("wsl status listen failed", err);
+      }
+      try {
+        const status = await getWslStatus();
+        if (!eventSeen) this.applyWslStatus(status);
+      } catch (err) {
+        console.error("get_wsl_status failed", err);
+      }
+    })();
+  }
+
+  private applyWslStatus(status: WslStatus): void {
+    this.wslStatus = status;
+    this.wslBanner.render(status);
+  }
+
+  /** 진단이 "터미널을 만들 수 없다"고 확정한 상태인가 — 백엔드 스폰 게이트와 같은
+   *  판정의 프론트 사본이다. 계약은 백엔드가 지키고, 이 검사는 사용자에게 배너
+   *  안내를 먼저 보여 주기 위한 것뿐이다. `probing`(진단 중)은 막지 않는다 —
+   *  백엔드가 첫 진단을 기다렸다가 스폰한다. */
+  private wslBlocksTerminal(): boolean {
+    const state = this.wslStatus?.state;
+    return (
+      state === "notInstalled" ||
+      state === "noDistro" ||
+      state === "failed" ||
+      state === "timeout"
     );
   }
 
@@ -298,6 +388,12 @@ class App {
   }
 
   private createWorkspaceHere(): void {
+    // 백엔드 스폰 게이트가 계약이지만, 사용자에게는 `spawnFailed` 원문 대신 배너
+    // 안내를 먼저 보여 준다 (배너가 이미 화면에 있다).
+    if (this.wslBlocksTerminal()) {
+      this.showError("cannot create a terminal: WSL is not ready — see the notice above");
+      return;
+    }
     const snapshot = this.store.snapshot;
     const ws = snapshot === null ? null : activeWorkspace(snapshot);
     if (ws === null) {
@@ -327,6 +423,10 @@ class App {
 
   private async openWorkspacePicker(): Promise<void> {
     if (this.picking) return;
+    if (this.wslBlocksTerminal()) {
+      this.showError("cannot create a terminal: WSL is not ready — see the notice above");
+      return;
+    }
     this.picking = true;
     try {
       const picked = await pickWorkspaceFolder();
@@ -412,6 +512,18 @@ class App {
     this.renderStatusLine();
   }
 
+  /** 정보성 안내 — 복사 확인처럼 오류가 아닌 한 줄. 같은 타이머 규율을 쓴다. */
+  private flashInfo(text: string): void {
+    this.infoText = text;
+    if (this.infoTimer !== null) clearTimeout(this.infoTimer);
+    this.infoTimer = setTimeout(() => {
+      this.infoTimer = null;
+      this.infoText = null;
+      this.renderStatusLine();
+    }, INFO_TTL_MS);
+    this.renderStatusLine();
+  }
+
   private setPrompt(text: string | null): void {
     if (this.promptText === text) return;
     this.promptText = text;
@@ -429,6 +541,8 @@ class App {
   }
 
   private render(snapshot: StateSnapshot): void {
+    const emptyBrowser = document.getElementById("empty-browser-button");
+    if (emptyBrowser) emptyBrowser.hidden = snapshot.state.workspaces.length > 0;
     this.tracer.markSnapshot(snapshot.state.activeWorkspace, performance.now());
     this.notifyNeedsInput(snapshot);
     this.sidebar.render(snapshot);
@@ -460,6 +574,7 @@ class App {
     const parts: string[] = [];
     if (this.promptText !== null) parts.push(this.promptText);
     if (this.errorText !== null) parts.push(`ERROR: ${this.errorText}`);
+    if (this.infoText !== null) parts.push(this.infoText);
     this.statusEl.textContent = parts.join(" · ");
     this.statusEl.classList.toggle("error", this.errorText !== null);
     this.statusEl.hidden = parts.length === 0;

@@ -1,5 +1,6 @@
-//! 부팅 재스폰 페이싱 — 복원된 탭의 셸을 다시 띄우는 일을 setup 스레드에서 떼어내고,
-//! WSL 이 감당할 속도로 흘려보낸다.
+//! 부팅 재스폰 페이싱과 WSL 준비 상태 게이트 — 복원된 탭의 셸을 다시 띄우는 일과
+//! Fresh 부팅의 초기 탭 생성을 setup 스레드에서 떼어내고, **첫 WSL 진단 뒤로**
+//! 미룬다.
 //!
 //! # 왜 (실기 사고 2026-08-20)
 //!
@@ -19,6 +20,21 @@
 //! knob 을 `0` 으로 두면 **둘 다 꺼져** v0.3.9 의 버스트가 그대로 재현된다 — 검증 절차가
 //! 사고를 먼저 재현한 뒤 수정을 확인하는 순서이기 때문이다.
 //!
+//! # WSL 진단 게이트 (2026-09-22)
+//!
+//! WSL 이 없는/깨진 PC 에서 이 웨이브는 탭마다 실패하고 그 실패를 `Exited` 로
+//! 각인시켰다 — 사용자가 WSL 을 고쳐도 탭은 죽은 채였고, 부팅마다 같은 실패를
+//! 반복했다. 이제 [`BootWork`] 가 **첫 진단을 기다린 뒤** 시작한다:
+//!
+//! - 진단이 준비되면 지금까지와 같다 (초기 탭 생성 → 재스폰 → 프로비저닝).
+//! - 준비되지 않았으면 **아무것도 실행하지 않는다**. 탭은 세션 없는 `Running` 으로
+//!   남아 기록·cwd 가 보존되고, UI 가 안내를 띄운다.
+//! - 사용자가 **명시적으로 재검사**해 준비되면 [`BootWork::retry`] 가 밀린 작업을
+//!   다시 적용한다 (자동 반복 없음 — 재검사가 유일한 재시도다).
+//!
+//! 배포판별 실패는 서로 독립이다: 준비된 distro 의 탭만 재스폰하고 나머지는
+//! 건너뛴다 ([`mast_core::wsl::respawn_plan`]).
+//!
 //! # 왜 별도 스레드인가
 //!
 //! 예열은 콜드 VM 에서 수 초가 걸리고 간격은 탭 수에 비례한다 — setup 스레드에서 하면
@@ -27,12 +43,14 @@
 //! 것도 종전과 같다 — 프론트는 세션 없는 탭을 attach 하지 않고 publish 마다 점진
 //! attach 한다.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager};
-use mast_core::command::{CommandError, Dispatcher};
+use mast_core::command::{Command, CommandError, Dispatcher, NewTab};
 use mast_core::record::RecordStore;
+use mast_core::wsl::{self, WslHealth, WslStatus};
+use tauri::{AppHandle, Manager};
 
 use crate::commands::forget_record_after_respawn;
 use crate::state;
@@ -50,94 +68,264 @@ const DEFAULT_STAGGER: Duration = Duration::from_millis(250);
 /// 전제가 아니므로, WSL 이 응답하지 않을 때 그것 때문에 탭이 하나도 안 살아나면 안 된다.
 const WARMUP_DEADLINE: Duration = Duration::from_secs(30);
 
-/// 복원된 `Running`·세션 없음 탭들을 예열 뒤 간격을 두고 재스폰한다. 즉시 반환하고
-/// 실제 작업은 새 스레드에서 돈다 (모듈 doc).
-///
-/// 되살릴 탭이 하나도 없어도 스레드는 뜬다 — 웨이브의 끝에 도는 정합성 검사와 진단
-/// 한 줄(ADR-0018)은 부팅마다 나와야 기준선 구실을 하고, Fresh 부팅(재스폰 0개)이야말로
-/// 그 기준선이다.
-pub fn respawn_restored_tabs(
-    handle: AppHandle,
-    dispatcher: Arc<Mutex<Dispatcher>>,
-    records: Arc<RecordStore>,
-) {
-    let (targets, distros) = {
-        let d = dispatcher.lock().unwrap();
-        (d.running_terminal_tabs(), distinct_distros(&d))
-    };
-    // 되살릴 탭이 없는 부팅에서는 페이싱 knob 을 읽지도 않는다 — 쓰이지 않을 값의
-    // 파싱 경고만 남으면 그 부팅이 페이싱을 했다는 오해를 준다.
-    let stagger = if targets.is_empty() {
-        Duration::ZERO
-    } else {
-        let stagger = stagger_from_env();
-        winlog!(
-            "boot: respawning {} tab(s), stagger {} ms",
-            targets.len(),
-            stagger.as_millis()
-        );
-        stagger
-    };
-    // 스레드 생성 실패는 부팅 자체를 막지 않는다 — 탭이 안 살아날 뿐이고, 사용자는
-    // 배너의 Restart 로 되살릴 수 있다. 그래도 조용히 넘기지는 않는다.
-    if let Err(err) = std::thread::Builder::new()
-        .name("mast-boot-respawn".to_string())
-        .spawn(move || {
-            // knob 0 은 **페이싱 전체를 끈다**는 뜻이다 — 예열까지 건너뛰어야 v0.3.9 의
-            // 버스트가 그대로 재현되고, 그 재현이 이 수정의 검증 절차다
-            // (WINDOWS-BUILD §10 v0.3.10 item 1). 예열만 남기면 웜 VM 을 때리게 되어
-            // 재현이 실패하고, 그러면 수정이 듣는지도 확인할 수 없다. 되살릴 탭이 없는
-            // 부팅에서는 예열도 하지 않는다 — 이 스레드가 도는 이유가 아래 검사뿐이라
-            // `wsl.exe` 를 띄울 근거가 없다.
-            if !targets.is_empty() && !stagger.is_zero() {
-                warm_wsl(&distros);
-            }
-            for (i, tab) in targets.iter().enumerate() {
-                if i > 0 && !stagger.is_zero() {
-                    std::thread::sleep(stagger);
-                }
-                let respawned = {
-                    let d_guard = &mut *dispatcher.lock().unwrap();
-                    let result = d_guard.respawn_tab(*tab);
-                    match &result {
-                        Ok(_) => {}
-                        // 사용자가 wave 도중 그 탭·워크스페이스를 닫았다. wave 가 별도
-                        // 스레드로 옮겨 가면서 **정상 동작이 된** 경합이라 실패로 적지
-                        // 않는다 (상태·revision 은 불변이다).
-                        Err(CommandError::UnknownTarget { .. }) => {
-                            winlog!("boot: tab {} closed before respawn; skipped", tab.0);
-                        }
-                        // 스폰 실패는 respawn_tab 이 이미 그 탭을 Exited{None} 으로 강등해
-                        // 상태에 반영했다 — 여기서는 loud 기록만 남긴다.
-                        Err(err) => {
-                            winlog!("boot: respawn failed (tab={}): {err}", tab.0);
-                        }
+/// 부팅 시 WSL 이 필요한 작업의 조정자 — 초기 탭 생성, 재스폰 웨이브, 프로비저닝을
+/// 첫 진단 뒤로 미루고, 명시적 재검사에서 밀린 작업을 다시 적용한다.
+pub struct BootWork {
+    /// Fresh 부팅이라 초기 워크스페이스+터미널 탭을 아직 만들지 않았을 수 있다.
+    needs_initial: bool,
+    /// 초기 생성 결정이 끝났다 (성공했거나 이미 워크스페이스가 있었다). 실패하면
+    /// 되돌려 다음 재검사가 다시 시도하게 한다.
+    initial_decided: AtomicBool,
+    /// 재스폰 웨이브가 도는 중 — 재검사가 겹쳐도 웨이브는 하나만 돈다.
+    wave_running: AtomicBool,
+}
+
+impl BootWork {
+    pub fn new(needs_initial: bool) -> Self {
+        Self {
+            needs_initial,
+            initial_decided: AtomicBool::new(false),
+            wave_running: AtomicBool::new(false),
+        }
+    }
+
+    /// 부팅 스레드 — 첫 진단을 기다린 뒤 초기 탭 생성·재스폰·프로비저닝을 적용하고,
+    /// 웨이브 끝에 정합성 검사 한 줄을 남긴다.
+    pub fn start(
+        self: &Arc<Self>,
+        handle: AppHandle,
+        dispatcher: Arc<Mutex<Dispatcher>>,
+        records: Arc<RecordStore>,
+        wsl: Arc<WslHealth>,
+    ) {
+        let work = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name("mast-boot".to_owned())
+            .spawn(move || {
+                let status = wsl.wait_for_first(crate::wsl_health::STATUS_WAIT);
+                winlog!("boot: WSL status: {} ({})", status.summary(), status.state_name());
+                work.apply(&handle, &dispatcher, &records, &wsl, &status);
+                work.audit(&handle);
+            });
+        if let Err(err) = spawned {
+            winlog!("boot: respawn thread failed to start: {err}");
+        }
+    }
+
+    /// 명시적 재검사 뒤 — 밀린 초기 생성·재스폰·프로비저닝을 다시 적용한다.
+    /// 이미 끝난 작업은 각자의 가드가 걸러 내므로 멱등이다.
+    pub fn retry(
+        self: &Arc<Self>,
+        handle: AppHandle,
+        dispatcher: Arc<Mutex<Dispatcher>>,
+        records: Arc<RecordStore>,
+        wsl: Arc<WslHealth>,
+        status: WslStatus,
+    ) {
+        let work = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name("mast-boot-retry".to_owned())
+            .spawn(move || {
+                work.apply(&handle, &dispatcher, &records, &wsl, &status);
+                work.audit(&handle);
+            });
+        if let Err(err) = spawned {
+            winlog!("boot: retry thread failed to start: {err}");
+        }
+    }
+
+    /// 준비 상태에 따라 밀린 작업을 적용한다. 준비되지 않았으면 **아무것도 하지
+    /// 않는다** — 탭 상태도 건드리지 않는다 (자동 반복 실패 금지).
+    fn apply(
+        &self,
+        handle: &AppHandle,
+        dispatcher: &Arc<Mutex<Dispatcher>>,
+        records: &Arc<RecordStore>,
+        wsl: &Arc<WslHealth>,
+        status: &WslStatus,
+    ) {
+        // "WSL 자체가 되는가"만 본다 — 개별 distro 가 없어도 다른 distro 의 탭은
+        // 살아나야 하므로 그 판정은 재스폰 계획(`respawn_plan`)과 스폰 게이트 몫이다.
+        if !status.permits_spawns() {
+            winlog!(
+                "boot: WSL is not ready ({}); terminals and provisioning are deferred",
+                status.summary()
+            );
+            return;
+        }
+        self.create_initial(handle, dispatcher);
+        self.respawn(handle, dispatcher, records, status);
+        self.provision(handle, dispatcher, wsl);
+    }
+
+    /// Fresh 부팅의 초기 워크스페이스+터미널 탭 — 진단이 준비된 뒤에만 만든다.
+    ///
+    /// **중복 생성 방지**: `initial_decided` CAS 와 Dispatcher lock 안의 "이미
+    /// 워크스페이스가 있는가" 검사를 함께 쓴다. 부팅 스레드와 재검사가 겹쳐도
+    /// 하나만 만들어진다. 생성이 실패하면 표식을 되돌려 다음 재검사가 재시도한다.
+    fn create_initial(&self, handle: &AppHandle, dispatcher: &Arc<Mutex<Dispatcher>>) {
+        if !self.needs_initial || self.initial_decided.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let created = {
+            let mut d = dispatcher.lock().unwrap();
+            if !d.state().workspaces.is_empty() {
+                // 다른 경로가 이미 만들었다 — 이 부팅의 초기 생성은 끝난 것으로 본다.
+                true
+            } else {
+                match d.dispatch(Command::CreateWorkspace {
+                    name: "main".to_owned(),
+                    root_path: None,
+                    distro: None,
+                    tab: Some(NewTab::Terminal { cwd: None }),
+                }) {
+                    Ok(_) => {
+                        state::publish_state(handle, &d);
+                        true
                     }
-                    state::publish_state(&handle, d_guard);
-                    result.is_ok()
-                };
-                // 되살아난 탭의 옛 화면은 이제 새 셸의 것이다 — 삭제는 lock 을 놓은
-                // 뒤다 (Restart 버튼 경로와 같은 헬퍼·같은 규율).
-                if respawned {
-                    forget_record_after_respawn(&records, *tab);
-                }
-            }
-            // 웨이브의 끝 — 부팅이 남긴 어긋남(스폰 실패로 강등된 탭, 복원이 놓친 세션)을
-            // 여기서 한 번 본다. 같은 자리에서 자원 그림 한 줄을 남기는 것이 진단의
-            // 기준선이다 (ADR-0018): 이후 수치는 이 줄과 비교해 읽는다.
-            match handle.try_state::<state::AppState>() {
-                Some(app_state) => {
-                    let audit = crate::audit::run_audit(&handle, &app_state, "boot");
-                    // 무언가 찾았다면 검사 쪽이 이미 같은 줄을 남겼다 — 두 번 찍지 않는다.
-                    if audit.is_empty() {
-                        crate::diagnostics::log_summary(&app_state, &audit, "boot");
+                    Err(err) => {
+                        winlog!("boot: initial workspace creation failed: {err}");
+                        false
                     }
                 }
-                None => winlog!("boot: managed state unavailable; audit skipped"),
             }
-        })
-    {
-        winlog!("boot: respawn thread failed to start: {err}");
+        };
+        if !created {
+            self.initial_decided.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// 재스폰 웨이브 — 준비된 distro 의 탭만, 예열 뒤 간격을 두고.
+    fn respawn(
+        &self,
+        handle: &AppHandle,
+        dispatcher: &Arc<Mutex<Dispatcher>>,
+        records: &Arc<RecordStore>,
+        status: &WslStatus,
+    ) {
+        if self.wave_running.swap(true, Ordering::SeqCst) {
+            winlog!("boot: a respawn wave is already running; this request is skipped");
+            return;
+        }
+        // 웨이브가 panic 으로 끝나도 표식이 남지 않게 RAII 로 되돌린다.
+        let _running = WaveGuard(&self.wave_running);
+
+        let (plan, distros) = {
+            let d = dispatcher.lock().unwrap();
+            // fallback 은 env `MAST_DISTRO` — 스폰 게이트와 같은 distro 해석 순서다.
+            (
+                wsl::respawn_plan(d.state(), status, crate::host::env_distro().as_deref()),
+                distinct_distros(&d),
+            )
+        };
+        for (tab, reason) in &plan.skipped {
+            winlog!("boot: tab {} is not respawned yet: {reason}", tab.0);
+        }
+        let targets = plan.ready;
+        // 되살릴 탭이 없는 부팅에서는 페이싱 knob 을 읽지도 않는다 — 쓰이지 않을 값의
+        // 파싱 경고만 남으면 그 부팅이 페이싱을 했다는 오해를 준다.
+        let stagger = if targets.is_empty() {
+            Duration::ZERO
+        } else {
+            let stagger = stagger_from_env();
+            winlog!(
+                "boot: respawning {} tab(s), stagger {} ms",
+                targets.len(),
+                stagger.as_millis()
+            );
+            stagger
+        };
+        // knob 0 은 **페이싱 전체를 끈다**는 뜻이다 — 예열까지 건너뛰어야 v0.3.9 의
+        // 버스트가 그대로 재현되고, 그 재현이 이 수정의 검증 절차다
+        // (WINDOWS-BUILD §10 v0.3.10 item 1). 예열만 남기면 웜 VM 을 때리게 되어
+        // 재현이 실패하고, 그러면 수정이 듣는지도 확인할 수 없다.
+        if !targets.is_empty() && !stagger.is_zero() {
+            // 예열은 준비된 distro 만 — 없는 배포판에 `wsl.exe -d` 를 띄우면 실패만
+            // 쌓이고 그 실패가 로그를 덮는다.
+            let ready_distros: Vec<Option<String>> = distros
+                .into_iter()
+                .filter(|distro| wsl::spawn_block_reason(status, distro.as_deref()).is_none())
+                .collect();
+            warm_wsl(&ready_distros);
+        }
+        for (i, tab) in targets.iter().enumerate() {
+            if i > 0 && !stagger.is_zero() {
+                std::thread::sleep(stagger);
+            }
+            let respawned = {
+                let d_guard = &mut *dispatcher.lock().unwrap();
+                let result = d_guard.respawn_tab(*tab);
+                match &result {
+                    Ok(_) => {}
+                    // 사용자가 wave 도중 그 탭·워크스페이스를 닫았다. wave 가 별도
+                    // 스레드로 옮겨 가면서 **정상 동작이 된** 경합이라 실패로 적지
+                    // 않는다 (상태·revision 은 불변이다).
+                    Err(CommandError::UnknownTarget { .. }) => {
+                        winlog!("boot: tab {} closed before respawn; skipped", tab.0);
+                    }
+                    // 스폰 실패는 respawn_tab 이 이미 그 탭을 Exited{None} 으로 강등해
+                    // 상태에 반영했다 — 여기서는 loud 기록만 남긴다.
+                    Err(err) => {
+                        winlog!("boot: respawn failed (tab={}): {err}", tab.0);
+                    }
+                }
+                state::publish_state(handle, d_guard);
+                result.is_ok()
+            };
+            // 되살아난 탭의 옛 화면은 이제 새 셸의 것이다 — 삭제는 lock 을 놓은
+            // 뒤다 (Restart 버튼 경로와 같은 헬퍼·같은 규율).
+            if respawned {
+                forget_record_after_respawn(records, *tab);
+            }
+        }
+    }
+
+    /// 상태에 있는 distro 들 + 기본 distro 를 프로비저닝 대상으로 건다 — 실제
+    /// 스킵/실행 판정은 `provision::ensure_provisioned` 안의 준비 상태 게이트가 한다.
+    fn provision(
+        &self,
+        handle: &AppHandle,
+        dispatcher: &Arc<Mutex<Dispatcher>>,
+        wsl: &Arc<WslHealth>,
+    ) {
+        let distros: Vec<Option<String>> = dispatcher
+            .lock()
+            .unwrap()
+            .state()
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.panes.values().flat_map(|p| &p.tabs).any(|t| matches!(t.kind, mast_core::model::TabKind::Terminal { .. })))
+            .map(|workspace| crate::host::resolve_distro(workspace.distro.clone()))
+            .collect();
+
+        for distro in &distros {
+            crate::provision::ensure_provisioned(handle, wsl, distro.as_deref());
+        }
+    }
+
+    /// 웨이브의 끝 — 부팅이 남긴 어긋남(스폰 실패로 강등된 탭, 복원이 놓친 세션)을
+    /// 한 번 본다. 같은 자리에서 자원 그림 한 줄을 남기는 것이 진단의 기준선이다
+    /// (ADR-0018): 이후 수치는 이 줄과 비교해 읽는다.
+    fn audit(&self, handle: &AppHandle) {
+        match handle.try_state::<state::AppState>() {
+            Some(app_state) => {
+                let audit = crate::audit::run_audit(handle, &app_state, "boot");
+                // 무언가 찾았다면 검사 쪽이 이미 같은 줄을 남겼다 — 두 번 찍지 않는다.
+                if audit.is_empty() {
+                    crate::diagnostics::log_summary(&app_state, &audit, "boot");
+                }
+            }
+            None => winlog!("boot: managed state unavailable; audit skipped"),
+        }
+    }
+}
+
+/// 재스폰 웨이브 진행 표식의 RAII 가드 — panic 경로에서도 표식을 내린다.
+struct WaveGuard<'a>(&'a AtomicBool);
+
+impl Drop for WaveGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
     }
 }
 

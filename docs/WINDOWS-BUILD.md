@@ -1,5 +1,83 @@
 # Windows Build Guide
 
+## 브라우저와 WSL 안내 검증
+
+신규 브라우저 통합의 실기 인수 절차다. 자동 테스트와 Windows 타깃 컴파일만으로
+아래 항목을 통과 처리하지 않는다. Windows/WebView2 버전, exe 해시, 설정과
+시나리오별 관측 결과를 함께 기록한다. 별도 Windows 테스트 계정 또는 VM을 사용하며,
+WSL 미설치 검증을 위해 호스트의 WSL을 제거하지 않는다.
+
+### 시작과 복원
+
+- WSL 없는 VM에서 앱이 종료되지 않고 설치 명령·공식 안내·재검사·설정 파일 열기를
+  표시하는지 확인한다. 첫 화면에서 브라우저를 열어 HTTP(S) 페이지를 표시한다.
+- 배포판 없음, 사용자 초기 설정 미완료, 잘못된 `MAST_DISTRO`, 배포판 실행 실패와
+  재검사를 확인한다. 정상 배포판은 다른 배포판의 실패와 독립적으로 시작하고,
+  재검사를 연속 눌러도 터미널이 중복 생성되지 않아야 한다.
+- 터미널·브라우저·뷰어가 섞인 레이아웃을 복원한다. 실패 탭과 종료 기록을 보존하고
+  숨긴 브라우저 탭을 한꺼번에 로드하지 않아야 한다.
+
+### 동일 페이지 에이전트 흐름
+
+테스트 계정의 Mast WSL 터미널에서 저장소 루트를 기준으로 실행한다.
+
+```sh
+python3 -m http.server 8765 --bind 127.0.0.1 --directory apps/mast/tests/fixtures
+```
+
+같은 워크스페이스의 다른 터미널에서 실행한다.
+
+```sh
+mast browser open http://localhost:8765/browser-smoke.html
+mast browser list
+mast browser wait '#42' --text '입력 대기'
+mast browser snapshot '#42'
+```
+
+실제 반환된 탭 ID와 요소 ref를 사용해 이름에 한글을 fill하고 저장 버튼을 click한다.
+화면에 같은 값이 표시되는지 확인한다. 새 snapshot의 input ref로 `press ... Enter`도
+실행해 폼 제출을 확인한다. `wait --text '저장 완료'`, `console`, `errors`, `screenshot`을
+실행하고 반환된 PNG를 WSL 에이전트가 실제로 연다. 이전 ref 재사용·탭 닫기 후 요청·
+다른 워크스페이스 대상·wait 시간 초과가 명확히 실패해야 한다.
+
+- 주소 입력·뒤/앞·새로고침·중지·Ctrl+L·Ctrl+Tab·탭 닫기, 한국어 IME와 복사/붙여넣기를
+  실제 키보드로 확인한다. 팝업은 제어된 탭, 다운로드는 거부 안내여야 한다.
+- 분할 크기 조절, Windows DPI 변경, 최소화/복원, 워크스페이스 전환, 앱 모달 표시,
+  UI 리로드 중 페이지가 pane 밖이나 모달 위를 덮지 않는지 확인한다.
+- 자동화 도중 전환·닫기를 반복해 중복 웹뷰·멈춤·복구 불가 상태가 없는지 확인한다.
+- 저장소 표시 버튼을 같은 워크스페이스의 두 탭에서 누르면 동일 표식, 다른 워크스페이스에서는
+  다른 표식이어야 한다. 외부 페이지의 Mast 명령 호출과 앱 이벤트 구독이 거부돼야 한다.
+
+### OFF와 자원 측정
+
+각 시나리오를 완전 재시작하고 동일한 안정화 시간 후 측정한다.
+
+| 시나리오 | 확인 사항 |
+|---|---|
+| browser OFF, 브라우저 저장 탭 있음 | URL/배치 보존, 페이지 로딩과 브라우저 요청 차단 |
+| browser ON, 미사용 | 브라우저 자식 웹뷰와 브라우저 자동화 작업 없음 |
+| 페이지 1개 / 여러 개 | 각각의 프로세스 트리 비용 기록 |
+| 모든 페이지 숨김 | 휴면 요청 결과와 CPU 감소, 입력 상태 보존 |
+| 모든 브라우저 탭 닫기 | 웹뷰 해제, 잔류 작업·버퍼·반복 CPU 사용 확인 |
+| 앱 종료 | 추적한 자손 프로세스 종료, 고아 프로세스 없음 |
+
+메모리는 기존 지표인 **WebView2를 포함한 전체 프로세스 트리의 private working set**을
+사용한다. 테스트 exe 이름이 다르면 ProcessName도 바꾼다.
+
+```powershell
+.\scripts\win\measure.ps1 -ProcessName mast-app -IntervalSec 5 -Samples 12 -OutCsv .\browser-off.csv
+```
+
+CSV의 프로세스 ID와 Windows 성능 모니터의 해당 프로세스 CPU를 함께 기록한다.
+OFF와 ON 미사용은 같은 터미널 수·같은 측정 조건으로 비교한다. WSL의 vmmemWSL 메모리는
+별도 지표이며 앱 합계에 섞지 않는다. 휴면이 메모리를 전부 반환한다고 가정하지 않는다.
+브라우저가 있을 때도 전체 메모리는 계속 측정되고 페이지 비용만으로 UI 자동 리셋이
+일어나지 않아야 한다.
+
+실기 체크리스트는 2026-09-25 사용자 실기로 통과했고, 결정과 검증 기록은
+[ADR-0031](adr/0031-wsl-readiness-and-embedded-browser.md)에 있다. 프로세스별 CPU·메모리 수치는
+저장소에 기록하지 않았다.
+
 How to set up a Windows machine to build and run mast, and how to run the Windows-side
 verification. Two apps share this guide:
 

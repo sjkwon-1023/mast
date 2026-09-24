@@ -130,6 +130,7 @@ pub enum Command {
     rename_all_fields = "camelCase"
 )]
 pub enum NewTab {
+    Browser { url: String },
     Terminal {
         /// None 이면 워크스페이스 root_path 를 기본 cwd 로 쓴다 (계획 v2 4장).
         cwd: Option<String>,
@@ -308,6 +309,7 @@ impl Default for ShellSpawnReq {
 
 /// PTY 부수효과 포트. 실제 구현은 앱 글루(`SessionManager` 래핑), 테스트는 fake.
 pub trait SessionHost: Send {
+    fn browser_enabled(&self) -> bool { true }
     /// 셸 세션을 스폰하고 휘발성 세션 id 를 돌려준다.
     fn spawn_shell(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId>;
 
@@ -424,3 +426,17 @@ fn unknown(kind: &str, id: u64) -> CommandError {
 
 #[cfg(test)]
 mod tests;
+
+impl Dispatcher {
+    pub fn update_browser(&mut self, id: TabId, url: &str, title: Option<&str>) -> Result<(), CommandError> {
+        let url = crate::browser::normalize_url(url).map_err(|message| CommandError::InvalidPath { message })?;
+        let tab = self.state.workspaces.iter_mut().flat_map(|w| w.panes.values_mut())
+            .flat_map(|p| &mut p.tabs).find(|t| t.id == id)
+            .ok_or_else(|| CommandError::UnknownTarget { target: format!("tab:{}", id.0) })?;
+        let crate::model::TabKind::Browser { url: current } = &mut tab.kind else { return Err(CommandError::KindMismatch { tab: id }); };
+        *current = url;
+        if let Some(title) = title { tab.title = title.chars().take(256).collect(); }
+        self.state.revision += 1;
+        Ok(())
+    }
+}

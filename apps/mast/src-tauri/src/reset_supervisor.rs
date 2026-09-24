@@ -324,7 +324,7 @@ fn perform_reset(app: &AppHandle, reason: &str, trigger: Option<ResetTrigger>) {
             winlog!("reset: cannot spawn the diagnostics thread: {err}");
         }
     }
-    match app.get_webview_window("main") {
+    match app.get_webview("main") {
         Some(window) => {
             if let Err(err) = window.reload() {
                 winlog!("reset: reload failed: {err}");
@@ -384,7 +384,7 @@ fn worker(shared: &Shared) {
                 }
             };
             g.last_mem_bytes = Some(bytes);
-            g.policy.on_mem_sample(bytes, now);
+            g.policy.on_mem_sample(if crate::browser::has_pages(&shared.app) { 0 } else { bytes }, now);
         }
 
         // 2) 발화 판정 — 리로드는 lock 밖에서 (Tauri 호출 중 신호 블록 방지).

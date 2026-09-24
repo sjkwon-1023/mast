@@ -73,6 +73,7 @@ afterAll(() => {
 // 목록은 그 파일을 보지 않는다.
 const INSTALLED_FROM_REPO: [name: string, executable: boolean][] = [
   ["mast-config.py", false],
+  ["mast-browser.py", false],
   ["mast-hooks-merge.py", false],
   ["mast-agent-hook.py", false],
   ["mast-claude-hook.sh", true],

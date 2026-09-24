@@ -1938,10 +1938,14 @@ name = "mast-app"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "block2",
  "libc",
  "mast-core",
  "mast-remote",
  "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-web-kit",
  "rfd",
  "serde",
  "serde_json",
@@ -1949,6 +1953,7 @@ dependencies = [
  "tauri-build",
  "tauri-winrt-notification",
  "tempfile",
+ "webview2-com",
  "windows",
  "windows-sys 0.61.2",
 ]
@@ -1963,6 +1968,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "url",
  "windows-sys 0.61.2",
 ]
 

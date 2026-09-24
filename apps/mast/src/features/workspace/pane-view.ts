@@ -160,6 +160,7 @@ function placeholderText(tab: Tab | null): string {
   if (tab === null) return "no tabs — press + to open a new terminal tab";
   const kind: TabKind = tab.kind;
   switch (kind.type) {
+    case "browser": return `browser: ${kind.url}`;
     case "terminal":
       // 세션 없는 terminal 탭 중 기록 뷰가 맡지 않는 것 — 세션 없는 exited 탭은
       // 기록 뷰가 마운트되므로(ADR-0018) 여기 오지 않는다. 남는 것은 복원 직후의
@@ -408,8 +409,9 @@ export class PaneView {
         pane: this.paneId,
         tab: { type: "changesViewer", path: null },
       })),
-      // 브라우저 탭 버튼(◎)은 여기 있었다 — 영구 disabled 라 자리만 차지해
-      // 뺐다. v2 에서 기능과 함께 돌아온다.
+      this.iconButton("◎", "New browser tab", () => ({
+        type: "createTab", pane: this.paneId, tab: {type: "browser", url: ""},
+      })),
 
       // 전달 아이콘 2개(⤷ = 전달, ⤷⏎ = 전달 후 실행)도 여기 있었다 — 수동
       // 마우스 제스처가 실사용 워크플로가 아니라 **버튼만** 뺐다. 뒤에 있던

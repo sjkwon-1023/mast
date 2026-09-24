@@ -30,7 +30,9 @@ use mast_core::command::{Dispatcher, RegistryAudit};
 use mast_core::persist::Saver;
 use mast_core::record::RecordStore;
 use mast_core::session::{SessionId, SessionManager};
+use mast_core::wsl::WslHealth;
 
+use crate::boot::BootWork;
 use crate::reset_supervisor::ResetSupervisor;
 use crate::router::OscRouter;
 use crate::sink::TerminalSink;
@@ -89,6 +91,13 @@ pub struct AppState {
     /// 끝난 탭의 마지막 화면 기록 (ADR-0018) — 디렉터리 경로만 드는 값이라 자체
     /// lock 이 없다. `TauriHost` 도 같은 `Arc` 를 들어 탭 닫기 경로에서 지운다.
     pub records: Arc<RecordStore>,
+    /// WSL 준비 상태 진단기 (2026-09-22) — 부팅에 한 번 비동기로 돌고 명시적
+    /// 재검사로만 갱신된다. `TauriHost` 의 스폰 게이트와 프로비저닝, 안내 커맨드가
+    /// 이 하나를 공유한다.
+    pub wsl: Arc<WslHealth>,
+    /// 부팅 시 WSL 이 필요한 작업(초기 탭 생성·재스폰·프로비저닝)의 조정자 —
+    /// 재검사 커맨드가 밀린 작업을 다시 적용할 때도 이 핸들을 쓴다.
+    pub boot: Arc<BootWork>,
     /// 마지막 정합성 검사 결과 — [`crate::audit::run_audit`] 이 쓰고 진단 커맨드가
     /// 읽는다. 검사 자체가 짧아 결과를 들고 있는 것은 표면을 위한 것이지 캐시가 아니다.
     pub last_audit: Mutex<RegistryAudit>,
@@ -146,6 +155,10 @@ impl Drop for ExitInFlight<'_> {
 /// 일어나지만 코어 AppState 는 구조 메타(워크스페이스·pane·탭)뿐인 작은 값이라
 /// 수용한다 — 실제 디스크 IO 는 Saver worker 스레드가 lock 밖에서 한다.
 pub fn publish_state(app: &AppHandle, dispatcher: &Dispatcher) {
+    if let Some(state) = app.try_state::<AppState>() {
+        crate::wsl_health::emit(app, dispatcher, &state.wsl.status());
+    }
+    crate::browser::prune(app, dispatcher.state());
     match serde_json::to_value(dispatcher.snapshot()) {
         Ok(payload) => {
             if let Err(err) = app.emit("state-changed", payload) {

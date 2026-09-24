@@ -106,6 +106,79 @@ body {
   color: var(--error);
 }
 
+/* ── WSL 준비 안내 배너 (2026-09-22) ────────────────────────────────────
+   상태 라인과 본문 사이의 전폭 배너 — WSL 이 준비되지 않았을 때만 main.ts 가
+   펼친다. 터미널 영역을 가리지 않도록 본문 위에 얹지 않고 flex 아이템으로 둔다
+   (배너가 떠 있는 동안 본문이 그만큼 줄어든다 — 모달로 터미널을 가리는 것보다
+   낫다). 문구는 사용자 대면이라 영어다. */
+.wsl-notice {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #332b16; /* 어두운 테마에서 warn 계열로 읽히는 배경 */
+  border-bottom: 1px solid var(--warn);
+  font-size: 12px;
+}
+
+.wsl-notice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wsl-notice-title {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.wsl-notice-body {
+  color: var(--fg);
+}
+
+/* 원문 세부 정보 — 로캘별 WSL 메시지 그대로. 길어도 줄바꿈해 전부 보여 준다. */
+.wsl-notice-detail {
+  color: var(--fg-muted);
+  font-family: monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 복사 대상 설치 명령 — 사용자가 눈으로 확인할 수 있게 별도 줄로 보여 준다. */
+.wsl-notice-command {
+  color: var(--fg);
+  font-family: monospace;
+  user-select: text;
+}
+
+.wsl-notice-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.wsl-notice-actions button {
+  background: var(--bg-panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wsl-notice-actions button:hover {
+  border-color: var(--fg-muted);
+}
+
+.wsl-notice-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* 상태 라인 아래 본문 행 — 좌 사이드바 + 우 뷰 (13단계 D6) */
 #main {
   flex: 1 1 auto;
@@ -1550,3 +1623,19 @@ body {
 .platform-macos.shortcut-guide::after {
   content: "⌘1–9: workspace  ·  ⌘⇧[ / ]: cycle  ·  ⌘D: auto split  ·  ⌘⌥arrows: pane";
 }
+
+/* 내장 브라우저 — 툴바는 pane 헤더와 같은 아이콘 버튼 톤을 쓴다. */
+.browser-view { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; color: var(--fg); }
+.browser-off { padding: 12px; color: var(--fg-muted); }
+.browser-toolbar { display: flex; align-items: center; gap: 2px; padding: 4px 6px; flex-shrink: 0; background: var(--bg-panel); border-bottom: 1px solid var(--border); }
+.browser-toolbar button { flex: 0 0 auto; width: 26px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--fg); border: none; border-radius: 4px; font-size: 14px; line-height: 1; cursor: pointer; }
+.browser-toolbar button:hover { background: var(--border); }
+.browser-toolbar input { flex: 1; min-width: 0; height: 24px; box-sizing: border-box; margin: 0 4px; padding: 0 10px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 12px; font: 12px system-ui, sans-serif; }
+.browser-toolbar input:focus { outline: none; border-color: var(--accent); }
+.browser-content { flex: 1; min-height: 0; }
+.browser-status { flex-shrink: 0; padding: 2px 10px; font-size: 11px; color: var(--fg-muted); background: var(--bg-panel); border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.browser-status.error { color: var(--error); }
+.browser-status[hidden] { display: none; }
+.browser-disabled .new-browser-tab, .browser-disabled [title="New browser tab"] { display: none; }
+.new-browser-tab { align-self: flex-start; padding: 4px 10px; background: var(--bg-panel); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.new-browser-tab:hover { background: var(--border); }

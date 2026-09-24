@@ -11,7 +11,10 @@ navigation, state/layout restoration, terminal records, Claude Code / Codex /
 OpenCode integration, agent state and notifications, on-demand session resume,
 `mast ls`, `mast send`, folder/text/Markdown viewers, the Git Changes viewer,
 startup release notices, optional Local HTTP, on-demand Secure Remote, Antigravity
-CLI running/idle hooks and Mac keyboard bindings.
+CLI running/idle hooks, Mac keyboard bindings and the embedded browser tab with
+`mast browser` (WKWebView; see [BROWSER.md](BROWSER.md) for the macOS differences and
+[ADR-0031](adr/0031-wsl-readiness-and-embedded-browser.md) for the decisions and the 2026-09-25
+field run).
 
 This is a development/source-build target, not a signed distributable product.
 The release notice only links to a release page; it does not download or install

@@ -56,6 +56,7 @@ function collectLeaves(tree: SplitTree): number[] {
 /** TabKind·TerminalStatus 전 variant 를 narrowing 으로 통과시키는 라벨러. */
 function tabKindLabel(kind: TabKind): string {
   switch (kind.type) {
+    case "browser": return `browser:${kind.url}`;
     case "terminal": {
       const status = kind.status;
       switch (status.type) {
@@ -86,6 +87,7 @@ function tabKindLabel(kind: TabKind): string {
  *  Changes 뷰어까지 union 에 있다). */
 function newTabTag(spec: NewTab): string {
   switch (spec.type) {
+    case "browser": return spec.type;
     case "terminal":
       expect(spec.cwd === null || typeof spec.cwd === "string").toBe(true);
       return spec.type;

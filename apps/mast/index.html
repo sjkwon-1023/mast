@@ -10,6 +10,10 @@
     <!-- 상태 라인은 일시 표시다 — 지속 프롬프트·에러가 있을 때만 main.ts 가
          펼친다 (평시에는 접혀 터미널 영역을 넓게 쓴다). -->
     <div id="status-line" hidden></div>
+    <!-- WSL 준비 안내 (2026-09-22) — 진단이 준비 상태가 아니거나 워크스페이스가
+         요구하는 배포판이 없을 때만 main.ts 가 펼친다. 내용·버튼은
+         features/wsl/banner.ts 가 그린다. -->
+    <div id="wsl-notice" hidden></div>
     <div id="main">
       <aside id="sidebar"></aside>
       <div id="view"></div>

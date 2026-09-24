@@ -109,6 +109,7 @@ impl Dispatcher {
                     ),
                     // 뷰어 탭에는 프로세스가 없다 — 세 번째 상태로 구분한다.
                     TabKind::FolderBrowser { .. } => ("folderBrowser", "viewer"),
+                    TabKind::Browser { .. } => ("browser", "viewer"),
                     TabKind::ChangesViewer { .. } => ("changesViewer", "viewer"),
                     TabKind::TextViewer { .. } => ("textViewer", "viewer"),
                     TabKind::MarkdownViewer { .. } => ("markdownViewer", "viewer"),

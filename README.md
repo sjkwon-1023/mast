@@ -95,10 +95,16 @@ for Windows + WSL2; an Apple Silicon native source build is also available.
 - **Layout persistence** — workspaces, splits and tabs come back, each shell respawned where it was,
   and a tab that was running an agent returns with its resume command one `Up` away.
 
+내장 브라우저 탭은 `◎` 버튼으로 연다. 에이전트는 `mast browser`로 같은 탭의 요소와
+스크린샷을 확인하고 입력·클릭할 수 있다. `mast config set browser.enabled false`로
+끄고 완전히 재시작하면 추가 브라우저 실행 자원을 만들지 않는다.
+[브라우저 사용법과 WSL 시작 안내](./docs/BROWSER.md).
+
 ## Install
 
-**Requirements:** Windows 11 (x64 or ARM64), WSL2 with a Linux distribution such as Ubuntu,
-and WebView2 (normally included with Windows 11).
+**요구 사항:** Windows 11 (x64 또는 ARM64)과 WebView2. 터미널과 WSL 파일 뷰어는
+Ubuntu 같은 Linux 배포판이 설치된 WSL2가 필요하다. WSL이 준비되지 않았으면 앱에서
+설치·초기 설정·재검사를 안내하며, 내장 브라우저는 WSL 없이 사용할 수 있다.
 
 1. **Prepare WSL2.** If needed, run `wsl --install` in administrator PowerShell, restart Windows,
    then open Ubuntu and create your Linux user account.

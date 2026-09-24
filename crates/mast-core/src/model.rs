@@ -449,6 +449,7 @@ pub struct Tab {
     rename_all_fields = "camelCase"
 )]
 pub enum TabKind {
+    Browser { url: String },
     Terminal {
         /// 휘발성 PTY 세션 id. **살아 있는 세션에만 Some** 이다 — 셸이 끝나면
         /// `SessionExited` 가 여기를 비우고, 마지막 화면은 메모리의 replay 가 아니라

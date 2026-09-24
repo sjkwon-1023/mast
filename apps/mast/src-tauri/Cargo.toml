@@ -10,7 +10,7 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["unstable"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
@@ -26,6 +26,7 @@ mast-remote = { path = "../../../crates/mast-remote" }
 # 아니다). Win32_System_Threading 은 OpenProcess/PROCESS_QUERY_LIMITED_INFORMATION
 # 의 실제 위치라 계획의 3종에 추가로 필요하다.
 [target."cfg(windows)".dependencies]
+webview2-com = "0.38.2"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Networking_WinHttp",
@@ -57,6 +58,7 @@ tauri-winrt-notification = "0.7"
 # 추가로 켜진다).
 windows = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
     # INetFwPolicy2·INetFwRule — 방화벽 규칙을 **일반 권한**으로 열거해 판정하는
     # `firewall` 모듈. netsh/PowerShell 출력 파싱을 쓰지 않는 이유는 느린 것에 더해
     # 문구가 로캘(한국어)에 따라 바뀌기 때문이다.
@@ -97,3 +99,9 @@ rfd = { version = "0.17", default-features = false }
 libc = "0.2"
 tempfile = "3"
 objc2 = "0.6"
+# 내장 브라우저의 WKWebView 제어(browser/macos.rs) — wry 가 이미 쓰는 같은 버전이라 새 crate 는
+# 없고, 우리 코드가 부르는 API 의 feature 만 명시한다.
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSProcessInfo", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSBitmapImageRep", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSResponder", "NSView", "NSWindow"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKNavigationDelegate", "WKSnapshotConfiguration", "WKWebView"] }
