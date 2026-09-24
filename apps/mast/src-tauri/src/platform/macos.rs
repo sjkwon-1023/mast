@@ -564,7 +564,9 @@ pub(crate) fn install_menu(app: &AppHandle) -> tauri::Result<()> {
     app.set_menu(Menu::with_items(app, &[&app_menu, &edit, &view, &window])?)?;
     app.on_menu_event(|app, event| {
         if event.id().as_ref() == "mast-quit" {
-            if let Some(window) = app.get_webview_window("main") {
+            // 창 조회는 `get_window` 로 한다. 브라우저 탭의 자식 웹뷰가 붙으면
+            // `get_webview_window` 가 None 이 되어 Quit 이 아무것도 하지 않는다.
+            if let Some(window) = app.get_window("main") {
                 let _ = window.close();
             }
         }
@@ -617,7 +619,7 @@ extern "C" fn application_should_terminate(
     }
     let Some(window) = TERMINATE_APP
         .get()
-        .and_then(|app| app.get_webview_window("main"))
+        .and_then(|app| app.get_window("main"))
     else {
         // main 창이 없으면 지킬 draft 도, 확인을 띄울 곳도 없다. 여기서 취소하면 Dock
         // Quit·로그아웃으로는 앱을 영영 끝낼 수 없으므로 종료를 허락한다.

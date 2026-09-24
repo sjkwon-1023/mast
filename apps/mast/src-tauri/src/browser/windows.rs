@@ -3,17 +3,22 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, Webview};
 
-use super::{error, event, native, unsupported_key, Result};
+use super::{activate_pane, error, event, native, unsupported_key, Result};
 
 pub(super) fn prepare(_app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
+/// WebView2 의 자식 웹뷰는 메인 웹뷰와 같은 창 클라이언트 좌표를 쓴다.
+pub(super) fn ui_origin(_app: &AppHandle) -> Result<(f64, f64)> {
+    Ok((0.0, 0.0))
+}
+
 pub(super) fn configure(app: &AppHandle, tab: u64, view: &Webview) -> Result<()> {
     use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PERMISSION_STATE_DENY;
     use webview2_com::{
-        AcceleratorKeyPressedEventHandler, NavigationCompletedEventHandler,
-        PermissionRequestedEventHandler,
+        AcceleratorKeyPressedEventHandler, FocusChangedEventHandler,
+        NavigationCompletedEventHandler, PermissionRequestedEventHandler,
     };
     let app = app.clone();
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -42,6 +47,11 @@ pub(super) fn configure(app: &AppHandle, tab: u64, view: &Webview) -> Result<()>
                         let _ = ui.eval(format!("window.dispatchEvent(new KeyboardEvent('keydown', {{key:{},ctrlKey:true,shiftKey:{},bubbles:true}}))", json!(key), shift));
                     }
                 }
+                Ok(())
+            })), &mut token)?;
+            let focus_app = app.clone();
+            native_view.controller().add_GotFocus(&FocusChangedEventHandler::create(Box::new(move |_, _| {
+                activate_pane(&focus_app, tab);
                 Ok(())
             })), &mut token)?;
             let permissions_app = app.clone();

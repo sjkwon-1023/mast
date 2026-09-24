@@ -29,6 +29,7 @@ export class BrowserView implements ViewerView {
     this.root.className = "browser-view";
     parent.append(this.root);
     if (!browserEnabled()) {
+      this.root.classList.add("browser-off");
       this.root.textContent = `Browser is disabled in settings. Saved URL: ${url || "(empty tab)"}`;
       return;
     }
@@ -38,14 +39,15 @@ export class BrowserView implements ViewerView {
     this.address.placeholder = "http://localhost:3000";
     this.address.setAttribute("aria-label", "Browser address");
     this.address.value = url;
-    for (const [label, action] of [["←", "back"], ["→", "forward"], ["↻", "reload"], ["✕", "stop"]]) {
+    for (const [label, name, action] of [["←", "Back", "back"], ["→", "Forward", "forward"], ["↻", "Reload", "reload"], ["✕", "Stop", "stop"]]) {
       const button = document.createElement("button");
-      button.type = "button"; button.textContent = label; button.title = action;
+      button.type = "button"; button.textContent = label; button.title = name;
+      button.setAttribute("aria-label", name);
       button.addEventListener("click", () => this.request(action));
       toolbar.append(button);
     }
+    // 입력칸 하나뿐인 form 이라 Enter 가 submit 이 된다 — 별도 Go 버튼은 두지 않는다.
     toolbar.append(this.address);
-    const go = document.createElement("button"); go.textContent = "Go"; toolbar.append(go);
     const external = document.createElement("button"); external.type = "button"; external.textContent = "↗"; external.title = "Open in external browser";
     external.addEventListener("click", () => { void openUrl(this.address.value).catch(e => this.showError(e)); });
     toolbar.append(external);
@@ -53,6 +55,7 @@ export class BrowserView implements ViewerView {
     this.content.className = "browser-content";
     this.status.className = "browser-status";
     this.status.setAttribute("role", "status");
+    this.status.hidden = true;
     this.root.append(toolbar, this.status, this.content);
     this.observer = new ResizeObserver(() => this.schedule());
     this.observer.observe(this.content);
@@ -62,8 +65,7 @@ export class BrowserView implements ViewerView {
     window.addEventListener("resize", this.schedule);
     void listen<Page>("browser-changed", ({payload}) => {
       if (payload.tab !== tab || this.disposed) return;
-      if (document.activeElement !== this.address) this.address.value = payload.url;
-      this.status.textContent = payload.error ?? (payload.loading ? "Loading…" : payload.title);
+      this.showPage(payload);
     }).then(unlisten => { if (this.disposed) unlisten(); else this.unlisten = unlisten; }).catch(e => this.showError(e));
     void listen<number>("browser-address-focus", ({payload}) => { if (payload === tab) { this.address.focus(); this.address.select(); } })
       .then(stop => { if (this.disposed) stop(); else this.unlistenFocus = stop; }).catch(e => this.showError(e));
@@ -71,7 +73,18 @@ export class BrowserView implements ViewerView {
     this.schedule();
   }
   private showError(error: unknown): void {
-    if (!this.disposed) this.status.textContent = typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error);
+    if (!this.disposed) this.showStatus(typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error), true);
+  }
+  private showPage(page: Page): void {
+    if (document.activeElement !== this.address) this.address.value = page.url;
+    this.showStatus(page.error ?? (page.loading ? "Loading…" : ""), page.error !== null);
+  }
+  // 제목은 탭바가 이미 보여 주므로, 상태 줄은 로딩·오류가 있을 때만 자리를 차지한다.
+  private showStatus(message: string, error: boolean): void {
+    this.status.textContent = message;
+    this.status.title = message;
+    this.status.hidden = message === "";
+    this.status.classList.toggle("error", error);
   }
   private request(action: string, url?: string): void {
     void this.chain.then(() => invoke("browser_request", {request: {action, tab: this.tab, url}})).catch(e => this.showError(e));
@@ -92,10 +105,7 @@ export class BrowserView implements ViewerView {
       if (this.disposed) return;
       const page = await invoke<Page | null>("browser_surface", {tab: this.tab, owner: this.owner, bounds});
       this.attached = visible;
-      if (page && !this.disposed) {
-        if (document.activeElement !== this.address) this.address.value = page.url;
-        this.status.textContent = page.error ?? (page.loading ? "Loading…" : page.title);
-      }
+      if (page && !this.disposed) this.showPage(page);
     }).catch(e => { this.lastBounds = null; this.showError(e); });
   }
   update(kind: ViewerKind): void {

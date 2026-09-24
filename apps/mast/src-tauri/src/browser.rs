@@ -126,6 +126,27 @@ fn save_location(app: AppHandle, tab: u64, url: String, title: Option<String>) {
     });
 }
 
+/// 페이지를 누르면 그 탭의 pane 을 활성으로 만든다. 자식 웹뷰가 마우스·포커스를 받아 메인
+/// UI 의 pane 클릭 처리가 돌지 않기 때문이다. 키보드 포커스는 페이지에 남긴다.
+fn activate_pane(app: &AppHandle, tab: u64) {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Ok((workspace, pane, _)) = target(&app, tab) else {
+            return;
+        };
+        let state = app.state::<AppState>();
+        let mut d = state.dispatcher.lock().unwrap();
+        let active = d
+            .state()
+            .workspaces
+            .iter()
+            .any(|w| w.id.0 == workspace && w.active_pane.0 == pane);
+        if !active && d.dispatch(Command::FocusPane { pane: PaneId(pane) }).is_ok() {
+            publish_state(&app, &d);
+        }
+    });
+}
+
 pub fn prune(app: &AppHandle, model: &mast_core::model::AppState) {
     let Some(state) = app.try_state::<BrowserState>() else {
         return;
@@ -388,10 +409,15 @@ pub async fn browser_surface(
                 return Err(error("invalid_params", "Invalid browser bounds"));
             }
             let view = ensure(&app, tab)?;
-            view.set_position(tauri::LogicalPosition::new(bounds.x, bounds.y))
-                .map_err(native)?;
-            view.set_size(tauri::LogicalSize::new(bounds.width, bounds.height))
-                .map_err(native)?;
+            // 프론트 좌표는 메인 UI 웹뷰 기준이다. 자식 웹뷰는 창 콘텐츠 뷰 기준으로 놓이므로
+            // 메인 웹뷰가 그 안에서 떨어진 만큼 옮긴다. 위치와 크기는 한 번에 준다 — macOS 는
+            // 아래 모서리가 원점이라 따로 주면 이전 높이 기준 위치가 남는다.
+            let (dx, dy) = platform::ui_origin(&app)?;
+            view.set_bounds(tauri::Rect {
+                position: tauri::LogicalPosition::new(bounds.x + dx, bounds.y + dy).into(),
+                size: tauri::LogicalSize::new(bounds.width, bounds.height).into(),
+            })
+            .map_err(native)?;
             platform::suspend(&view, true)?;
             view.show().map_err(native)?;
             event(&app, tab, |p| {

@@ -95,5 +95,10 @@ CLI는 `scripts/macos/mast.py`에 `browser`를 연결하고 `mast-browser.py`를
   not_found를 실제 WKWebView에서 확인했다. 9번 같은 제한 포트는 WebKit이 콜백 없이 막아
   오류가 남지 않는다(BROWSER.md에 기록). UI 배치·단축키 전달·IME·쿠키 격리·재시작 후
   로그인 유지는 사용자 실기가 남았다(MACOS.md 목록).
+- 청크 05 macOS 실기(2026-09-25, 사용자): 탭 열기·배치·페이지 입력·한글 IME·워크스페이스별 쿠키
+  격리·재시작 후 탭 복원과 로그인 유지가 정상이다. 실기에서 나온 결함을 고쳤다 — macOS 26의
+  메인 웹뷰가 타이틀바 밑까지 덮고 `obscuredContentInsets`만큼 페이지를 내려 그려 브라우저가
+  툴바를 덮던 좌표 문제, 한글 입력 소스의 단축키 판정, 페이지 클릭 시 pane 미활성, 브라우저
+  탭이 있으면 `get_webview_window`가 None이 되어 Cmd+Q가 동작하지 않던 문제. 툴바 UI도 정리했다.
 - 초기 스냅샷/조작은 최상위 DOM만 다룬다. 다운로드·웹 권한·임의 eval·외부 CDP·MCP는
   지원하지 않는다. UI 실기 통과 전 ADR 확정·계획 삭제·커밋/push/PR을 진행하지 않는다.

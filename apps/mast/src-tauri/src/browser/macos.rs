@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
+use objc2::runtime::{AnyClass, AnyObject, Imp, NSObjectProtocol, Sel};
 use objc2::{sel, MainThreadMarker};
 use objc2_app_kit::{
     NSBitmapImageFileType, NSBitmapImageRep, NSEvent, NSEventMask, NSEventModifierFlags,
@@ -24,7 +24,7 @@ use objc2_web_kit::WKWebView;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, Webview};
 
-use super::{error, event, native, unsupported_key, Result};
+use super::{activate_pane, error, event, native, unsupported_key, Result};
 use crate::winlog;
 
 /// `NSURLErrorCancelled` — 멈춤·새 탐색으로 앞선 탐색이 취소됐다.
@@ -91,6 +91,36 @@ pub(super) fn prepare(app: &AppHandle) -> Result<()> {
     on_main(&main, "the browser setup", |webview, done| {
         HOOKS.call_once(|| install_hooks(webview));
         let _ = done.try_send(Ok(()));
+    })
+}
+
+/// 메인 UI 페이지의 왼쪽 위가 창 콘텐츠 뷰에서 떨어진 거리 — 프론트 좌표를 자식 웹뷰
+/// 좌표로 옮기는 보정값. macOS 26 은 메인 웹뷰가 타이틀바 밑까지 창 전체를 덮고, WebKit 이
+/// 가려지는 높이를 `obscuredContentInsets` 로 잡아 페이지를 그만큼 내려 그린다. 이를 빼면
+/// 페이지가 타이틀바 높이만큼 위로 올라가 툴바를 덮는다.
+pub(super) fn ui_origin(app: &AppHandle) -> Result<(f64, f64)> {
+    let main = app
+        .get_webview("main")
+        .ok_or_else(|| error("not_found", "Main window is unavailable"))?;
+    on_main(&main, "the layout query", |webview, done| {
+        let frame = webview.frame();
+        // SAFETY: 메인 스레드에서 뷰 계층을 읽는다.
+        let origin = match unsafe { webview.superview() } {
+            Some(parent) if !parent.isFlipped() => (
+                frame.origin.x,
+                parent.frame().size.height - frame.origin.y - frame.size.height,
+            ),
+            _ => (frame.origin.x, frame.origin.y),
+        };
+        // macOS 26 에 생긴 메서드라 이전 OS 에서는 부르지 않는다(보낼 곳이 없으면 예외다).
+        let (left, top) = if webview.respondsToSelector(sel!(obscuredContentInsets)) {
+            // SAFETY: 메인 스레드이고 응답하는 것을 확인했다.
+            let insets = unsafe { webview.obscuredContentInsets() };
+            (insets.left, insets.top)
+        } else {
+            (0.0, 0.0)
+        };
+        let _ = done.try_send(Ok((origin.0 + left, origin.1 + top)));
     })
 }
 
@@ -256,6 +286,29 @@ fn install_hooks(webview: &WKWebView) {
         Some(token) => std::mem::forget(token),
         None => winlog!("browser: the shortcut monitor was not installed"),
     }
+    let clicks = RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
+        note_click(event);
+        event.as_ptr()
+    });
+    let mask = NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown;
+    // SAFETY: 메인 스레드이고 AppKit 이 블록을 복사해 보관한다.
+    match unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &clicks) } {
+        Some(token) => std::mem::forget(token),
+        None => winlog!("browser: the click monitor was not installed"),
+    }
+}
+
+fn note_click(event: NonNull<NSEvent>) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    // SAFETY: AppKit 이 모니터 호출 동안 살아 있는 이벤트를 넘긴다.
+    let event = unsafe { event.as_ref() };
+    let hit = event
+        .window(mtm)
+        .and_then(|window| window.contentView())
+        .and_then(|content| content.hitTest(event.locationInWindow()));
+    if let (Some(tab), Some(app)) = (hit.and_then(browser_tab), APP.get()) {
+        activate_pane(app, tab);
+    }
 }
 
 /// wry 0.55 의 탐색 델리게이트는 실패 콜백을 구현하지 않아, 실패하면 로딩 표시가 풀리지
@@ -347,7 +400,11 @@ fn forward_shortcut(event: NonNull<NSEvent>) -> *mut NSEvent {
 
 fn focused_browser(event: &NSEvent, mtm: MainThreadMarker) -> Option<u64> {
     let responder = event.window(mtm)?.firstResponder()?;
-    let mut view = responder.downcast::<NSView>().ok()?;
+    browser_tab(responder.downcast::<NSView>().ok()?)
+}
+
+/// 뷰나 그 조상이 브라우저 웹뷰면 그 탭.
+fn browser_tab(mut view: Retained<NSView>) -> Option<u64> {
     let views = views();
     loop {
         if let Some(tab) = views.get(&(Retained::as_ptr(&view) as usize)) {
@@ -360,17 +417,50 @@ fn focused_browser(event: &NSEvent, mtm: MainThreadMarker) -> Option<u64> {
 
 /// `KeyboardEvent.key` 와 같은 이름 — `shared/keys.ts` 가 이 값으로 판정한다.
 fn key_name(event: &NSEvent) -> String {
-    match event.keyCode() {
-        48 => "Tab".to_owned(),
-        123 => "ArrowLeft".to_owned(),
-        124 => "ArrowRight".to_owned(),
-        125 => "ArrowDown".to_owned(),
-        126 => "ArrowUp".to_owned(),
-        _ => event
-            .charactersIgnoringModifiers()
-            .map(|chars| chars.to_string())
-            .unwrap_or_default(),
-    }
+    let code = event.keyCode();
+    let chars = event
+        .charactersIgnoringModifiers()
+        .map(|chars| chars.to_string())
+        .unwrap_or_default();
+    named_key(code)
+        .or_else(|| (!chars.is_ascii()).then(|| ansi_key(code)).flatten())
+        .map_or(chars, str::to_owned)
+}
+
+fn named_key(code: u16) -> Option<&'static str> {
+    Some(match code {
+        48 => "Tab",
+        123 => "ArrowLeft",
+        124 => "ArrowRight",
+        125 => "ArrowDown",
+        126 => "ArrowUp",
+        _ => return None,
+    })
+}
+
+/// 한글 등 비 ASCII 입력 소스에서는 문자가 자모로 오므로, 단축키에 쓰는 키만 ANSI 배열의
+/// 물리 키 위치로 읽는다. ASCII 입력 소스(Dvorak 포함)는 그 배열의 문자를 그대로 쓴다.
+fn ansi_key(code: u16) -> Option<&'static str> {
+    Some(match code {
+        2 => "d",
+        11 => "b",
+        13 => "w",
+        17 => "t",
+        18 => "1",
+        19 => "2",
+        20 => "3",
+        21 => "4",
+        23 => "5",
+        22 => "6",
+        26 => "7",
+        28 => "8",
+        25 => "9",
+        30 => "]",
+        33 => "[",
+        37 => "l",
+        45 => "n",
+        _ => return None,
+    })
 }
 
 /// `shared/keys.ts::macKeyAction` 이 가로채는 조합 중 페이지 밖을 다루는 것 — pane 안 탭
@@ -403,6 +493,16 @@ mod tests {
         assert_eq!(data_store_id(7), data_store_id(7));
         assert_ne!(data_store_id(7), data_store_id(8));
         assert_eq!(&data_store_id(7)[..8], b"mastbrws");
+    }
+
+    #[test]
+    fn shortcut_keys_are_read_by_physical_position_for_non_ascii_sources() {
+        assert_eq!(ansi_key(17), Some("t"));
+        assert_eq!(ansi_key(18), Some("1"));
+        assert_eq!(ansi_key(33), Some("["));
+        assert_eq!(ansi_key(37), Some("l"));
+        assert_eq!(ansi_key(12), None);
+        assert_eq!(named_key(48), Some("Tab"));
     }
 
     #[test]
