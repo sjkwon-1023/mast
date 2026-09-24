@@ -1196,11 +1196,11 @@ mod tests {
 
     #[test]
     fn a_completed_probe_notifies_waiters_and_fires_the_callback_once() {
-        let seen: Arc<Mutex<Vec<WslStatus>>> = Arc::new(Mutex::new(Vec::new()));
-        let recorder = Arc::clone(&seen);
+        let (sender, seen) = std::sync::mpsc::channel();
+        let sender = Mutex::new(sender);
         let health = WslHealth::new(Box::new(|| ready(&["Ubuntu"])));
         health.set_callback(Box::new(move |status| {
-            recorder.lock().unwrap().push(status.clone());
+            let _ = sender.lock().unwrap().send(status.clone());
         }));
         let health = Arc::new(health);
 
@@ -1209,7 +1209,11 @@ mod tests {
             health.wait_for_first(Duration::from_secs(3)),
             ready(&["Ubuntu"])
         );
-        let recorded = seen.lock().unwrap().clone();
-        assert_eq!(recorded, vec![ready(&["Ubuntu"])], "콜백은 완료마다 한 번");
+        // 대기자를 먼저 깨우고 콜백을 부르므로(run_probe) 콜백 도착은 따로 기다린다.
+        assert_eq!(
+            seen.recv_timeout(Duration::from_secs(3)),
+            Ok(ready(&["Ubuntu"]))
+        );
+        assert!(seen.try_recv().is_err(), "콜백은 완료마다 한 번");
     }
 }
