@@ -80,6 +80,13 @@ class NativeCli(unittest.TestCase):
             with self.assertRaises(ValueError):
                 cli.main(["id"])
 
+    def test_browser_hands_its_arguments_to_the_shared_browser_helper(self):
+        with patch.object(cli.os, "execv") as execv:
+            cli.main(["browser", "snapshot", "#42"])
+        execv.assert_called_once_with(
+            sys.executable,
+            [sys.executable, str(cli.BIN / "mast-browser.py"), "snapshot", "#42"])
+
 
 class NativeInstaller(unittest.TestCase):
     def setUp(self):

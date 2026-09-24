@@ -48,6 +48,23 @@ R8. 메모리 감시와 UI 리셋이 브라우저 페이지 비용을 터미널 
 최종 필수 게이트: cargo test -p mast-core; cargo test -p mast-remote; cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings; 같은 ARM64 clippy; cargo check --workspace --target x86_64-pc-windows-msvc; apps/mast와 apps/spike 각각 npm ci, npm run build, npm test. 의도한 의존성 변경 후 lockfile 정합성을 확인한다.
 Windows 네이티브 빌드: apps/mast에서 npm run tauri build -- --no-bundle. 실기: WSL 미설치 VM(호스트 WSL 제거 금지), 정상 WSL, 배포판 오류, 브라우저 OFF/ON 미사용/1개/여러 개/휴면/모두 닫기에서 프로세스·CPU·메모리·종료 누수 기록. 기존 단일 웹뷰 기준과 같은 프로세스 트리 지표 사용. 자동화 중 사용자 탭 전환·닫기·복원·UI 리셋·로그인 격리 확인. 수치를 만들거나 모의 테스트를 실기 통과로 표시하지 않는다.
 
+### 05 — macOS 네이티브 브라우저 (2026-09-24 추가)
+선행 04와 macOS 네이티브 지원(#53·#54) 머지. 사용자가 "맥도 지원"을 요청했다. 브라우저 탭 모델·CLI·OSC 질의 경로는 공유하고 WebView2 전용 부분만 WKWebView로 대응한다.
+
+| Windows(WebView2) | macOS(WKWebView) |
+|---|---|
+| 워크스페이스별 `data_directory` | 워크스페이스 ID에서 만든 `data_store_identifier`(macOS 14+). 그보다 낮으면 비영속(incognito) 저장소로 격리한다. |
+| CDP `Runtime.evaluate` | `evaluateJavaScript:` 결과를 `JSON.stringify`로 받는다. |
+| CDP stop·기록 이동·스크린샷 | `stopLoading`·`goBack`/`goForward`·`takeSnapshotWithConfiguration:` → PNG |
+| CDP 신뢰 키 이벤트(press) | WKWebView에 `NSEvent` keyDown/keyUp을 직접 전달한다. 포커스는 옮기지 않는다. |
+| `NavigationCompleted` 실패 | wry가 구현하지 않은 `webView:didFail(Provisional)Navigation:withError:`를 `WryNavigationDelegate`에 런타임으로 추가한다(`install_terminate_guard`와 같은 방식). 이미 구현돼 있으면 추가하지 않고 로그만 남긴다. |
+| `AcceleratorKeyPressed` 단축키 전달 | `NSEvent` 로컬 모니터가 브라우저 웹뷰 포커스 중의 Mast 단축키(`shared/keys.ts`의 `MAC_KEYS`·Cmd+1–9·Cmd+⌥방향키·Ctrl+Tab)와 Cmd+L만 메인 UI로 넘긴다. 페이지 자체 단축키는 가로채지 않는다. |
+| 권한 요청 거부 | 앱 Info.plist에 카메라·마이크·위치 사용 설명이 없어 WebKit이 시스템 단계에서 거부한다. 문서에 근거를 남긴다. |
+| `TrySuspend` 휴면 | 공개 API가 없다. 숨긴 WKWebView는 WebKit이 타이머·렌더링을 억제하는 것에 맡긴다. |
+
+CLI는 `scripts/macos/mast.py`에 `browser`를 연결하고 `mast-browser.py`를 자산으로 배포한다.
+검증: macOS 네이티브 clippy·테스트, 프론트 build/test, macOS 스크립트 테스트, 이 Mac에서 앱을 띄워 `mast browser` 정적 페이지 흐름(open → snapshot → fill/click → press → wait → screenshot → console/errors → back/forward → close)을 실행한다. Windows는 PR `windows-gates`와 사용자 실기로 확인한다.
+
 ## 인수와 진행 규칙
 
 메인이 매 청크의 코드·diff·게이트 로그를 직접 확인한 뒤 다음 청크를 지시한다. worker는 다른 작업자가 있음을 전제하고 기존 변경을 되돌리지 않으며 커밋/push/PR·재위임을 하지 않는다. 원인별 내부 수정 3회 실패, 환경 장애, 계약 변경 필요 시 증거와 함께 blocked 보고. Windows 검증을 실행할 환경이 없으면 미검증으로 남기고 완료·커밋하지 않는다. 사용자 승인으로 플랜 리뷰·최종 병렬 리뷰는 생략하지만 통합 검증은 생략하지 않는다. 성공 후 메인이 기능 worktree에서 커밋/push/PR을 진행한다. CI 등 장시간 작업은 완료 알림으로 재개한다.
@@ -71,5 +88,12 @@ Windows 네이티브 빌드: apps/mast에서 npm run tauri build -- --no-bundle.
 - Windows의 모달/IME/DPI/localhost/동일 페이지 CLI 흐름, WSL 미설치 VM,
   프로세스 트리 CPU·메모리 수치는 아직 미검증이다. 이를 완료로 표시하지 않는다.
   상세 절차는 docs/WINDOWS-BUILD.md, 공개 사용 계약은 docs/BROWSER.md에 기록한다.
+- 청크 05(macOS, 2026-09-24): 격리한 HOME에서 디버그 빌드를 띄워 `mast browser`로
+  open → wait → snapshot → fill → press Enter(폼 제출) → console → click·errors → scroll →
+  screenshot → 팝업의 새 탭 전환 → 다운로드 거부 → navigate → stale_ref 거부 → back/forward·
+  기록 끝 not_found → file: 거부 → 닫힌 포트·없는 호스트의 탐색 실패 오류 → close → 닫힌 탭
+  not_found를 실제 WKWebView에서 확인했다. 9번 같은 제한 포트는 WebKit이 콜백 없이 막아
+  오류가 남지 않는다(BROWSER.md에 기록). UI 배치·단축키 전달·IME·쿠키 격리·재시작 후
+  로그인 유지는 사용자 실기가 남았다(MACOS.md 목록).
 - 초기 스냅샷/조작은 최상위 DOM만 다룬다. 다운로드·웹 권한·임의 eval·외부 CDP·MCP는
   지원하지 않는다. UI 실기 통과 전 ADR 확정·계획 삭제·커밋/push/PR을 진행하지 않는다.

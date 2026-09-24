@@ -19,6 +19,7 @@ HELP = """usage:
   mast send [-l] <target> <text...>   type into another tab (-l: do not submit)
   mast id                           print this tab's stable ID
   mast config [get|set|reset ...]     inspect or change saved settings
+  mast browser --help               inspect and control browser tabs
   mast skill-load                   reinstall the bundled agent skills
 
 Quote numeric addresses: mast send '#176' 'cargo test'. Sends stay in this
@@ -159,6 +160,8 @@ def main(args):
         if rest or not re.fullmatch(r"[0-9]+", os.environ.get("MAST_TAB", "")):
             raise ValueError("mast id needs a Mast tab and no arguments")
         print(os.environ["MAST_TAB"])
+    elif command == "browser":
+        os.execv(sys.executable, [sys.executable, str(BIN / "mast-browser.py")] + rest)
     elif command in ("config", "skill-load"):
         script = "mast-config.py" if command == "config" else "mast-setup.py"
         if command == "skill-load":

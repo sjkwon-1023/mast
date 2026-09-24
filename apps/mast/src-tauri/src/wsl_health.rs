@@ -242,8 +242,9 @@ pub fn emit(app: &AppHandle, dispatcher: &Dispatcher, status: &WslStatus) {
 // 글루는 Linux 개발 호스트에서 컴파일되지 않으므로 이 테스트는 Windows CI 에서만
 // 돈다 (ci.yml 의 `cargo test --workspace --target x86_64-pc-windows-msvc`).
 // `AppHandle` 을 타지 않는 DTO 계약만 여기서 잠근다 — 프론트 타입 미러가 이
-// 키 이름(camelCase)에 걸려 있다.
-#[cfg(test)]
+// 키 이름(camelCase)에 걸려 있다. macOS 워크스페이스는 distro 를 저장하지 않아 없는
+// 배포판 목록이 생기지 않으므로 macOS 에서는 돌리지 않는다.
+#[cfg(all(test, not(target_os = "macos")))]
 mod tests {
     use mast_core::command::{Command, Dispatcher, SessionHost, ShellSpawnReq};
     use mast_core::session::SessionId;

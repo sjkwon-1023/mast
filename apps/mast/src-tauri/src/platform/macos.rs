@@ -49,6 +49,7 @@ const ASSETS: &[(&str, &str)] = &[
     asset!("bin/mast-hooks-merge.py", "wsl/mast-hooks-merge.py"),
     asset!("bin/mast-agy-hook.sh", "wsl/mast-agy-hook.sh"),
     asset!("bin/mast-config.py", "wsl/mast-config.py"),
+    asset!("bin/mast-browser.py", "wsl/mast-browser.py"),
     asset!("bin/mast-claude-hook.sh", "wsl/mast-claude-hook.sh"),
     asset!("bin/mast-codex-hook.sh", "wsl/mast-codex-hook.sh"),
     asset!("bin/mast-opencode-plugin.js", "wsl/mast-opencode-plugin.js"),

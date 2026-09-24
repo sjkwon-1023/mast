@@ -1938,10 +1938,14 @@ name = "mast-app"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "block2",
  "libc",
  "mast-core",
  "mast-remote",
  "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-web-kit",
  "rfd",
  "serde",
  "serde_json",

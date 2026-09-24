@@ -19,6 +19,6 @@ describe("browser CLI", () => {
     run(`args=b.parser().parse_args(['wait','42','--timeout-ms','999999'])\ntry: b.make_request(args)\nexcept ValueError: pass\nelse: raise AssertionError('unbounded wait')`);
   });
   it("writes a screenshot locally and never overwrites an existing file", () => {
-    run(`with tempfile.TemporaryDirectory() as directory:\n p=pathlib.Path(directory)/'capture.png'\n result={'data':'iVBORw0KGgo='}\n assert b.save_screenshot(result,p)['path']==str(p)\n try: b.save_screenshot(result,p)\n except FileExistsError: pass\n else: raise AssertionError('overwrote existing screenshot')`);
+    run(`with tempfile.TemporaryDirectory() as directory:\n p=pathlib.Path(directory)/'capture.png'\n result={'data':'iVBORw0KGgo='}\n assert b.save_screenshot(result,p)['path']==str(p.resolve())\n try: b.save_screenshot(result,p)\n except FileExistsError: pass\n else: raise AssertionError('overwrote existing screenshot')`);
   });
 });

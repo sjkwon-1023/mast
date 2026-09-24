@@ -99,3 +99,9 @@ rfd = { version = "0.17", default-features = false }
 libc = "0.2"
 tempfile = "3"
 objc2 = "0.6"
+# 내장 브라우저의 WKWebView 제어(browser/macos.rs) — wry 가 이미 쓰는 같은 버전이라 새 crate 는
+# 없고, 우리 코드가 부르는 API 의 feature 만 명시한다.
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSProcessInfo", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSBitmapImageRep", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSResponder", "NSView", "NSWindow"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKNavigationDelegate", "WKSnapshotConfiguration", "WKWebView"] }
