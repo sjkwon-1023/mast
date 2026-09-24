@@ -666,18 +666,19 @@ describe("PaneView header buttons", () => {
     );
   }
 
-  it("has the five working buttons — the send pair is retired", () => {
+  it("has the six working buttons — the send pair is retired", () => {
     const { view } = mount();
     view.update(pane(THREE, 10), true, null, null);
 
     const titles = headerButtons(view).map((b) => b.title);
-    expect(titles).toHaveLength(5);
+    expect(titles).toHaveLength(6);
     expect(titles.filter((t) => t.toLowerCase().includes("send"))).toEqual([]);
     // 툴팁의 기능 설명 부분만 본다 — 뒤에 붙는 단축키 표기는 shared/keys.ts 소유.
     expect(titles.map((t) => t.replace(/ \(.*\)$/, ""))).toEqual([
       "New terminal tab",
       "New folder browser tab",
       "New changes viewer tab",
+      "New browser tab",
       "Split left/right",
       "Split top/bottom",
     ]);
@@ -687,7 +688,7 @@ describe("PaneView header buttons", () => {
     const { view } = mount();
     view.update(pane(THREE, 10), true, null, null);
 
-    const [plus, ...icons] = headerButtons(view);
+    const [plus, ...icons] = headerButtons(view).filter(b => b.title !== "New browser tab");
     // + 는 텍스트 라벨 그대로다 (판단: 기호가 이미 자명하다).
     expect(plus.textContent).toBe("+");
     expect(icons).toHaveLength(4);

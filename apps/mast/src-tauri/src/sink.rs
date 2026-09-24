@@ -469,6 +469,35 @@ fn deliver_query(app: &AppHandle, requester: SessionId, kind: &str, reply_b64: &
                 return;
             }
         };
+        if let Some(payload) = kind.strip_prefix("browser:") {
+            let Some(state) = app.try_state::<AppState>() else { return };
+            let (workspace, distro) = {
+                let d = state.dispatcher.lock().unwrap();
+                let (tab, distro) = requester_tab_and_distro(d.state(), requester);
+                let workspace = tab.and_then(|id| d.state().workspaces.iter().find(|w| w.panes.values().any(|p| p.tabs.iter().any(|t| t.id.0 == id))).map(|w| w.id.0));
+                (workspace, distro)
+            };
+            let result = match workspace {
+                Some(workspace) => decode_send_text(payload).map_err(|e| e.to_string())
+                    .and_then(|bytes| serde_json::from_slice::<crate::browser::Request>(&bytes).map_err(|e| e.to_string()))
+                    .map(|request| crate::browser::execute(&app, request, Some(workspace))),
+                None => Err("requester terminal no longer exists".into()),
+            };
+            let response = match result {
+                Ok(Ok(value)) => serde_json::json!({"result": value}),
+                Ok(Err(err)) => serde_json::json!({"error": err}),
+                Err(message) => serde_json::json!({"error": {"code": "invalid_params", "message": message}}),
+            };
+            match serde_json::to_vec(&response) {
+                Ok(bytes) if bytes.len() <= 24 * 1024 * 1024 => {
+                    if let Err(err) = write_reply_file(distro, &reply_path, &bytes) { winlog!("browser reply failed: {err}"); }
+                }
+                _ => {
+                    let _ = write_reply_file(distro, &reply_path, br#"{"error":{"code":"too_large","message":"Browser response exceeds 24 MiB"}}"#);
+                }
+            }
+            return;
+        }
         if kind != QUERY_KIND_LIST_TABS {
             winlog!(
                 "query: unsupported kind {kind:?} from session {requester}; ignored"

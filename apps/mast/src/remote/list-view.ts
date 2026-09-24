@@ -171,6 +171,8 @@ function tabDetail(kind: TabKind): string {
         default:
           return kind.status.code === null ? "exited" : `exited (${kind.status.code})`;
       }
+    case "browser":
+      return "browser · desktop only";
     case "folderBrowser":
       return "folder";
     case "textViewer":

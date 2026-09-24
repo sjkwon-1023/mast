@@ -7,7 +7,8 @@
 //! - PTY 엔진: [`session`]은 세션과 입출력을 관리한다. 내부 `flow`는 역압,
 //!   `replay`는 재연결 버퍼, [`osc`]는 출력 스트림의 제어 시퀀스 해석을 맡는다.
 //! - 저장과 환경 접근: [`persist`]는 상태 저장·복원, [`record`]는 종료된 탭 기록,
-//!   [`capture`]는 외부 명령의 출력 캡처, [`git`]은 Git 조회, [`wslpath`]는 WSL 경로 변환을 맡는다.
+//!   [`capture`]는 외부 명령의 출력 캡처, [`git`]은 Git 조회, [`wslpath`]는 WSL 경로 변환,
+//!   [`wsl`]은 WSL 준비 상태 진단과 스폰 게이트를 맡는다.
 //! - 정책과 프로토콜: [`notify`]는 알림 배치, [`send`]는 에이전트 간 전송 규약,
 //!   [`reset`]은 UI 리셋 판정, [`deadline`]은 동기 호출의 시간 상한, [`firewall`]과 [`update`]는
 //!   방화벽·업데이트 판정 로직을 제공한다.
@@ -33,6 +34,8 @@ pub mod reset;
 pub mod send;
 pub mod session;
 pub mod update;
+pub mod wsl;
+pub mod browser;
 pub mod wslpath;
 
 /// 데스크톱 호출자가 공유하는 작은 OS 별 경계.

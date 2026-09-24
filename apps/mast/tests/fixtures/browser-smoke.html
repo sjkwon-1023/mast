@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<title>Mast 브라우저 검증</title>
+<style>body { font: 18px system-ui; padding: 24px; } label, button, p { display: block; margin: 12px 0; } input { font: inherit; }</style>
+<h1>Mast 동일 페이지 검증</h1>
+<form>
+  <label>이름 <input name="name" aria-label="이름" autocomplete="off"></label>
+  <button type="submit">저장</button>
+</form>
+<p id="result">입력 대기</p>
+<button id="error">검증용 오류 발생</button>
+<button id="cookie">워크스페이스 저장소 표시</button>
+<p id="storage"></p>
+<a href="?popup=1" target="_blank">팝업 탭</a>
+<a href="browser-smoke.html" download>다운로드 거부 확인</a>
+<script>
+document.querySelector('form').addEventListener('submit', event => {
+  event.preventDefault();
+  const name = document.querySelector('input').value;
+  document.querySelector('#result').textContent = `저장 완료: ${name}`;
+  console.log('저장 완료', name);
+});
+document.querySelector('#error').addEventListener('click', () => { throw new Error('브라우저 검증 오류'); });
+document.querySelector('#cookie').addEventListener('click', () => {
+  let marker = localStorage.getItem('mast-browser-smoke');
+  if (!marker) { marker = crypto.randomUUID(); localStorage.setItem('mast-browser-smoke', marker); }
+  document.cookie = `mast_browser_smoke=${marker}; SameSite=Lax; path=/`;
+  document.querySelector('#storage').textContent = `${marker} / ${document.cookie}`;
+});
+</script>
+</html>

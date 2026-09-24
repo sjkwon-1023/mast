@@ -91,6 +91,7 @@ export interface Tab {
  *  스크롤 위치를 기억하지 않아 필드 자체가 없다 (setViewerScroll 대상이 되면
  *  kindMismatch). */
 export type TabKind =
+  | { type: "browser"; url: string }
   | {
       type: "terminal";
       /** 휘발성 PTY 세션 id. 살아 있는 세션에만 실린다 — 셸이 끝나면 비워지고,
@@ -116,6 +117,7 @@ export type TerminalStatus =
 /** 탭 생성 명세 (command.rs NewTab) — createTab·splitPane·createWorkspace 공유.
  *  21단계 뷰어 4종이 모두 착지해 TabKind 와 종류가 일대일이다. */
 export type NewTab =
+  | { type: "browser"; url: string }
   | { type: "terminal"; cwd: string | null }
   /** path 가 null 이면 워크스페이스 rootPath, 그것도 null 이면 "/" (terminal
    *  cwd 와 대칭). */

@@ -564,6 +564,10 @@ export class WorkspaceView {
     const distro = ws?.distro ?? null;
     const created = new LazyViewerView(parent, target.kind, async () => {
       switch (target.kind.type) {
+        case "browser": {
+          const { BrowserView } = await import("../browser/view");
+          return (host, kind) => new BrowserView(host, target.tab, kind);
+        }
         case "terminal": {
           const { RecordView } = await import("../viewers/record/view");
           return (host) => new RecordView(host, target.tab);

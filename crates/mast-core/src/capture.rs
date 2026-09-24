@@ -24,7 +24,34 @@ pub struct CapturedOutput {
     pub timed_out: bool,
 }
 
+/// [`capture_with_spawn`] 의 실패 — 스폰 실패를 **구조적으로** 알아야 하는 호출자
+/// (예: 실행 파일 자체가 없는지 봐야 하는 WSL 진단)를 위해 있다.
+#[derive(Debug, Clone)]
+pub struct CaptureFailure {
+    pub message: String,
+    /// 프로그램을 찾지 못해 스폰하지 못했다 (io `NotFound`).
+    pub not_found: bool,
+}
+
+impl From<String> for CaptureFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            not_found: false,
+        }
+    }
+}
+
 pub fn capture(command: &mut Command, limits: CaptureLimits) -> Result<CapturedOutput, String> {
+    capture_with_spawn(command, limits).map_err(|failure| failure.message)
+}
+
+/// [`capture`] 와 같지만 스폰 실패의 종류를 [`CaptureFailure`] 로 돌려준다 — 기존
+/// 호출자는 문자열만 받는 [`capture`] 를 그대로 쓴다.
+pub fn capture_with_spawn(
+    command: &mut Command,
+    limits: CaptureLimits,
+) -> Result<CapturedOutput, CaptureFailure> {
     implementation::capture(command, limits)
 }
 
@@ -38,7 +65,7 @@ enum DrainOutcome {
 
 #[cfg(any(unix, windows))]
 mod implementation {
-    use super::{CaptureLimits, CapturedOutput, DrainOutcome, READ_CHUNK};
+    use super::{CaptureFailure, CaptureLimits, CapturedOutput, DrainOutcome, READ_CHUNK};
     use std::{
         io::{self, Read},
         process::{Child, Command, ExitStatus},
@@ -62,11 +89,12 @@ mod implementation {
     pub(super) fn capture(
         command: &mut Command,
         limits: CaptureLimits,
-    ) -> Result<CapturedOutput, String> {
+    ) -> Result<CapturedOutput, CaptureFailure> {
         os::prepare_command(command);
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("cannot spawn capture command: {error}"))?;
+        let mut child = command.spawn().map_err(|error| CaptureFailure {
+            message: format!("cannot spawn capture command: {error}"),
+            not_found: error.kind() == io::ErrorKind::NotFound,
+        })?;
         let child_pid = child.id();
 
         let stdout = match child.stdout.take() {
@@ -329,7 +357,7 @@ mod implementation {
         child_pid: u32,
         status: Option<&mut Option<ExitStatus>>,
         message: String,
-    ) -> String {
+    ) -> CaptureFailure {
         let result = if let Some(status) = status {
             stop_process(child, child_pid, status)
         } else {
@@ -337,8 +365,8 @@ mod implementation {
             stop_process(child, child_pid, &mut temporary_status)
         };
         match result {
-            Ok(()) => message,
-            Err(cleanup) => format!("{message}; cleanup failed: {cleanup}"),
+            Ok(()) => message.into(),
+            Err(cleanup) => format!("{message}; cleanup failed: {cleanup}").into(),
         }
     }
 
@@ -473,13 +501,13 @@ mod implementation {
 
 #[cfg(not(any(unix, windows)))]
 mod implementation {
-    use super::{CaptureLimits, CapturedOutput};
+    use super::{CaptureFailure, CaptureLimits, CapturedOutput};
     use std::process::Command;
 
     pub(super) fn capture(
         _command: &mut Command,
         _limits: CaptureLimits,
-    ) -> Result<CapturedOutput, String> {
-        Err("bounded capture is unsupported on this platform".to_string())
+    ) -> Result<CapturedOutput, CaptureFailure> {
+        Err("bounded capture is unsupported on this platform".to_string().into())
     }
 }

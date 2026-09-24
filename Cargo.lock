@@ -1949,6 +1949,7 @@ dependencies = [
  "tauri-build",
  "tauri-winrt-notification",
  "tempfile",
+ "webview2-com",
  "windows",
  "windows-sys 0.61.2",
 ]
@@ -1963,6 +1964,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "url",
  "windows-sys 0.61.2",
 ]
 

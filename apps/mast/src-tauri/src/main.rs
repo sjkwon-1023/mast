@@ -4,7 +4,8 @@
 //! 모듈 지도: `commands`는 IPC, `host`·`sink`·`router`는 세션과 출력·알림 연결,
 //! `state`·`boot`·`reset_supervisor`는 상태 공유와 기동·리셋 수명을 맡는다.
 //! `remote`는 HTTP 서버 조립, `firewall`·`git`·`update`·`app_identity`·`provision`은
-//! OS와 외부 환경 연동, `audit`·`diagnostics`·`logfile`은 진단을 담당한다.
+//! OS와 외부 환경 연동, `audit`·`diagnostics`·`logfile`은 진단을 담당하고,
+//! `wsl_health`는 WSL 준비 상태 진단과 그 프론트 계약을 맡는다.
 //!
 //! # 부팅 순서 (계획 15단계 B-2 · 0장 manage-first)
 //!
@@ -29,6 +30,7 @@ compile_error!("Mast supports macOS on Apple Silicon only (aarch64-apple-darwin)
 mod app_identity;
 mod audit;
 mod boot;
+mod browser;
 mod commands;
 mod diagnostics;
 // Windows 방화벽 규칙 감지(COM)·적용(승격 netsh) — 원격 표면의 페어링 대화상자용.
@@ -47,6 +49,7 @@ mod secure_remote;
 mod sink;
 mod state;
 mod update;
+mod wsl_health;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -54,7 +57,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mast_core::command::{Command, Dispatcher, NewTab, RegistryAudit};
+use mast_core::command::{Dispatcher, RegistryAudit};
 use mast_core::model::{AppState as CoreState, TabId, TabKind};
 use mast_core::persist::{self, FreshReason, LoadOutcome, Saver};
 use mast_core::record::RecordStore;
@@ -99,6 +102,16 @@ fn backup_label(backup: &Result<PathBuf, String>) -> String {
     }
 }
 
+fn restrict_browser_ipc(handler: impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static)
+    -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        if invoke.message.webview_ref().label() != "main" {
+            invoke.resolver.reject("Mast commands are restricted to the application UI");
+            true
+        } else { handler(invoke) }
+    }
+}
+
 fn main() {
     // **웹뷰 초기화보다 먼저다.** Windows 셸에 AUMID 를 선언하고 시작 메뉴 바로가기를
     // 맞춰야 needsInput 토스트가 mast 발신자로 뜬다 — 미등록 발신자의 토스트를
@@ -115,6 +128,11 @@ fn main() {
     let window_hidden = AtomicBool::new(false);
 
     tauri::Builder::default()
+        .on_page_load(|view, payload| {
+            if view.label() == "main" && matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                browser::hide_all(view.app_handle());
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             // 로그가 켜져 있다면 **제일 먼저** 연다 — 부팅 자체(상태 복원·재스폰
@@ -123,6 +141,8 @@ fn main() {
             logfile::init(&handle);
             #[cfg(target_os = "macos")]
             platform::macos::initialize(&handle)?;
+            let ui = commands::read_ui_settings(&handle).map_err(std::io::Error::other)?;
+            app.manage(browser::BrowserState::new(ui.browser.is_none_or(|b| b.enabled)));
             let sessions = Arc::new(SessionManager::new());
             let sinks = Arc::new(state::SinkRegistry::default());
             // OSC 라우터는 sink 생성보다 먼저 — sink factory(TauriHost)가 핸들을
@@ -134,12 +154,17 @@ fn main() {
             let state_path = app_data_dir.join("state.json");
             let records = Arc::new(RecordStore::new(app_data_dir.join("records")));
 
+            // WSL 진단기 — host 보다 먼저 만들어야 host 의 스폰 게이트가 이 하나를
+            // 공유한다. 첫 진단은 Dispatcher 가 생긴 직후(아래)에 시작한다.
+            let wsl = wsl_health::create();
+
             let tauri_host = host::TauriHost::new(
                 handle.clone(),
                 Arc::clone(&sessions),
                 Arc::clone(&sinks),
                 Arc::clone(&router),
                 Arc::clone(&records),
+                Arc::clone(&wsl),
             );
 
             let (dispatcher, needs_dogfood) = match persist::load(&state_path) {
@@ -192,7 +217,21 @@ fn main() {
                 ),
             }
 
+            if needs_dogfood { wsl_health::include_target(host::resolve_distro(None)); }
+            for workspace in &dispatcher.state().workspaces {
+                if workspace.panes.values().flat_map(|p| &p.tabs).any(|t| matches!(t.kind, mast_core::model::TabKind::Terminal { .. })) {
+                    wsl_health::include_target(host::resolve_distro(workspace.distro.clone()));
+                }
+            }
             let dispatcher = Arc::new(Mutex::new(dispatcher));
+            // 첫 WSL 진단을 여기서 띄운다 — 상태 로드 직후라 초기 탭 생성·재스폰
+            // 준비와 겹쳐 돌고, 모든 스폰 경로가 이 결과를 기다리거나 거부한다
+            // (`host.rs` 게이트, `boot::BootWork`). 완료 이벤트 콜백은 Dispatcher
+            // 핸들이 필요하므로 만들어진 직후에 단다.
+            wsl_health::attach_emitter(&wsl, handle.clone(), Arc::clone(&dispatcher));
+            if let Err(err) = wsl.start() {
+                winlog!("wsl: {err}");
+            }
             let saver = Arc::new(Saver::spawn(state_path, SAVE_DEBOUNCE));
             // 자동 UI 리셋 supervisor (계획 16단계 C-2) — env 설정 파싱 + worker
             // 스레드 기동. 활동·창 이벤트 신호는 commands / on_window_event 가
@@ -204,9 +243,13 @@ fn main() {
             let sessions_for_remote = Arc::clone(&sessions);
             let sessions_for_secure_remote = Arc::clone(&sessions);
 
+            // 부팅 시 WSL 이 필요한 작업(초기 탭 생성·재스폰·프로비저닝)의 조정자.
+            let boot_work = Arc::new(boot::BootWork::new(needs_dogfood));
+
             // manage 를 재스폰보다 먼저 (ADR-0016 결정 8) — 재스폰된 세션의 on_exit 은
             // try_state 로 관리 상태를 찾으므로, 스폰이 먼저면 그 사이 exit
-            // 이벤트가 소실되는 창이 생긴다.
+            // 이벤트가 소실되는 창이 생긴다. 초기 생성·프로비저닝도 같은 이유로
+            // manage 뒤에 돈다 (`BootWork` 는 이 manage 뒤에 시작한다).
             app.manage(state::AppState {
                 dispatcher: Arc::clone(&dispatcher),
                 sessions,
@@ -215,56 +258,32 @@ fn main() {
                 reset,
                 router,
                 records: Arc::clone(&records),
+                wsl: Arc::clone(&wsl),
+                boot: Arc::clone(&boot_work),
                 last_audit: Mutex::new(RegistryAudit::default()),
                 exits_in_flight: Mutex::new(HashSet::new()),
             });
 
-            // Fresh 부팅 dogfood — 직접 상태 조작 없이 커맨드 bus 경유로 초기
-            // 워크스페이스 + 터미널 탭을 단일 dispatch 로 원자 생성한다 (계획
-            // 13-D1). manage 뒤라서 이 스폰의 on_exit 은 어떤 타이밍에도 관리
-            // 상태를 찾는다. 프론트 attach 전의 셸 프롬프트 출력이 replay 에
-            // 잡히는 것이 attach 프로토콜의 자연 검증이다 (계획 3-C). 실패는
-            // 가리지 않는다 — 부팅 불능이므로 즉시 패닉.
-            if needs_dogfood {
-                let d_guard = &mut *dispatcher.lock().unwrap();
-                d_guard
-                    .dispatch(Command::CreateWorkspace {
-                        name: "main".to_string(),
-                        root_path: None,
-                        distro: None,
-                        tab: Some(NewTab::Terminal { cwd: None }),
-                    })
-                    .unwrap_or_else(|err| panic!("[mast] boot: CreateWorkspace failed: {err}"));
-                state::publish_state(&handle, d_guard);
+            // sanitize·수리 결과를 즉시 디스크에 반영한다 (ADR-0016 결정 8 초기 저장) —
+            // 이 시점 상태가 다음 크래시 복원의 기준선이 된다. **Restored 부팅에만**
+            // 한다: Fresh 부팅은 초기 워크스페이스가 실제로 만들어질 때 그 publish 가
+            // 저장하고, WSL 이 준비되지 않아 초기 생성이 미뤄지는 동안 빈 상태를
+            // 파일로 만들면 다음 부팅이 Fresh 가 아니게 되어 초기 탭 생성 기회를
+            // 영영 잃는다 (파일 없음 = 다음 부팅도 Fresh = 재시도 가능).
+            if !needs_dogfood {
+                saver.schedule(dispatcher.lock().unwrap().state().clone());
             }
 
-            // sanitize·수리 결과를 즉시 디스크에 반영한다 (ADR-0016 결정 8 초기 저장) — 이
-            // 시점 상태가 다음 크래시 복원의 기준선이 된다. Fresh 부팅의 초기
-            // 워크스페이스도 이 한 번으로 저장된다. **재스폰보다 먼저** 한다: 재스폰은
-            // 이제 별도 스레드에서 천천히 돌고(`boot`), 그 결과는 회당 publish 가
-            // 알아서 저장한다.
-            saver.schedule(dispatcher.lock().unwrap().state().clone());
-
-            // 탭별 재스폰 — 회당 lock 취득·해제 + publish (ADR-0016 결정 8: lock 사이에
-            // 도착하는 on_exit/dispatch 가 끼어들 수 있어 이벤트 소실 창이 없다).
-            // WSL 예열과 탭 간 간격은 `boot` 모듈 doc 참조 (실기 사고 2026-08-20).
-            boot::respawn_restored_tabs(handle.clone(), Arc::clone(&dispatcher), records);
-
-            // 에이전트 알림 훅 프로비저닝 (fire-and-forget) — 부팅 경로를 붙잡지
-            // 않도록 setup 의 맨 끝에서, 상태에 있는 distro 들 + 기본 distro 를
-            // 대상으로 건다. Dispatcher lock 은 이 한 문장(목록 복사) 동안만 잡힌다.
-            let distros: Vec<String> = dispatcher
-                .lock()
-                .unwrap()
-                .state()
-                .workspaces
-                .iter()
-                .filter_map(|workspace| workspace.distro.clone())
-                .collect();
-            provision::ensure_provisioned(&handle, None);
-            for distro in &distros {
-                provision::ensure_provisioned(&handle, Some(distro));
-            }
+            // 초기 탭 생성·재스폰·프로비저닝은 **첫 WSL 진단 뒤**에 시작한다 —
+            // 진단이 준비되지 않았으면 아무것도 실행하지 않고, 명시적 재검사가
+            // 밀린 작업을 다시 적용한다 (`boot` 모듈 doc). 웨이브의 예열·간격은
+            // 실기 사고 2026-08-20 의 페이싱 그대로다.
+            boot_work.start(
+                handle.clone(),
+                Arc::clone(&dispatcher),
+                Arc::clone(&records),
+                Arc::clone(&wsl),
+            );
 
             // 원격 표면(LAN 폴링)은 **부팅의 맨 끝**이다: 설정에 `remote` 가 없으면
             // 리스너도 스레드도 토큰 파일도 생기지 않고, 있으면 그때부터 이 프로세스
@@ -347,7 +366,9 @@ fn main() {
             }
             _ => {}
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(restrict_browser_ipc(tauri::generate_handler![
+            browser::browser_request,
+            browser::browser_surface,
             commands::dispatch,
             commands::get_state,
             commands::respawn_tab,
@@ -365,6 +386,11 @@ fn main() {
             commands::reset_ui,
             // settings.json 의 UI 설정 (터미널 폰트) — 부팅당 1회, 설정 UI 는 없다.
             commands::get_ui_settings,
+            // WSL 준비 상태 안내 (2026-09-22) — 조회는 부팅·이벤트마다, 재검사는
+            // 사용자가 누를 때만, 설정 파일 열기는 버튼을 누를 때만.
+            commands::get_wsl_status,
+            commands::recheck_wsl,
+            commands::open_settings_file,
             update::get_update_info,
             // 프론트엔드 → 런타임 로그 파일 (로그가 켜져 있을 때만).
             commands::log_line,
@@ -405,7 +431,7 @@ fn main() {
             secure_remote::secure_remote_status,
             secure_remote::secure_remote_firewall_status,
             secure_remote::secure_remote_firewall_allow,
-        ])
+        ]))
         .build(tauri::generate_context!())
         .expect("error while building mast")
         .run(|app, event| {

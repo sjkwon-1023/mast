@@ -3534,3 +3534,35 @@ fn native_workspace_ignores_distro_and_accepts_native_paths() {
     assert_eq!(ws.distro, None);
     assert_eq!(ws.root_path.as_deref(), Some("/mnt/a:project"));
 }
+
+#[test]
+fn browser_tab_uses_no_pty_and_keeps_url_through_persistence() {
+    let host = FakeSessionHost::default();
+    let mut d = Dispatcher::new(Box::new(host.clone()));
+    let out = d.dispatch(Command::CreateWorkspace { name: "web".into(), root_path: None, distro: None,
+        tab: Some(NewTab::Browser { url: "http://localhost:3000".into() }) }).unwrap();
+    let CommandOutput::WorkspaceCreated { tab: Some(tab), session: None, .. } = out else { panic!("unexpected output") };
+    assert!(host.spawns().is_empty());
+    d.update_browser(tab, "https://example.com/", Some("Example")).unwrap();
+    let json = serde_json::to_vec(d.state()).unwrap();
+    let restored: AppState = serde_json::from_slice(&json).unwrap();
+    let restored = Dispatcher::adopt(restored, Box::new(host.clone()));
+    assert!(matches!(&restored.state().workspaces[0].panes.values().next().unwrap().tabs[0].kind,
+        TabKind::Browser { url } if url == "https://example.com/"));
+    assert!(host.spawns().is_empty());
+}
+
+#[test]
+fn disabled_browser_rejects_creation_without_mutating_state() {
+    struct Disabled;
+    impl SessionHost for Disabled {
+        fn browser_enabled(&self) -> bool { false }
+        fn spawn_shell(&self, _: ShellSpawnReq) -> anyhow::Result<SessionId> { panic!("must not spawn") }
+        fn kill(&self, _: SessionId) { panic!("must not kill") }
+    }
+    let mut d = Dispatcher::new(Box::new(Disabled));
+    let before = serde_json::to_value(d.state()).unwrap();
+    assert!(d.dispatch(Command::CreateWorkspace { name: "web".into(), root_path: None, distro: None,
+        tab: Some(NewTab::Browser { url: "https://example.com".into() }) }).is_err());
+    assert_eq!(before, serde_json::to_value(d.state()).unwrap());
+}

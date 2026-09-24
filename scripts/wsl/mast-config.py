@@ -15,12 +15,14 @@ import tempfile
 MAX_BYTES = 1024 * 1024
 DEFAULT_PORT = 7331
 LANGUAGES = ["css", "html", "javascript", "json", "python", "rust", "toml", "typescript"]
-KEYS = {"fontFamily", "fontSize", "highlightLanguages", "log", "remote", "remote.port", "showTabIds"}
+KEYS = {"fontFamily", "fontSize", "highlightLanguages", "log", "remote", "remote.port", "showTabIds", "browser", "browser.enabled"}
 DEFAULTS = {
     "fontFamily": "terminal: Consolas, 'Cascadia Mono', monospace; viewers: monospace",
     "fontSize": "terminal: 13px; viewers: 12px",
     "highlightLanguages": LANGUAGES,
     "log": False,
+    "browser": {"enabled": True},
+    "browser.enabled": True,
     "remote": False,
     "remote.port": "none while remote is off; set remote defaults to 7331",
     "showTabIds": True,
@@ -28,6 +30,7 @@ DEFAULTS = {
 HELP = """usage:
   mast config                         show saved overrides, defaults and help
   mast config get [key]                inspect saved settings (not running state)
+  mast config set browser.enabled <true|false>
   mast config set fontFamily <name>
   mast config set fontSize <6-72>
   mast config set highlightLanguages '["python","rust"]'
@@ -84,6 +87,9 @@ def validate(data):
         or any(not isinstance(item, str) or item not in LANGUAGES for item in languages)
     ):
         raise ValueError("highlightLanguages must be an array of: " + ", ".join(LANGUAGES))
+    browser = data.get("browser")
+    if browser is not None and (not isinstance(browser, dict) or type(browser.get("enabled")) is not bool):
+        raise ValueError("browser must be an object with boolean enabled")
     remote = data.get("remote")
     if remote is not None:
         if not isinstance(remote, dict) or "port" not in remote:
@@ -159,7 +165,11 @@ def mutation(args):
     if action == "reset":
         if values or key == "remote.port":
             raise ValueError("reset takes one top-level key; use reset remote to disable it")
-        return key, None, True
+        return "browser" if key == "browser.enabled" else key, None, True
+    if key in ("browser", "browser.enabled"):
+        if len(values) != 1:
+            raise ValueError("set browser.enabled requires true or false")
+        return "browser", {"enabled": boolean(values[0])}, False
     if key == "remote":
         enabled, port = True, DEFAULT_PORT
         if values and values[0] in ("true", "false"):
@@ -201,6 +211,10 @@ def update(path, change):
         updated = copy.deepcopy(data)
         if remove:
             updated.pop(key, None)
+        elif key == "browser":
+            browser = updated.get("browser") or {}
+            browser["enabled"] = value["enabled"]
+            updated["browser"] = browser
         elif key in ("remote", "remote.port"):
             remote = updated.get("remote") or {}
             remote["port"] = value
@@ -241,6 +255,7 @@ def execute(args, path):
         if len(args) == 2:
             key = args[1]
             value = (data.get("remote") or {}).get("port") if key == "remote.port" else data.get(key)
+            if key == "browser.enabled": value = (data.get("browser") or {}).get("enabled")
             print(json.dumps({"key": key, "saved": value, "default": DEFAULTS[key]}, indent=2))
         else:
             print("Saved overrides (not running state):")

@@ -158,6 +158,7 @@ export function notifyToast(title: string, body: string, logLabel: string): Prom
  *  `serde(rename_all = "camelCase")`)이고, 사용자가 손으로 쓰는 settings.json 의
  *  키와 같은 이름이다. **null = 미설정**이라 그 항목은 기본값을 그대로 쓴다. */
 export interface UiSettings {
+  browser?: { enabled: boolean } | null;
   /** xterm fontFamily — CSS font-family 문자열. */
   fontFamily: string | null;
   /** xterm fontSize (px). 백엔드가 6~72 범위를 강제한다 (밖이면 reject). */
@@ -458,6 +459,61 @@ export function gitDiff(
   request: GitDiffRequest,
 ): Promise<GitDiff> {
   return invoke<GitDiff>("git_diff", { distro, request });
+}
+
+// --- WSL 준비 상태 (2026-09-22) ---------------------------------------------
+//
+// 백엔드 `wsl_health::WslStatusDto` 미러 (camelCase). 진단은 부팅에 한 번
+// 비동기로 돌고 명시적 재검사로만 갱신되며, 결과는 `wsl-status-changed` 로도 온다.
+// **상태 판정은 전부 백엔드가 한다** — 프론트는 `wsl.exe` 존재나 준비 여부를
+// 스스로 추측하지 않는다 (stub·가짜 준비 금지).
+
+/** WSL 진단 상태. `probing` 은 첫 진단 전, `notApplicable` 은 unix 개발 실행이다. */
+export interface WslStatus {
+  state:
+    | "probing"
+    | "notApplicable"
+    | "notInstalled"
+    | "noDistro"
+    | "ready"
+    | "failed"
+    | "timeout";
+  /** 분류와 별개로 보여 주는 원문 세부 정보 — WSL 메시지는 로캘별이므로 판정에
+   *  쓰지 않고 그대로 표시만 한다. */
+  detail: string | null;
+  /** 원시 종료 코드 (0x8007019E 같은 HRESULT 포함). 없으면 null. */
+  code: number | null;
+  /** 설치된 배포판 목록 — `ready` 일 때만 비어 있지 않다. 첫 항목이 기본 배포판. */
+  distros: string[];
+  /** `ready` 인데 워크스페이스가 요구하는데 설치돼 있지 않은 배포판들. */
+  missingDistros: string[];
+  failures: { distro: string; detail: string; code: number | null; timedOut: boolean }[];
+}
+
+/** 현재 진단 상태 조회 — 부팅 배너가 첫 1회, 이후는 이벤트가 갱신한다. */
+export function getWslStatus(): Promise<WslStatus> {
+  return invoke<WslStatus>("get_wsl_status");
+}
+
+/** 명시적 재검사 — 새 진단을 돌리고(도는 진단이 있으면 그 결과를 기다린다),
+ *  준비되면 백엔드가 밀린 부팅 작업(초기 탭·재스폰·프로비저닝)을 다시 적용한다.
+ *  진단 완료 이벤트는 완료 콜백이 보내므로 이 호출은 결과만 쓴다. */
+export function recheckWsl(): Promise<WslStatus> {
+  return invoke<WslStatus>("recheck_wsl");
+}
+
+/** 진단 결과 갱신 구독 — payload 는 `getWslStatus` 와 같은 DTO 다. */
+export function onWslStatusChanged(
+  handler: (status: WslStatus) => void,
+): Promise<UnlistenFn> {
+  return listen<WslStatus>("wsl-status-changed", (event) => handler(event.payload));
+}
+
+/** 앱 설정 파일(`settings.json`)을 기본 편집기로 연다 — WSL 안내 배너의
+ *  "Open settings.json" 버튼. 파일이 없으면 백엔드가 빈 JSON 객체로 만든다
+ *  (앱 설정은 전부 기본값이라 동작은 같다). Windows 전용이고 dev 실행은 reject. */
+export function openSettingsFile(): Promise<void> {
+  return invoke<void>("open_settings_file");
 }
 
 // --- 워크스페이스 폴더 선택 --------------------------------------------------

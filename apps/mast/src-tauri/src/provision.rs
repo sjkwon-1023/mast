@@ -19,14 +19,19 @@
 //!
 //! # 호출 지점
 //!
-//! `main.rs` setup 끝(상태의 워크스페이스 distro 들 + 기본 distro)과 `commands.rs`
-//! 의 `dispatch` 성공 경로(CreateWorkspace 로 새 distro 가 들어올 때)뿐이다.
-//! **스폰 핫패스(`host.rs`)는 건드리지 않는다** — 첫 탭 스폰을 wsl.exe 왕복만큼
-//! 늦추지 않기 위해서다.
+//! `boot.rs` 의 부팅 웨이브(상태의 워크스페이스 distro 들 + 기본 distro)와
+//! `commands.rs` 의 `dispatch` 성공 경로(CreateWorkspace 로 새 distro 가 들어올
+//! 때)뿐이다. **스폰 핫패스(`host.rs`)는 건드리지 않는다** — 첫 탭 스폰을
+//! wsl.exe 왕복만큼 늦추지 않기 위해서다.
+//!
+//! 두 호출 지점 모두 [`crate::wsl_health`] 의 진단을 인자로 받아, 진단이 끝나기
+//! 전에는 `wsl.exe` 를 띄우지 않는다 (2026-09-22 — WSL 없는 PC 에서 부팅마다
+//! 같은 실패를 반복하던 경로).
 
 use std::collections::HashSet;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
+use mast_core::wsl::WslHealth;
 use tauri::AppHandle;
 #[cfg(windows)]
 use crate::winlog;
@@ -34,7 +39,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 18;
+const SETUP_VERSION: u32 = 19;
 
 /// 설치 스크립트 heredoc 에 통째로 들어가는 레포 파일들: (자리표시자, heredoc 종결 줄, 내용).
 ///
@@ -42,7 +47,8 @@ const SETUP_VERSION: u32 = 18;
 /// (`setup_script`). 그래서 설치된 파일은 레포 파일과 바이트 단위로 같다. 순서대로 치환하므로
 /// 앞서 넣은 파일에 뒤 자리표시자나 자기 종결 줄이 들어 있으면 스크립트가 조용히 깨진다 —
 /// 아래 `const _` 가 그 경우를 빌드 실패로 만든다.
-const EMBEDDED_FILES: [(&str, &str, &str); 9] = [
+const EMBEDDED_FILES: [(&str, &str, &str); 10] = [
+    ("@BROWSER_HELPER@", "MAST_BROWSER_EOF", include_str!("../../../../scripts/wsl/mast-browser.py")),
     (
         "@CONFIG_HELPER@",
         "MAST_CONFIG_EOF",
@@ -232,27 +238,35 @@ fn claim(key: &str) -> bool {
 /// 이거나 빈 문자열이면 WSL 기본 배포판이 대상이다 (`host.rs::spawn_spec` 의 빈
 /// 문자열 = 미설정 규율과 동일).
 ///
+/// **진단 게이트** (2026-09-22): 이 함수는 WSL 준비 상태 진단이 끝나기 전에는
+/// `wsl.exe` 를 띄우지 않는다 — 첫 진단을 상한 안에서 기다린 뒤, 대상 distro 가
+/// 준비된 경우에만 설치 스크립트를 흘린다. 준비되지 않았으면 로그만 남기고
+/// 끝난다 (마커를 만들지 않으므로 다음 부팅·재검사 뒤에 다시 시도된다). 기본
+/// distro 이름도 진단 목록의 첫 항목을 쓰므로 `wsl.exe -l -q` 왕복이 하나 줄었다.
+///
 /// `_app` 은 호출부 대칭(모든 호출 지점이 `AppHandle` 을 쥐고 있다)을 위해 계약에
 /// 남긴 인자다 — 현재 구현은 쓰지 않는다.
 #[cfg(not(target_os = "macos"))]
-pub fn ensure_provisioned(_app: &AppHandle, distro: Option<&str>) {
+pub fn ensure_provisioned(_app: &AppHandle, wsl: &Arc<WslHealth>, distro: Option<&str>) {
     let distro = distro.filter(|d| !d.is_empty()).map(str::to_owned);
+    let target = distro.clone().unwrap_or_else(|| "default distro".to_owned());
+    let wsl = Arc::clone(wsl);
     tauri::async_runtime::spawn_blocking(move || {
-        // 해석·claim 을 블로킹 태스크 안에서 한다 — 기본 distro 이름 질의(wsl.exe)
-        // 가 블로킹이고, claim 이 해석된 키를 써야 위 rustdoc 의 이중 프로비저닝을
-        // 막는다. 캐시에 걸러진 태스크는 즉시 반환하는 싼 태스크다.
+        let status = wsl.wait_for_first(crate::wsl_health::STATUS_WAIT);
+        if let Some(reason) = mast_core::wsl::spawn_block_reason(&status, distro.as_deref()) {
+            winlog!("provisioning skipped ({target}): {reason}");
+            return;
+        }
+        // claim 이 해석된 키를 써야 위 rustdoc 의 이중 프로비저닝을 막는다. 캐시에
+        // 걸러진 태스크는 즉시 반환하는 싼 태스크다.
         let resolved = match &distro {
             Some(name) => Some(name.clone()),
-            None => default_distro_name(),
+            None => status.default_distro().map(str::to_owned),
         };
         if !claim(resolved.as_deref().unwrap_or_default()) {
             return;
         }
         if let Err(err) = run(distro.as_deref()) {
-            let target = match &distro {
-                Some(distro) => distro.as_str(),
-                None => "default distro",
-            };
             winlog!(
                 "provisioning failed ({target}): {err}; \
                  agent notification hooks are not wired — see scripts/wsl/claude-hook-example.md \
@@ -260,18 +274,6 @@ pub fn ensure_provisioned(_app: &AppHandle, distro: Option<&str>) {
             );
         }
     });
-}
-
-/// `commands.rs` 의 기본 배포판 질의(성공만 OnceLock 캐시)를 공유한다.
-#[cfg(windows)]
-fn default_distro_name() -> Option<String> {
-    crate::commands::default_distro().ok()
-}
-
-/// unix 에는 WSL 기본 배포판 개념이 없다 (`run` 의 no-op 과 같은 대칭).
-#[cfg(not(windows))]
-fn default_distro_name() -> Option<String> {
-    None
 }
 
 #[cfg(windows)]
@@ -1139,6 +1141,7 @@ QUERY_TICKS=40
 usage() {
   cat <<'MAST_USAGE_EOF'
 usage:
+  mast browser --help                inspect and control browser tabs
   mast ls                            list tabs in this workspace: TAB, TITLE, WORKSPACE, STATUS, COMMAND
   mast send [-l] <target> <text...>  type text into another pane (-l: pre-fill, do not submit)
   mast id                            print this tab's id ($MAST_TAB)
@@ -1475,6 +1478,7 @@ case "${1:-}" in
     command -v python3 >/dev/null 2>&1 || { echo 'mast config: python3 is required in WSL' >&2; exit 1; }
     exec python3 "$HOME/.mast/bin/mast-config.py" "$@"
     ;;
+  browser) shift; exec python3 "$HOME/.mast/bin/mast-browser.py" "$@" ;;
   ls) shift; cmd_ls "$@" ;;
   send) shift; cmd_send "$@" ;;
   id) shift; cmd_id "$@" ;;
@@ -1491,6 +1495,14 @@ if [ "$status" -ne 0 ] || ! chmod +x "$CLI.tmp" || ! mv -f "$CLI.tmp" "$CLI"; th
   exit 1
 fi
 log "cli installed: $CLI"
+
+cat > "$MAST_HOME/bin/mast-browser.py.tmp" <<'MAST_BROWSER_EOF'
+@BROWSER_HELPER@
+MAST_BROWSER_EOF
+if [ "$?" -ne 0 ] || ! mv -f "$MAST_HOME/bin/mast-browser.py.tmp" "$MAST_HOME/bin/mast-browser.py"; then
+  echo "[mast] setup: cannot install browser CLI" >&2
+  exit 1
+fi
 
 cat > "$CONFIG.tmp" <<'MAST_CONFIG_EOF'
 @CONFIG_HELPER@
@@ -2016,6 +2028,6 @@ mod tests {
 }
 
 #[cfg(target_os = "macos")]
-pub fn ensure_provisioned(_app: &AppHandle, _distro: Option<&str>) {
+pub fn ensure_provisioned(_app: &AppHandle, _wsl: &Arc<WslHealth>, _distro: Option<&str>) {
     crate::platform::macos::provision();
 }

@@ -13,6 +13,7 @@ use mast_core::deadline::call_with_deadline;
 use mast_core::model::TabId;
 use mast_core::record::RecordStore;
 use mast_core::session::{SessionId, SessionManager, SessionOptions, SpawnSpec};
+use mast_core::wsl::WslHealth;
 
 use crate::router::OscRouter;
 use crate::sink::{SinkHandle, TerminalSink};
@@ -30,6 +31,9 @@ pub struct TauriHost {
     /// 닫힌 탭의 기록 파일을 지우는 데 쓰는 저장소 핸들 — 관리 상태와 같은 `Arc` 다
     /// ([`SessionHost::release_tabs`], ADR-0018 수명 규칙).
     records: Arc<RecordStore>,
+    /// WSL 준비 상태 진단기 — **모든 셸 스폰의 마지막 게이트**다. 진단이 끝나기
+    /// 전(`Probing`)이나 준비되지 않은 상태에서는 스폰을 거부한다.
+    wsl: Arc<WslHealth>,
 }
 
 impl TauriHost {
@@ -39,6 +43,7 @@ impl TauriHost {
         sinks: Arc<SinkRegistry>,
         router: Arc<OscRouter>,
         records: Arc<RecordStore>,
+        wsl: Arc<WslHealth>,
     ) -> Self {
         Self {
             app,
@@ -46,20 +51,28 @@ impl TauriHost {
             sinks,
             router,
             records,
+            wsl,
         }
     }
+}
+
+/// env `MAST_DISTRO` — `resolve_distro` 의 중간 단계 (빈 문자열은 미설정).
+/// 코어의 재스폰 계획처럼 env 를 직접 못 읽는 곳에 이 값을 넘겨, 스폰 해석과
+/// 같은 순서를 지키게 한다.
+pub(crate) fn env_distro() -> Option<String> {
+    std::env::var("MAST_DISTRO").ok().filter(|d| !d.is_empty())
 }
 
 /// distro 선택 우선순위: 요청값 → env `MAST_DISTRO` → `None`(WSL 기본 배포판).
 /// 빈 문자열은 미설정으로 취급한다.
 ///
 /// 스폰([`spawn_spec`])과 부팅 예열([`crate::boot`])이 **같은 값을 골라야** 한다 —
-/// 예열이 다른 distro 를 세우면 정작 스폰이 콜드 VM 을 만난다.
+/// 예열이 다른 distro 를 세우면 정작 스폰이 콜드 VM 을 만난다. WSL 스폰 게이트도
+/// 같은 해석을 써야 한다 — 요청값이 없는데 `MAST_DISTRO` 가 목록에 없으면 기본
+/// 배포판으로 통과시키고 스폰이 실패하는 어긋남을 만들지 않기 위해서다.
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn resolve_distro(requested: Option<String>) -> Option<String> {
-    requested
-        .filter(|d| !d.is_empty())
-        .or_else(|| std::env::var("MAST_DISTRO").ok().filter(|d| !d.is_empty()))
+    requested.filter(|d| !d.is_empty()).or_else(env_distro)
 }
 
 #[cfg(target_os = "macos")]
@@ -353,6 +366,7 @@ fn create_session(
 }
 
 impl SessionHost for TauriHost {
+    fn browser_enabled(&self) -> bool { crate::browser::enabled(&self.app) }
     fn spawn_shell(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId> {
         // 스폰은 Dispatcher lock 아래의 유일한 블로킹 구간이라(모듈 doc), 여기서
         // 얼마나 걸렸는지가 "앱 전체가 멈춘 것처럼 보였다"류 신고의 첫 단서다.
@@ -389,6 +403,20 @@ impl SessionHost for TauriHost {
 
 impl TauriHost {
     fn spawn_shell_inner(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId> {
+        // **모든 셸 스폰의 단일 게이트** — 진단이 끝나기 전에는 어떤 경로도
+        // `wsl.exe` 를 띄우지 못한다. 부팅 경로는 `boot::BootWork` 가 진단을 기다린
+        // 뒤에 부르므로 여기서 걸리지 않고, UI 발 명령은 진단이 준비되지 않았으면
+        // 이 사유가 그대로 `CommandError::SpawnFailed` 로 표면화된다.
+        #[cfg(windows)]
+        {
+            let status = self.wsl.status();
+            let requested = resolve_distro(req.distro.clone());
+            if let Some(reason) = mast_core::wsl::spawn_block_reason(&status, requested.as_deref())
+            {
+                wintrace!("spawn: refused before the WSL diagnosis is ready: {reason}");
+                return Err(anyhow!("{reason}"));
+            }
+        }
         // sink 가 들고 갈 탭 id — exit 이 기록 파일 이름을 여기서만 얻는다
         // (`history_tab` 은 이 세션이 실릴 탭의 안정 ID 다, 코어 rustdoc).
         let tab = req.history_tab.map(TabId);

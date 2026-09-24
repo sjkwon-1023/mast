@@ -123,6 +123,17 @@ function expectSuccess(result: Invocation): void {
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
 describe.skipIf(process.platform !== "linux")("mast config helper", () => {
+  it("round-trips browser.enabled without changing remote settings", () => {
+    const path = fixture();
+    writeFileSync(path, JSON.stringify({remote: {port: 7441}}));
+    expect(invoke(["set", "browser.enabled", "false"], path).stdout).toContain("OK:");
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({remote: {port: 7441}, browser: {enabled: false}});
+    expect(invoke(["get", "browser.enabled"], path).stdout).toContain('"saved": false');
+    expect(invoke(["reset", "browser"], path).stdout).toContain("OK:");
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({remote: {port: 7441}});
+    expect(invoke(["set", "browser.enabled", "yes"], path).stdout).toContain("EXC:");
+  });
+
   it("exposes help without resolving a Windows path", () => {
     const result = help();
     const exported = moduleHelp();
@@ -374,7 +385,7 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
     mkdirSync(bin, { recursive: true });
     const cli = join(bin, "mast");
     const helper = join(bin, "mast-config.py");
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, CLI: cli, CONFIG: helper };
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, MAST_HOME: join(home, ".mast"), CLI: cli, CONFIG: helper };
     delete env.BASH_ENV;
     const installed = spawnSync("bash", ["--noprofile", "--norc", "-s"], {
       input: "log() { :; }\n" + install, env, encoding: "utf8", timeout: 5_000,

@@ -21,7 +21,7 @@ use std::time::UNIX_EPOCH;
 
 use tauri::ipc::{Channel, InvokeResponseBody, Response};
 use tauri::{AppHandle, Manager, State};
-use mast_core::command::{Command, CommandError, CommandOutput};
+use mast_core::command::{Command, CommandError, CommandOutput, NewTab};
 use mast_core::model::TabId;
 use mast_core::record::RecordStore;
 use mast_core::session::{PtySession, SessionId};
@@ -29,6 +29,7 @@ use mast_core::session::{PtySession, SessionId};
 use mast_core::wslpath;
 
 use crate::state::{publish_state, AppState};
+use crate::wsl_health::{self, WslStatusDto};
 use crate::winlog;
 
 /// `get_stats` 직렬화형 (spike 이식). 코어 `SessionStats` 는 serde 의존이 없어
@@ -52,6 +53,17 @@ fn session(state: &AppState, id: SessionId) -> Result<Arc<PtySession>, String> {
         .sessions
         .get(id)
         .ok_or_else(|| format!("unknown session id: {id}"))
+}
+
+/// 이 명령이 터미널 셸 스폰을 일으키는가 — "진단 전 스폰 금지" 의 대상 판별이다.
+/// 뷰어 탭 생성·분할(tab 없음)은 스폰이 없으므로 진단을 기다리지 않는다.
+fn creates_terminal(cmd: &Command) -> bool {
+    match cmd {
+        Command::CreateWorkspace { tab, .. } => matches!(tab, Some(NewTab::Terminal { .. })),
+        Command::CreateTab { tab, .. } => matches!(tab, NewTab::Terminal { .. }),
+        Command::SplitPane { tab, .. } => matches!(tab, Some(NewTab::Terminal { .. })),
+        _ => false,
+    }
 }
 
 /// 구조 변이 단일 진입점 — 커맨드 bus. 성공 시 `state-changed` 로 새 스냅샷을
@@ -84,7 +96,24 @@ pub async fn dispatch(
     // 블로킹)이 Dispatcher lock 아래에서 일어난다 (계획 0-3 — 핫패스와 무간섭
     // 이라 수용). 메인(이벤트 루프) 스레드는 잡지 않는다.
     let dispatcher = Arc::clone(&state.dispatcher);
+    let wsl_for_dispatch = Arc::clone(&state.wsl);
+    let wsl_for_provision = Arc::clone(&state.wsl);
     let result = tauri::async_runtime::spawn_blocking(move || {
+        // 터미널을 만드는 명령은 **진단이 끝난 뒤에만** 실행한다 (진단 전 스폰 금지).
+        // 기다리는 자리가 Dispatcher lock **밖**이라는 것이 요점이다 — 락을 쥔 채
+        // 기다리면 무관한 핫패스가 전부 밀린다. 준비 여부의 최종 판정은 host.rs 의
+        // 스폰 게이트가 하고, 그 사유가 SpawnFailed 로 표면화된다.
+        if creates_terminal(&cmd) {
+            let distro = match &cmd {
+                Command::CreateWorkspace { distro, .. } => distro.clone(),
+                Command::CreateTab { pane, .. } | Command::SplitPane { pane, .. } => {
+                    let d = dispatcher.lock().unwrap();
+                    d.state().workspaces.iter().find(|w| w.panes.contains_key(pane)).and_then(|w| w.distro.clone())
+                }
+                _ => None,
+            };
+            wsl_health::ensure_target(&wsl_for_dispatch, crate::host::resolve_distro(distro));
+        }
         let mut d = dispatcher.lock().unwrap();
         let out = d.dispatch(cmd)?;
         // emit + 저장 예약은 lock 안에서 — revision 과 상태가 일관된 스냅샷만
@@ -106,7 +135,7 @@ pub async fn dispatch(
         // 워크스페이스가 실제로 생겼을 때만 — 이미 프로비저닝한 distro(부팅 때
         // 건 것 포함)는 `ensure_provisioned` 의 프로세스 수명 캐시가 걸러 낸다.
         if let Some(distro) = created_distro {
-            crate::provision::ensure_provisioned(&provision_app, distro.as_deref());
+            crate::provision::ensure_provisioned(&provision_app, &wsl_for_provision, distro.as_deref());
         }
         // Dispatcher lock 은 위 `spawn_blocking` 클로저가 끝나며 이미 풀렸다 — 검사는
         // 그 lock 을 다시 잡으므로 여기서(await 뒤)가 가장 이른 안전한 지점이다.
@@ -149,7 +178,24 @@ pub async fn respawn_tab(
 ) -> Result<SessionId, CommandError> {
     let dispatcher = Arc::clone(&state.dispatcher);
     let records = Arc::clone(&state.records);
+    let wsl = Arc::clone(&state.wsl);
     tauri::async_runtime::spawn_blocking(move || {
+        // 준비되지 않은 distro 의 재시작 시도는 **상태를 건드리지 않고** 거부한다.
+        // `Dispatcher::respawn_tab` 의 스폰 실패 강등(`Exited`)은 WSL 문제를 탭
+        // 상태에 각인시켜, 사용자가 WSL 을 고쳐도 기록 뷰의 배지만 남는다 — 여기서
+        // 걸러야 탭이 세션 없는 Running 으로 남아 재검사 후 살아난다.
+        wsl.wait_for_first(crate::wsl_health::STATUS_WAIT);
+        let blocked = {
+            let d = dispatcher.lock().unwrap();
+            mast_core::wsl::tab_distro(d.state(), TabId(tab)).and_then(|distro| {
+                // 스폰 경로와 같은 해석 (요청값 → MAST_DISTRO → 기본).
+                let requested = crate::host::resolve_distro(distro);
+                mast_core::wsl::spawn_block_reason(&wsl.status(), requested.as_deref())
+            })
+        };
+        if let Some(reason) = blocked {
+            return Err(CommandError::SpawnFailed { message: reason });
+        }
         let result = {
             let mut d = dispatcher.lock().unwrap();
             let result = d.respawn_tab(TabId(tab));
@@ -359,6 +405,97 @@ pub fn user_activity(state: State<'_, AppState>, visible: Option<bool>) {
 }
 
 // ---------------------------------------------------------------------------
+// WSL 준비 상태 (2026-09-22)
+//
+// 진단 자체는 `wsl_health` 모듈이 소유한다 — 여기는 프론트 계약(조회·재검사)과
+// 앱 설정 파일 열기뿐이다.
+// ---------------------------------------------------------------------------
+
+/// WSL 준비 상태 조회 — 프론트 안내 배너가 부팅 때 한 번, 그리고
+/// `wsl-status-changed` 이벤트마다 읽는다.
+///
+/// `spawn_blocking` 인 이유는 DTO 의 `missingDistros` 계산이 Dispatcher lock 을
+/// 잠깐 타기 때문이다 (스폰이 락을 오래 쥘 수 있어 async 워커에서 기다리지 않는다).
+#[tauri::command]
+pub async fn get_wsl_status(state: State<'_, AppState>) -> Result<WslStatusDto, String> {
+    let wsl = Arc::clone(&state.wsl);
+    let dispatcher = Arc::clone(&state.dispatcher);
+    tauri::async_runtime::spawn_blocking(move || {
+        let status = wsl.status();
+        wsl_health::dto(&status, &dispatcher.lock().unwrap())
+    })
+    .await
+    .map_err(|err| format!("get_wsl_status task join failed: {err}"))
+}
+
+/// 명시적 재검사 — 새 진단을 돌린다 (도는 진단이 있으면 그 결과를 기다린다).
+/// 성공하면 밀린 부팅 작업(초기 탭 생성·재스폰·프로비저닝)을 다시 적용한다.
+///
+/// 진단 완료 이벤트는 진단기의 완료 콜백이 보낸다 (`wsl_health::create`) —
+/// 여기서 또 보내면 같은 결과가 두 번 간다.
+#[tauri::command]
+pub async fn recheck_wsl(
+    _app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<WslStatusDto, String> {
+    let wsl = Arc::clone(&state.wsl);
+    let dispatcher = Arc::clone(&state.dispatcher);
+    tauri::async_runtime::spawn_blocking(move || {
+        let status = wsl
+            .refresh(crate::wsl_health::STATUS_WAIT)
+            .ok_or_else(|| "the WSL diagnosis did not finish in time".to_owned())?;
+        winlog!("wsl: recheck: {} ({})", status.summary(), status.state_name());
+        // 준비됐다면 밀린 부팅 작업을 다시 적용한다 — 웨이브가 초 단위로 걸릴 수
+        // 있어 별도 스레드에서 돈다 (`BootWork::retry`). 이미 끝난 작업은 각자의
+        // 가드가 걸러 내므로 재검사를 여러 번 눌러도 초기 탭이 중복 생성되지 않는다.
+        Ok(wsl_health::dto(&status, &dispatcher.lock().unwrap()))
+    })
+    .await
+    .map_err(|err| format!("recheck_wsl task join failed: {err}"))?
+}
+
+/// 앱 설정 파일(`settings.json`)을 기본 편집기로 연다 — WSL 안내 배너의
+/// "Open settings.json" 버튼이다. 파일이 없으면 **빈 JSON 객체로 만들어 준다**:
+/// 앱의 모든 설정은 기본값이라 동작은 파일이 없는 것과 같고, 사용자에게는 편집할
+/// 실체가 생긴다 (기본값을 채워 넣는 것은 별도 결정 — 백로그의 "첫 실행
+/// settings.json" 항목).
+///
+/// 경로는 앱이 읽는 바로 그 파일이다 (`get_ui_settings` 와 같은 `app_config_dir`) —
+/// 임의 경로를 열 수 있는 표면이 아니다.
+#[cfg(windows)]
+#[tauri::command]
+pub async fn open_settings_file(app: AppHandle) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|err| format!("cannot resolve the app config dir: {err}"))?;
+    let path = dir.join("settings.json");
+    tauri::async_runtime::spawn_blocking(move || {
+        if !path.exists() {
+            std::fs::create_dir_all(&dir)
+                .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
+            use std::io::Write;
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(mut file) => file.write_all(b"{}\n").map_err(|err| err.to_string())?,
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {},
+                Err(err) => return Err(format!("cannot create {}: {err}", path.display())),
+            }
+        }
+        shell_execute(&path.to_string_lossy())
+    })
+    .await
+    .map_err(|err| format!("open_settings_file task join failed: {err}"))?
+}
+
+/// unix(개발 실행)에는 열 Windows 설정 파일이 없다 — 조용한 no-op 으로 가리지
+/// 않고 명시적으로 실패한다 (`pick_workspace_folder` 와 같은 규율).
+#[cfg(not(windows))]
+#[tauri::command]
+pub async fn open_settings_file() -> Result<(), String> {
+    Err("opening settings.json is Windows-only".to_owned())
+}
+
+// ---------------------------------------------------------------------------
 // UI 설정 (`settings.json`)
 //
 // 설정 **UI 는 없다** — 사용자가 앱 설정 디렉터리의 `settings.json` 을 직접 쓰고
@@ -405,7 +542,11 @@ pub struct UiSettings {
     /// 리스너도 스레드도 토큰 파일도 생기지 않는다. `log` 와 같은 규율으로 부팅 때
     /// 한 번만 읽으므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
     pub remote: Option<RemoteSettings>,
+    pub browser: Option<BrowserSettings>,
 }
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct BrowserSettings { pub enabled: bool }
 
 /// `settings.json` 의 `remote` 객체.
 ///
@@ -452,7 +593,9 @@ const HIGHLIGHT_LANGUAGES: [&str; 8] = [
 /// 다르다) 작은 파일 읽기 한 번이고, 호출도 부팅당 1회다.
 #[tauri::command]
 pub fn get_ui_settings(app: AppHandle) -> Result<UiSettings, String> {
-    read_ui_settings(&app)
+    let mut settings = read_ui_settings(&app)?;
+    settings.browser = Some(BrowserSettings { enabled: crate::browser::enabled(&app) });
+    Ok(settings)
 }
 
 /// [`get_ui_settings`] 의 알맹이 — 커맨드가 아닌 호출자도 쓴다. 부팅 시

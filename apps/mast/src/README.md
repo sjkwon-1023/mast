@@ -11,6 +11,7 @@ state; the frontend receives revisioned snapshots and renders disposable views.
 | `features/viewers/` | Common viewer lifetime/font/scroll contracts; `text/`, `markdown/`, `folder/` and `record/` own their respective views. |
 | `features/changes/` | Git change selection and diff presentation. |
 | `features/pairing/` | Desktop phone-pairing dialog and firewall feedback. |
+| `features/wsl/` | WSL readiness notice: pure state→copy model, banner DOM and the clipboard helper. |
 | `features/notifications/` | Needs-input notification decisions and the existing dormant chime implementation. |
 | `infrastructure/` | Tauri command/event wrappers, native window visibility, runtime logging and the confirmation dialog (`confirm.ts` — native sheet on macOS). |
 | `shared/` | Serialized Rust contracts, shared keyboard decisions/selectors, command error formatting and font bounds. |

@@ -13,11 +13,9 @@ Three rules hold for every key below:
 - **Everything is optional.** Leave a key out and the built-in default applies.
 - **The file is read once, at boot.** Editing it while mast is running changes nothing until
   you restart.
-- **A bad file reports itself.** If the JSON does not parse, or a value is out of range, the
-  status line says so and the whole file is ignored — you never get a half-applied file, and
-  a value is never silently corrected to something you did not write. Keys mast does not
-  recognise are ignored rather than rejected, so a file written for a newer version still
-  works on an older one.
+- **잘못된 설정은 시작을 중단한다.** JSON 파싱이나 값 검증에 실패하면 오류를 보고하고
+  앱 시작을 중단한다. 특히 잘못된 브라우저 OFF 설정을 기본값 ON으로 대체하지 않는다.
+  파일을 수정한 뒤 다시 실행한다. 알 수 없는 키는 무시한다.
 
 ## CLI
 
@@ -36,6 +34,8 @@ mast config set remote false              # remove remote, disabling it after re
 mast config reset fontSize                # remove this override
 mast config reset showTabIds              # back to the default (shown)
 mast config reset remote                  # disable phone access
+mast config set browser.enabled false     # 브라우저 비활성화
+mast config reset browser.enabled         # 기본값 true로 복원
 ```
 
 The CLI displays **saved settings**, not a query of the running app. Commands never restart
@@ -70,6 +70,7 @@ and retrying. External editors do not participate in this lock: do not edit the 
   "highlightLanguages": ["python", "javascript", "typescript", "rust", "json", "toml", "css", "html"],
   "log": false,
   "showTabIds": true,
+  "browser": { "enabled": true },
   "remote": { "port": 7331 }
 }
 ```
@@ -142,6 +143,26 @@ not invented for the badge: it is the tab's model id, assigned when the tab is c
 across a restart, a rename and changes to the tab strip, so an address stays valid. `true` and
 `false` are the only values; JSON `null` counts as unset, as it does for the other keys, and any
 other type is an error. Read once at boot.
+
+## `browser.enabled`
+
+내장 브라우저 탭을 사용할 수 있는지 정한다. 생략하면 **true**이며, 객체를 직접
+작성할 때는 `enabled`에 boolean을 반드시 지정한다.
+
+```json
+"browser": { "enabled": false }
+```
+
+false이면 브라우저 웹뷰·작업 스레드·타이머·이벤트 구독·자동화 초기화를 만들지
+않는다. 저장된 탭의 URL과 배치는 유지한다. true여도 페이지를 처음 표시하거나
+에이전트가 페이지 작업을 요청하기 전에는 웹뷰를 만들지 않는다. 숨긴 페이지의
+휴면은 메모리 반환을 보장하지 않는다. 설정은 **앱 완전 재시작** 후 적용되며
+UI 리로드로 바뀌지 않는다. `remote` 설정과는 독립이다.
+
+CLI는 `mast config set browser.enabled false`, `mast config set browser.enabled true`,
+`mast config reset browser.enabled`를 지원한다. `set browser false`도 같은 OFF 설정을
+저장한다. reset은 브라우저 설정을 지워 기본값 true로 되돌린다.
+[사용법과 에이전트 명령](BROWSER.md)을 참고한다.
 
 ## `macOptionIsMeta` (macOS only)
 
