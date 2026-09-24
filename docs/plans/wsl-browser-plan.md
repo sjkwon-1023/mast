@@ -100,5 +100,9 @@ CLI는 `scripts/macos/mast.py`에 `browser`를 연결하고 `mast-browser.py`를
   메인 웹뷰가 타이틀바 밑까지 덮고 `obscuredContentInsets`만큼 페이지를 내려 그려 브라우저가
   툴바를 덮던 좌표 문제, 한글 입력 소스의 단축키 판정, 페이지 클릭 시 pane 미활성, 브라우저
   탭이 있으면 `get_webview_window`가 None이 되어 Cmd+Q가 동작하지 않던 문제. 툴바 UI도 정리했다.
+- Windows 실기(2026-09-25, 사용자, 1차): 페이지 포커스 시 pane 활성화는 정상이다. 페이지 포커스 중
+  `Alt+Shift` 단축키가 동작하지 않던 결함(WebView2 핸들러가 옛 Ctrl 키맵만 알고 Alt 조합의
+  SYSTEM_KEY_DOWN 을 받지 않음)과, 브라우저 탭을 보던 pane 의 분할 버튼이 새 pane 을 브라우저로
+  열던 결함을 고쳤다. 나머지 Windows 절차는 아직 남았다.
 - 초기 스냅샷/조작은 최상위 DOM만 다룬다. 다운로드·웹 권한·임의 eval·외부 CDP·MCP는
   지원하지 않는다. UI 실기 통과 전 ADR 확정·계획 삭제·커밋/push/PR을 진행하지 않는다.

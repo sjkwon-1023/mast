@@ -741,6 +741,30 @@ describe("PaneView header buttons", () => {
     ]);
   });
 
+  // 브라우저 탭을 보고 있어도 분할은 키보드 분할과 같이 새 터미널을 연다.
+  it("splits a pane showing a browser tab into a new terminal, not another browser", () => {
+    const { view, headerButton, dispatched } = mount(4);
+    const browser: Tab = {
+      id: 20,
+      title: "Browser",
+      kind: { type: "browser", url: "http://localhost:3000" },
+      notification: "none",
+      lastActivityMs: null,
+      agentStatus: "idle",
+      lastAgentMessage: null,
+    };
+    view.update(pane([browser], 20), true, null, null);
+
+    headerButton("Split left/right").click();
+    headerButton("Split top/bottom").click();
+
+    const tab = { type: "terminal", cwd: null } as const;
+    expect(dispatched).toEqual([
+      { type: "splitPane", pane: 4, direction: "horizontal", tab },
+      { type: "splitPane", pane: 4, direction: "vertical", tab },
+    ]);
+  });
+
   it("reads the cwd at click time, and sends null when a viewer is shown or the tab has no cwd recorded", () => {
     const { view, headerButton, dispatched } = mount(4);
     const tabs = [folderTab(10), terminalTab(11), terminalTab(12, { cwd: "/home/u/proj" })];

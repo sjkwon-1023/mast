@@ -428,9 +428,7 @@ export class PaneView {
           type: "splitPane",
           pane: this.paneId,
           direction: "horizontal",
-          tab: this.pane?.tabs.find(t => t.id === this.pane?.activeTab)?.kind.type === "browser"
-            ? {type: "browser", url: ""}
-            : { type: "terminal", cwd: paneTerminalCwd(this.pane) },
+          tab: { type: "terminal", cwd: paneTerminalCwd(this.pane) },
         }),
       ),
       this.svgButton(
@@ -440,9 +438,7 @@ export class PaneView {
           type: "splitPane",
           pane: this.paneId,
           direction: "vertical",
-          tab: this.pane?.tabs.find(t => t.id === this.pane?.activeTab)?.kind.type === "browser"
-            ? {type: "browser", url: ""}
-            : { type: "terminal", cwd: paneTerminalCwd(this.pane) },
+          tab: { type: "terminal", cwd: paneTerminalCwd(this.pane) },
         }),
       ),
     );
