@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Mast app icon source. Every platform icon (icns, ico, png) is generated from this file
+       with `npx tauri icon icons/icon.svg`. The rounded body follows the macOS icon grid
+       (824 px body inside a 1024 px canvas). -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161c26"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </linearGradient>
+    <linearGradient id="sail-main" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6cb6ff"/>
+      <stop offset="1" stop-color="#3d8fef"/>
+    </linearGradient>
+    <linearGradient id="sail-jib" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3f86e6"/>
+      <stop offset="1" stop-color="#2a63c4"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#body)"/>
+  <rect x="100.5" y="100.5" width="823" height="823" rx="184.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+  <!-- jib (small left sail) -->
+  <polygon points="392,352 392,742 196,742" fill="url(#sail-jib)"/>
+  <!-- main sail (large right sail) -->
+  <polygon points="474,206 474,742 836,742" fill="url(#sail-main)"/>
+  <!-- mast -->
+  <rect x="410" y="176" width="46" height="660" rx="6" fill="#e8edf5"/>
+</svg>
