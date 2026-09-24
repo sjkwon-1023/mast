@@ -403,11 +403,11 @@ export class PaneView {
       }), shortcutBadge("newFolderTab")),
       // Changes 는 pane 셸의 cwd 가 아니라 워크스페이스 루트에서 여는 전역
       // 작업 목록이다. path null 은 코어가 워크스페이스 rootPath 로 해석한다.
-      ...(IS_MAC ? [] : [this.svgButton(SVG_CHANGES, "New changes viewer tab", () => ({
+      this.svgButton(SVG_CHANGES, "New changes viewer tab", () => ({
         type: "createTab",
         pane: this.paneId,
         tab: { type: "changesViewer", path: null },
-      }))]),
+      })),
       // 브라우저 탭 버튼(◎)은 여기 있었다 — 영구 disabled 라 자리만 차지해
       // 뺐다. v2 에서 기능과 함께 돌아온다.
 

@@ -195,7 +195,7 @@ class App {
         () => {},
       );
     }
-    if (!IS_MAC) this.initUpdateNotice();
+    this.initUpdateNotice();
     installReloadKey((err) => {
       console.error("reload confirmation failed", err);
       this.showError(formatCommandError(err));
@@ -238,7 +238,7 @@ class App {
       console.error("get_ui_settings failed", err);
       this.showError(formatCommandError(err));
     }
-    if (!IS_MAC) await this.initRemote();
+    await this.initRemote();
     this.store.subscribe((snapshot) => this.render(snapshot));
     await this.store.init();
   }

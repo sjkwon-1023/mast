@@ -13,7 +13,7 @@ pub fn get_update_info(state: State<'_, UpdateState>) -> UpdateInfo {
 pub fn init(app: &AppHandle) {
     let cache = Arc::new(UpdateCheck::new(env!("CARGO_PKG_VERSION")));
     app.manage(UpdateState(cache.clone()));
-    if cfg!(target_os = "macos") || !cache.begin() {
+    if !cache.begin() {
         return;
     }
     let handle = app.clone();
@@ -41,15 +41,23 @@ pub fn init(app: &AppHandle) {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn fetch_release() -> Result<Vec<u8>, String> {
-    Err("release checking is available on Windows only".into())
+    Err("release checking is available on Windows and macOS only".into())
 }
 
 #[cfg(windows)]
 fn fetch_release() -> Result<Vec<u8>, String> {
     native::fetch()
 }
+
+#[cfg(target_os = "macos")]
+fn fetch_release() -> Result<Vec<u8>, String> {
+    macos::fetch()
+}
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 #[cfg(windows)]
 mod native {

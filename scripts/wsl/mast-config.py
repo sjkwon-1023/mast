@@ -295,8 +295,6 @@ def main():
         if sys.platform == "darwin":
             path = Path(os.environ.get("MAST_CONFIG_PATH") or
                         Path.home() / "Library/Application Support/app.mast.desktop/settings.json")
-            if args[:2] in (["set", "remote"], ["set", "remote.port"]):
-                raise ValueError("remote control is not supported in the initial macOS version")
         else:
             path = windows_settings_path()
         execute(args, path)

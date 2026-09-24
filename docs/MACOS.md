@@ -1,4 +1,4 @@
-# Mast on macOS — initial native port
+# Mast on macOS — Apple Silicon source builds
 
 One Mast codebase, the same workspace/pane/tab model, and the same terminal,
 replay, OSC, agent-state and viewer pipelines. The macOS desktop target is
@@ -6,18 +6,17 @@ replay, OSC, agent-state and viewer pipelines. The macOS desktop target is
 
 ## Scope
 
-The initial port includes native zsh/bash terminals, workspace/pane/split/tab
+The native source build includes zsh/bash terminals, workspace/pane/split/tab
 navigation, state/layout restoration, terminal records, Claude Code / Codex /
 OpenCode integration, agent state and notifications, on-demand session resume,
-`mast ls`, `mast send`, folder/text/Markdown viewers and Mac keyboard bindings.
+`mast ls`, `mast send`, folder/text/Markdown viewers, the Git Changes viewer,
+startup release notices, optional Local HTTP, on-demand Secure Remote, Antigravity
+CLI running/idle hooks and Mac keyboard bindings.
 
 This is a development/source-build target, not a signed distributable product.
-Git changes/diff, mobile Local HTTP and Secure Remote are **not supported on Mac
-in this phase**. Their Windows paths remain intact. A restored changes-viewer
-tab is retained but shows a deferred-feature message. Mac startup never opens a
-remote listener, even when an imported settings file enables remote control.
-There is no Mac auto-update check. Packages, permanent Mac release workflows,
-signing/notarization and expanded OS integrations remain separate work.
+The release notice only links to a release page; it does not download or install
+an update. Packages, permanent Mac release workflows, signing/notarization and
+expanded OS integrations remain separate work.
 
 ## Build and run
 
@@ -47,6 +46,65 @@ may report that Python is required. The setup helper runs in its own process
 group with time-limited commands and finishes on its own if Mast quits first;
 that run's `~/.mast/setup.log` may then be missing or stale, and the next launch
 retries based on the setup marker files.
+
+## Git changes and startup release notices
+
+Open a workspace's Changes viewer from the pane toolbar. macOS runs Git directly
+through `/usr/bin/env`; install Git and make it available to Mast's environment.
+The viewer is read-only and uses the same repository resolution and limits as the
+Windows viewer: repository discovery and status share a 10-second capture budget,
+each diff has its own 10-second budget, at most four content queries run at once,
+and one displayed diff is capped at 512 KiB. Bare containers use the worktree for
+the bare repository's current branch; when that worktree is unavailable, open an
+explicit worktree instead of relying on an unrelated checkout. See
+[ADR-0022](adr/0022-read-only-git-changes-viewer.md).
+
+At startup, Mast makes one background request to the fixed GitHub latest-release
+endpoint. A strictly newer stable version adds a link to the repository's fixed
+release page. If runtime logging is enabled, a failed or offline check is logged;
+it does not claim that Mast is up to date. The native request uses `/usr/bin/curl`,
+a direct connection without environment proxy settings, a 3-second connect
+timeout, a low-speed timeout of 3 seconds below 1 byte per second, an 11-second
+curl total timeout and a 12-second process-capture deadline. Headers and the
+response body are capped at
+16 KiB and 64 KiB. There is no popup, polling, download, installer or automatic
+restart. See [ADR-0024](adr/0024-startup-update-notice.md).
+
+## Phone access and the macOS firewall
+
+Local HTTP is off unless `remote` is present in settings. Configure it with
+`mast config set remote` (port 7331 by default), then fully quit and relaunch Mast.
+It serves plain HTTP on the configured port for a phone on a trusted local
+network. When disabled, Mast starts no Local HTTP listener or thread and creates
+no Local HTTP token file. When enabled, the token is stored as `remote-token` in
+Mast's application data directory, normally
+`~/Library/Application Support/app.mast.desktop/remote-token`; the phone keeps
+the pairing token in browser local storage. Do not expose this service to an
+untrusted network or forward its port. See [the settings reference](SETTINGS.md)
+and [ADR-0016](adr/0016-remote-surface-over-lan.md).
+
+Secure Remote is a separate mode available from *Pair phone* and does not depend
+on the `remote` setting. It opens UDP 7331 only after you start pairing. The first
+phone must authenticate within 120 seconds; one phone can be connected at a time.
+The host keeps its certificate, private key and token in memory. After pairing,
+the browser remembers the authentication in local storage under
+`mast.secure-remote.pairing.v1` and can reconnect until the certificate expires
+(at most 14 days) or Mast exits. See [ADR-0028](adr/0028-secure-remote-webtransport.md).
+
+macOS Firewall is app-based. Its rule can cover incoming connections for Mast,
+including both Local HTTP (TCP) and Secure Remote (UDP); it is not limited to one
+port or one transport. The pairing dialog only requests administrator approval
+after you click **Allow in macOS Firewall**. macOS's own incoming-connection
+prompt is a separate system prompt. Mast does not change the global firewall or
+the block-all setting. When macOS block-all is enabled, an app allow rule cannot
+override it; review Firewall settings in System Settings. Mast reports the app as
+allowed only when it appears in the firewall's app list with incoming connections
+allowed; an app that is not in that list is reported as not yet allowed, even
+though `socketfilterfw --getappblocked` answers "permitted" for unlisted paths.
+The application-wide
+rule is keyed to the current executable and is broader than either phone mode by
+itself, so a moved copy may need its own approval; add it only on networks you
+trust.
 
 The initial native notification transport uses `osascript` so unbundled source
 builds can show macOS notification banners without a signed app identity. Grant
@@ -139,6 +197,15 @@ is recorded in `~/.mast/setup.log` and `mast skill-load` reports it too.
 Unavailable agents are retried at a subsequent launch. The existing
 `no-codex-hooks` opt-out marker remains supported; native setup also respects
 `no-claude-hooks` and `no-opencode-hooks`.
+
+If `~/.gemini/antigravity-cli` is present, native setup merges Mast's Bash hook
+into `~/.gemini/config/hooks.json`. `~/.mast/no-agy-hooks` opts out. Setup records
+the result in `~/.mast/.setup-macos-v<version>-agy`; a detected agy version below
+1.1.10 prints a warning and setup continues. If the shared merger refuses the
+existing hook contents, it leaves them unchanged and records that refusal. Repair
+the file, remove the marker, and relaunch Mast to retry; setup failures without a
+marker are retried on a later launch. The hook reports running and idle only; it
+does not report needs-input or save a resume hint.
 
 Detached agent hooks use the inherited `MAST_TTY` instead of Linux `/proc`.
 The fallback accepts only a non-symlink, same-user `/dev/ttysNNN` character device;
@@ -299,12 +366,34 @@ merging, and Mac key maps.
 
 ```sh
 cargo test -p mast-core --locked
+cargo test -p mast-remote --locked
 cargo test -p mast-app --locked
 python3 -m unittest discover -s scripts/macos/tests -v
 cd apps/mast && npm run build && npm test
 ```
 
-Before treating a source build as daily-driver-ready, run this device checklist:
+### Feature-parity field checks (pending)
+
+These checks have not been recorded as passed. Run them on the target Mac before
+treating these features as field-verified:
+
+- Open the Changes viewer in a normal repository and a bare-container workspace.
+- Confirm the startup notice appears only for a newer stable release and behaves
+  quietly when offline.
+- Verify Local HTTP is absent with `remote` unset, then pair over HTTP after
+  enabling it and fully restarting Mast.
+- Start Secure Remote, authenticate, reconnect from the same phone, test the
+  one-connection limit, and confirm app exit ends the host session.
+- Inspect the current macOS Firewall state; where the host state permits, test
+  allow and decline. Confirm block-all is reported if already enabled; do not
+  change global firewall settings for this check.
+- Install agy, observe running/idle, check the below-1.1.10 warning path, test
+  `no-agy-hooks`, and verify repair plus marker removal retries a refused merge.
+
+Do not record any of these manual checks as complete until they have actually
+been run.
+
+Before treating a source build as daily-driver-ready, also run this device checklist:
 create several workspaces and split panes; run each installed agent; observe
 running/needs-input/idle transitions and notification permissions; exchange
 literal/submitted `mast send` messages and inspect `mast ls`; quit/reopen and

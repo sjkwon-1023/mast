@@ -10,25 +10,29 @@ key is present, paired once by QR, with the token kept in the phone browser's lo
 Two properties of that surface are acceptable on a trusted LAN but were the reason for a second
 mode: the listener is long-lived, and the token is stored on the phone.
 
-The request was a phone mode that (a) opens a listener only for the pairing and tears it down
-afterwards, (b) never stores the token on the phone, and (c) still does not provide an internet
-relay — reaching the PC from outside the LAN stays the user's own VPN / port-forwarding path.
+The original request was a phone mode that (a) opens a listener only for the pairing and tears it
+down afterwards, (b) never stores the token on the phone, and (c) still does not provide an
+internet relay — reaching the PC from outside the LAN stays the user's own VPN / port-forwarding
+path. The 2026-09-20 amendment below supersedes the first two requirements with remembered
+authentication and reconnection; this context records the initial request, not the current
+storage or connection-lifetime contract.
 The public page needs a stable HTTPS origin, and the repository is public, so GitHub Pages is
 the deployment target. Serving that page from public HTTPS creates a trust problem: the local
 listener has only a self-signed certificate, which the browser would normally refuse.
 WebTransport's certificate-hash pinning is the means to clear it — `serverCertificateHashes`
 lets the page accept a certificate issued for this pairing (self-signed, ECDSA P-256, validity
 capped at 14 days) for that one connection, without touching the browser's trust store.
-Pinning does not by itself produce (a) or (b): the listener's lifetime and the phone's
-no-storage rule are separate design choices that follow from treating the pairing as one-shot,
-with the one-time token in the QR fragment as the thing that authorizes the single connection.
+In the initial design, one-shot pairing was the reason for the listener's lifetime and the
+phone's no-storage rule, with the QR token authorizing a single connection. The 2026-09-20
+amendment below replaces those choices with remembered authentication and reconnection.
 
 The phone screen itself was already implemented (headless xterm rendering, offset-based screen
 deltas, paste/Enter separation, TUI scroll handling), and duplicating it was not acceptable.
 
 ## Decisions
 
-2026-09-20의 아래 「인증 기억과 재연결」 변경으로 일회 연결·저장 금지·연결 종료 시 서버 종료 계약을 대체한다.
+The 2026-09-20 "Authentication memory and reconnect" amendment below supersedes the original
+single-connection, no-phone-storage and teardown-on-disconnect decisions in this section.
 
 1. **A separate public static bundle, deployed to GitHub Pages.** The `secure-remote` Vite
    entry builds with base `/mast/` into **`apps/mast/dist-secure-remote`** — deliberately outside
@@ -256,3 +260,21 @@ checks the produced text and references, but its scope is bounded as described i
 기존 토큰·인증서 교체 테스트, 브라우저 저장·만료·화면 복귀·늦은 완료·제한된
 재시도·저장 실패 테스트를 수행한다. 실제 iOS 잠금·복귀와 PC 앱 재시작 후
 QR 재인증은 실기 확인 대상이다.
+
+## Amendment (2026-09-24) — native macOS host
+
+The native macOS host follows the current pairing and remembered-authentication contract above.
+Its certificate, private key and token stay in process memory and are discarded when Mast exits;
+the phone stores the target address, port, certificate pin, token and fixed expiry in
+`localStorage` under `mast.secure-remote.pairing.v1`. The first pairing retains the 120-second
+authentication window. After authentication, the same phone can reconnect until the certificate
+expires (at most 14 days) or the app exits. There is at most one active connection. Pre-auth
+limits, timeouts and the public page behavior are unchanged.
+
+The host binds UDP 7331 only after the user starts pairing. macOS Firewall status and the explicit
+administrator allow action are application-scoped and shared with Local HTTP; they do not create
+a port-only UDP exception or alter global firewall settings. Secure Remote remains independent
+of the Local HTTP `remote` setting and token file. Windows and the hosted phone page are unchanged.
+
+Automated native tests do not establish a real iPhone/browser reconnect, macOS Firewall allow
+prompt or app-restart pairing flow. Those field checks remain pending.
