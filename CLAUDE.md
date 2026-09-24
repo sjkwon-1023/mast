@@ -174,9 +174,10 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 - **Per-pane split-button affordance** (ADR-0004) — a first-time user read the header
   buttons as "split the *selected* pane".
 
-- **The `◎` browser tab button** was removed from the pane header (permanently disabled,
-  taking up space); it returns in v2 with the feature behind it, and only if an unused
-  browser tab can be isolated well enough to cost nothing at idle.
+- **The `◎` browser tab button returned with the embedded browser — landed 2026-09-25**
+  ([ADR-0031](docs/adr/0031-wsl-readiness-and-embedded-browser.md)). It had been removed while it
+  was a disabled placeholder; it came back only once an unused browser tab cost no webview
+  (created on first show or agent request, off entirely with `browser.enabled: false`).
 
 - **A workspace round-trip cost a long-running pane its terminal modes — fixed 2026-09-05**
   (user report, v0.3.15). Two short lines pasted into a busy Claude Code pane submitted the first

@@ -74,8 +74,9 @@ OFF와 ON 미사용은 같은 터미널 수·같은 측정 조건으로 비교�
 브라우저가 있을 때도 전체 메모리는 계속 측정되고 페이지 비용만으로 UI 자동 리셋이
 일어나지 않아야 한다.
 
-현재 실기 체크리스트와 자원 수치는 **미검증**이다. 자동 게이트와 진행 상태는
-[계획](plans/wsl-browser-plan.md)에 기록하며 실기 완료 후 ADR로 확정한다.
+실기 체크리스트는 2026-09-25 사용자 실기로 통과했고, 결정과 검증 기록은
+[ADR-0031](adr/0031-wsl-readiness-and-embedded-browser.md)에 있다. 프로세스별 CPU·메모리 수치는
+저장소에 기록하지 않았다.
 
 How to set up a Windows machine to build and run mast, and how to run the Windows-side
 verification. Two apps share this guide:

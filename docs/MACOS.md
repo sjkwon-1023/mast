@@ -12,7 +12,9 @@ OpenCode integration, agent state and notifications, on-demand session resume,
 `mast ls`, `mast send`, folder/text/Markdown viewers, the Git Changes viewer,
 startup release notices, optional Local HTTP, on-demand Secure Remote, Antigravity
 CLI running/idle hooks, Mac keyboard bindings and the embedded browser tab with
-`mast browser` (WKWebView; see [BROWSER.md](BROWSER.md) for the macOS differences).
+`mast browser` (WKWebView; see [BROWSER.md](BROWSER.md) for the macOS differences and
+[ADR-0031](adr/0031-wsl-readiness-and-embedded-browser.md) for the decisions and the 2026-09-25
+field run).
 
 This is a development/source-build target, not a signed distributable product.
 The release notice only links to a release page; it does not download or install
@@ -390,14 +392,6 @@ treating these features as field-verified:
   change global firewall settings for this check.
 - Install agy, observe running/idle, check the below-1.1.10 warning path, test
   `no-agy-hooks`, and verify repair plus marker removal retries a refused merge.
-
-- Browser tab: open one from a pane header and from the empty screen; confirm the
-  page stays inside its pane while resizing, splitting, switching tabs and
-  workspaces, and while a modal dialog is open. With the page focused, check that
-  Cmd+1–9, Cmd+W, Cmd+T, Cmd+D, Cmd+⌥arrows and Ctrl+Tab reach Mast, Cmd+L focuses
-  the address bar, and Cmd+C/V and Korean IME input stay in the page. Confirm two
-  workspaces keep separate cookies (`browser-smoke.html` storage button) and that
-  a workspace keeps its login after quitting and reopening Mast.
 
 Do not record any of these manual checks as complete until they have actually
 been run.
