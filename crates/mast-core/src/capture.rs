@@ -74,6 +74,18 @@ mod implementation {
     };
 
     const POLL_INTERVAL: Duration = Duration::from_millis(10);
+    const EXITING_GROUP_GRACE: Duration = Duration::from_secs(1);
+
+    fn wait_for_exit(child: &mut Child, grace: Duration) -> Option<ExitStatus> {
+        let started = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(exit)) => return Some(exit),
+                Ok(None) if started.elapsed() < grace => thread::sleep(POLL_INTERVAL),
+                _ => return None,
+            }
+        }
+    }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum ReadOutcome {
@@ -302,6 +314,15 @@ mod implementation {
         let mut errors = Vec::new();
         let group_killed = match os::kill_process_group(child_pid) {
             Ok(killed) => killed,
+            // 종료 중인 그룹의 플랫폼 완화(macOS EPERM)에 걸리면 리더는 곧 거둘 수
+            // 있게 되므로 잠시 기다려 보고, 끝났으면 멈출 것이 없다.
+            Err(error) if os::is_exited_group_error(&error) => {
+                match wait_for_exit(child, EXITING_GROUP_GRACE) {
+                    Some(exit) => *status = Some(exit),
+                    None => errors.push(format!("cannot kill capture process group: {error}")),
+                }
+                false
+            }
             Err(error) => {
                 errors.push(format!("cannot kill capture process group: {error}"));
                 false
@@ -432,6 +453,20 @@ mod implementation {
                 Err(error)
             }
         }
+
+        pub(super) fn is_exited_group_error(error: &io::Error) -> bool {
+            // macOS 는 종료 중이거나 좀비만 남은 그룹에 ESRCH 대신 EPERM 을 돌려준다.
+            // Linux 의 EPERM 은 진짜 권한 오류이므로 완화는 macOS 에서만 적용한다.
+            #[cfg(target_os = "macos")]
+            {
+                error.raw_os_error() == Some(libc::EPERM)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = error;
+                false
+            }
+        }
     }
 
     #[cfg(windows)]
@@ -495,6 +530,10 @@ mod implementation {
 
         pub(super) fn kill_process_group(_pid: u32) -> io::Result<bool> {
             Ok(false)
+        }
+
+        pub(super) fn is_exited_group_error(_error: &io::Error) -> bool {
+            false
         }
     }
 }
