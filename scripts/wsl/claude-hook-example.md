@@ -27,7 +27,7 @@ with the tool call it guards, happen entirely in the WSL-side scripts this docum
 
 ## Automatic provisioning
 
-**mast auto-provisions this on first run per distro (`~/.mast/.setup-v19`); this
+**mast auto-provisions this on first run per distro (`~/.mast/.setup-v20`); this
 document remains the contract and the manual path.**
 
 On launch the app streams a setup script into `wsl.exe [-d <distro>] -- bash -s` for every
@@ -56,16 +56,21 @@ A full run, in order:
    Unlike send/query, config does **not** emit OSC: it resolves and edits the Windows settings
    file directly, requiring Windows interop and drive access when invoked (not when installed).
    Commands, validation and restart semantics are in [`docs/SETTINGS.md`](../../docs/SETTINGS.md).
-5. A two-line `~/.mast/bin/mast-send.sh` that execs `mast send "$@"` (it replaces the setup v3
+5. `~/.mast/bin/mast-manager.py` — the manager workspace CLI behind `mast manager`
+   (`start` / `workspaces` / `events` / `patch`). It loads `mast-agent-hook.py` from the same
+   directory.
+6. `~/.mast/bin/mast-manager-harness.py` — the manager harness the app starts with
+   `mast-python`, which loads `mast-manager.py` from the same directory.
+7. A two-line `~/.mast/bin/mast-send.sh` that execs `mast send "$@"` (it replaces the setup v3
    script, so anything still pointing at that path keeps working), and `~/.mast/bin/mast-open`,
    also installed as `xdg-open` ([ADR-0012](../../docs/adr/0012-opening-links.md)).
-6. The agent hook files, copied from `scripts/wsl/` byte for byte and overwritten on every
+8. The agent hook files, copied from `scripts/wsl/` byte for byte and overwritten on every
    version: `mast-hooks-merge.py` (the config merge, Python 3.6+), `mast-agent-hook.py` (the
    Claude Code and Codex [dispatcher](#the-hook-dispatcher--mast-agent-hookpy), Python 3.8+),
    and the entry points `mast-claude-hook.sh`, `mast-codex-hook.sh` and `mast-agy-hook.sh`. The
    commands written into agent config files name only these paths, so replacing the files
    never changes a Codex trust hash.
-7. 에이전트 스킬. `mast-send`는 `~/.claude/skills/mast-send/SKILL.md`에 설치한다(아래의
+9. 에이전트 스킬. `mast-send`는 `~/.claude/skills/mast-send/SKILL.md`에 설치한다(아래의
    에이전트 send·query 채널; 원본: `scripts/wsl/skills/mast-send/SKILL.md`). `mast` 사용법
    스킬은 `~/.claude/skills/mast/SKILL.md`에 설치한다 — CLI, send 채널, 상태 토큰을 담아
    에이전트가 안내 없이도 mast가 무엇을 제공하는지 알게 한다(원본:
@@ -77,38 +82,38 @@ A full run, in order:
    스킬 경로의 심볼릭 링크는 링크 자체를 교체하며 대상 파일에는 쓰지 않는다.
    에이전트는 세션이 시작될 때 스킬을 읽으므로, 이미 돌고 있던 탭은 새 스킬을
    보려면 에이전트를 다시 시작해야 한다.
-8. **The `python3` gate.** Every step from here on runs Python — merging into a user's JSON or
+10. **The `python3` gate.** Every step from here on runs Python — merging into a user's JSON or
    TOML has to preserve every existing value, which rules out text munging. Without `python3`
    the run prints a notice and exits 0 **without writing a marker**, so the next launch retries.
-9. **The dispatcher interpreter.** When `python3` is 3.8 or later, its absolute path goes into
+11. **The dispatcher interpreter.** When `python3` is 3.8 or later, its absolute path goes into
    `~/.mast/bin/mast-python`. The entry points and `mast-codex-notify.sh` start the dispatcher
    with that interpreter, because the `PATH` an agent hands its hooks can differ from the setup
    shell's. Below 3.8 the record is removed and a notice printed: Claude Code gets its status
    rows only and the Codex hooks step is skipped, but the run goes on and writes its marker, so
    the notice does not repeat on every launch.
-10. **Claude Code hooks** — `mast-hooks-merge.py claude` merges the rows under
+12. **Claude Code hooks** — `mast-hooks-merge.py claude` merges the rows under
     [Claude Code hooks](#claude-code-hooks--claudesettingsjson) into `~/.claude/settings.json`,
     keeping every existing value. A failed merge exits 1 with no marker.
-11. **Codex `notify`** — a `notify` key is added to `~/.codex/config.toml` if that file exists
+13. **Codex `notify`** — a `notify` key is added to `~/.codex/config.toml` if that file exists
     and has no `notify` of its own ([below](#codex-notify--codexconfigtoml); a missing file
     means Codex is not installed there and nothing is created). When `~/.codex/` exists, a
     managed `mast integration` block in `~/.codex/AGENTS.md` teaches Codex the CLI and to run
     it outside the sandbox (delete the block to opt out). A failure in either exits 1 with no
     marker.
-12. **Codex hooks** — when `~/.codex/` exists, `mast-hooks-merge.py codex` appends mast's
+14. **Codex hooks** — when `~/.codex/` exists, `mast-hooks-merge.py codex` appends mast's
     groups to `~/.codex/hooks.json` ([Codex hooks](#codex-hooks--codexhooksjson)).
-13. **Antigravity CLI hooks** — when `~/.gemini/antigravity-cli/` exists,
+15. **Antigravity CLI hooks** — when `~/.gemini/antigravity-cli/` exists,
     `mast-hooks-merge.py agy` adds a named hook to `~/.gemini/config/hooks.json`
     ([Antigravity CLI hooks](#antigravity-cli-hooks--geminiconfighooksjson)).
-14. Records what it did in `~/.mast/setup.log`, then writes the marker.
+16. Records what it did in `~/.mast/setup.log`, then writes the marker.
 
 ### Markers and retries
 
 | Marker | Written when | To run it again |
 |---|---|---|
-| `~/.mast/.setup-v19` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v19` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
-| `~/.mast/.setup-v19-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v19-codex` reruns that step alone |
-| `~/.mast/.setup-v19-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v19-agy` reruns that step alone |
+| `~/.mast/.setup-v20` | Steps 1–13 succeeded (steps 14 and 15 may have failed) | `rm ~/.mast/.setup-v20` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
+| `~/.mast/.setup-v20-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v20-codex` reruns that step alone |
+| `~/.mast/.setup-v20-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v20-agy` reruns that step alone |
 
 With the main marker in place, a launch still runs an agent step whose directory exists and
 whose sub-marker does not — which is how a Codex or Antigravity CLI installed after setup v16
@@ -120,18 +125,18 @@ the agent later is noticed.
 
 When a run fails:
 
-- A failure in steps 1–11 — installing a file, the Claude Code merge, the Codex `notify` line,
+- A failure in steps 1–13 — installing a file, the Claude Code merge, the Codex `notify` line,
   the AGENTS.md block — leaves **no marker**, and the next launch repeats the whole run. So does
   a missing `python3`.
-- An agent hooks step (12 or 13) that fails on I/O — a read or write error other than a file
+- An agent hooks step (14 or 15) that fails on I/O — a read or write error other than a file
   that is not writable, the file changing while it was being merged, `python3` gone on a rerun —
   leaves only its own sub-marker unwritten. The main marker is still written, and the next launch
   retries that step alone.
 - A file that is not writable or is a dangling symlink, and for Codex a `config.toml` with inline
   hooks, is **skipped** with a notice and counts as finished: the sub-marker is written — for
-  Claude Code, whose merge is part of steps 1–11, the main marker — so no launch retries it. Once
-  the cause is fixed, `rm ~/.mast/.setup-v19-codex` (or `-agy`; for Claude Code
-  `rm ~/.mast/.setup-v19`) wires the hooks, or add the notice's snippet by hand.
+  Claude Code, whose merge is part of steps 1–13, the main marker — so no launch retries it. Once
+  the cause is fixed, `rm ~/.mast/.setup-v20-codex` (or `-agy`; for Claude Code
+  `rm ~/.mast/.setup-v20`) wires the hooks, or add the notice's snippet by hand.
 - A Codex or Antigravity CLI hooks file whose **content** the merge cannot handle is refused
   with exit 3: the file is left untouched and the sub-marker **is** written, because a rerun
   would refuse it the same way. The notice names the problem and says to edit the file and
@@ -165,8 +170,8 @@ that setup could not write somewhere — `cannot install …`, `cannot create �
 | When | The notice says |
 |---|---|
 | No `python3` | Install it, or wire the hooks by hand from this document |
-| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v19` (`rm ~/.mast/.setup-v19-codex` when only the Codex step ran) |
-| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v19` |
+| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v20` (`rm ~/.mast/.setup-v20-codex` when only the Codex step ran) |
+| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v20` |
 | A Codex install older than a hook feature mast relies on | Its path, and each missing feature ([version limits](#codex-version-limits)) |
 | Codex hooks were written | How to trust them — the wording follows the Codex version |
 | `config.toml` has inline `[hooks]` tables, `features.hooks = false`, `approvals_reviewer = "auto_review"`, or a stale `[hooks.state]` entry | What mast did not do, and why |
@@ -294,7 +299,7 @@ it swaps one known line in place, no position guessing involved.
 
 The installer lives in `apps/mast/src-tauri/src/provision.rs`. The copies it embeds are
 **byte-identical** to their sources — the "Example hook script" below,
-`scripts/wsl/skills/mast-send/SKILL.md`, and the `scripts/wsl/` files of steps 4 and 6: change
+`scripts/wsl/skills/mast-send/SKILL.md`, and the `scripts/wsl/` files of steps 4, 5, 6 and 8: change
 both halves together. `apps/mast/tests/hook-example.test.ts` checks the first two, and that this
 document names the current setup marker.
 
@@ -308,8 +313,9 @@ emitted them; the workspace card shows a summary derived from its tabs.
 | `OSC 777;notify;mast:running;<body>` | Agent work started or resumed | `running` | no |
 | `OSC 777;notify;mast:needsInput;<body>` | Waiting for user input | `needsInput` | yes |
 | `OSC 777;notify;mast:idle;<body>` | Work finished | `idle` | yes |
-| `OSC 777;mast-send;<target>;<base64>` | Text delivered to another pane's stdin (next section) | unchanged | no |
-| `OSC 777;mast-query;<kind>;<base64>` | Metadata answered into a file the sender names (section after that) | unchanged | no |
+| `OSC 777;mast-send;<target>;<base64>` | Text delivered to another pane's stdin (two sections below) | unchanged | no |
+| `OSC 777;mast-query;<kind>;<base64>` | Metadata answered into a file the sender names (three sections below) | unchanged | no |
+| `OSC 777;mast-agent;<base64>` | Agent session metadata recorded on the tab (next section) | unchanged | no |
 | Any other `OSC 777` / every `OSC 9` | Status-neutral notification | **unchanged** | yes |
 | `OSC 0` (and the alias `OSC 2`) | Tab title | unchanged | no |
 | `OSC 7` `file://host/path` | Tab cwd (respawn location on restart) | unchanged | no |
@@ -362,9 +368,60 @@ Detailed rules:
 - A restart resets all notifications and statuses: every tab comes back `idle` with no
   message, so every workspace derives `idle` with no preview (a dead session's needsInput does
   not survive a restart — 계획 v2 section 11).
-- `mast-send` and `mast-query` are the two `OSC 777`s that are **not** notifications:
-  they change no state at all, raise no dot, and are not coalesced into the 100ms flush
-  window. They are actions, and each has its own section below.
+- `mast-send` and `mast-query` are the two `OSC 777`s that are **not** notifications: they
+  change no state at all — unlike the `mast-agent` metadata, which does record one — raise no
+  dot, and are not coalesced into the 100ms flush window. They are actions, and each has its
+  own section below.
+
+## Agent session metadata — `OSC 777;mast-agent`
+
+The channel that tells the app **which transcript file belongs to a tab**, so later features
+can summarize that tab's work from the agent's own transcript. The hook dispatcher
+(`mast-agent-hook.py`) writes it, next to whatever status token the same hook event carries.
+
+```
+ESC ] 777 ; mast-agent ; <base64> BEL
+```
+
+| Field | Contract |
+|---|---|
+| `mast-agent` | Literal kind marker. An app or CLI that predates this channel ignores the whole sequence, exactly like any other unknown `OSC 777` kind, so a new hook script stays compatible with an older core. |
+| `<base64>` | Standard base64 (`A-Za-z0-9+/`, with `=` padding, no whitespace or newline) of the UTF-8 JSON object below. |
+
+The plaintext before base64:
+
+```json
+{"v":1,"agent":"claude","session":"7d1c2a4e-1111-4222-8333-444455556666","transcript":"/home/u/.claude/projects/x/7d1c2a4e-1111-4222-8333-444455556666.jsonl"}
+```
+
+| Key | Contract |
+|---|---|
+| `v` | Protocol version. `1` is the only accepted value. |
+| `agent` | `claude` or `codex`. |
+| `session` | The agent's own session id, 1–128 characters from `[A-Za-z0-9._:-]`. It is the raw payload string, not the dispatcher's hashed identifier. |
+| `transcript` | Absolute path to the session transcript, at most 4096 bytes. |
+
+The app validates every field before recording anything: standard base64, UTF-8, a JSON
+**object**, `v == 1`, a known `agent`, the `session` charset and length, and the `transcript`
+size and absolute-path shape. **Any failure drops the whole event** — nothing is recorded and
+no status changes. Unknown extra keys are ignored, so a later version can add fields without
+breaking this one.
+
+| Agent | Events carrying the metadata | Conditions |
+|---|---|---|
+| Claude Code | `SessionStart`, `UserPromptSubmit`, `Stop` | root session only; `transcript_path` non-empty and `session_id` a string in the hook payload |
+| Codex | `UserPromptSubmit`, `Stop` | only after the dispatch gates that already guard status tokens (transcript present, `CODEX_THREAD_ID` matches) |
+
+- **It is not a status token.** Nothing in the `mast:running`/`needsInput`/`idle` state
+  machine changes: this sequence sets no `agentStatus`, raises no unread dot and fires no
+  toast. It is also **not persisted and never appears in a snapshot** — a restart loses the
+  association, and the next hook event reports it again. A tab whose agent never emitted it
+  (Claude Code older than 2.1.118, a hook failure) simply has no transcript to read.
+- Emission follows the same tty discipline as the status tokens (direct `/dev/tty`, then the
+  ancestor pts fallback; 0.5 s write deadline with a lone-BEL retry when the write is cut
+  short, `SIGTTOU` ignored), but it **never counts as an emission attempt**: a failed metadata
+  write must not turn the Codex `notify` fallback into its exit-1 path. A failure leaves only
+  one diagnostic line in the tab's hook diagnostics (`~/.mast/agent-hooks/tab-<id>.diag`).
 
 ## Agent send channel — `OSC 777;mast-send`
 
@@ -465,9 +522,11 @@ of them stops a program that is already free to write to the target's PTY itself
 The read half of the agent channel: it answers "what tabs are open?" so an agent can pick a
 target id instead of guessing at a title. It shares the send channel's **workspace
 confinement** — it enumerates the requester's own workspace and nothing else, because a list
-that reached further would offer targets the send half refuses. Unlike the notify and send
-channels this one has a **reply**, and because the OSC stream is one-way (into the app) the
-reply is a **file the sender names in the request**.
+that reached further would offer targets the send half refuses. The one deliberate exception
+is the `manager:` kind below, which is answered to the manager workspace's tab alone and
+describes the whole app. Unlike the notify and send channels this one has a **reply**, and
+because the OSC stream is one-way (into the app) the reply is a **file the sender names in
+the request**.
 
 ```
 ESC ] 777 ; mast-query ; <kind> ; <base64 reply path> BEL
@@ -476,7 +535,7 @@ ESC ] 777 ; mast-query ; <kind> ; <base64 reply path> BEL
 | Field | Contract |
 |---|---|
 | `mast-query` | Literal kind marker. |
-| `<kind>` | The question. `list-tabs` is the only one the app answers; any other value is ignored (so a newer CLI against an older app simply gets no reply, and vice versa). |
+| `<kind>` | The question. `list-tabs`, or `manager:<base64 request>` for the manager workspace (both below). Any other value is ignored (so a newer CLI against an older app simply gets no reply, and vice versa). |
 | `<base64 reply path>` | Standard base64 of an absolute Linux path that **must start with `/tmp/`**. Both fields are required — `777;mast-query;list-tabs` with no path is not a query at all, since there is nowhere to answer. |
 
 **`/tmp/` is enforced at the string level — a misfire guard, not a privilege boundary.** The
@@ -526,6 +585,52 @@ and deletes the file. **The `COMMAND` column is not part of the reply** — the 
 what runs inside a tab. The CLI fills it from `/proc` on its own side by finding the process
 whose environment has `MAST_TAB=<id>` and reading its terminal's foreground process group,
 which is why a tab whose shell lives in another WSL distro or in a Windows shell shows `?`.
+
+### The `manager:` kind — manager workspace query
+
+`manager:<base64 request>` answers questions about the **manager workspace** — the one
+workspace with `manager: true`, where the manager harness runs. `list-tabs` cannot serve it:
+a query about the whole app cannot be answered from one workspace's tab list. The CLI half
+(`mast manager …`) arrives in a later stage; this is the reply contract it builds on.
+
+```
+ESC ] 777 ; mast-query ; manager:<base64 request> ; <base64 reply path> BEL
+```
+
+The plaintext before base64 is one of exactly two JSON requests, at most 4 KiB:
+
+| Request | Success reply (`result`) |
+|---|---|
+| `{"op":"workspaces"}` | The overview — `{"nextSeq":N,"workspaces":[…]}` with one entry per workspace (`id`, `name`, `rootPath`, `distro`, `manager`, `agentStatus`, `tabs`). Each tab carries `kind`/`status` strings, `agentStatus`, `lastAgentMessage` and `agentSession`. The manager workspace itself appears with `manager: true`; skipping it is the caller's decision. |
+| `{"op":"events","since":N}` | The event log after seq `N` — `{"events":[…],"nextSeq":N,"gap":bool}`. `gap: true` means the retained window no longer starts at `N+1` (the 1024-entry ring overflowed, or `N` is stale from before a restart) and `events` holds everything retained. |
+
+| Failure | Reply |
+|---|---|
+| The requesting tab is not in a manager workspace — an ordinary workspace, a session the app cannot map back to a tab, or no manager workspace at all | `{"error":{"code":"forbidden","message":"the requesting tab is not in a manager workspace"}}` |
+| The request field is not standard base64, is not UTF-8, is not JSON matching one of the two shapes above, or decodes to more than 4 KiB | `{"error":{"code":"invalid_params","message":"the manager request is not valid JSON within 4 KiB"}}` |
+| The serialized success reply would exceed 4 MiB | `{"error":{"code":"too_large","message":"the manager reply exceeds 4 MiB"}}` |
+
+- **Only a tab in the manager workspace may ask.** The overview and the event log describe
+  every workspace in the app, so answering an ordinary tab would be an isolation escape hatch
+  around the send/query confinement. A rejected tab still gets the `forbidden` reply (not
+  silence), so a CLI can tell a permission failure from an app that is not running.
+- **It is a misfire guard, not a security boundary** — the same premise as the send channel.
+  Anything that can write to a manager tab's PTY can ask. The confinement keeps a mis-aimed
+  request from reading every workspace's metadata; it does not stop a process that could
+  write to the manager tab's PTY itself.
+- **The reply file is created with mode 0600 on unix** — the overview is other workspaces'
+  metadata too, so it is owner-readable only. On a Windows host the app writes across the 9P
+  boundary into the distro, where this side cannot set a mode; the file gets the distro's
+  default instead.
+- **`list-tabs` and `send` keep their old behavior in a manager tab too.** A manager tab
+  running `mast ls` or `mast send` still enumerates and reaches only its own workspace,
+  exactly as in any other tab — the manager kind is an added question, not a widening of the
+  existing two.
+- Like `list-tabs`, the reply appears complete or not at all (`<path>.partial` → rename), a
+  failed *write* is silent to the requester and appears in the app's stderr only, and the
+  query shares the send/query in-flight cap (8 concurrent). The `forbidden`/`invalid_params`
+  replies above are written on the same path, so their reader sees the same
+  complete-or-absent file.
 
 ## tty resolution discipline — direct `/dev/tty` → ancestor pts fallback
 
@@ -1532,8 +1637,8 @@ PROMPT_COMMAND="__mast_osc${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
    therefore has a tty, so it only takes step 1 — its purpose is to see whether the delivery
    path itself is alive.
 2. Read `~/.mast/setup.log`: each merged row (`added`, `wired`, `migrated`, `narrowed`) and
-   every notice is there, and the markers `~/.mast/.setup-v19`, `.setup-v19-codex` and
-   `.setup-v19-agy` show which steps finished.
+   every notice is there, and the markers `~/.mast/.setup-v20`, `.setup-v20-codex` and
+   `.setup-v20-agy` show which steps finished.
 3. Then run each agent inside a mast terminal and confirm that its hooks update the tab's badge
    and dot, the pane badge, and the sidebar status and preview. The field checklist is
    `docs/WINDOWS-BUILD.md` §10, "v0.3.32 — Agent state signals verification (setup v16)". A

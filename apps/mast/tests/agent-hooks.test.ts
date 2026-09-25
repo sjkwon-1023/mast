@@ -243,7 +243,12 @@ class HookBox {
       "tokens",
     );
     if (unterminated) throw new Error("an OSC sequence was left unterminated on the pty");
-    return tokens.map(([token, body]) => (body ? `${token} ${body}` : token));
+    // mast-agent 메타는 상태 토큰과 같은 pty 로 나가지만 이 스위트의 검사 대상이 아니다.
+    // 하네스가 모르는 777 kind 를 "?" 토큰으로 돌려주므로 여기서 걷어낸다. 메타 자체의
+    // 방출 계약은 withPython 스위트가 임시 tty 로 검증한다.
+    return tokens
+      .map(([token, body]) => (body ? `${token} ${body}` : token))
+      .filter((token) => !token.startsWith("? 777;mast-agent;"));
   }
 
   statePath(): string {
@@ -602,6 +607,240 @@ print(json.dumps({"post": {k: v for k, v in fields.items()}, "truncated": trunca
     expect(body).toHaveLength(500);
     expect(body.startsWith("a,b ]0,x  c")).toBe(true);
     expect(/[\u0000-\u001f\u007f-\u009f;]/.test(body)).toBe(false);
+  });
+
+  it("encodes mast-agent metadata by the core's validation rules", () => {
+    const out = pythonEval<{ decoded: Json; encoded: string; rejects: Record<string, boolean> }>(`
+import base64
+payload = hook.agent_meta_payload("claude", "7d1c-2a4e", "/home/u/.claude/projects/x/a.jsonl")
+reject = lambda agent, session, transcript: hook.agent_meta_payload(agent, session, transcript) is None
+print(json.dumps({
+    "decoded": json.loads(payload.decode("utf-8")),
+    "encoded": base64.b64encode(payload).decode("ascii"),
+    "rejects": {
+        "empty_session": reject("claude", "", "/a"),
+        "long_session": reject("claude", "a" * (hook.MAX_AGENT_SESSION_CHARS + 1), "/a"),
+        "slash_in_session": reject("claude", "a/b", "/a"),
+        "space_in_session": reject("claude", "a b", "/a"),
+        "non_ascii_session": reject("claude", u"\\uc138\\uc158", "/a"),
+        "relative": reject("claude", "s", "relative/x.jsonl"),
+        "empty_transcript": reject("claude", "s", ""),
+        "long_transcript": reject("claude", "s", "/" + "a" * hook.MAX_AGENT_TRANSCRIPT_BYTES),
+        "escaped_payload": reject("claude", "s", "/" + "\\x01" * 4000),
+        "unknown_agent": reject("gemini", "s", "/a"),
+        "codex": reject("codex", "t:0.1", "/home/u/.codex/sessions/x.jsonl"),
+    },
+}))
+`);
+    expect(out.decoded).toEqual({
+      v: 1,
+      agent: "claude",
+      session: "7d1c-2a4e",
+      transcript: "/home/u/.claude/projects/x/a.jsonl",
+    });
+    // 표준 base64: 패딩 포함, URL-safe 문자 없음.
+    expect(out.encoded).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+    expect(out.rejects).toEqual({
+      empty_session: true,
+      long_session: true,
+      slash_in_session: true,
+      space_in_session: true,
+      non_ascii_session: true,
+      relative: true,
+      empty_transcript: true,
+      long_transcript: true,
+      escaped_payload: true,
+      unknown_agent: true,
+      codex: false,
+    });
+  });
+
+  it("emits mast-agent for root Claude lifecycle events and keeps payload session ids raw", () => {
+    const out = pythonEval<{
+      start: Json[];
+      attempted: boolean;
+      before_pairing_off: number;
+      pairing_off: number;
+      long_session: string;
+      long_expected: string;
+    }>(`
+import base64, os, tempfile
+root = tempfile.mkdtemp()
+os.environ["HOME"] = root
+os.environ["MAST_TAB"] = "6"
+os.mkdir(os.path.join(root, ".mast"))
+tty = os.path.join(root, "tty")
+hook.open_terminal = lambda: os.open(tty, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+
+def meta():
+    with open(tty, "rb") as handle:
+        data = handle.read()
+    return [json.loads(base64.b64decode(part.split(b"\\x07", 1)[0]).decode("utf-8"))
+            for part in data.split(b"\\x1b]777;mast-agent;")[1:]]
+
+def run(name, **fields):
+    payload = {"hook_event_name": name, "session_id": "sess-1",
+               "transcript_path": "/home/u/.claude/projects/x/a.jsonl"}
+    payload.update(fields)
+    hook.claude_hook(hook.Tab("6", "claude", name), hook.Event(payload, False))
+
+run("SessionStart")
+start = meta()
+attempted = hook.EMISSION_ATTEMPTED[0]
+run("UserPromptSubmit")
+run("UserPromptSubmit", agent_id="agent-1", agent_type="Explore")
+run("UserPromptSubmit", transcript_path="")
+before_pairing_off = len(meta())
+open(os.path.join(root, ".mast", "claude-pairing-off"), "w").close()
+run("Stop")
+pairing_off = len(meta())
+long_session = "s" * 120
+run("SessionStart", session_id=long_session)
+print(json.dumps({"start": start, "attempted": attempted,
+                  "before_pairing_off": before_pairing_off, "pairing_off": pairing_off,
+                  "long_session": meta()[-1]["session"], "long_expected": long_session}))
+`);
+    expect(out.start).toEqual([
+      {
+        v: 1,
+        agent: "claude",
+        session: "sess-1",
+        transcript: "/home/u/.claude/projects/x/a.jsonl",
+      },
+    ]);
+    // 메타 방출만으로는 EMISSION_ATTEMPTED 를 세우지 않는다.
+    expect(out.attempted).toBe(false);
+    // SessionStart + root UserPromptSubmit 만 실린다. subagent scope 와 빈 transcript 는 제외.
+    expect(out.before_pairing_off).toBe(2);
+    // pairing-off marker 가 있어도 Stop 메타는 나간다.
+    expect(out.pairing_off).toBe(3);
+    // ident() 해시가 아니라 payload 원본 session_id 가 실린다.
+    expect(out.long_session).toBe(out.long_expected);
+  });
+
+  it("emits mast-agent for Codex prompts and stops only past the existing gates", () => {
+    const out = pythonEval<{
+      first: Json;
+      counts: number[];
+    }>(`
+import base64, os, tempfile
+root = tempfile.mkdtemp()
+os.environ["HOME"] = root
+os.environ["MAST_TAB"] = "6"
+os.mkdir(os.path.join(root, ".mast"))
+tty = os.path.join(root, "tty")
+hook.open_terminal = lambda: os.open(tty, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+
+def meta():
+    with open(tty, "rb") as handle:
+        data = handle.read()
+    return [json.loads(base64.b64decode(part.split(b"\\x07", 1)[0]).decode("utf-8"))
+            for part in data.split(b"\\x1b]777;mast-agent;")[1:]]
+
+def run(name, **fields):
+    payload = {"hook_event_name": name, "session_id": "sess-1", "turn_id": "t1",
+               "transcript_path": "/home/u/.codex/sessions/x.jsonl"}
+    payload.update(fields)
+    hook.codex_hook(hook.Tab("6", "codex", name), hook.Event(payload, False))
+
+run("UserPromptSubmit")
+first = meta()[0]
+counts = [len(meta())]
+run("Stop")
+counts.append(len(meta()))
+os.environ["CODEX_THREAD_ID"] = "outer-thread"
+run("Stop")
+counts.append(len(meta()))
+os.environ["CODEX_THREAD_ID"] = "sess-1"
+run("Stop")
+counts.append(len(meta()))
+del os.environ["CODEX_THREAD_ID"]
+run("Stop", transcript_path="")
+counts.append(len(meta()))
+open(os.path.join(root, ".mast", "no-codex-hooks"), "w").close()
+run("Stop")
+counts.append(len(meta()))
+print(json.dumps({"first": first, "counts": counts}))
+`);
+    expect(out.first).toEqual({
+      v: 1,
+      agent: "codex",
+      session: "sess-1",
+      transcript: "/home/u/.codex/sessions/x.jsonl",
+    });
+    // UPS 1, Stop 2, CODEX_THREAD_ID 불일치 2, 일치 3, 빈 transcript 3, opt-out 3.
+    expect(out.counts).toEqual([1, 2, 2, 3, 3, 3]);
+  });
+
+  it("keeps stdout empty and exits 0 across a metadata write and the MAST_TAB gate", () => {
+    const out = pythonEval<{
+      first_code: number;
+      first_stdout: string;
+      second_code: number;
+      second_stdout: string;
+      meta: Json[];
+    }>(`
+import base64, os, tempfile
+root = tempfile.mkdtemp()
+os.environ["HOME"] = root
+os.environ["MAST_TAB"] = "6"
+os.mkdir(os.path.join(root, ".mast"))
+tty = os.path.join(root, "tty")
+hook.open_terminal = lambda: os.open(tty, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+payload = json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "sess-1",
+                      "transcript_path": "/home/u/.claude/projects/x/a.jsonl",
+                      "prompt": "go on"}).encode("utf-8")
+
+def feed(data):
+    read_end, write_end = os.pipe()
+    os.write(write_end, data)
+    os.close(write_end)
+    saved = os.dup(0)
+    os.dup2(read_end, 0)
+    os.close(read_end)
+    return saved
+
+def run_main():
+    saved_in = os.dup(0)
+    saved_out = os.dup(1)
+    sink = tempfile.TemporaryFile()
+    os.dup2(sink.fileno(), 1)
+    code = hook.main(["mast-agent-hook.py", "claude"])
+    os.dup2(saved_out, 1)
+    os.close(saved_out)
+    os.dup2(saved_in, 0)
+    os.close(saved_in)
+    sink.seek(0)
+    return code, sink.read().decode("utf-8", "replace")
+
+saved = feed(payload)
+first_code, first_stdout = run_main()
+os.dup2(saved, 0)
+os.close(saved)
+del os.environ["MAST_TAB"]
+saved = feed(payload)
+second_code, second_stdout = run_main()
+os.dup2(saved, 0)
+os.close(saved)
+with open(tty, "rb") as handle:
+    data = handle.read()
+meta = [json.loads(base64.b64decode(part.split(b"\\x07", 1)[0]).decode("utf-8"))
+        for part in data.split(b"\\x1b]777;mast-agent;")[1:]]
+print(json.dumps({"first_code": first_code, "first_stdout": first_stdout,
+                  "second_code": second_code, "second_stdout": second_stdout, "meta": meta}))
+`);
+    expect(out.first_code).toBe(0);
+    expect(out.first_stdout).toBe("");
+    expect(out.second_code).toBe(0);
+    expect(out.second_stdout).toBe("");
+    expect(out.meta).toEqual([
+      {
+        v: 1,
+        agent: "claude",
+        session: "sess-1",
+        transcript: "/home/u/.claude/projects/x/a.jsonl",
+      },
+    ]);
   });
 });
 

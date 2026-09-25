@@ -56,6 +56,7 @@ function ws(
   opts: {
     tabs?: Tab[];
     agentStatus?: AgentStatus;
+    manager?: boolean;
   } = {},
 ): Workspace {
   const tabs = opts.tabs ?? [terminalTab(id * 10, `tab ${id * 10}`)];
@@ -67,6 +68,7 @@ function ws(
     distro: null,
     gitBranch: null,
     gitDirty: null,
+    manager: opts.manager ?? false,
     layout: { type: "leaf", pane: id },
     panes: { [String(id)]: pane },
     activePane: id,
@@ -231,6 +233,42 @@ describe("ListView needsInput dot", () => {
     const row = view.root.querySelector<HTMLElement>(".tab");
     row?.click();
     expect(opened).toEqual([{ tab: 10, title: "first" }]);
+  });
+});
+
+describe("ListView tab details", () => {
+  it("보드 탭 상세는 board · desktop only (폰에서는 열 수 없다)", () => {
+    const { view } = mount();
+    const board: Tab = { ...viewerTab(10, "Manager"), kind: { type: "managerBoard" } };
+    view.render(snapshot(1, [ws(1, { tabs: [board] })]));
+
+    // 뷰어 행이라 클릭 대상이 아니다 — 상세 문자열만 계약이다.
+    expect(view.root.querySelector(".tab-detail")?.textContent).toBe("board · desktop only");
+  });
+});
+
+describe("ListView empty notice with the manager workspace", () => {
+  it("관리자만 있으면 'No workspaces' 가 뜬다 (관리자는 세지 않는다)", () => {
+    const { view } = mount();
+    view.render(snapshot(1, [ws(1, { manager: true })]));
+
+    expect(view.root.querySelector(".empty")?.textContent).toBe("No workspaces");
+    // 카드 자체는 숨기지 않는다 — 기존 표시 그대로.
+    expect(view.root.querySelectorAll(".ws")).toHaveLength(1);
+  });
+
+  it("일반 워크스페이스가 하나라도 있으면 안내가 없다", () => {
+    const { view } = mount();
+    view.render(snapshot(1, [ws(1, { manager: true }), ws(2)]));
+
+    expect(view.root.querySelector(".empty")).toBeNull();
+  });
+
+  it("워크스페이스가 0개면 그대로 안내가 뜬다", () => {
+    const { view } = mount();
+    view.render(snapshot(1, []));
+
+    expect(view.root.querySelector(".empty")?.textContent).toBe("No workspaces");
   });
 });
 

@@ -78,6 +78,9 @@ function tabKindLabel(kind: TabKind): string {
       return `markdownViewer:${kind.scrollTop}`;
     case "changesViewer":
       return `changesViewer:${kind.path}`;
+    case "managerBoard":
+      // 필드 없는 태그 — 관리자 워크스페이스 생성만 만든다 (고정 탭).
+      return "managerBoard";
     default:
       return assertNever(kind);
   }
@@ -167,6 +170,12 @@ function commandTag(cmd: Command): string {
       expect(typeof cmd.tab).toBe("number");
       expect(typeof cmd.scrollTop).toBe("number");
       return cmd.type;
+    case "createManagerWorkspace":
+      expect(typeof cmd.rootPath).toBe("string");
+      expect(cmd.distro === null || typeof cmd.distro === "string").toBe(true);
+      return cmd.type;
+    case "removeManagerWorkspace":
+      return cmd.type;
     default:
       return assertNever(cmd);
   }
@@ -228,6 +237,10 @@ function errorTag(entry: CommandError): string {
       return entry.type;
     case "invalidName":
       expect(typeof entry.message).toBe("string");
+      return entry.type;
+    case "managerExists":
+      return entry.type;
+    case "managerPinned":
       return entry.type;
     default:
       return assertNever(entry);
@@ -324,6 +337,13 @@ describe("stage10-snapshot.json", () => {
     expect(tabKindLabel(pane11.tabs[0].kind)).toBe("folderBrowser:/");
   });
 
+  it("narrows the fieldless manager board kind", () => {
+    // stage10 fixture 에는 보드 탭이 없다 — 보드는 관리자 워크스페이스
+    // 생성만 만든다). union 커버리지는 tabKindLabel 의 assertNever 가 컴파일
+    // 시점에 잠그고, 여기서는 런타임 라벨만 확인한다.
+    expect(tabKindLabel({ type: "managerBoard" })).toBe("managerBoard");
+  });
+
   it("parses workspace nullable/git fields and empty panes", () => {
     const [ws1, ws2] = snapshotFixture.state.workspaces;
     expect(ws1.gitBranch).toBeNull();
@@ -418,6 +438,8 @@ describe("stage10-commands.json", () => {
       "renameWorkspace",
       "moveWorkspace",
       "moveWorkspace",
+      "createManagerWorkspace",
+      "removeManagerWorkspace",
     ]);
   });
 
@@ -494,6 +516,16 @@ describe("stage10-commands.json", () => {
       type: "markdownViewer",
       path: "/home/dev/code/mast/README.md",
     });
+
+    // 관리자 워크스페이스 명령 2종 (preview) — 뒤에 덧붙인 순서 그대로.
+    const createManager = commandsFixture[19];
+    if (createManager.type !== "createManagerWorkspace")
+      throw new Error("20th must be createManagerWorkspace");
+    expect(createManager.rootPath).toBe("/home/dev/.mast/manager");
+    expect(createManager.distro).toBeNull();
+    const removeManager = commandsFixture[20];
+    if (removeManager.type !== "removeManagerWorkspace")
+      throw new Error("21st must be removeManagerWorkspace");
   });
 });
 
@@ -535,6 +567,8 @@ describe("stage10-outputs.json", () => {
       "invalidPath",
       "invalidScroll",
       "invalidName",
+      "managerExists",
+      "managerPinned",
     ]);
   });
 });

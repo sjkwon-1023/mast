@@ -81,6 +81,14 @@ impl OscEventPayload {
                 title: String::new(),
                 body: String::new(),
             },
+            // 에이전트 세션 메타도 MVP 앱의 기능이다 — frozen 하네스는 관측만 한다.
+            // 경로·세션 id 는 프론트 표시에 쓸모가 없으므로 종류만 남긴다.
+            OscEvent::Osc777Agent(_) => Self {
+                id,
+                kind: "777-agent",
+                title: String::new(),
+                body: String::new(),
+            },
             // DEC private mode·리셋은 OSC 가 아니라 코어 세션이 소비한다
             // (재-attach preamble — mast-core session.rs). sink 까지 오지 않으므로
             // 여기 팔은 exhaustive 검사를 만족시키는 것이 전부다.

@@ -1,6 +1,10 @@
 //! 탭·세션 위치와 워크스페이스 안의 에이전트 전송 대상을 조회한다.
 
 use super::{unknown, CommandError, Dispatcher, TabInfo};
+use crate::manager::{
+    EventsSince, ManagerOverview, ManagerQueryError, ManagerReply, ManagerRequest, OverviewTab,
+    OverviewWorkspace,
+};
 use crate::model::{PaneId, TabId, TabKind, TerminalStatus};
 use crate::send::SendTargetError;
 use crate::session::SessionId;
@@ -98,22 +102,7 @@ impl Dispatcher {
         let ws = &self.state.workspaces[wi];
         for pane in ws.panes.values() {
             for tab in &pane.tabs {
-                let (kind, status) = match &tab.kind {
-                    TabKind::Terminal { status, .. } => (
-                        "terminal",
-                        match status {
-                            TerminalStatus::Running => "running",
-                            TerminalStatus::Exited { .. } => "exited",
-                            TerminalStatus::NotStarted => "not-started",
-                        },
-                    ),
-                    // 뷰어 탭에는 프로세스가 없다 — 세 번째 상태로 구분한다.
-                    TabKind::FolderBrowser { .. } => ("folderBrowser", "viewer"),
-                    TabKind::Browser { .. } => ("browser", "viewer"),
-                    TabKind::ChangesViewer { .. } => ("changesViewer", "viewer"),
-                    TabKind::TextViewer { .. } => ("textViewer", "viewer"),
-                    TabKind::MarkdownViewer { .. } => ("markdownViewer", "viewer"),
-                };
+                let (kind, status) = tab_kind_status(&tab.kind);
                 out.push(TabInfo {
                     tab: tab.id.0,
                     title: tab.title.clone(),
@@ -127,6 +116,80 @@ impl Dispatcher {
             }
         }
         out
+    }
+
+    /// 관리자 이벤트 로그에서 `since`(이미 받은 마지막 seq) 뒤의 이벤트를 오래된
+    /// 순으로 돌려준다. 기록이 꺼져 있으면 빈 목록이다.
+    pub fn events_since(&self, since: u64) -> EventsSince {
+        self.manager_events.events_since(since)
+    }
+
+    /// 관리자 이벤트 링에 다음으로 발급될 seq. 호출 전후 값을 비교하면 `apply_osc`
+    /// 가 상태 변경 없이(false) 세션 메타만 기록했는지 알 수 있다.
+    pub fn manager_next_seq(&self) -> u64 {
+        self.manager_events.next_seq()
+    }
+
+    /// 전 워크스페이스의 개요. **관리자 워크스페이스도 `manager: true`
+    /// 로 포함한다** — 제외 판단은 하네스 몫이다. 탭은 pane ID 순 → 탭 표시 순서로
+    /// [`Self::list_tabs`] 와 같은 매핑·순서를 쓴다.
+    pub fn overview(&self) -> ManagerOverview {
+        ManagerOverview {
+            next_seq: self.manager_events.next_seq(),
+            workspaces: self
+                .state
+                .workspaces
+                .iter()
+                .map(|ws| OverviewWorkspace {
+                    id: ws.id.0,
+                    name: ws.name.clone(),
+                    root_path: ws.root_path.clone(),
+                    distro: ws.distro.clone(),
+                    manager: ws.manager,
+                    agent_status: ws.agent_status,
+                    tabs: ws
+                        .panes
+                        .values()
+                        .flat_map(|pane| &pane.tabs)
+                        .map(|tab| {
+                            let (kind, status) = tab_kind_status(&tab.kind);
+                            OverviewTab {
+                                tab: tab.id.0,
+                                title: tab.title.clone(),
+                                kind,
+                                status,
+                                agent_status: tab.agent_status,
+                                last_agent_message: tab.last_agent_message.clone(),
+                                agent_session: tab.agent_session.clone(),
+                            }
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    /// 관리자 query 권한 판정 (ADR-0032).
+    ///
+    /// 요청 세션의 탭이 `manager == true` 워크스페이스에 속할 때만 성공한다. 이
+    /// 판정은 OSC가 그 탭의 PTY로 들어왔다는 사실에 근거하며, 같은 사용자의 다른
+    /// 프로세스를 막는 보안 경계가 아니다 — 기존 `send.rs` 규약과 같은 성격이다.
+    /// 미지 세션·일반 워크스페이스·관리자 워크스페이스 없음은 `Forbidden` 이다.
+    pub fn manager_query(
+        &self,
+        requester: SessionId,
+        request: &ManagerRequest,
+    ) -> Result<ManagerReply, ManagerQueryError> {
+        let Some(wi) = self.workspace_index_of_session(requester) else {
+            return Err(ManagerQueryError::Forbidden);
+        };
+        if !self.state.workspaces[wi].manager {
+            return Err(ManagerQueryError::Forbidden);
+        }
+        Ok(match request {
+            ManagerRequest::Workspaces => ManagerReply::Overview(self.overview()),
+            ManagerRequest::Events { since } => ManagerReply::Events(self.events_since(*since)),
+        })
     }
 
     /// `pane` 을 소유한 워크스페이스의 인덱스 (전 워크스페이스 범위 탐색).
@@ -188,6 +251,28 @@ impl Dispatcher {
             }
         }
         Err(unknown("tab", tab.0))
+    }
+}
+
+/// 탭 종류·상태의 외부 문자열 — [`Dispatcher::list_tabs`] 와
+/// [`Dispatcher::overview`] 가 같은 값을 내도록 한 곳에서 정한다.
+pub(super) fn tab_kind_status(kind: &TabKind) -> (&'static str, &'static str) {
+    match kind {
+        TabKind::Terminal { status, .. } => (
+            "terminal",
+            match status {
+                TerminalStatus::Running => "running",
+                TerminalStatus::Exited { .. } => "exited",
+                TerminalStatus::NotStarted => "not-started",
+            },
+        ),
+        // 뷰어 탭에는 프로세스가 없다 — 세 번째 상태로 구분한다.
+        TabKind::FolderBrowser { .. } => ("folderBrowser", "viewer"),
+        TabKind::Browser { .. } => ("browser", "viewer"),
+        TabKind::ChangesViewer { .. } => ("changesViewer", "viewer"),
+        TabKind::TextViewer { .. } => ("textViewer", "viewer"),
+        TabKind::MarkdownViewer { .. } => ("markdownViewer", "viewer"),
+        TabKind::ManagerBoard => ("managerBoard", "viewer"),
     }
 }
 

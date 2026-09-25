@@ -1,9 +1,13 @@
 // 사이드바 워크스페이스 카드 모델 계산 (DOM-free — vitest 대상).
 //
-// Workspace 배열 + activeWorkspace 를 렌더 가능한 카드 모델 배열로 사영한다.
+// Workspace 배열 + activeWorkspace 를 렌더 가능한 카드 모델로 사영한다.
 // DOM 조립(features/workspace/sidebar.ts)과 판정 로직을 분리해 상태 매핑·경로 축약·null 생략을
 // 순수 테스트로 잠근다 (tab-strip-model 과 같은 구도). 18단계부터 agentStatus·
 // message·unread 는 OSC 라우팅으로 실제 값이 들어오는 동적 필드다.
+//
+// 일반 카드와 관리자(고정) 카드는 목록을 분리해 내놓는다(SidebarModel). 고정
+// 카드는 사이드바 맨 아래 별도 슬롯에 그려지므로 멤버십·순서 판정에서도 두
+// 슬롯을 따로 본다 — 벡터 중간에 관리자가 있어도 일반 카드 순서는 흔들리지 않는다.
 //
 // 카드는 3줄이다: 이름(+ unread dot) / 상태 텍스트 + 메시지 첫 줄 / 축약 경로.
 // pane·탭 개수와 git branch 는 카드에 싣지 않는다 — 개수는 화면(split tree)이
@@ -21,6 +25,9 @@ export interface WorkspaceCardModel {
   name: string;
   /** 하이라이트 + 클릭 no-op 판정에 쓰인다. */
   active: boolean;
+  /** 관리자 워크스페이스(고정 카드)인가 — 별도 슬롯 배치·닫기 버튼 없음·드래그
+   *  제외·순번 제외의 근거다 (sidebar.ts 상호작용 절). */
+  pinned: boolean;
   status: AgentStatus;
   /** 상태 표시 텍스트 — 아이콘 대신 단어로 읽힌다 (계획 v2 6장의 3상태 그대로). */
   statusLabel: string;
@@ -88,23 +95,40 @@ export function hasRunningTerminals(ws: Workspace): boolean {
   );
 }
 
-/** 순서 유지. */
+/** 사이드바 카드 모델 — 일반 카드 목록과 고정(관리자) 카드를 분리해 내놓는다.
+ *  `pinned` 는 0개 또는 1개이며, 벡터 안 위치와 무관하게 항상 마지막 슬롯
+ *  (new workspace 버튼 바로 위)에 그려진다. */
+export interface SidebarModel {
+  cards: WorkspaceCardModel[];
+  pinned: WorkspaceCardModel | null;
+}
+
+/** 일반 카드는 벡터 순서 그대로, 관리자 카드는 `pinned` 로 분리한다. 관리자가
+ *  없으면 `cards` 는 기존 배열 결과와 같고 `pinned` 는 null 이다. */
 export function sidebarModel(
   workspaces: Workspace[],
   activeWorkspace: WorkspaceId | null,
-): WorkspaceCardModel[] {
-  return workspaces.map((ws) => ({
-    workspace: ws.id,
-    name: ws.name,
-    active: ws.id === activeWorkspace,
-    status: ws.agentStatus,
-    statusLabel: STATUS_LABELS[ws.agentStatus],
-    message: firstLine(ws.lastAgentMessage),
-    unread: Object.values(ws.panes).some((pane) =>
-      pane.tabs.some((tab) => tab.notification === "unread"),
-    ),
-    path: abbreviatePath(ws.rootPath),
-  }));
+): SidebarModel {
+  const cards: WorkspaceCardModel[] = [];
+  let pinned: WorkspaceCardModel | null = null;
+  for (const ws of workspaces) {
+    const model: WorkspaceCardModel = {
+      workspace: ws.id,
+      name: ws.name,
+      active: ws.id === activeWorkspace,
+      pinned: ws.manager,
+      status: ws.agentStatus,
+      statusLabel: STATUS_LABELS[ws.agentStatus],
+      message: firstLine(ws.lastAgentMessage),
+      unread: Object.values(ws.panes).some((pane) =>
+        pane.tabs.some((tab) => tab.notification === "unread"),
+      ),
+      path: abbreviatePath(ws.rootPath),
+    };
+    if (model.pinned) pinned = model;
+    else cards.push(model);
+  }
+  return { cards, pinned };
 }
 
 /** 카드 리스트 렌더 판정.
@@ -120,6 +144,7 @@ export function sameCard(a: WorkspaceCardModel, b: WorkspaceCardModel): boolean 
     a.workspace === b.workspace &&
     a.name === b.name &&
     a.active === b.active &&
+    a.pinned === b.pinned &&
     a.status === b.status &&
     a.statusLabel === b.statusLabel &&
     a.message === b.message &&
@@ -164,19 +189,33 @@ export function dropBefore(boxes: CardBox[], y: number): WorkspaceId | null {
  *  그때 리스트를 통째로 재조립하면 눌린 카드 엘리먼트가 mousedown~click 사이에
  *  갈아치워져 클릭이 유실된다 (ADR-0003 결정 7 의 탭바 스왈로와 같은 결함). */
 export function reconcilePlan(
-  prev: WorkspaceCardModel[] | null,
-  next: WorkspaceCardModel[],
+  prev: SidebarModel | null,
+  next: SidebarModel,
 ): CardReconcile {
-  if (prev === null || prev.length !== next.length) return "rebuild";
-  for (let i = 0; i < next.length; i += 1) {
-    const before = prev[i];
-    const after = next[i];
+  if (prev === null) return "rebuild";
+  if (!samePinnedWorkspace(prev.pinned, next.pinned)) return "rebuild";
+  if (prev.cards.length !== next.cards.length) return "rebuild";
+  for (let i = 0; i < next.cards.length; i += 1) {
+    const before = prev.cards[i];
+    const after = next.cards[i];
     if (before === undefined || after === undefined) return "rebuild";
     if (before.workspace !== after.workspace) return "rebuild";
   }
-  const changed = next.some((after, i) => {
-    const before = prev[i];
-    return before === undefined || !sameCard(before, after);
-  });
+  const changed =
+    next.cards.some((after, i) => {
+      const before = prev.cards[i];
+      return before === undefined || !sameCard(before, after);
+    }) ||
+    (prev.pinned !== null && next.pinned !== null && !sameCard(prev.pinned, next.pinned));
   return changed ? "patch" : "skip";
+}
+
+/** 고정 슬롯의 정체성 — 둘 다 없거나 같은 워크스페이스여야 한다. 다르면 카드가
+ *  슬롯 사이를 옮겨 다니는 것이라 DOM 재조립이다. */
+function samePinnedWorkspace(
+  a: WorkspaceCardModel | null,
+  b: WorkspaceCardModel | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return a.workspace === b.workspace;
 }

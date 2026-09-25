@@ -39,7 +39,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 19;
+const SETUP_VERSION: u32 = 20;
 
 /// 설치 스크립트 heredoc 에 통째로 들어가는 레포 파일들: (자리표시자, heredoc 종결 줄, 내용).
 ///
@@ -47,12 +47,22 @@ const SETUP_VERSION: u32 = 19;
 /// (`setup_script`). 그래서 설치된 파일은 레포 파일과 바이트 단위로 같다. 순서대로 치환하므로
 /// 앞서 넣은 파일에 뒤 자리표시자나 자기 종결 줄이 들어 있으면 스크립트가 조용히 깨진다 —
 /// 아래 `const _` 가 그 경우를 빌드 실패로 만든다.
-const EMBEDDED_FILES: [(&str, &str, &str); 10] = [
+const EMBEDDED_FILES: [(&str, &str, &str); 12] = [
     ("@BROWSER_HELPER@", "MAST_BROWSER_EOF", include_str!("../../../../scripts/wsl/mast-browser.py")),
     (
         "@CONFIG_HELPER@",
         "MAST_CONFIG_EOF",
         include_str!("../../../../scripts/wsl/mast-config.py"),
+    ),
+    (
+        "@MANAGER_CLI@",
+        "MAST_MANAGER_EOF",
+        include_str!("../../../../scripts/wsl/mast-manager.py"),
+    ),
+    (
+        "@MANAGER_HARNESS@",
+        "MAST_MANAGER_HARNESS_EOF",
+        include_str!("../../../../scripts/wsl/mast-manager-harness.py"),
     ),
     (
         "@HOOKS_MERGE@",
@@ -1142,6 +1152,7 @@ usage() {
   cat <<'MAST_USAGE_EOF'
 usage:
   mast browser --help                inspect and control browser tabs
+  mast manager --help                manager workspace commands: start, workspaces, events, patch
   mast ls                            list tabs in this workspace: TAB, TITLE, WORKSPACE, STATUS, COMMAND
   mast send [-l] <target> <text...>  type text into another pane (-l: pre-fill, do not submit)
   mast id                            print this tab's id ($MAST_TAB)
@@ -1479,6 +1490,7 @@ case "${1:-}" in
     exec python3 "$HOME/.mast/bin/mast-config.py" "$@"
     ;;
   browser) shift; exec python3 "$HOME/.mast/bin/mast-browser.py" "$@" ;;
+  manager) shift; exec python3 "$HOME/.mast/bin/mast-manager.py" "$@" ;;
   ls) shift; cmd_ls "$@" ;;
   send) shift; cmd_send "$@" ;;
   id) shift; cmd_id "$@" ;;
@@ -1514,6 +1526,28 @@ if [ "$status" -ne 0 ] || ! mv -f "$CONFIG.tmp" "$CONFIG"; then
   exit 1
 fi
 log "config helper installed: $CONFIG"
+
+cat > "$MAST_HOME/bin/mast-manager.py.tmp" <<'MAST_MANAGER_EOF'
+@MANAGER_CLI@
+MAST_MANAGER_EOF
+status=$?
+if [ "$status" -ne 0 ] || ! mv -f "$MAST_HOME/bin/mast-manager.py.tmp" "$MAST_HOME/bin/mast-manager.py"; then
+  rm -f "$MAST_HOME/bin/mast-manager.py.tmp"
+  echo "[mast] setup: cannot install manager CLI" >&2
+  exit 1
+fi
+log "manager CLI installed: $MAST_HOME/bin/mast-manager.py"
+
+cat > "$MAST_HOME/bin/mast-manager-harness.py.tmp" <<'MAST_MANAGER_HARNESS_EOF'
+@MANAGER_HARNESS@
+MAST_MANAGER_HARNESS_EOF
+status=$?
+if [ "$status" -ne 0 ] || ! mv -f "$MAST_HOME/bin/mast-manager-harness.py.tmp" "$MAST_HOME/bin/mast-manager-harness.py"; then
+  rm -f "$MAST_HOME/bin/mast-manager-harness.py.tmp"
+  echo "[mast] setup: cannot install manager harness" >&2
+  exit 1
+fi
+log "manager harness installed: $MAST_HOME/bin/mast-manager-harness.py"
 
 # --- 3. mast-send.sh compatibility wrapper ---------------------------------------------
 # The v3 helper became `mast send`. Anything already pointing at the old path — a user's
@@ -2009,10 +2043,67 @@ exit 0
 
 /// Linux 게이트의 테스트는 `apps/mast/tests/setup-script.ts` 의 TS 사본으로 조립한 스크립트를 돌린다. 실제로
 /// 배포되는 조립 결과는 Windows 에서만 컴파일되는 이 함수이므로 사본과 어긋나는 치환은 여기서만 드러난다.
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Windows 에서는 실제 배포 함수를 그대로 쓴다.
+    #[cfg(windows)]
+    fn assembled_setup_script() -> String {
+        setup_script()
+    }
+
+    /// Windows 밖에서는 `setup_script()` 가 컴파일되지 않으므로 같은 치환을 여기서 다시 한다
+    /// (Windows 체크아웃의 CRLF 정규화까지 같게 유지한다).
+    #[cfg(not(windows))]
+    fn assembled_setup_script() -> String {
+        let mut script = SETUP_SCRIPT.replace(VERSION_PLACEHOLDER, &SETUP_VERSION.to_string());
+        for (placeholder, _delimiter, file) in EMBEDDED_FILES {
+            script = script.replace(&format!("{placeholder}\n"), file);
+        }
+        script.replace("\r\n", "\n")
+    }
+
+    // 관리자 스크립트 두 개가 설치 블록·CLI 디스패치·버전 20과 함께 들어갔는지 확인한다.
+    // provision-setup.test.ts 는 Linux 전용이라 macOS 에서도 도는 검사가 필요하다.
+    #[test]
+    fn setup_script_installs_the_manager_scripts_and_dispatches_mast_manager() {
+        let script = assembled_setup_script();
+        let bytes = script.as_bytes();
+        for at in 0..bytes.len() {
+            assert_eq!(placeholder_len(bytes, at), 0, "unreplaced token at byte {at}");
+        }
+        assert!(
+            script.contains("MARKER=\"$MAST_HOME/.setup-v20\""),
+            "SETUP_VERSION 20 is not reflected in the generated marker"
+        );
+        assert!(
+            script.contains("manager) shift; exec python3 \"$HOME/.mast/bin/mast-manager.py\" \"$@\" ;;"),
+            "the mast CLI does not dispatch `mast manager`"
+        );
+        assert!(
+            script.contains("mast manager --help"),
+            "the mast CLI usage does not name `mast manager --help`"
+        );
+        for (target, delimiter, file) in [
+            (
+                "$MAST_HOME/bin/mast-manager.py",
+                "MAST_MANAGER_EOF",
+                include_str!("../../../../scripts/wsl/mast-manager.py"),
+            ),
+            (
+                "$MAST_HOME/bin/mast-manager-harness.py",
+                "MAST_MANAGER_HARNESS_EOF",
+                include_str!("../../../../scripts/wsl/mast-manager-harness.py"),
+            ),
+        ] {
+            assert!(script.contains(&format!("cat > \"{target}.tmp\" <<'{delimiter}'")), "{target}");
+            let block = format!("<<'{delimiter}'\n{}{delimiter}\n", file.replace("\r\n", "\n"));
+            assert_eq!(script.matches(&block).count(), 1, "{delimiter}");
+        }
+    }
+
+    #[cfg(windows)]
     #[test]
     fn setup_script_embeds_every_file_once_and_leaves_no_placeholder() {
         let script = setup_script();

@@ -9,6 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import type { Command, CommandOutput, SessionId, StateSnapshot, TabId } from "../shared/types";
+import type { GlueStatus } from "../features/manager/board-model";
 
 /** 터미널 출력 채널 메시지 — raw channel 은 ArrayBuffer 를 주지만, 구현 차이에
  *  대비해 Uint8Array 도 수용한다. 소비 측(features/terminal/frame.ts)에서 정규화한다. */
@@ -574,4 +575,50 @@ export function onStateChanged(
 
 export function fsSaveMarkdown(distro: string | null, path: string, expected: string, content: string): Promise<void> {
   return invoke<void>("fs_save_markdown", { distro, path, expected, content });
+}
+
+// --- 관리자 작업 보드 (preview) ------------------------------------------------
+// 글루의 Tauri 명령·이벤트 미러다. status 판정(라벨·stale)은
+// features/manager/board-model.ts 가 소유하므로 GlueStatus 는 그쪽 선언을
+// 그대로 쓴다 (type-only import — 런타임 의존 없음, 계약 표류는 tsc 가 잡는다).
+
+/** `get_manager_board`/`manager-board` payload. `board` 는 하네스 board 메시지
+ *  **원문**(불명 JSON)이라 소비자가 parseBoard 로 항목 단위 검증한다. */
+export interface ManagerBoardPayload {
+  status: GlueStatus;
+  board: unknown | null;
+}
+
+/** `manager-notify` payload — 하네스 notify 메시지 원문. */
+export interface ManagerNotifyPayload {
+  type: "notify";
+  workspaceId: number;
+  reason: "question" | "done" | "failed";
+  title: string;
+  body: string;
+}
+
+/** 보드 뷰 마운트 때의 초기 스냅샷 — 기능이 꺼져 있으면 `disabled` + board null. */
+export function getManagerBoard(): Promise<ManagerBoardPayload> {
+  return invoke<ManagerBoardPayload>("get_manager_board");
+}
+
+/** choice 카드의 이어보기(resume)/새로 시작(fresh) 선택 — 하네스가 없으면
+ *  사유 문자열로 reject 된다 (실패 문구는 카드가 표시한다). */
+export function managerAction(action: "resume" | "fresh", key: string): Promise<void> {
+  return invoke<void>("manager_action", { action, key });
+}
+
+/** 보드 status·board 갱신 구독 — payload 는 `getManagerBoard` 와 같다. */
+export function onManagerBoard(
+  handler: (payload: ManagerBoardPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<ManagerBoardPayload>("manager-board", (event) => handler(event.payload));
+}
+
+/** 하네스 notify 구독 (알림 배선의 입력). */
+export function onManagerNotify(
+  handler: (payload: ManagerNotifyPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<ManagerNotifyPayload>("manager-notify", (event) => handler(event.payload));
 }

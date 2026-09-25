@@ -543,10 +543,75 @@ pub struct UiSettings {
     /// 한 번만 읽으므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
     pub remote: Option<RemoteSettings>,
     pub browser: Option<BrowserSettings>,
+    /// 관리자 워크스페이스 preview (D12). **키가 없으면 꺼짐**이고, 객체가 있으면
+    /// `enabled` 가 필수다. `log` 와 같은 규율로 부팅 때 한 번만 읽으므로 바꾼 뒤에는
+    /// 앱을 다시 시작해야 한다.
+    pub manager: Option<ManagerSettings>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct BrowserSettings { pub enabled: bool }
+
+/// `settings.json` 의 `manager` 객체.
+///
+/// `enabled` 만 필수이고 나머지는 [`ManagerSettings::resolved`] 가 기본값을 채운다.
+/// **모르는 하위 키는 `deny_unknown_fields` 로 거부한다** — 오타 난 `summarModel` 이
+/// 조용히 무시되면 사용자는 요약이 왜 기본값으로 도는지 알 수 없다. (top-level
+/// [`UiSettings`] 는 전방 호환을 위해 모르는 키를 무시하지만 preview 객체 안은 예외다.)
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManagerSettings {
+    /// preview 스위치. 객체가 있으면 필수다 (빠지면 serde 가 파일 전체를 실패시킨다).
+    pub enabled: bool,
+    /// 관리자 에이전트 모델 이름. 미설정이면 [`MANAGER_DEFAULT_MODEL`].
+    pub model: Option<String>,
+    /// 관리자 에이전트 reasoning effort. 미설정이면 [`MANAGER_DEFAULT_EFFORT`].
+    pub effort: Option<String>,
+    /// 요약 호출 모델 이름. 미설정이면 [`MANAGER_DEFAULT_MODEL`].
+    pub summary_model: Option<String>,
+    /// 요약 호출 effort. 미설정이면 [`MANAGER_DEFAULT_SUMMARY_EFFORT`].
+    pub summary_effort: Option<String>,
+    /// Stop 뒤 유휴 병합까지 기다리는 초. 미설정이면 [`MANAGER_DEFAULT_IDLE_SECONDS`].
+    pub idle_seconds: Option<u16>,
+}
+
+/// 기본값까지 채운 관리자 설정 — 글루가 하네스 spawn 설정으로 그대로 쓴다.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedManagerSettings {
+    pub enabled: bool,
+    pub model: String,
+    pub effort: String,
+    pub summary_model: String,
+    pub summary_effort: String,
+    pub idle_seconds: u16,
+}
+
+impl ManagerSettings {
+    /// 미설정 필드를 기본값으로 채운다. 기본값은 이 메서드와 `MANAGER_DEFAULT_*`
+    /// 상수 한 곳에서만 정한다 (`mast-config.py` 의 `MANAGER_DEFAULTS` 와 같은 값).
+    pub fn resolved(&self) -> ResolvedManagerSettings {
+        ResolvedManagerSettings {
+            enabled: self.enabled,
+            model: self
+                .model
+                .clone()
+                .unwrap_or_else(|| MANAGER_DEFAULT_MODEL.to_owned()),
+            effort: self
+                .effort
+                .clone()
+                .unwrap_or_else(|| MANAGER_DEFAULT_EFFORT.to_owned()),
+            summary_model: self
+                .summary_model
+                .clone()
+                .unwrap_or_else(|| MANAGER_DEFAULT_MODEL.to_owned()),
+            summary_effort: self
+                .summary_effort
+                .clone()
+                .unwrap_or_else(|| MANAGER_DEFAULT_SUMMARY_EFFORT.to_owned()),
+            idle_seconds: self.idle_seconds.unwrap_or(MANAGER_DEFAULT_IDLE_SECONDS),
+        }
+    }
+}
 
 /// `settings.json` 의 `remote` 객체.
 ///
@@ -582,6 +647,22 @@ const HIGHLIGHT_LANGUAGES: [&str; 8] = [
     "typescript",
 ];
 
+/// 관리자 preview 기본 모델 — `mast-config.py` 의 `MANAGER_DEFAULTS` 와 같아야 한다
+/// (ADR-0023: 두 validator 는 같은 규칙을 쓴다). Rust 쪽 기본값은 이 상수들이 한 곳이다.
+const MANAGER_DEFAULT_MODEL: &str = "gpt-6-luna";
+/// 관리자 preview 기본 effort.
+const MANAGER_DEFAULT_EFFORT: &str = "high";
+/// 요약 호출 기본 effort.
+const MANAGER_DEFAULT_SUMMARY_EFFORT: &str = "low";
+/// 관리자 preview 기본 유휴 병합 대기 초.
+const MANAGER_DEFAULT_IDLE_SECONDS: u16 = 45;
+/// 허용 effort. `mast-config.py` 의 `MANAGER_EFFORTS` 와 같아야 한다.
+const MANAGER_EFFORTS: [&str; 5] = ["minimal", "low", "medium", "high", "xhigh"];
+/// 유휴 병합 대기 허용 범위(초). 밖의 값은 조용히 조정하지 않고 거부한다.
+const MANAGER_IDLE_SECONDS_RANGE: std::ops::RangeInclusive<u16> = 10..=600;
+/// 모델 이름 최대 문자 수. 빈 문자열도 거부하므로 허용 길이는 1..=64다.
+const MANAGER_MODEL_MAX_CHARS: usize = 64;
+
 /// 앱 설정 디렉터리(`%AppData%\app.mast.desktop`)의 `settings.json` 을 읽는다.
 ///
 /// - 파일 없음 → `Ok(기본값)`. 설정을 쓴 적 없는 것이 정상 상태다.
@@ -615,6 +696,55 @@ pub(crate) fn read_ui_settings(app: &AppHandle) -> Result<UiSettings, String> {
         Err(err) => return Err(format!("cannot read {}: {err}", path.display())),
     };
     parse_ui_settings(&text, &path)
+}
+
+/// 관리자 preview 객체 검증 — `mast-config.py` 의 `validate()` 안 manager 블록과
+/// **같은 규칙**이어야 한다 (ADR-0023). 규칙이 갈라지면 CLI로는 저장되고 부팅은
+/// 실패하거나 그 반대가 된다.
+fn validate_manager(manager: &ManagerSettings, path: &Path) -> Result<(), String> {
+    for (label, value) in [
+        ("model", &manager.model),
+        ("summaryModel", &manager.summary_model),
+    ] {
+        if let Some(value) = value {
+            let valid = !value.is_empty()
+                && value.chars().count() <= MANAGER_MODEL_MAX_CHARS
+                && value
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | ':' | '-'));
+            if !valid {
+                return Err(format!(
+                    "manager.{label} in {} must be 1-{MANAGER_MODEL_MAX_CHARS} characters from A-Za-z0-9._:-",
+                    path.display()
+                ));
+            }
+        }
+    }
+    for (label, value) in [
+        ("effort", &manager.effort),
+        ("summaryEffort", &manager.summary_effort),
+    ] {
+        if let Some(value) = value {
+            if !MANAGER_EFFORTS.contains(&value.as_str()) {
+                return Err(format!(
+                    "manager.{label} {value:?} in {} is not one of: {}",
+                    path.display(),
+                    MANAGER_EFFORTS.join(", ")
+                ));
+            }
+        }
+    }
+    if let Some(seconds) = manager.idle_seconds {
+        if !MANAGER_IDLE_SECONDS_RANGE.contains(&seconds) {
+            return Err(format!(
+                "manager.idleSeconds {seconds} in {} is out of range ({}-{})",
+                path.display(),
+                MANAGER_IDLE_SECONDS_RANGE.start(),
+                MANAGER_IDLE_SECONDS_RANGE.end()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// JSON 텍스트 → 검증된 설정. 파일 읽기와 분리한 순수 부분이라 단위 테스트가
@@ -669,6 +799,9 @@ fn parse_ui_settings(text: &str, path: &Path) -> Result<UiSettings, String> {
                 HIGHLIGHT_LANGUAGES.join(", ")
             ));
         }
+    }
+    if let Some(manager) = &settings.manager {
+        validate_manager(manager, path)?;
     }
     Ok(settings)
 }
@@ -1373,6 +1506,113 @@ mod tests {
         assert_eq!(future.show_tab_ids, None);
         assert!(parse_ui_settings(r#"{"fontSize": 200}"#, path()).is_err());
         assert!(parse_ui_settings(r#"{"remote": {"port": 80}}"#, path()).is_err());
+    }
+
+    #[test]
+    fn manager_resolves_defaults_for_every_absent_field() {
+        let settings = parse_ui_settings(r#"{"manager": {"enabled": true}}"#, path()).unwrap();
+        let resolved = settings.manager.unwrap().resolved();
+        assert!(resolved.enabled);
+        assert_eq!(resolved.model, "gpt-6-luna");
+        assert_eq!(resolved.effort, "high");
+        assert_eq!(resolved.summary_model, "gpt-6-luna");
+        assert_eq!(resolved.summary_effort, "low");
+        assert_eq!(resolved.idle_seconds, 45);
+    }
+
+    #[test]
+    fn manager_resolved_keeps_explicit_values() {
+        let settings = parse_ui_settings(
+            r#"{"manager": {"enabled": false, "model": "gpt-6.luna:v1_x-y", "effort": "xhigh",
+                 "summaryModel": "m2", "summaryEffort": "minimal", "idleSeconds": 600}}"#,
+            path(),
+        )
+        .unwrap();
+        let resolved = settings.manager.unwrap().resolved();
+        assert!(!resolved.enabled);
+        assert_eq!(resolved.model, "gpt-6.luna:v1_x-y");
+        assert_eq!(resolved.effort, "xhigh");
+        assert_eq!(resolved.summary_model, "m2");
+        assert_eq!(resolved.summary_effort, "minimal");
+        assert_eq!(resolved.idle_seconds, 600);
+    }
+
+    #[test]
+    fn manager_absent_or_null_is_off() {
+        assert_eq!(parse_ui_settings("{}", path()).unwrap().manager, None);
+        assert_eq!(
+            parse_ui_settings(r#"{"manager": null}"#, path())
+                .unwrap()
+                .manager,
+            None
+        );
+    }
+
+    #[test]
+    fn manager_idle_seconds_stays_inside_the_documented_range() {
+        for seconds in [10, 600] {
+            let text = format!(r#"{{"manager": {{"enabled": false, "idleSeconds": {seconds}}}}}"#);
+            let settings = parse_ui_settings(&text, path()).unwrap();
+            assert_eq!(settings.manager.unwrap().idle_seconds, Some(seconds));
+        }
+        // 9·601 은 물론, u16 범위 밖·소수·문자열도 파일 전체를 실패시킨다.
+        for text in [
+            r#"{"manager": {"enabled": false, "idleSeconds": 9}}"#,
+            r#"{"manager": {"enabled": false, "idleSeconds": 601}}"#,
+            r#"{"manager": {"enabled": false, "idleSeconds": -1}}"#,
+            r#"{"manager": {"enabled": false, "idleSeconds": 70000}}"#,
+            r#"{"manager": {"enabled": false, "idleSeconds": 45.0}}"#,
+            r#"{"manager": {"enabled": false, "idleSeconds": "45"}}"#,
+        ] {
+            assert!(parse_ui_settings(text, path()).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn manager_accepts_only_the_five_efforts() {
+        for effort in MANAGER_EFFORTS {
+            let text = format!(r#"{{"manager": {{"enabled": false, "effort": "{effort}"}}}}"#);
+            let settings = parse_ui_settings(&text, path()).unwrap();
+            assert_eq!(settings.manager.unwrap().effort.as_deref(), Some(effort));
+        }
+        for text in [
+            r#"{"manager": {"enabled": false, "effort": "max"}}"#,
+            r#"{"manager": {"enabled": false, "effort": "HIGH"}}"#,
+            r#"{"manager": {"enabled": false, "summaryEffort": "x-high"}}"#,
+        ] {
+            assert!(parse_ui_settings(text, path()).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn manager_model_charset_and_length_are_locked() {
+        let max = "a".repeat(MANAGER_MODEL_MAX_CHARS);
+        let text = format!(r#"{{"manager": {{"enabled": false, "summaryModel": "{max}"}}}}"#);
+        assert!(parse_ui_settings(&text, path()).is_ok());
+        let long = "a".repeat(MANAGER_MODEL_MAX_CHARS + 1);
+        for text in [
+            format!(r#"{{"manager": {{"enabled": false, "model": "{long}"}}}}"#),
+            r#"{"manager": {"enabled": false, "model": ""}}"#.to_owned(),
+            r#"{"manager": {"enabled": false, "model": "bad model"}}"#.to_owned(),
+            r#"{"manager": {"enabled": false, "model": "prompt/../x"}}"#.to_owned(),
+            r#"{"manager": {"enabled": false, "model": "한글"}}"#.to_owned(),
+            r#"{"manager": {"enabled": false, "model": "ok!"}}"#.to_owned(),
+        ] {
+            assert!(parse_ui_settings(&text, path()).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn manager_rejects_a_missing_enabled_and_unknown_fields() {
+        for text in [
+            r#"{"manager": {}}"#,
+            r#"{"manager": {"model": "gpt-6-luna"}}"#,
+            r#"{"manager": true}"#,
+            r#"{"manager": {"enabled": "yes"}}"#,
+            r#"{"manager": {"enabled": true, "extra": 1}}"#,
+        ] {
+            assert!(parse_ui_settings(text, path()).is_err(), "{text}");
+        }
     }
 }
 

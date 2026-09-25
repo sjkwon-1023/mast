@@ -36,6 +36,8 @@ export interface Workspace {
   /** git 정보 — 타입 공간만 확정, 값 채움은 19단계. */
   gitBranch: string | null;
   gitDirty: boolean | null;
+  /** 관리자 워크스페이스 표식 — 사이드바 고정과 관리자 권한 판정의 근거. */
+  manager: boolean;
   layout: SplitTree;
   /** Rust BTreeMap<PaneId, Pane> — JSON object 키 제약으로 키가 문자열 숫자("2")다.
    *  조회는 String(paneId) 로 한다. */
@@ -103,7 +105,10 @@ export type TabKind =
   | { type: "folderBrowser"; path: string }
   | { type: "textViewer"; path: string; scrollTop: number }
   | { type: "markdownViewer"; path: string; scrollTop: number }
-  | { type: "changesViewer"; path: string };
+  | { type: "changesViewer"; path: string }
+  /** 관리자 작업 보드 — 필드 없는 태그이고, 관리자 워크스페이스 생성만 만든다.
+   *  고정 탭이라 close/move 가 코어에서 거부된다 (managerPinned). */
+  | { type: "managerBoard" };
 
 export type TerminalStatus =
   | { type: "running" }
@@ -163,7 +168,13 @@ export type Command =
   | { type: "navigateFolder"; tab: TabId; path: string }
   /** 뷰어 스크롤 위치 기록 (unmount 복원·persist). scrollTop 은 finite·0 이상
    *  이어야 하고(아니면 invalidScroll), 값 시맨틱은 TabKind 참조. */
-  | { type: "setViewerScroll"; tab: TabId; scrollTop: number };
+  | { type: "setViewerScroll"; tab: TabId; scrollTop: number }
+  /** 관리자 워크스페이스(preview)를 목록 끝에 만든다 — rootPath 는 워크스페이스
+   *  루트 겸 터미널 탭의 기본 cwd. 이미 있으면 managerExists, 경로 형태가
+   *  불량하면 invalidPath. */
+  | { type: "createManagerWorkspace"; rootPath: string; distro: string | null }
+  /** 관리자 워크스페이스를 해체한다 — 없으면 unknownTarget. */
+  | { type: "removeManagerWorkspace" };
 
 /** dispatch 성공 결과 (command.rs CommandOutput). */
 export type CommandOutput =
@@ -205,4 +216,8 @@ export type CommandError =
   | { type: "invalidScroll"; value: number }
   /** 이름 값 불량 — renameWorkspace 의 빈/공백뿐인 이름 (경로가 아니라
    *  invalidPath 를 재사용하지 않는다). */
-  | { type: "invalidName"; message: string };
+  | { type: "invalidName"; message: string }
+  /** 관리자 워크스페이스가 이미 있다 — 하나뿐이라 두 번째 생성이 거부된다. */
+  | { type: "managerExists" }
+  /** 관리자 워크스페이스와 그 보드 탭은 고정이다 — close/move 가 거부된다. */
+  | { type: "managerPinned" };

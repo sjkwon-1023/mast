@@ -2,6 +2,7 @@
 
 use super::events::clear_tab_agent;
 use super::{unknown, CommandError, Dispatcher, NewTab, ShellSpawnReq};
+use crate::manager::{AgentEvent, AgentEventKind};
 use crate::model::{AgentStatus, NotificationState, Tab, TabId, TabKind, TerminalStatus};
 use crate::session::SessionId;
 
@@ -103,9 +104,15 @@ impl Dispatcher {
         };
         // 성공이든 강등이든 이전 세션의 에이전트가 남긴 상태는 새 셸의 것이 아니다.
         clear_tab_agent(&mut self.state.workspaces[wi], tab);
+        // 이전 세션의 에이전트 수명이 끝났다 — 재스폰은 그 세션을 잇지 않는다.
+        let recorded = self.manager_snapshot(&self.state.workspaces[wi]);
         self.state.revision += 1;
         for ws in &self.state.workspaces {
             ws.debug_assert_invariants();
+        }
+        if let Some(recorded) = recorded {
+            self.manager_events
+                .record(AgentEvent::new(AgentEventKind::TabGone, recorded).with_tab(tab));
         }
         result
     }
@@ -271,12 +278,13 @@ fn terminal_tab(id: TabId, session: SessionId, cwd: Option<String>) -> Tab {
         agent_status: AgentStatus::Idle,
         last_agent_message: None,
         last_agent_message_seq: None,
+        agent_session: None,
     }
 }
 
 /// 갓 만들어진 뷰어 탭의 값 — [`terminal_tab`] 의 뷰어 짝 (CreateTab·SplitPane·
-/// CreateWorkspace 공유). 스폰이 없으므로 순수 변이다.
-fn viewer_tab(id: TabId, title: String, kind: TabKind) -> Tab {
+/// CreateWorkspace·CreateManagerWorkspace 공유). 스폰이 없으므로 순수 변이다.
+pub(super) fn viewer_tab(id: TabId, title: String, kind: TabKind) -> Tab {
     Tab {
         id,
         title,
@@ -286,6 +294,7 @@ fn viewer_tab(id: TabId, title: String, kind: TabKind) -> Tab {
         agent_status: AgentStatus::Idle,
         last_agent_message: None,
         last_agent_message_seq: None,
+        agent_session: None,
     }
 }
 

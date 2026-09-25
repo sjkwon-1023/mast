@@ -229,6 +229,15 @@ body {
   padding: 6px;
 }
 
+/* 관리자 워크스페이스 고정 슬롯 (sidebar.ts) — 카드 목록 밖, new workspace 버튼
+   바로 위. 목록과의 경계를 위쪽 구분선으로 드러낸다. 카드가 없으면 hidden 이라
+   자리도 차지하지 않는다. */
+.sidebar-pinned {
+  flex: 0 0 auto;
+  padding: 6px;
+  border-top: 1px solid var(--border);
+}
+
 .ws-card {
   /* 테두리는 항상 1px — 활성 토글이 레이아웃을 흔들지 않게 색만 바꾼다 */
   border: 1px solid var(--border);
@@ -263,6 +272,11 @@ body {
 
 .ws-card.active {
   border-color: var(--accent);
+}
+
+/* 관리자 고정 카드 표식 — 위 테두리를 한 단계 진하게 해 별도 슬롯임을 드러낸다. */
+.ws-card--pinned {
+  border-top-color: var(--fg-muted);
 }
 
 /* 카드 1줄 — 이름 + 집계 unread dot + 닫기 */
@@ -1639,3 +1653,339 @@ body {
 .browser-disabled .new-browser-tab, .browser-disabled [title="New browser tab"] { display: none; }
 .new-browser-tab { align-self: flex-start; padding: 4px 10px; background: var(--bg-panel); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
 .new-browser-tab:hover { background: var(--border); }
+
+/* ── 뷰어 탭 — managerBoard ───────────────────────────────────────────
+   보드 헤더 + 카드 목록. 카드는 읽기 전용이라 배경·테두리·배지로만 층을 나눈다.
+   색은 전부 기존 변수(--fg-muted/--border/--accent/--warn/--error)를 쓴다. */
+
+.board-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  outline: none; /* 프로그램적 focus(tabindex -1) 표시는 하지 않는다 */
+}
+
+.board-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.board-state {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--fg);
+}
+
+/* 글루 상태 색 — 살아 있으면 accent, 대기·재시작은 warn, 실패는 error. */
+.board-state-ok,
+.board-state-busy {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.board-state-restarting,
+.board-state-starting {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.board-state-failed,
+.board-state-unsupported {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.board-open-log {
+  margin-left: auto;
+  padding: 1px 8px;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.board-open-log:hover:not(:disabled) {
+  background: var(--border);
+}
+
+.board-open-log[hidden] {
+  display: none;
+}
+
+.board-notice {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  color: var(--error);
+  font-size: 11px;
+}
+
+.board-notice[hidden] {
+  display: none;
+}
+
+.board-cards {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+}
+
+.board-card {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.board-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.board-card-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.board-card-ws,
+.board-updated {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.board-updated {
+  margin-left: auto;
+}
+
+.board-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.board-badge {
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--fg-muted);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.board-live-needsInput,
+.board-stale,
+.board-reason,
+.board-limit {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.board-live-running {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.board-reported.done,
+.board-verified.done {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.board-headline,
+.board-progress,
+.board-section {
+  margin-top: 5px;
+}
+
+.board-headline {
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.board-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.board-progress-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.board-section-title {
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.board-item {
+  padding: 2px 0 2px 8px;
+  border-left: 2px solid var(--border);
+  margin-top: 3px;
+}
+
+.board-item-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.board-toggle {
+  margin-left: 6px;
+  padding: 0 4px;
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.board-toggle:hover {
+  color: var(--fg);
+  background: var(--border);
+}
+
+.board-quote {
+  margin: 3px 0 0;
+  padding: 2px 8px;
+  border-left: 2px solid var(--accent);
+  color: var(--fg-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.board-group {
+  margin-top: 4px;
+}
+
+.board-next-item {
+  padding-left: 8px;
+  overflow-wrap: anywhere;
+}
+
+.board-plan {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  min-width: 0;
+}
+
+.board-plan-goal {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-open-plan {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.board-open-plan:hover:not(:disabled) {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.board-open-plan:disabled {
+  border-color: var(--border);
+  color: var(--fg-muted);
+  cursor: default;
+}
+
+.board-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.board-goto,
+.board-resume,
+.board-fresh {
+  padding: 1px 8px;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.board-goto:hover,
+.board-resume:hover:not(:disabled),
+.board-fresh:hover:not(:disabled) {
+  background: var(--border);
+}
+
+.board-resume,
+.board-fresh {
+  border-color: var(--accent);
+}
+
+.board-resume:disabled,
+.board-fresh:disabled {
+  border-color: var(--border);
+  color: var(--fg-muted);
+  cursor: default;
+}
+
+.board-choice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.board-empty,
+.board-card-error,
+.board-error {
+  margin-top: 5px;
+  color: var(--fg-muted);
+}
+
+.board-card-error,
+.board-error {
+  color: var(--error);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

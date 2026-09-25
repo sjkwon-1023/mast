@@ -79,6 +79,7 @@ function workspace(id: number, panes: Pane[], activePane: number): Workspace {
     distro: null,
     gitBranch: null,
     gitDirty: null,
+    manager: false,
     // planViewSync 는 layout 을 보지 않는다 — 형태만 유효한 leaf 로 채운다.
     layout: { type: "leaf", pane: panes[0]?.id ?? 0 },
     panes: record,

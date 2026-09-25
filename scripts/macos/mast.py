@@ -20,6 +20,7 @@ HELP = """usage:
   mast id                           print this tab's stable ID
   mast config [get|set|reset ...]     inspect or change saved settings
   mast browser --help               inspect and control browser tabs
+  mast manager --help               manager workspace commands: start, workspaces, events, patch
   mast skill-load                   reinstall the bundled agent skills
 
 Quote numeric addresses: mast send '#176' 'cargo test'. Sends stay in this
@@ -162,6 +163,8 @@ def main(args):
         print(os.environ["MAST_TAB"])
     elif command == "browser":
         os.execv(sys.executable, [sys.executable, str(BIN / "mast-browser.py")] + rest)
+    elif command == "manager":
+        os.execv(sys.executable, [sys.executable, str(BIN / "mast-manager.py")] + rest)
     elif command in ("config", "skill-load"):
         script = "mast-config.py" if command == "config" else "mast-setup.py"
         if command == "skill-load":

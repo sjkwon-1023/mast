@@ -121,6 +121,8 @@ interface TabNodes {
   dot: HTMLSpanElement;
   exited: HTMLSpanElement;
   notStarted: HTMLSpanElement;
+  /** 보드 탭의 × — 고정 탭이라 코어가 거부하므로 그리지 않는다 (hidden 상주). */
+  close: HTMLButtonElement;
   model: TabButtonModel;
 }
 
@@ -178,6 +180,10 @@ function placeholderText(tab: Tab | null): string {
       return `markdownViewer: ${kind.path} (no viewer mounted)`;
     case "changesViewer":
       return `changesViewer: ${kind.path} (no viewer mounted)`;
+    case "managerBoard":
+      // 보드 뷰는 항상 마운트된다 — 이 문구는 그 안전망이다. 탭 스트립
+      // 라벨과 같이 코어 제목("Manager")이 아니라 표시명("Board")을 쓴다.
+      return "Board";
   }
 }
 
@@ -554,12 +560,18 @@ export class PaneView {
    *  판정으로만 남기고, 값이 변한 경우의 기본 경로를 in-place 패치로 바꾼다. */
   private renderTabStrip(pane: Pane): void {
     const model = tabStripModel(pane);
+    // 보드 탭 여부는 kind 에서 직접 읽는다 — tabStripModel 의 버튼 모델은 "그리는
+    // 값"만 담고, 고정 탭의 표시명·닫기 숨김은 이 파일(뷰)의 관심사다.
+    const boardTabs = new Set<TabId>();
+    for (const tab of pane.tabs) {
+      if (tab.kind.type === "managerBoard") boardTabs.add(tab.id);
+    }
     const prev = this.lastStrip;
     const plan = tabStripPlan(prev, model);
     if (plan === "skip") return;
     if (plan === "rebuild") {
       this.tabNodes.clear();
-      const nodes = model.map((m) => this.tabButton(m));
+      const nodes = model.map((m) => this.tabButton(m, boardTabs.has(m.tab)));
       for (const n of nodes) this.tabNodes.set(n.model.tab, n);
       this.tabStripEl.replaceChildren(...nodes.map((n) => n.root));
     } else {
@@ -568,7 +580,7 @@ export class PaneView {
         const before = prev?.[i];
         if (before !== undefined && sameTabButton(before, next)) return;
         const nodes = this.tabNodes.get(next.tab);
-        if (nodes !== undefined) this.applyTab(nodes, next);
+        if (nodes !== undefined) this.applyTab(nodes, next, boardTabs.has(next.tab));
       });
     }
     this.lastStrip = model;
@@ -581,7 +593,7 @@ export class PaneView {
       : "Unread notification in this pane";
   }
 
-  private tabButton(model: TabButtonModel): TabNodes {
+  private tabButton(model: TabButtonModel, board: boolean): TabNodes {
     // 컨테이너는 div — X 가 <button> 이라 버튼 중첩을 피한다.
     const el = document.createElement("div");
     el.className = "tab";
@@ -639,22 +651,34 @@ export class PaneView {
 
     el.append(title, id, needsInput, dot, exited, notStarted, close);
 
-    const nodes: TabNodes = { root: el, title, id, needsInput, dot, exited, notStarted, model };
-    this.applyTab(nodes, model);
+    const nodes: TabNodes = {
+      root: el,
+      title,
+      id,
+      needsInput,
+      dot,
+      exited,
+      notStarted,
+      close,
+      model,
+    };
+    this.applyTab(nodes, model, board);
 
     el.addEventListener("click", () => this.onTabClick(nodes.model));
     return nodes;
   }
 
   /** 탭 모델을 기존 노드에 반영 — 조립 직후와 in-place 패치가 같은 경로를 탄다. */
-  private applyTab(nodes: TabNodes, model: TabButtonModel): void {
+  private applyTab(nodes: TabNodes, model: TabButtonModel, board: boolean): void {
     nodes.model = model;
     nodes.root.classList.toggle("active", model.active);
     nodes.root.classList.toggle("exited", model.exited);
     nodes.root.classList.toggle("not-started", model.notStarted);
-    nodes.root.title = model.title; // 잘린 제목의 툴팁
+    // 보드 탭의 표시명은 "Board" — 코어가 붙이는 제목("Manager")은 워크스페이스
+    // 이름이라 탭에서는 표시명을 갈아 끼운다.
+    nodes.root.title = board ? "Board" : model.title; // 잘린 제목의 툴팁
 
-    setText(nodes.title, model.title);
+    setText(nodes.title, board ? "Board" : model.title);
     nodes.needsInput.hidden = !model.needsInput;
     // ID 배지 — 부팅 때 한 번 정해진 설정이라 렌더 중 변하지 않는다. 꺼져 있으면
     // 텍스트도 비우고 hidden 으로 자리까지 걷는다 (노드는 상주 — 위 dot 규율).
@@ -664,6 +688,9 @@ export class PaneView {
     nodes.dot.hidden = !model.notification;
     nodes.exited.hidden = !model.exited;
     nodes.notStarted.hidden = !model.notStarted;
+    // 고정 탭이라 닫기가 없다 — 코어도 managerPinned 로 거부한다 (closeTab 이
+    // 실패해 상태 라인에 에러만 남는 클릭을 아예 만들지 않는다).
+    nodes.close.hidden = board;
   }
 
   /** 탭 클릭 처리. 비활성 pane 의 FocusPane 은 root 의 mousedown capture 가

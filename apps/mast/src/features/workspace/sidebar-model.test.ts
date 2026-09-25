@@ -45,6 +45,7 @@ function ws(
     agentStatus?: AgentStatus;
     lastAgentMessage?: string | null;
     panes?: Record<string, Pane>;
+    manager?: boolean;
   } = {},
 ): Workspace {
   return {
@@ -55,6 +56,7 @@ function ws(
     // gitBranch/gitDirty 는 19단계(v2)까지 항상 null 인 예약 필드 — 카드가 읽지 않는다.
     gitBranch: null,
     gitDirty: null,
+    manager: opts.manager ?? false,
     layout: { type: "leaf", pane: 1 },
     panes: opts.panes ?? { "1": pane(1, [terminalTab(10)]) },
     activePane: 1,
@@ -72,23 +74,23 @@ describe("sidebarModel", () => {
         ws(3, { agentStatus: "idle" }),
       ],
       1,
-    );
+    ).cards;
     expect(models.map((m) => m.status)).toEqual(["running", "needsInput", "idle"]);
     expect(models.map((m) => m.statusLabel)).toEqual(["running", "needs input", "idle"]);
   });
 
   it("marks only the activeWorkspace as active, preserving order", () => {
-    const models = sidebarModel([ws(1), ws(2), ws(3)], 2);
+    const models = sidebarModel([ws(1), ws(2), ws(3)], 2).cards;
     expect(models.map((m) => m.workspace)).toEqual([1, 2, 3]);
     expect(models.map((m) => m.active)).toEqual([false, true, false]);
   });
 
   it("marks nothing active when activeWorkspace is null (empty-state precursor)", () => {
-    expect(sidebarModel([ws(1)], null).map((m) => m.active)).toEqual([false]);
+    expect(sidebarModel([ws(1)], null).cards.map((m) => m.active)).toEqual([false]);
   });
 
   it("omits message/path as null when the model values are null", () => {
-    const m = sidebarModel([ws(1)], 1)[0];
+    const m = sidebarModel([ws(1)], 1).cards[0];
     expect(m?.message).toBeNull();
     expect(m?.path).toBeNull();
   });
@@ -102,7 +104,7 @@ describe("sidebarModel", () => {
         ws(4, { lastAgentMessage: "" }),
       ],
       1,
-    );
+    ).cards;
     expect(models.map((m) => m.message)).toEqual([
       "done: 3 files changed",
       "single line",
@@ -125,7 +127,7 @@ describe("sidebarModel", () => {
         ws(3, { panes: { "1": pane(1, []) } }),
       ],
       1,
-    );
+    ).cards;
     expect(models.map((m) => m.unread)).toEqual([true, false, false]);
   });
 
@@ -138,9 +140,38 @@ describe("sidebarModel", () => {
         }),
       ],
       1,
-    )[0];
+    ).cards[0];
     expect(m?.status).toBe("idle");
     expect(m?.unread).toBe(true);
+  });
+});
+
+describe("sidebarModel pinned manager slot", () => {
+  it("separates the manager card into `pinned` regardless of vector position", () => {
+    const middle = sidebarModel([ws(1), ws(2, { manager: true }), ws(3)], 1);
+    expect(middle.cards.map((m) => m.workspace)).toEqual([1, 3]);
+    expect(middle.cards.map((m) => m.pinned)).toEqual([false, false]);
+    expect(middle.pinned?.workspace).toBe(2);
+    expect(middle.pinned?.pinned).toBe(true);
+
+    // 벡터 첫째여도 일반 카드 순서는 그대로이고 관리자만 분리된다.
+    const first = sidebarModel([ws(2, { manager: true }), ws(1), ws(3)], 1);
+    expect(first.cards.map((m) => m.workspace)).toEqual([1, 3]);
+    expect(first.pinned?.workspace).toBe(2);
+  });
+
+  it("has no pinned slot when there is no manager workspace", () => {
+    const model = sidebarModel([ws(1), ws(2)], 1);
+    expect(model.pinned).toBeNull();
+    // 관리자가 없으면 카드 목록은 기존 배열 결과와 동일하다.
+    expect(model.cards.map((m) => m.workspace)).toEqual([1, 2]);
+    expect(model.cards.every((m) => !m.pinned)).toBe(true);
+  });
+
+  it("keeps the manager card active when it is the active workspace", () => {
+    const model = sidebarModel([ws(1), ws(2, { manager: true })], 2);
+    expect(model.pinned?.active).toBe(true);
+    expect(model.cards.map((m) => m.active)).toEqual([false]);
   });
 });
 
@@ -232,11 +263,33 @@ describe("reconcilePlan", () => {
   it("rebuilds when a card is added or removed", () => {
     expect(reconcilePlan(three(), sidebarModel([ws(1), ws(2), ws(3), ws(4)], 1))).toBe("rebuild");
     expect(reconcilePlan(three(), sidebarModel([ws(1), ws(3)], 1))).toBe("rebuild");
-    expect(reconcilePlan(three(), [])).toBe("rebuild");
+    expect(reconcilePlan(three(), { cards: [], pinned: null })).toBe("rebuild");
   });
 
   it("rebuilds when the cards are reordered (same membership)", () => {
     expect(reconcilePlan(three(), sidebarModel([ws(2), ws(1), ws(3)], 1))).toBe("rebuild");
+  });
+
+  it("rebuilds when the pinned slot appears, disappears, or swaps workspace", () => {
+    const without = sidebarModel([ws(1), ws(2)], 1);
+    const withPinned = sidebarModel([ws(1), ws(2, { manager: true })], 1);
+    expect(reconcilePlan(without, withPinned)).toBe("rebuild");
+    expect(reconcilePlan(withPinned, without)).toBe("rebuild");
+
+    const swapped = sidebarModel([ws(1), ws(3, { manager: true })], 1);
+    expect(reconcilePlan(withPinned, swapped)).toBe("rebuild");
+  });
+
+  it("patches when only the pinned card's dynamic fields change (same slot)", () => {
+    const before = sidebarModel([ws(1), ws(2, { manager: true })], 1);
+    const beforeCopy = sidebarModel([ws(1), ws(2, { manager: true })], 1);
+    expect(reconcilePlan(before, beforeCopy)).toBe("skip");
+
+    const after = sidebarModel(
+      [ws(1), ws(2, { manager: true, agentStatus: "running", lastAgentMessage: "working" })],
+      1,
+    );
+    expect(reconcilePlan(before, after)).toBe("patch");
   });
 });
 

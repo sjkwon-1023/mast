@@ -3,6 +3,7 @@
 use std::cmp::Reverse;
 
 use super::{Dispatcher, SessionEvent};
+use crate::manager::{AgentEvent, AgentEventKind};
 use crate::model::{
     AgentStatus, NotificationState, PaneId, Tab, TabId, TabKind, TerminalStatus, Workspace,
 };
@@ -19,7 +20,10 @@ impl Dispatcher {
             } => {
                 self.started_sessions.remove(&session);
                 let mut changed = false;
-                for ws in &mut self.state.workspaces {
+                // 관리자 워크스페이스 판정은 변이 루프 밖에서 한다 — 루프 동안
+                // self.state 가 가변 대여라 이벤트를 바로 쌓을 수 없다.
+                let mut gone = Vec::new();
+                for (wi, ws) in self.state.workspaces.iter_mut().enumerate() {
                     let mut exited = Vec::new();
                     for pane in ws.panes.values_mut() {
                         for tab in &mut pane.tabs {
@@ -48,11 +52,20 @@ impl Dispatcher {
                     // 그 needsInput 과 문구가 워크스페이스 파생값에 계속 남는다.
                     for tab in exited {
                         changed |= clear_tab_agent(ws, tab);
+                        gone.push((wi, tab));
                     }
                 }
                 // 미지 session 이면 changed == false — 무해한 no-op (모듈 doc 참조).
                 if changed {
                     self.state.revision += 1;
+                }
+                // 터미널 탭의 셸 종료 = 그 탭 에이전트 수명의 끝 — tabGone 한 건.
+                for (wi, tab) in gone {
+                    if let Some(recorded) = self.manager_snapshot(&self.state.workspaces[wi]) {
+                        self.manager_events.record(
+                            AgentEvent::new(AgentEventKind::TabGone, recorded).with_tab(tab),
+                        );
+                    }
                 }
             }
             SessionEvent::SessionStartupTimeout { session } => {
@@ -137,6 +150,9 @@ impl Dispatcher {
             .expect("locate_session 이 존재를 보장")
             .tabs[ti];
         let mut changed = false;
+        // 기록할 실제 변경 — 상태 변이를 다 반영한 뒤 이벤트로 옮긴다.
+        let mut status_event = None;
+        let mut session_event = None;
         // 늦게 도착한 표식이 경고를 거두는 경로다. 감지가 세션을 죽이지 않기 때문에
         // 존재할 수 있는 전이이며, 느린 콜드 스타트를 오탐해도 대가가 없는 근거이기도
         // 하다.
@@ -164,6 +180,14 @@ impl Dispatcher {
                 }
             }
         }
+        if let Some(agent_session) = &delta.agent_session {
+            // 세션 메타는 스냅샷·persist 에 나가지 않으므로 changed 를 세우지
+            // 않는다 — changed 는 스냅샷 발행 여부다. 값이 실제로 다를 때만 바꾼다.
+            if tab.agent_session.as_ref() != Some(agent_session) {
+                tab.agent_session = Some(agent_session.clone());
+                session_event = Some(agent_session.clone());
+            }
+        }
         // 가시 탭의 unread 는 억제한다 — 내용이 이미 눈앞에 있으므로 dot 이 의미가
         // 없고, 이미 활성인 탭에는 ActivateTab 해제가 다시 오지 않는다.
         if delta.unread && !visible && tab.notification != NotificationState::Unread {
@@ -179,6 +203,7 @@ impl Dispatcher {
             if tab.agent_status != status {
                 tab.agent_status = status;
                 changed = true;
+                status_event = Some(status);
             }
         }
         if let Some(message) = &delta.message {
@@ -189,6 +214,29 @@ impl Dispatcher {
             tab.last_agent_message_seq = Some(message_seq);
         }
         changed |= recompute_agent_summary(ws);
+
+        // 기록은 탭 변이 뒤 — status 이벤트의 message 는 이 시점의 탭 값이다.
+        if status_event.is_some() || session_event.is_some() {
+            if let Some(recorded) = self.manager_snapshot(&self.state.workspaces[wi]) {
+                if let Some(status) = status_event {
+                    let message = self.state.workspaces[wi].panes[&pane].tabs[ti]
+                        .last_agent_message
+                        .clone();
+                    self.manager_events.record(
+                        AgentEvent::new(AgentEventKind::Status, recorded.clone())
+                            .with_tab(tab_id)
+                            .with_status(status, message),
+                    );
+                }
+                if let Some(agent_session) = session_event {
+                    self.manager_events.record(
+                        AgentEvent::new(AgentEventKind::Session, recorded)
+                            .with_tab(tab_id)
+                            .with_session(agent_session),
+                    );
+                }
+            }
+        }
         changed
     }
 }
@@ -228,8 +276,11 @@ fn latest_message<'a>(tabs: impl Iterator<Item = &'a Tab>) -> Option<String> {
         .and_then(|tab| tab.last_agent_message.clone())
 }
 
-/// 탭의 에이전트 상태를 비우고 워크스페이스를 재계산한다. 반환값은 탭이나 파생값이
-/// 바뀌었는가.
+/// 탭의 에이전트 상태와 세션 메타를 비우고 워크스페이스를 재계산한다. 반환값은 탭이나
+/// 파생값이 바뀌었는가.
+///
+/// `agent_session` 은 스냅샷에 나가지 않으므로 `changed` 판정에 넣지 않는다 —
+/// 셸이 끝난 뒤 남은 세션 id 를 다음 셸에 물려줄 수는 없어 항상 비운다.
 pub(super) fn clear_tab_agent(ws: &mut Workspace, tab: TabId) -> bool {
     let mut changed = false;
     if let Some(target) = ws
@@ -242,6 +293,7 @@ pub(super) fn clear_tab_agent(ws: &mut Workspace, tab: TabId) -> bool {
         target.agent_status = AgentStatus::Idle;
         target.last_agent_message = None;
         target.last_agent_message_seq = None;
+        target.agent_session = None;
     }
     recompute_agent_summary(ws) || changed
 }

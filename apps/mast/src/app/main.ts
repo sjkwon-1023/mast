@@ -16,6 +16,7 @@ import {
   getUiSettings,
   getWslStatus,
   notifyToast,
+  onManagerNotify,
   onUpdateChecked,
   onWslStatusChanged,
   openSettingsFile,
@@ -36,6 +37,7 @@ import {
   needsInputToasts,
   needsInputToastTargets,
 } from "../features/notifications/chime";
+import { managerToast, parseManagerNotify } from "../features/manager/notify";
 import { formatCommandError } from "../shared/command-error";
 import { activeTerminalCwd, activeWorkspace, pathBasename } from "../shared/keys";
 import { openPairingDialog } from "../features/pairing/dialog";
@@ -256,6 +258,7 @@ class App {
       console.error("window visibility listen failed", err);
     });
     this.initWslNotice();
+    this.initManagerNotify();
     installNavKeys({
       getSnapshot: () => this.store.snapshot,
       paneRects: () => this.wsView.paneRects(),
@@ -323,6 +326,33 @@ class App {
   private applyWslStatus(status: WslStatus): void {
     this.wslStatus = status;
     this.wslBanner.render(status);
+  }
+
+  /** 관리자 하네스 notify 구독 — 판정은 features/manager/notify.ts 가 하고 여기서는
+   *  최신 스냅샷·포커스 상태를 실어 notifyToast 로 넘기기만 한다. 토스트 전송 실패는
+   *  console.debug 로만 남긴다 (needsInput 토스트와 같은 처리). 기능이 꺼져 있으면
+   *  manager-notify 이벤트 자체가 오지 않으므로 별도 분기가 없다. */
+  private initManagerNotify(): void {
+    onManagerNotify((payload) => {
+      const notify = parseManagerNotify(payload);
+      if (notify === null) {
+        console.debug("[mast] ignored manager notify", payload);
+        return;
+      }
+      const snapshot = this.store.snapshot;
+      const toast = managerToast(
+        notify,
+        snapshot?.state.activeWorkspace ?? null,
+        this.windowFocused,
+        snapshot?.state.workspaces ?? [],
+      );
+      if (toast === null) return;
+      notifyToast(toast.title, toast.body, toast.logLabel).catch((err) => {
+        console.debug("[mast] manager toast failed", err);
+      });
+    }).catch((err: unknown) => {
+      console.error("manager notify listen failed", err);
+    });
   }
 
   /** 진단이 "터미널을 만들 수 없다"고 확정한 상태인가 — 백엔드 스폰 게이트와 같은

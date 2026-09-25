@@ -17,6 +17,11 @@
 // 무관 알림 하나로도 뚫린다 — 그래서 스킵 가드는 skip 판정으로만 남기고, 값이
 // 변한 경우의 기본 경로를 in-place 패치로 바꾼다.
 //
+// 관리자 워크스페이스(고정 카드)는 일반 카드 목록 밖 별도 슬롯(`.sidebar-pinned`,
+// new workspace 버튼 바로 위)에 그린다. 닫기 버튼·드래그 시작·드롭 대상이 없고
+// 순번 배지도 받지 않는다 — Ctrl+1~9 순번에서 빠지는 것과 같은 규칙이다
+// (app/navigation/actions.ts). 이름 바꾸기와 클릭 전환은 그대로 허용한다.
+//
 // 상호작용:
 // - 카드 클릭 = SwitchWorkspace (이미 활성이면 no-op 스킵 — 무변경 revision 잡음 방지).
 // - × = CloseWorkspace. 실행 중인 터미널 세션이 1개라도 있으면 확인(confirmAction)을
@@ -54,7 +59,7 @@ import {
   sameCard,
   sidebarModel,
 } from "./sidebar-model";
-import type { CardBox, WorkspaceCardModel } from "./sidebar-model";
+import type { CardBox, SidebarModel, WorkspaceCardModel } from "./sidebar-model";
 import type { UpdateInfo } from "../../infrastructure/backend";
 import type { Command, CommandOutput, StateSnapshot, WorkspaceId } from "../../shared/types";
 
@@ -87,14 +92,14 @@ interface DragState {
 /** 카드 1개의 DOM 노드 묶음 — in-place 패치 대상. model 은 이 카드가 지금 그리고
  *  있는 모델로, 클릭 핸들러가 stale 클로저 대신 여기서 최신 값을 읽는다.
  *  3줄 구성: head(이름 | 이름 편집 입력 + unread dot + ×) / status(상태 텍스트 +
- *  메시지) / path. */
+ *  메시지) / path. 고정 카드는 × 를 만들지 않으므로 `close` 가 null 이다. */
 interface CardNodes {
   root: HTMLElement;
   name: HTMLSpanElement;
   /** 이름 인라인 편집 입력 — 평시 hidden, F2 편집 중에만 name 과 자리를 바꾼다. */
   rename: HTMLInputElement;
   dot: HTMLSpanElement;
-  close: HTMLButtonElement;
+  close: HTMLButtonElement | null;
   status: HTMLDivElement;
   path: HTMLDivElement;
   model: WorkspaceCardModel;
@@ -115,12 +120,14 @@ function statusText(model: WorkspaceCardModel): string {
 
 export class Sidebar {
   private readonly cardsEl: HTMLDivElement;
+  /** 관리자 워크스페이스 전용 슬롯 — 일반 카드 목록 밖, new workspace 버튼 바로 위. */
+  private readonly pinnedEl: HTMLDivElement;
   private readonly pairBtn: HTMLButtonElement;
   private readonly versionEl: HTMLSpanElement;
   private readonly updateBtn: HTMLButtonElement;
   private lastSnapshot: StateSnapshot | null = null;
   /** 직전 렌더의 카드 모델 (첫 렌더 전 null) — reconcilePlan 의 좌변 (파일 상단). */
-  private lastCards: WorkspaceCardModel[] | null = null;
+  private lastModel: SidebarModel | null = null;
   /** 현재 화면에 붙어 있는 카드 노드 — workspace id 키잉, patch 판정의 대상. */
   private readonly cardNodes = new Map<WorkspaceId, CardNodes>();
   private editing: WorkspaceId | null = null;
@@ -147,6 +154,10 @@ export class Sidebar {
   ) {
     this.cardsEl = document.createElement("div");
     this.cardsEl.className = "sidebar-cards";
+
+    this.pinnedEl = document.createElement("div");
+    this.pinnedEl.className = "sidebar-pinned";
+    this.pinnedEl.hidden = true;
 
     const footer = document.createElement("div");
     footer.className = "sidebar-footer";
@@ -180,7 +191,7 @@ export class Sidebar {
     this.updateBtn.addEventListener("click", () => this.onOpenUpdate(LATEST_RELEASE_URL));
 
     footer.append(newBtn, this.pairBtn, this.versionEl, this.updateBtn);
-    rootEl.append(this.cardsEl, footer);
+    rootEl.append(this.cardsEl, this.pinnedEl, footer);
   }
 
   /** 캐시 조회·update-checked 이벤트의 결과를 정적 푸터에 반영한다. */
@@ -207,7 +218,7 @@ export class Sidebar {
     // 같은 방식으로 종료 시(endDrag) 한 번에 만회한다.
     if (this.drag !== null) return;
     const model = sidebarModel(snapshot.state.workspaces, snapshot.state.activeWorkspace);
-    const prev = this.lastCards;
+    const prev = this.lastModel;
     const plan = reconcilePlan(prev, model);
     if (plan === "skip") return;
     if (plan === "rebuild") {
@@ -215,21 +226,42 @@ export class Sidebar {
       // 편집 가드가 사라진 노드를 가리키지 않게 한다 (파일 상단 편집 상태 가드).
       this.editing = null;
       this.cardNodes.clear();
-      const nodes = model.map((m, i) => this.card(m, i + 1));
+      // 순번 배지는 일반 카드에만 붙는다 — 고정 카드는 Ctrl+1~9 대상이 아니다.
+      const nodes = model.cards.map((m, i) => this.card(m, i + 1));
       for (const n of nodes) this.cardNodes.set(n.model.workspace, n);
       this.cardsEl.replaceChildren(...nodes.map((n) => n.root));
+      this.pinnedEl.hidden = model.pinned === null;
+      if (model.pinned === null) {
+        this.pinnedEl.replaceChildren();
+      } else {
+        const pinned = this.card(model.pinned, null);
+        this.cardNodes.set(pinned.model.workspace, pinned);
+        this.pinnedEl.replaceChildren(pinned.root);
+      }
     } else {
       // 멤버십·순서가 같음이 판정으로 보장된다 — 변한 카드만 in-place 갱신.
-      model.forEach((next, i) => {
-        const before = prev?.[i];
+      const prevCards = prev?.cards ?? [];
+      model.cards.forEach((next, i) => {
+        const before = prevCards[i];
         if (before !== undefined && sameCard(before, next)) return;
         // 편집 중인 카드는 건드리지 않는다 — 밀린 갱신은 stopEditing 이 만회한다.
         if (this.editing === next.workspace) return;
         const nodes = this.cardNodes.get(next.workspace);
         if (nodes !== undefined) this.applyCard(nodes, next);
       });
+      const pinned = model.pinned;
+      const prevPinned = prev?.pinned ?? null;
+      if (
+        pinned !== null &&
+        prevPinned !== null &&
+        !sameCard(prevPinned, pinned) &&
+        this.editing !== pinned.workspace
+      ) {
+        const nodes = this.cardNodes.get(pinned.workspace);
+        if (nodes !== undefined) this.applyCard(nodes, pinned);
+      }
     }
-    this.lastCards = model;
+    this.lastModel = model;
   }
 
   /** 워크스페이스 카드의 이름을 인라인 편집으로 바꾼다. 인자가 없으면 활성 워크스페이스
@@ -276,8 +308,10 @@ export class Sidebar {
     nodes.rename.hidden = true;
     nodes.name.hidden = false;
     // 편집 중 스킵된 패치를 여기서 만회한다 — 그 스냅샷의 sameCard 판정은 이미
-    // 지나갔으므로 다음 렌더가 저절로 고쳐 주지 않는다.
-    const latest = this.lastCards?.find((c) => c.workspace === workspace);
+    // 지나갔으므로 다음 렌더가 저절로 고쳐 주지 않는다. 고정 슬롯도 같은 경로다.
+    const latest =
+      this.lastModel?.cards.find((c) => c.workspace === workspace) ??
+      (this.lastModel?.pinned?.workspace === workspace ? this.lastModel.pinned : undefined);
     if (latest !== undefined) this.applyCard(nodes, latest);
   }
 
@@ -297,13 +331,15 @@ export class Sidebar {
 
   /** 카드 DOM 조립 — 값에 따라 있다 없다 하는 행(경로·집계 dot)도 노드는
    *  항상 만들고 hidden 으로만 토글한다. 노드 존재 자체가 변하면 그 카드의
-   *  자식이 갈아치워져 in-place 패치의 의미가 없어지기 때문이다. */
-  private card(model: WorkspaceCardModel, ordinal: number): CardNodes {
+   *  자식이 갈아치워져 in-place 패치의 의미가 없어지기 때문이다.
+   *  고정 카드(ordinal null)는 닫기 버튼과 드래그 리스너를 만들지 않는다 —
+   *  노드 부재 자체가 계약이라 hidden 으로 흉내 내지 않는다. */
+  private card(model: WorkspaceCardModel, ordinal: number | null): CardNodes {
     const el = document.createElement("div");
-    el.className = "ws-card";
+    el.className = model.pinned ? "ws-card ws-card--pinned" : "ws-card";
     // ordinal 배지에 Shift 가 없는 것은 실제 키(`Alt+1`~`9`)가 shift 를 요구하지
     // 않기 때문이다 — 문자 명령 배지(shortcutBadge)와의 차이가 곧 안내다.
-    if (ordinal <= 9) el.dataset.altShortcut = String(ordinal);
+    if (ordinal !== null && ordinal <= 9) el.dataset.altShortcut = String(ordinal);
 
     const head = document.createElement("div");
     head.className = "ws-card-head";
@@ -341,18 +377,23 @@ export class Sidebar {
     dot.textContent = "●";
     dot.title = "Unread notification";
 
-    const close = document.createElement("button");
-    close.type = "button";
-    close.className = "ws-card-close";
-    close.textContent = "×";
-    // 단축키 표기는 "+ New workspace" 버튼과 같은 관례 — shared/keys.ts 단일 소스.
-    close.title = `Close workspace (${shortcutLabel("closeWorkspace")})`;
-    close.addEventListener("click", (ev) => {
-      ev.stopPropagation(); // 카드 클릭(전환)과 분리
-      void this.onClose(model.workspace);
-    });
+    let close: HTMLButtonElement | null = null;
+    if (!model.pinned) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ws-card-close";
+      button.textContent = "×";
+      // 단축키 표기는 "+ New workspace" 버튼과 같은 관례 — shared/keys.ts 단일 소스.
+      button.title = `Close workspace (${shortcutLabel("closeWorkspace")})`;
+      button.addEventListener("click", (ev) => {
+        ev.stopPropagation(); // 카드 클릭(전환)과 분리
+        void this.onClose(model.workspace);
+      });
+      close = button;
+    }
 
-    head.append(name, rename, dot, close);
+    head.append(name, rename, dot);
+    if (close !== null) head.append(close);
 
     // 상태는 항상 있으므로 이 줄은 감추지 않는다 (경로 줄과 달리 hidden 토글이
     // 없다).
@@ -367,10 +408,13 @@ export class Sidebar {
     const nodes: CardNodes = { root: el, name, rename, dot, close, status, path, model };
     this.applyCard(nodes, model);
 
-    el.addEventListener("pointerdown", (ev) => this.onCardPointerDown(ev, nodes));
-    el.addEventListener("pointermove", (ev) => this.onCardPointerMove(ev));
-    el.addEventListener("pointerup", () => this.endDrag(true));
-    el.addEventListener("pointercancel", () => this.endDrag(false));
+    // 고정 카드는 드래그 시작이 없다 — 리스너 자체를 붙이지 않는다.
+    if (!model.pinned) {
+      el.addEventListener("pointerdown", (ev) => this.onCardPointerDown(ev, nodes));
+      el.addEventListener("pointermove", (ev) => this.onCardPointerMove(ev));
+      el.addEventListener("pointerup", () => this.endDrag(true));
+      el.addEventListener("pointercancel", () => this.endDrag(false));
+    }
 
     el.addEventListener("click", () => {
       // 드래그로 끝난 상호작용의 click 은 삼킨다 — 순서를 바꾸려고 끌었을 뿐인데
@@ -458,7 +502,8 @@ export class Sidebar {
    *  no-op 스킵" 과 같은 규칙). */
   private movesAnything(drag: DragState): boolean {
     if (drag.before === drag.workspace) return false;
-    const cards = this.lastCards ?? [];
+    // 고정 카드는 드래그 대상이 아니므로 일반 카드 목록만 본다.
+    const cards = this.lastModel?.cards ?? [];
     const from = cards.findIndex((c) => c.workspace === drag.workspace);
     if (from < 0) return false;
     const to =
@@ -476,7 +521,8 @@ export class Sidebar {
    *  가리킨다. 카드는 한 자릿수라 매번 재도 싸다. */
   private dropBoxes(): CardBox[] {
     const boxes: CardBox[] = [];
-    for (const card of this.lastCards ?? []) {
+    // 고정 카드는 목록 밖 슬롯이라 드롭 자 계산에서 뺀다 — before 후보가 될 수 없다.
+    for (const card of this.lastModel?.cards ?? []) {
       const nodes = this.cardNodes.get(card.workspace);
       if (nodes === undefined) continue;
       const rect = nodes.root.getBoundingClientRect();
@@ -491,7 +537,8 @@ export class Sidebar {
   private showDropIndicator(drag: DragState): void {
     this.clearDropIndicator();
     if (drag.before === null) {
-      const last = this.lastCards?.at(-1);
+      // 맨 뒤 표시는 일반 카드 목록의 마지막 카드에만 붙는다 (고정 슬롯은 제외).
+      const last = this.lastModel?.cards.at(-1);
       if (last === undefined) return;
       this.cardNodes.get(last.workspace)?.root.classList.add("drop-after");
       return;
@@ -509,8 +556,11 @@ export class Sidebar {
   private applyCard(nodes: CardNodes, model: WorkspaceCardModel): void {
     nodes.model = model;
     nodes.root.classList.toggle("active", model.active);
-    if (model.active) nodes.close.dataset.altShortcut = shortcutBadge("closeWorkspace");
-    else delete nodes.close.dataset.altShortcut;
+    nodes.root.classList.toggle("ws-card--pinned", model.pinned);
+    if (nodes.close !== null) {
+      if (model.active) nodes.close.dataset.altShortcut = shortcutBadge("closeWorkspace");
+      else delete nodes.close.dataset.altShortcut;
+    }
 
     setText(nodes.name, model.name);
     nodes.name.title = model.name; // 잘린 이름의 툴팁
@@ -530,10 +580,14 @@ export class Sidebar {
 
   /** `Ctrl+Shift+Q` — 활성 워크스페이스 닫기 (main.ts 글루가 부른다). × 버튼과
    *  완전히 같은 경로를 타므로 confirm 조건·문구가 갈라지지 않는다. 활성
-   *  워크스페이스가 없으면(빈 상태·스냅샷 미도착) 조용한 no-op 이다. */
+   *  워크스페이스가 없으면(빈 상태·스냅샷 미도착) 조용한 no-op 이다.
+   *  관리자 워크스페이스도 조용한 no-op 이다 — 고정이라 확인 대화상자조차
+   *  띄우지 않고, 코어도 managerPinned 로 거부한다. */
   async closeActive(): Promise<void> {
     const workspace = this.lastSnapshot?.state.activeWorkspace ?? null;
     if (workspace === null) return;
+    const target = this.lastSnapshot?.state.workspaces.find((w) => w.id === workspace) ?? null;
+    if (target?.manager === true) return;
     await this.onClose(workspace);
   }
 

@@ -10,7 +10,7 @@ import type { StateSnapshot, Tab } from "../../shared/types";
 
 function snapshot(closed: boolean, revision = 1): StateSnapshot {
   const tab = (id: number): Tab => ({ id, title: 'folder', kind: { type: 'folderBrowser', path: '/tmp' }, notification: 'none', lastActivityMs: null, agentStatus: 'idle', lastAgentMessage: null });
-  return { revision, state: { revision, nextId: 10, activeWorkspace: 1, workspaces: [{ id: 1, name: 'ws', rootPath: '/tmp', distro: null, gitBranch: null, gitDirty: null, layout: { type: 'leaf', pane: 1 }, panes: { '1': { id: 1, activeTab: closed ? 2 : 3, tabs: closed ? [tab(2)] : [tab(2), tab(3)] } }, activePane: 1, agentStatus: 'idle', lastAgentMessage: null }] } };
+  return { revision, state: { revision, nextId: 10, activeWorkspace: 1, workspaces: [{ id: 1, name: 'ws', rootPath: '/tmp', distro: null, gitBranch: null, gitDirty: null, manager: false, layout: { type: 'leaf', pane: 1 }, panes: { '1': { id: 1, activeTab: closed ? 2 : 3, tabs: closed ? [tab(2)] : [tab(2), tab(3)] } }, activePane: 1, agentStatus: 'idle', lastAgentMessage: null }] } };
 }
 let view: WorkspaceView;
 afterEach(() => { if (view) { const empty = snapshot(true); empty.state.workspaces = []; empty.state.activeWorkspace = null; view.render(empty); } document.body.replaceChildren(); });

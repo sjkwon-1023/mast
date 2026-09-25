@@ -82,6 +82,19 @@ function folderTab(id: number, path = "/home/u"): Tab {
   };
 }
 
+/** 관리자 작업 보드 탭 — 코어 제목은 "Manager" 지만 탭 표시명은 "Board" 다. */
+function boardTab(id: number): Tab {
+  return {
+    id,
+    title: "Manager",
+    kind: { type: "managerBoard" },
+    notification: "none",
+    lastActivityMs: null,
+    agentStatus: "idle",
+    lastAgentMessage: null,
+  };
+}
+
 function pane(tabs: Tab[], activeTab: number | null): Pane {
   return { id: 1, tabs, activeTab };
 }
@@ -627,6 +640,40 @@ describe("PaneView viewer seam (21단계)", () => {
     view.update(pane([terminalTab(10)], 10), true, null, null);
     expect(placeholder().style.display).not.toBe("none");
     expect(view.shownTab).toBeNull();
+  });
+
+  // 보드 탭은 고정이다 — 라벨은 표시명 "Board", 닫기 버튼은 그리지 않는다
+  // (코어도 closeTab 을 managerPinned 로 거부한다: 실패할 클릭을 만들지 않는다).
+  it("labels the manager board tab Board and draws no close button", () => {
+    const { view, tabs } = mount();
+    view.update(pane([terminalTab(10), boardTab(11)], 11), true, null, null);
+
+    const rows = tabs();
+    expect(child(rows[1], ".tab-title").textContent).toBe("Board");
+    expect(rows[1].title).toBe("Board");
+    expect(child(rows[1], ".tab-close").hidden).toBe(true);
+    // 일반 탭의 닫기는 그대로 살아 있다.
+    expect(child(rows[0], ".tab-close").hidden).toBe(false);
+  });
+
+  it("keeps the board label and hidden close through an in-place patch", () => {
+    const { view, tabs } = mount();
+    view.update(pane([terminalTab(10), boardTab(11)], 11), true, null, null);
+    const before = tabs();
+
+    // 제목만 바뀐 패치 경로 — 노드는 유지되고 보드 표시명도 그대로다.
+    view.update(pane([terminalTab(10, { title: "renamed" }), boardTab(11)], 11), true, null, null);
+    const after = tabs();
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
+    expect(child(after[1], ".tab-title").textContent).toBe("Board");
+    expect(child(after[1], ".tab-close").hidden).toBe(true);
+  });
+
+  it("shows Board in the placeholder when no board viewer is mounted", () => {
+    const { view, placeholder } = mount();
+    view.update(pane([boardTab(11)], 11), true, null, null);
+    expect(placeholder().textContent).toBe("Board");
   });
 
   it("dispatches CreateTab{folderBrowser, path: null} from the header SVG folder button", () => {

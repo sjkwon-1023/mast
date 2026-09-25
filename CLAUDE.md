@@ -417,6 +417,20 @@ it carries, so read it before reopening the same question. Nothing here blocks t
     server modes, the beta `opencode2` binary, and an agent-facing mast CLI guide remain
     outside this integration.
 
+- **Manager workspace preview — landed 2026-09-25** ([ADR-0032](docs/adr/0032-manager-workspace-preview.md),
+  setup v20). Opt-in (`mast config set manager.enabled true`, codex CLI required, full restart):
+  a pinned workspace above New workspace whose agent and task board summarize Claude Code and
+  Codex work across every workspace — waiting questions, user/ai decisions with quoted evidence,
+  progress, next steps and plan links. Collection runs in an app-owned Python harness (stdio, no
+  PTY tab) fed by a 1024-event core ring; `codex exec` summaries merge as JSON patches; closing a
+  workspace archives its record and reopening the same path offers Resume or Start fresh;
+  `mast manager workspaces|events|patch|start` is the manager agent's surface. The manager query
+  is read-only and confined to the manager workspace. **Still open**: Windows field checks
+  (M1–M10 in `docs/WINDOWS-BUILD.md`: the `wsl.exe` harness pipe, other-distro display, toasts),
+  summary quality of `gpt-6-luna` low unmeasured, the B1 project-hook injection path to revisit
+  if a TUI hook works, and transcript collection for workspaces in other WSL distributions.
+  Verified by macOS automated gates only; M1–M10 are not run.
+
 - **Agent-facing pane-send channel** — **landed 2026-08-11 as a shell CLI**, not MCP (user
   decision: MCP is heavy, and it is a v2 browser-surface question instead). `mast send`
   addresses a target by stable tab id (`'#181'`) as well as by title, and `mast ls`
@@ -424,10 +438,11 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   `/tmp` file the caller names). Contract in `scripts/wsl/claude-hook-example.md`, agent
   surface in `scripts/wsl/skills/mast-send/SKILL.md`, verification in WINDOWS-BUILD §10.
   Still open: **reading a pane's scrollback** (enumeration is metadata only — an opt-in
-  design is needed before any output leaves a pane), and `mast ls`'s **`COMMAND` column
-  showing `?` for a tab whose shell is in another distro or a Windows shell** (it is read
-  from this distro's `/proc`). Keyboard targeting for the old manual send mode stays absorbed
-  by the stage-17 retirement — it is not coming back.
+  design is needed before any output leaves a pane; the manager preview v1 did not open
+  this: it reads summarized task JSON, never pane output), and `mast ls`'s **`COMMAND`
+  column showing `?` for a tab whose shell is in another distro or a Windows shell** (it
+  is read from this distro's `/proc`). Keyboard targeting for the old manual send mode
+  stays absorbed by the stage-17 retirement — it is not coming back.
 
 - **Agent-facing file and diff presentation commands — backlog (user request 2026-09-20).**
   Add `mast` CLI commands that let an agent open a chosen file in the appropriate viewer or
@@ -438,7 +453,9 @@ it carries, so read it before reopening the same question. Nothing here blocks t
 - **Cross-workspace send/`ls` would need an explicit opt-in** — both halves of the agent
   channel stop at the requester's own workspace (2026-08-11 decision, ADR-0005 addendum); if
   reaching another project's pane ever becomes a real need it arrives as a named opt-in, never
-  as the default radius.
+  as the default radius. The manager workspace preview v1 did not open this either: its
+  `mast manager workspaces|events` query is read-only metadata for the manager workspace and is
+  not a security boundary.
 
 - **Query-reply `/tmp` confinement is string-level only** — a pre-planted symlink
   (`/tmp/x → $HOME`) routes the reply write outside; blocking it needs a

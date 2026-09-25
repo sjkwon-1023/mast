@@ -164,6 +164,58 @@ CLI는 `mast config set browser.enabled false`, `mast config set browser.enabled
 저장한다. reset은 브라우저 설정을 지워 기본값 true로 되돌린다.
 [사용법과 에이전트 명령](BROWSER.md)을 참고한다.
 
+## `manager` (preview)
+
+Settings for the manager workspace preview: the manager agent's model and reasoning effort,
+the merge summarizer's model and effort, and how long a workspace may stay idle before a
+merge. **Absent means off.** When the object exists, `enabled` is required and is the switch.
+
+```json
+"manager": {
+  "enabled": true,
+  "model": "gpt-6-luna",
+  "effort": "high",
+  "summaryModel": "gpt-6-luna",
+  "summaryEffort": "low",
+  "idleSeconds": 45
+}
+```
+
+| field | default | accepted |
+|---|---|---|
+| `enabled` | required | `true` or `false` |
+| `model` | `gpt-6-luna` | 1–64 characters from `A-Za-z0-9._:-` |
+| `effort` | `high` | `minimal`, `low`, `medium`, `high`, `xhigh` |
+| `summaryModel` | `gpt-6-luna` | same as `model` |
+| `summaryEffort` | `low` | same as `effort` |
+| `idleSeconds` | `45` | integer, 10 to 600 |
+
+Optional fields may be omitted or `null`. An unknown field inside `manager` is an error, not an
+ignored entry — a misspelled `summarModel` must not fall back to the default silently.
+
+```sh
+mast config set manager.enabled true      # requires the codex CLI on PATH
+mast config set manager.enabled false
+mast config set manager.model gpt-6-luna
+mast config set manager.effort high
+mast config set manager.summaryModel gpt-6-luna
+mast config set manager.summaryEffort low
+mast config set manager.idleSeconds 45
+mast config reset manager.model           # one field back to its default
+mast config reset manager                 # remove the object, turning the preview off
+```
+
+`set manager.enabled true` runs `codex --version` first with a ten-second limit. If the codex
+CLI is missing, exits non-zero or times out, the command prints
+`codex CLI not found; install Codex CLI before enabling the manager preview` on stderr, exits 1
+and **leaves the file untouched**. `set manager.enabled false` is not checked. Setting any other
+field while `manager` is absent stores `{"enabled": false, "<field>": <value>}` and prints
+`manager is disabled; run mast config set manager.enabled true`. Resetting `manager.enabled`
+alone is refused — use `mast config reset manager`. `mast config get manager` and
+`mast config get manager.<field>` show the saved value next to the built-in default.
+
+Read once at boot like the other keys: a change needs a full restart.
+
 ## `macOptionIsMeta` (macOS only)
 
 Makes the Option key act as Meta in the terminal: Option+B sends `ESC b`, Option+F `ESC f`,

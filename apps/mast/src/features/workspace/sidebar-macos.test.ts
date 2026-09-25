@@ -19,6 +19,7 @@ function workspace(): Workspace {
     distro: null,
     gitBranch: null,
     gitDirty: null,
+    manager: false,
     layout: { type: "leaf", pane: 1 },
     panes: { "1": { id: 1, tabs: [], activeTab: null } },
     activePane: 1,

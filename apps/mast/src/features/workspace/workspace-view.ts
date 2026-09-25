@@ -590,6 +590,16 @@ export class WorkspaceView {
           const { ChangesView } = await import("../changes/changes-view");
           return (host, kind) => new ChangesView(host, target.tab, distro, kind);
         }
+        case "managerBoard": {
+          // 보드 뷰 — 라이브 상태 정렬·배지에 스냅샷이 필요하므로 이 뷰의
+          // getter 를 넘긴다 (매 revision IPC 재호출 금지). update 마다 재렌더.
+          const { BoardView } = await import("../manager/board-view");
+          return (host) =>
+            new BoardView(host, {
+              dispatch: this.dispatch,
+              snapshot: () => this.lastSnapshot,
+            });
+        }
       }
     });
     this.viewerViews.set(target.tab, created);

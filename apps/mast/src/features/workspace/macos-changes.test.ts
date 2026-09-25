@@ -66,6 +66,7 @@ function workspace(id: number, tab: Tab | null): Workspace {
     distro: null,
     gitBranch: null,
     gitDirty: null,
+    manager: false,
     layout: { type: "leaf", pane: id },
     panes: { [String(id)]: pane },
     activePane: id,

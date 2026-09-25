@@ -10,7 +10,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{AppState, PaneId, SplitDirection, SplitId, TabId, WorkspaceId};
+use crate::manager::{EventWorkspace, ManagerEvents};
+use crate::model::{AppState, PaneId, SplitDirection, SplitId, TabId, Workspace, WorkspaceId};
 use crate::session::SessionId;
 
 mod audit;
@@ -118,6 +119,19 @@ pub enum Command {
         tab: TabId,
         scroll_top: f64,
     },
+    /// 관리자 워크스페이스(preview)를 목록 끝에 만든다 — pane 1개에 터미널 탭과
+    /// 보드 탭을 원자적으로 두고 보드를 active_tab 으로 세운다. 스폰 실패 시
+    /// 상태·next_id 불변. 이미 있으면 [`CommandError::ManagerExists`], 경로 형태가
+    /// 불량하면 [`CommandError::InvalidPath`] (CreateWorkspace 의 /mnt 규칙 포함).
+    CreateManagerWorkspace {
+        /// 워크스페이스 루트이자 터미널 탭의 기본 cwd. 리눅스 절대 경로여야 한다.
+        root_path: String,
+        /// 연결할 WSL 배포판 — macOS 에서는 CreateWorkspace 처럼 None 으로 강제한다.
+        distro: Option<String>,
+    },
+    /// 관리자 워크스페이스를 해체한다 — 세션 kill·탭 자원 해제·active fallback 이
+    /// CloseWorkspace 와 같다. 없으면 [`CommandError::UnknownTarget`].
+    RemoveManagerWorkspace,
 }
 
 /// 탭 생성 명세 — CreateTab·SplitPane·CreateWorkspace 가 공유한다. 21단계 뷰어
@@ -222,6 +236,12 @@ pub enum CommandError {
     /// 이름 값이 불량하다 — RenameWorkspace 의 빈/공백뿐인 이름. 경로가 아니므로
     /// InvalidPath 를 재사용하지 않는다 (사유 문자열을 그대로 싣는 형태는 동일).
     InvalidName { message: String },
+    /// 관리자 워크스페이스가 이미 있다 — 하나뿐이라 두 번째 CreateManagerWorkspace
+    /// 는 상태·revision 불변으로 실패한다.
+    ManagerExists,
+    /// 관리자 워크스페이스와 그 보드 탭은 고정이다 — CloseWorkspace·MoveWorkspace·
+    /// 보드 탭의 CloseTab·그 pane 의 ClosePane 이 상태·revision 불변으로 거부된다.
+    ManagerPinned,
 }
 
 impl fmt::Display for CommandError {
@@ -253,6 +273,12 @@ impl fmt::Display for CommandError {
             }
             CommandError::InvalidName { message } => {
                 write!(f, "invalid name: {message}")
+            }
+            CommandError::ManagerExists => {
+                write!(f, "a manager workspace already exists")
+            }
+            CommandError::ManagerPinned => {
+                write!(f, "the manager workspace and its board are pinned")
             }
         }
     }
@@ -364,6 +390,8 @@ pub struct Dispatcher {
     /// 메시지끼리는 순번이 같아 작은 TabId 동률 규칙이 가르게 한다. 복원된 탭의 순번은
     /// 비어 있으므로 부팅마다 0 부터 다시 세도 순서가 어긋나지 않는다.
     osc_batch_seq: u64,
+    /// 관리자(preview) 이벤트 링 — `set_manager_events(true)` 동안에만 쌓인다.
+    manager_events: ManagerEvents,
 }
 
 impl Dispatcher {
@@ -373,6 +401,7 @@ impl Dispatcher {
             host,
             started_sessions: HashSet::new(),
             osc_batch_seq: 0,
+            manager_events: ManagerEvents::new(),
         }
     }
 
@@ -392,12 +421,32 @@ impl Dispatcher {
             host,
             started_sessions: HashSet::new(),
             osc_batch_seq: 0,
+            manager_events: ManagerEvents::new(),
         }
     }
 
     /// 테스트·글루용 상태 접근자.
     pub fn state(&self) -> &AppState {
         &self.state
+    }
+
+    /// 관리자 이벤트 기록 스위치 (기본 false). 꺼져 있으면 기록 지점이 전부 no-op 이라
+    /// 유휴 비용이 없다 — 글루가 preview on 일 때만 켠다.
+    pub fn set_manager_events(&mut self, on: bool) {
+        self.manager_events.set_enabled(on);
+    }
+
+    /// 기록 대상 워크스페이스의 이벤트 시점 스냅샷. 꺼져 있거나 관리자
+    /// 워크스페이스면 None 이라 호출자가 스냅샷 생성 자체를 건너뛴다 (R9).
+    fn manager_snapshot(&self, ws: &Workspace) -> Option<EventWorkspace> {
+        (self.manager_events.is_enabled() && !ws.manager)
+            .then(|| EventWorkspace::from_workspace(ws))
+    }
+
+    /// 테스트 접근자 — 공개 조회 API `events_since` 가 이 링을 읽는다.
+    #[cfg(test)]
+    pub(crate) fn manager_events(&self) -> &ManagerEvents {
+        &self.manager_events
     }
 
     pub fn snapshot(&self) -> StateSnapshot<'_> {

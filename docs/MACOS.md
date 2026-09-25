@@ -392,6 +392,11 @@ treating these features as field-verified:
   change global firewall settings for this check.
 - Install agy, observe running/idle, check the below-1.1.10 warning path, test
   `no-agy-hooks`, and verify repair plus marker removal retries a refused merge.
+- Run the manager workspace preview checks (M1–M9): enabling needs the codex CLI; the pinned
+  workspace and its order, the board header and log, transcript collection from two workspaces,
+  core-only needsInput toasts, `mast manager start` with the digest fallback and `mast manager
+  patch` board refresh, a killed harness recovering, archive → Resume/Start fresh, plan cards,
+  and preview-off removal with `~/.mast/manager` kept.
 
 Do not record any of these manual checks as complete until they have actually
 been run.

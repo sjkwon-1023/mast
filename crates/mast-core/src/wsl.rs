@@ -873,6 +873,7 @@ mod tests {
             agent_status: AgentStatus::Idle,
             last_agent_message: None,
             last_agent_message_seq: None,
+            agent_session: None,
         }
     }
 
@@ -885,6 +886,7 @@ mod tests {
             distro: distro.map(str::to_owned),
             git_branch: None,
             git_dirty: None,
+            manager: false,
             layout: SplitTree::Leaf { pane: pane_id },
             panes: BTreeMap::from([(
                 pane_id,

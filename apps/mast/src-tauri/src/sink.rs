@@ -21,6 +21,9 @@ use std::sync::{Arc, Mutex};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager};
 use mast_core::command::{SessionEvent, TabInfo};
+use mast_core::manager::{
+    manager_reply_json, parse_manager_request, ManagerQueryError, ManagerRequest,
+};
 use mast_core::model::{AppState as CoreState, TabId, TabKind};
 use mast_core::osc::OscEvent;
 use mast_core::send::{decode_reply_path, decode_send_text};
@@ -410,6 +413,19 @@ fn deliver_send(app: &AppHandle, sender: SessionId, target: &str, text_b64: &str
 /// 떨어진다 (전방 호환 — 새 kind 를 아는 CLI 가 옛 mast 를 만나도 안전하다).
 const QUERY_KIND_LIST_TABS: &str = "list-tabs";
 
+/// 관리자 query 회신 파일의 unix 권한 — 소유자만 읽고 쓴다. 개요·이벤트
+/// 회신은 요청자 워크스페이스 밖의 메타데이터까지 실으므로 전역 읽기를 열어 두지 않는다.
+const MANAGER_REPLY_FILE_MODE: u32 = 0o600;
+
+/// 관리자 kind 의 payload(base64 JSON)를 요청으로 되돌린다. base64·4 KiB 초과·UTF-8·
+/// JSON·스키마 오류를 전부 [`ManagerQueryError::InvalidParams`] 로 접는다 — 어느
+/// 단계에서 걸렸든 요청자에게는 같은 invalid_params 회신이 간다.
+fn decode_manager_request(payload: &str) -> Result<ManagerRequest, ManagerQueryError> {
+    decode_send_text(payload)
+        .map_err(|_| ManagerQueryError::InvalidParams)
+        .and_then(|bytes| parse_manager_request(&bytes))
+}
+
 /// 질의 회신 JSON 의 최상위 형태 — `{"tabs": [...], "self_tab": <탭 id|null>}`.
 ///
 /// `tabs` 의 원소는 코어 [`TabInfo`] 의 직렬화형이다. `self_tab` 은 **요청자
@@ -490,11 +506,42 @@ fn deliver_query(app: &AppHandle, requester: SessionId, kind: &str, reply_b64: &
             };
             match serde_json::to_vec(&response) {
                 Ok(bytes) if bytes.len() <= 24 * 1024 * 1024 => {
-                    if let Err(err) = write_reply_file(distro, &reply_path, &bytes) { winlog!("browser reply failed: {err}"); }
+                    if let Err(err) = write_reply_file(distro, &reply_path, &bytes, None) { winlog!("browser reply failed: {err}"); }
                 }
                 _ => {
-                    let _ = write_reply_file(distro, &reply_path, br#"{"error":{"code":"too_large","message":"Browser response exceeds 24 MiB"}}"#);
+                    let _ = write_reply_file(distro, &reply_path, br#"{"error":{"code":"too_large","message":"Browser response exceeds 24 MiB"}}"#, None);
                 }
+            }
+            return;
+        }
+        if let Some(payload) = kind.strip_prefix("manager:") {
+            let Some(state) = app.try_state::<AppState>() else { return };
+            // 요청 디코드·파싱은 순수하고 Dispatcher 상태가 필요 없다 — 실패도 회신으로
+            // 답한다(무응답이 아니라). 권한 판정과 distro 역매핑은 한 lock 스냅샷으로
+            // 읽고, 직렬화·파일 I/O 는 lock 밖이다 (list-tabs 와 같은 잠금 규율).
+            let request = decode_manager_request(payload);
+            let (result, distro) = {
+                let dispatcher = state.dispatcher.lock().unwrap();
+                let result = match &request {
+                    Ok(request) => dispatcher.manager_query(requester, request),
+                    Err(error) => Err(*error),
+                };
+                let (_, distro) = requester_tab_and_distro(dispatcher.state(), requester);
+                (result, distro)
+            };
+            // 거부는 회신으로만이 아니라 앱 로그에도 한 줄 남긴다 — 요청 내용과 경로는
+            // 어느 쪽에도 싣지 않는다 (회신 경로 규율).
+            if let Err(ManagerQueryError::Forbidden) = result {
+                winlog!("manager query: forbidden from session {requester}");
+            }
+            let json = manager_reply_json(result);
+            if let Err(err) = write_reply_file(
+                distro,
+                &reply_path,
+                json.as_bytes(),
+                Some(MANAGER_REPLY_FILE_MODE),
+            ) {
+                winlog!("manager query: reply for session {requester} failed: {err}");
             }
             return;
         }
@@ -553,7 +600,7 @@ fn deliver_query(app: &AppHandle, requester: SessionId, kind: &str, reply_b64: &
                 return;
             }
         };
-        if let Err(err) = write_reply_file(distro, &reply_path, &json) {
+        if let Err(err) = write_reply_file(distro, &reply_path, &json, None) {
             winlog!("query: reply for session {requester} failed: {err}");
         }
     });
@@ -687,10 +734,20 @@ fn answer_color_query(app: &AppHandle, session: SessionId, code: u8) {
 /// 아직 다 쓰이지 않은 파일을 읽어 JSON 파싱이 깨진다 (특히 9P 를 사이에 둔
 /// 쓰기는 한 번에 끝나지 않는다). rename 은 같은 디렉터리 안이라 파일시스템
 /// 경계를 넘지 않는다.
-fn write_reply_file(distro: Option<String>, reply_path: &str, json: &[u8]) -> Result<(), String> {
+///
+/// `mode` 가 `Some` 이면 unix 에서 회신 파일을 그 권한으로 만든다 — 관리자 query 만
+/// [`MANAGER_REPLY_FILE_MODE`] 를 넘기고, `None`(list-tabs·browser)은 종전대로 시스템
+/// 기본값을 쓴다. windows 호스트는 WSL 9P 경로에 쓰므로 권한 설정이 의미 없어 값을
+/// 무시한다.
+fn write_reply_file(
+    distro: Option<String>,
+    reply_path: &str,
+    json: &[u8],
+    mode: Option<u32>,
+) -> Result<(), String> {
     let partial = crate::commands::host_path(distro.clone(), &format!("{reply_path}.partial"))?;
     let final_path = crate::commands::host_path(distro, reply_path)?;
-    std::fs::write(&partial, json)
+    write_reply_partial(&partial, json, mode)
         .map_err(|err| format!("cannot write {}: {err}", partial.display()))?;
     std::fs::rename(&partial, &final_path).map_err(|err| {
         // 개명이 실패하면 우리가 만든 임시 파일만 남는다 — 치우고 나간다.
@@ -701,4 +758,127 @@ fn write_reply_file(distro: Option<String>, reply_path: &str, json: &[u8]) -> Re
             final_path.display()
         )
     })
+}
+
+/// [`write_reply_file`] 의 `.partial` 쓰기. `mode()` 는 **생성 시에만** 적용되므로,
+/// 이전 회차가 다른 권한으로 남긴 `.partial` 이 있어도 `set_permissions` 로 계약 값을
+/// 되찾는다. `mode: None` 은 `std::fs::write` 그대로다 (기존 두 회신의 동작 보존).
+fn write_reply_partial(
+    path: &std::path::Path,
+    json: &[u8],
+    mode: Option<u32>,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(mode)
+            .open(path)?;
+        file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+        return file.write_all(json);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    std::fs::write(path, json)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+
+    /// 테스트별 새 임시 디렉터리 — 실제 쓰기·rename 을 확인하므로 빈 곳이 필요하다.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mast-sink-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn manager_payload_decodes_to_the_two_ops() {
+        // `printf '%s' '<json>' | base64 -w0` 형태.
+        assert_eq!(
+            decode_manager_request("eyJvcCI6IndvcmtzcGFjZXMifQ==").unwrap(),
+            ManagerRequest::Workspaces
+        );
+        assert_eq!(
+            decode_manager_request("eyJvcCI6ImV2ZW50cyIsInNpbmNlIjozfQ==").unwrap(),
+            ManagerRequest::Events { since: 3 }
+        );
+    }
+
+    #[test]
+    fn manager_payload_failures_map_to_the_invalid_params_reply_bytes() {
+        for payload in [
+            "not base64!",          // base64 알파벳 밖
+            "bm90IGpzb24=",         // "not json"
+            "eyJvcCI6Im5vcGUifQ==", // {"op":"nope"}
+        ] {
+            let error = decode_manager_request(payload).unwrap_err();
+            assert_eq!(error, ManagerQueryError::InvalidParams, "{payload}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&manager_reply_json(Err(error))).unwrap(),
+                serde_json::json!({
+                    "error": {
+                        "code": "invalid_params",
+                        "message": "the manager request is not valid JSON within 4 KiB"
+                    }
+                })
+            );
+        }
+        // 디코드 결과가 4 KiB 를 넘어도 같은 invalid_params 로 접힌다.
+        let over = "A".repeat(mast_core::manager::MAX_MANAGER_REQUEST_BYTES / 3 * 4 + 4);
+        assert_eq!(
+            decode_manager_request(&over),
+            Err(ManagerQueryError::InvalidParams)
+        );
+    }
+
+    #[test]
+    fn manager_reply_file_is_0600_even_over_a_stale_partial() {
+        let dir = scratch("manager-reply");
+        let path = dir.join("reply.json");
+        let partial = dir.join("reply.json.partial");
+        // 이전 회차가 남긴 .partial 의 권한이 달라도 계약(0600)을 되찾는다.
+        std::fs::write(&partial, b"stale").unwrap();
+        std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_reply_file(
+            None,
+            path.to_str().unwrap(),
+            br#"{"result":{}}"#,
+            Some(MANAGER_REPLY_FILE_MODE),
+        )
+        .unwrap();
+
+        assert_eq!(mode_of(&path), 0o600);
+        assert_eq!(std::fs::read(&path).unwrap(), br#"{"result":{}}"#);
+        assert!(!partial.exists(), "partial 은 최종 이름으로 rename 된다");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_tabs_and_browser_replies_keep_the_stale_partial_mode() {
+        let dir = scratch("default-reply");
+        let path = dir.join("reply.json");
+        let partial = dir.join("reply.json.partial");
+        std::fs::write(&partial, b"stale").unwrap();
+        std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_reply_file(None, path.to_str().unwrap(), br#"{}"#, None).unwrap();
+
+        assert_eq!(mode_of(&path), 0o644, "기본 경로는 권한을 강제하지 않는다");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
