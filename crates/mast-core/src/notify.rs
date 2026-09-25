@@ -25,7 +25,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::model::AgentStatus;
+use crate::model::{AgentSession, AgentStatus};
 use crate::osc::OscEvent;
 use crate::session::SessionId;
 
@@ -49,6 +49,10 @@ pub struct OscDelta {
     /// 시작 표식이 도착했다 — sticky. 마감을 넘겨 "시작되지 않음"이 붙은 탭을 정상으로
     /// 되돌리는 신호이며, 늦게 온 표식도 같은 경로로 흘러 경고를 거둔다.
     pub(crate) started: bool,
+    /// `mast-agent` 가 알린 에이전트 세션 메타 — last-wins. 상태 델타라 배치에
+    /// 담기지만 unread·message·status 는 건드리지 않는다 (메타 도착은 사용자에게
+    /// 새 소식이 아니고, 이 값은 스냅샷에도 나가지 않는다).
+    pub(crate) agent_session: Option<AgentSession>,
 }
 
 /// flush 창 동안의 세션별 변경분 모음. 세션 id 순회 순서를 고정하려고 `BTreeMap` 을 쓴다
@@ -103,6 +107,11 @@ impl OscBatch {
             // 표식은 액션이 아니라 상태 델타다 — 늦게 와도 경고를 거둬야 하므로
             // 코얼레싱 창에 담긴다. 세션당 한 번뿐이라 sticky 로 충분하다.
             OscEvent::Osc777Started => self.slot(session).started = true,
+            // 세션 메타도 상태 델타다 — 같은 창에 여러 번 와도 마지막 것이 이긴다.
+            // 검증은 파서(osc.rs)가 끝냈으므로 여기 오는 값은 항상 유효하다.
+            OscEvent::Osc777Agent(agent) => {
+                self.slot(session).agent_session = Some(agent.clone());
+            }
             // 색상 질의도 상태가 아니라 **액션**이다 — 글루가 그 세션의 stdin 에
             // 즉시 응답을 쓴다 (sink.rs). 여기 슬롯은 만들지 않는다: 질의는 TUI
             // 앱이 그릴 때마다 반복해서 오므로 배치에 담으면 flush 가 헛돈다.
@@ -374,6 +383,31 @@ mod tests {
             },
         );
         assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn agent_session_is_last_wins_and_stays_status_neutral() {
+        let first = AgentSession {
+            agent: crate::model::AgentKind::Claude,
+            session_id: "first".into(),
+            transcript_path: "/home/u/.claude/first.jsonl".into(),
+        };
+        let second = AgentSession {
+            agent: crate::model::AgentKind::Codex,
+            session_id: "second".into(),
+            transcript_path: "/home/u/.codex/second.jsonl".into(),
+        };
+        let delta = merged(&[
+            OscEvent::Osc777Agent(first),
+            OscEvent::Osc0Title("t".into()),
+            OscEvent::Osc777Agent(second.clone()),
+        ]);
+        // 같은 창에 두 번 와도 마지막 것이 이기고, 슬롯은 만들되 상태는 건드리지 않는다.
+        assert_eq!(delta.agent_session, Some(second));
+        assert_eq!(delta.status, None);
+        assert_eq!(delta.message, None);
+        assert!(!delta.unread);
+        assert!(!delta.started);
     }
 
     #[test]

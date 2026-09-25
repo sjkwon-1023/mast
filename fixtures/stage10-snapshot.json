@@ -9,6 +9,7 @@
         "distro": "Ubuntu-24.04",
         "gitBranch": null,
         "gitDirty": null,
+        "manager": false,
         "layout": {
           "type": "split",
           "id": 12,
@@ -120,6 +121,7 @@
         "distro": null,
         "gitBranch": "main",
         "gitDirty": true,
+        "manager": false,
         "layout": { "type": "leaf", "pane": 11 },
         "panes": {
           "11": {

@@ -73,6 +73,9 @@ const WARMUP_DEADLINE: Duration = Duration::from_secs(30);
 pub struct BootWork {
     /// Fresh 부팅이라 초기 워크스페이스+터미널 탭을 아직 만들지 않았을 수 있다.
     needs_initial: bool,
+    /// 관리자 preview 가 켜져 있다 — 웨이브가 관리자 워크스페이스 하나를 보장한다.
+    /// 꺼져 있을 때의 제거는 `main.rs` 배선이 manage 직후에 맡는다.
+    manager: bool,
     /// 초기 생성 결정이 끝났다 (성공했거나 이미 워크스페이스가 있었다). 실패하면
     /// 되돌려 다음 재검사가 다시 시도하게 한다.
     initial_decided: AtomicBool,
@@ -81,9 +84,10 @@ pub struct BootWork {
 }
 
 impl BootWork {
-    pub fn new(needs_initial: bool) -> Self {
+    pub fn new(needs_initial: bool, manager: bool) -> Self {
         Self {
             needs_initial,
+            manager,
             initial_decided: AtomicBool::new(false),
             wave_running: AtomicBool::new(false),
         }
@@ -154,6 +158,13 @@ impl BootWork {
             return;
         }
         self.create_initial(handle, dispatcher);
+        // 관리자 워크스페이스 보장 — 초기 생성 뒤·재스폰 앞. 이미 있으면 no-op.
+        // 감독 시작은 그 뒤에 한 번만 — 워크스페이스가 상태에 있을 때만
+        // 실제로 뜨고, 재검사 재진입은 `ManagerShared` 의 CAS 가 막는다.
+        if self.manager {
+            crate::manager::ensure_workspace(handle, dispatcher);
+            crate::manager::start_supervisor(handle, dispatcher);
+        }
         self.respawn(handle, dispatcher, records, status);
         self.provision(handle, dispatcher, wsl);
     }

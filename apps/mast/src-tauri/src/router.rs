@@ -191,7 +191,12 @@ fn apply_batch(inner: &RouterInner, batch: OscBatch) {
         return;
     };
     let mut dispatcher = managed.dispatcher.lock().unwrap();
+    let next_seq = dispatcher.manager_next_seq();
     if dispatcher.apply_osc(batch, now_ms()) {
         publish_state(&inner.app, &dispatcher);
+    } else if dispatcher.manager_next_seq() != next_seq {
+        // 세션 메타만 바뀐 OSC — 상태 발행은 없지만 관리자 링에는 새 이벤트가
+        // 기록됐다. 하네스 writer 를 깨워 다음 발행을 기다리지 않게 한다.
+        crate::manager::wake(&inner.app);
     }
 }

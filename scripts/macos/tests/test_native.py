@@ -87,6 +87,13 @@ class NativeCli(unittest.TestCase):
             sys.executable,
             [sys.executable, str(cli.BIN / "mast-browser.py"), "snapshot", "#42"])
 
+    def test_manager_hands_its_arguments_to_the_manager_cli(self):
+        with patch.object(cli.os, "execv") as execv:
+            cli.main(["manager", "--help"])
+        execv.assert_called_once_with(
+            sys.executable,
+            [sys.executable, str(cli.BIN / "mast-manager.py"), "--help"])
+
 
 class NativeInstaller(unittest.TestCase):
     def setUp(self):

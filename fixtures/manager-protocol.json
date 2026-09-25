@@ -1,0 +1,289 @@
+{
+  "overview": {
+    "nextSeq": 43,
+    "workspaces": [
+      {
+        "id": 1,
+        "name": "feature-x",
+        "rootPath": "/home/u/p/x",
+        "distro": null,
+        "manager": false,
+        "agentStatus": "running",
+        "tabs": [
+          {
+            "tab": 4,
+            "title": "claude",
+            "kind": "terminal",
+            "status": "running",
+            "agentStatus": "running",
+            "lastAgentMessage": "running the test suite",
+            "agentSession": {
+              "agent": "claude",
+              "sessionId": "abc",
+              "transcriptPath": "/home/u/.claude/projects/x/abc.jsonl"
+            }
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "name": "manager",
+        "rootPath": "/home/u/.mast/manager",
+        "distro": "Ubuntu",
+        "manager": true,
+        "agentStatus": "idle",
+        "tabs": [
+          {
+            "tab": 1,
+            "title": "manager",
+            "kind": "terminal",
+            "status": "running",
+            "agentStatus": "idle",
+            "lastAgentMessage": null,
+            "agentSession": null
+          },
+          {
+            "tab": 2,
+            "title": "Board",
+            "kind": "managerBoard",
+            "status": "viewer",
+            "agentStatus": "idle",
+            "lastAgentMessage": null,
+            "agentSession": null
+          }
+        ]
+      }
+    ]
+  },
+  "eventsSince": {
+    "events": [
+      {
+        "seq": 41,
+        "kind": "session",
+        "workspace": {
+          "id": 1,
+          "name": "feature-x",
+          "rootPath": "/home/u/p/x",
+          "distro": null
+        },
+        "tab": 4,
+        "status": null,
+        "message": null,
+        "agentSession": {
+          "agent": "claude",
+          "sessionId": "abc",
+          "transcriptPath": "/home/u/.claude/projects/x/abc.jsonl"
+        }
+      },
+      {
+        "seq": 42,
+        "kind": "status",
+        "workspace": {
+          "id": 1,
+          "name": "feature-x",
+          "rootPath": "/home/u/p/x",
+          "distro": null
+        },
+        "tab": 4,
+        "status": "running",
+        "message": "running the test suite",
+        "agentSession": null
+      }
+    ],
+    "nextSeq": 43,
+    "gap": false
+  },
+  "requests": [
+    { "op": "workspaces" },
+    { "op": "events", "since": 3 }
+  ],
+  "errors": [
+    {
+      "error": {
+        "code": "forbidden",
+        "message": "the requesting tab is not in a manager workspace"
+      }
+    },
+    {
+      "error": {
+        "code": "invalid_params",
+        "message": "the manager request is not valid JSON within 4 KiB"
+      }
+    },
+    {
+      "error": {
+        "code": "too_large",
+        "message": "the manager reply exceeds 4 MiB"
+      }
+    }
+  ],
+  "appToHarness": [
+    {
+      "type": "hello",
+      "protocol": 1,
+      "managerWorkspace": 7,
+      "managerDir": "/home/u/.mast/manager",
+      "managerDistro": "Ubuntu",
+      "defaultDistro": "Ubuntu",
+      "settings": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "summaryModel": "gpt-6-luna",
+        "summaryEffort": "low",
+        "idleSeconds": 45
+      }
+    },
+    {
+      "type": "snapshot",
+      "overview": {
+        "nextSeq": 43,
+        "workspaces": [
+          {
+            "id": 1,
+            "name": "feature-x",
+            "rootPath": "/home/u/p/x",
+            "distro": null,
+            "manager": false,
+            "agentStatus": "running",
+            "tabs": [
+              {
+                "tab": 4,
+                "title": "claude",
+                "kind": "terminal",
+                "status": "running",
+                "agentStatus": "running",
+                "lastAgentMessage": "running the test suite",
+                "agentSession": {
+                  "agent": "claude",
+                  "sessionId": "abc",
+                  "transcriptPath": "/home/u/.claude/projects/x/abc.jsonl"
+                }
+              }
+            ]
+          },
+          {
+            "id": 7,
+            "name": "manager",
+            "rootPath": "/home/u/.mast/manager",
+            "distro": "Ubuntu",
+            "manager": true,
+            "agentStatus": "idle",
+            "tabs": [
+              {
+                "tab": 1,
+                "title": "manager",
+                "kind": "terminal",
+                "status": "running",
+                "agentStatus": "idle",
+                "lastAgentMessage": null,
+                "agentSession": null
+              },
+              {
+                "tab": 2,
+                "title": "Board",
+                "kind": "managerBoard",
+                "status": "viewer",
+                "agentStatus": "idle",
+                "lastAgentMessage": null,
+                "agentSession": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "events",
+      "events": [
+        {
+          "seq": 41,
+          "kind": "session",
+          "workspace": {
+            "id": 1,
+            "name": "feature-x",
+            "rootPath": "/home/u/p/x",
+            "distro": null
+          },
+          "tab": 4,
+          "status": null,
+          "message": null,
+          "agentSession": {
+            "agent": "claude",
+            "sessionId": "abc",
+            "transcriptPath": "/home/u/.claude/projects/x/abc.jsonl"
+          }
+        },
+        {
+          "seq": 42,
+          "kind": "status",
+          "workspace": {
+            "id": 1,
+            "name": "feature-x",
+            "rootPath": "/home/u/p/x",
+            "distro": null
+          },
+          "tab": 4,
+          "status": "running",
+          "message": "running the test suite",
+          "agentSession": null
+        }
+      ],
+      "nextSeq": 43
+    },
+    {
+      "type": "action",
+      "action": "resume",
+      "key": "k3f9c1a2b4d5e6f70819b"
+    }
+  ],
+  "harnessToApp": [
+    {
+      "type": "status",
+      "state": "ok",
+      "message": "watching 2 workspaces",
+      "lastCollectedAt": "2026-09-25T04:20:00Z",
+      "logPath": "/home/u/.mast/manager/logs/harness.log",
+      "codexVersion": "codex-cli 0.9.1"
+    },
+    {
+      "type": "board",
+      "generatedAt": "2026-09-25T04:20:00Z",
+      "entries": [
+        {
+          "workspaceId": 4,
+          "key": null,
+          "state": "none",
+          "reason": "no_root",
+          "task": null,
+          "error": null,
+          "archive": null
+        },
+        {
+          "workspaceId": 3,
+          "key": null,
+          "state": "unsupported",
+          "reason": "other_distro",
+          "task": null,
+          "error": null,
+          "archive": null
+        },
+        {
+          "workspaceId": 5,
+          "key": "k1a2b3c4d5e6f7081920a",
+          "state": "choice",
+          "reason": null,
+          "task": null,
+          "error": null,
+          "archive": null
+        }
+      ]
+    },
+    {
+      "type": "notify",
+      "workspaceId": 3,
+      "reason": "question",
+      "title": "manager needs a choice",
+      "body": "Resume the stored task or start fresh for workspace feature-x."
+    }
+  ]
+}

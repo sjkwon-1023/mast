@@ -77,8 +77,10 @@ export function runNavAction(context: NavigationContext, action: KeyAction): voi
   const snapshot = context.getSnapshot();
   if (snapshot === null) return;
   if (action.type === "switchWorkspace") {
+    // Ctrl+1~9 순번은 관리자 워크스페이스를 뺀 사이드바 순서다 — 고정 카드는
+    // 별도 슬롯이고 순번 배지도 받지 않는다 (features/workspace/sidebar.ts).
     const target = workspaceAtOrdinal(
-      snapshot.state.workspaces.map((w) => w.id),
+      snapshot.state.workspaces.filter((w) => !w.manager).map((w) => w.id),
       action.ordinal,
     );
     if (target === null || target === snapshot.state.activeWorkspace) return;
@@ -86,8 +88,13 @@ export function runNavAction(context: NavigationContext, action: KeyAction): voi
     return;
   }
   if (action.type === "cycleWorkspace") {
+    // cycle 은 관리자를 포함한다. 순서는 사이드바에 보이는 순서 — 일반
+    // 카드들 다음에 관리자다 (벡터 안 위치와 무관).
     const target = nextWorkspace(
-      snapshot.state.workspaces.map((w) => w.id),
+      [
+        ...snapshot.state.workspaces.filter((w) => !w.manager),
+        ...snapshot.state.workspaces.filter((w) => w.manager),
+      ].map((w) => w.id),
       snapshot.state.activeWorkspace,
       action.delta,
     );

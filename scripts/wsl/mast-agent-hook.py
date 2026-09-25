@@ -18,6 +18,7 @@ deny/block 으로 해석한다. `codex-notify` 만은 판정을 끝내지 못하
 spawn 이다, codex-rs/hooks/src/legacy_notify.rs:61-69).
 """
 
+import base64
 import contextlib
 import fcntl
 import hashlib
@@ -41,6 +42,10 @@ BODY_CHARS = 500
 SUMMARY_CHARS = 160
 ID_CHARS = 96
 TTY_HOPS = 8
+# `mast-agent` 메타 상한 — 코어 `osc::parse_agent_session` 과 같은 값이어야 한다.
+MAX_AGENT_PAYLOAD_BYTES = 8 * 1024
+MAX_AGENT_SESSION_CHARS = 128
+MAX_AGENT_TRANSCRIPT_BYTES = 4096
 
 # 훅 timeout 안에 반드시 끝나야 한다. Codex 는 timeout 에 process group 을 SIGKILL 하므로
 # (codex-rs/hooks/src/engine/command_runner.rs:333-347) OSC 쓰기 도중 잘릴 수 있다. 반대로 lock 을
@@ -96,6 +101,9 @@ CODEX_EVENTS = (
     "Stop",
     "Interrupt",
 )
+# 세션 메타를 싣는 이벤트. Claude 는 root scope 만, Codex 는 기존 상태 게이트를 통과한 뒤.
+CLAUDE_META_EVENTS = ("SessionStart", "UserPromptSubmit", "Stop")
+CODEX_META_EVENTS = ("UserPromptSubmit", "Stop")
 # 권한 UI 가 PostToolUse 전에 입력을 바꾸는 도구다(2.1.270 번들: 승인 뒤 `Ce=rMn(name,
 # updatedInput,Ce)`/`Ce=DK(name,Ce)` 가 PostToolUse tool_input 이 된다 — AskUserQuestion 은 answers
 # 가 붙고, ExitPlanMode 는 plan/planFilePath 가 빠지고, IDE 에서 고친 Edit 는 내용이 달라진다).
@@ -125,6 +133,7 @@ PATCH_HEREDOC_OPENERS = ("<<EOF", "<<'EOF'", '<<"EOF"')
 CONTROL_RE = re.compile("[\x00-\x1f\x7f-\x9f]")
 WHITESPACE_RE = re.compile(r"[ \t\n\r]*")
 TAB_RE = re.compile(r"[0-9]{1,12}")
+AGENT_SESSION_RE = re.compile(r"[A-Za-z0-9._:-]{1,%d}" % MAX_AGENT_SESSION_CHARS)
 TOOL_USE_ID_RE = re.compile(rb'"tool_use_id"\s*:\s*"((?:[^"\\]|\\.){0,512})"')
 AUTO_REVIEW_RE = re.compile(
     r"""^[ \t]*approvals_reviewer[ \t]*=[ \t]*["'](?:auto_review|guardian_subagent)["']"""
@@ -388,6 +397,68 @@ def write_osc(token, body):
         return status == "ok"
     finally:
         os.close(fd)
+
+
+def agent_meta_payload(agent, session_id, transcript_path):
+    """코어 `parse_agent_session` 과 같은 규칙으로 검증해 UTF-8 JSON bytes 를 만든다.
+
+    거부하면 None 이다 — 호출자는 아무것도 쓰지 않는다. 규칙: agent ∈ {claude, codex},
+    session 1~128자 `[A-Za-z0-9._:-]`, transcript 는 `/` 로 시작하는 ≤ 4096 bytes
+    문자열(검증 전에 UTF-8 로 인코딩해 byte 수를 센다), JSON ≤ 8 KiB.
+    """
+    if agent not in ("claude", "codex"):
+        return None
+    if not isinstance(session_id, str) or not AGENT_SESSION_RE.fullmatch(session_id):
+        return None
+    if not isinstance(transcript_path, str) or not transcript_path.startswith("/"):
+        return None
+    try:
+        transcript_bytes = transcript_path.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    if len(transcript_bytes) > MAX_AGENT_TRANSCRIPT_BYTES:
+        return None
+    data = json.dumps(
+        {"v": 1, "agent": agent, "session": session_id, "transcript": transcript_path},
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    if len(data) > MAX_AGENT_PAYLOAD_BYTES:
+        return None
+    return data
+
+
+def write_agent_osc(payload):
+    # write_osc 와 같은 규율이다: O_NONBLOCK 없이 deadline 까지 쓰고, deadline 에 끊긴
+    # 부분 쓰기는 BEL 로 닫아 뒤따르는 에이전트 출력이 OSC payload 로 삼켜지지 않게 한다.
+    # 다만 EMISSION_ATTEMPTED 는 세우지 않는다 — 상태 토큰 방출이 아니라, notify 실패
+    # 복구(codex-notify 의 exit 1 fallback)의 대상이 아니다.
+    data = b"\x1b]777;mast-agent;" + base64.b64encode(payload) + b"\x07"
+    fd = open_terminal()
+    if fd is None:
+        return False
+    try:
+        status = write_bytes(fd, data, WRITE_SECONDS)
+        if status == "timeout":
+            write_bytes(fd, b"\x07", BEL_SECONDS)
+        return status == "ok"
+    finally:
+        os.close(fd)
+
+
+def write_agent_meta(tab, agent, session_id, transcript_path):
+    """payload 원본 값으로 `mast-agent` 메타를 한 번 쓴다.
+
+    코어 검증을 못 넘으면 쓰지 않고, 쓰기가 실패하면 diag 한 줄만 남긴다.
+    """
+    payload = agent_meta_payload(agent, session_id, transcript_path)
+    if payload is None:
+        tab.diag("agent session metadata rejected")
+        return False
+    if not write_agent_osc(payload):
+        tab.diag("could not write agent session metadata to the terminal")
+        return False
+    return True
 
 
 def emit(tab, state, token, body="", dedup=False):
@@ -785,6 +856,11 @@ CLAUDE_HANDLERS = {
 def claude_hook(tab, event):
     if event.name not in CLAUDE_EVENTS:
         return
+    # 세션 메타는 상태 토큰과 별개 채널이라 pairing-off marker 검사보다 앞에서 쓴다.
+    if event.name in CLAUDE_META_EVENTS and event.scope == ROOT:
+        write_agent_meta(
+            tab, "claude", event.payload.get("session_id"), event.payload.get("transcript_path")
+        )
     if event.session is None:
         tab.diag("hook input has no session_id")
         return
@@ -1194,6 +1270,9 @@ def codex_hook(tab, event):
     if event.name == "PermissionRequest":
         codex_permission(tab, event)
         return
+    # 위 게이트를 모두 통과한 이벤트만 handler 전에 세션 메타를 한 번 싣는다.
+    if event.name in CODEX_META_EVENTS:
+        write_agent_meta(tab, "codex", session, transcript)
     handler = CODEX_HANDLERS[event.name]
     seconds = INTERRUPT_LOCK_SECONDS if event.name == "Interrupt" else SYNC_LOCK_SECONDS
     tab.transact(seconds, lambda state: handler(tab, state, event))

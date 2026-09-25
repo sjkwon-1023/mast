@@ -10,6 +10,7 @@ state; the frontend receives revisioned snapshots and renders disposable views.
 | `features/terminal/` | Live xterm view, shared terminal settings, attach framing, acknowledgements, scroll restoration, the macOS WebKit Hangul input adapter (`webkit-ime*.ts`) and the macOS Finder file drop (`file-drop.ts`). |
 | `features/viewers/` | Common viewer lifetime/font/scroll contracts; `text/`, `markdown/`, `folder/` and `record/` own their respective views. |
 | `features/changes/` | Git change selection and diff presentation. |
+| `features/manager/` | Manager work board: pure card/parse/sort model (`board-model.ts`) and the board tab view (`board-view.ts`). |
 | `features/pairing/` | Desktop phone-pairing dialog and firewall feedback. |
 | `features/wsl/` | WSL readiness notice: pure state→copy model, banner DOM and the clipboard helper. |
 | `features/notifications/` | Needs-input notification decisions and the existing dormant chime implementation. |

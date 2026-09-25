@@ -103,7 +103,7 @@ fn outputs_fixture_matches_serialization() {
             session: None,
         },
     ];
-    // 전 CommandError variant 1개씩 (8종).
+    // 전 CommandError variant 1개씩 (10종).
     let errors = vec![
         CommandError::UnknownTarget {
             target: "pane 99".to_string(),
@@ -121,6 +121,8 @@ fn outputs_fixture_matches_serialization() {
         CommandError::InvalidName {
             message: "workspace name must not be empty or whitespace only".to_string(),
         },
+        CommandError::ManagerExists,
+        CommandError::ManagerPinned,
     ];
 
     let expected = serde_json::json!({ "outputs": outputs, "errors": errors });
@@ -133,12 +135,12 @@ fn commands_fixture_round_trips() {
     let original: serde_json::Value = serde_json::from_str(&text).unwrap();
     let parsed: Vec<Command> = serde_json::from_str(&text).unwrap();
 
-    // 전 Command variant 1개씩(14종) + 뷰어 NewTab 3종을 실은 createTab 3개
+    // 전 Command variant 1개씩(16종) + 뷰어 NewTab 3종을 실은 createTab 3개
     // (21단계) + createWorkspace 의 tab 필드 누락 하위호환 형태 1개 +
     // moveWorkspace 의 before 두 형태 중 나머지 하나(null = 맨 뒤) —
     // variant 추가 시 fixture 도 갱신할 것 (새 variant 는 뒤에 덧붙인다:
     // 앞에 끼우면 아래 인덱스 단언이 전부 밀린다).
-    assert_eq!(parsed.len(), 19);
+    assert_eq!(parsed.len(), 21);
 
     // 뷰어 NewTab 잠금 (21단계): folderBrowser 의 path 는 nullable(= 워크스페이스
     // root_path 상속), textViewer·markdownViewer 는 필수다.
@@ -195,6 +197,22 @@ fn commands_fixture_round_trips() {
         ),
         "renameWorkspace 엔트리: {:?}",
         parsed[16]
+    );
+
+    // 관리자 워크스페이스 명령 2종 (preview) — 뒤에 덧붙인 순서 그대로.
+    assert!(
+        matches!(
+            &parsed[19],
+            Command::CreateManagerWorkspace { root_path, distro }
+                if root_path == "/home/dev/.mast/manager" && distro.is_none()
+        ),
+        "createManagerWorkspace 엔트리: {:?}",
+        parsed[19]
+    );
+    assert!(
+        matches!(&parsed[20], Command::RemoveManagerWorkspace),
+        "removeManagerWorkspace 엔트리: {:?}",
+        parsed[20]
     );
 
     // 재직렬화는 None 을 "tab": null 로 명시하므로, 원본의 compat 엔트리에

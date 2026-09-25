@@ -1,0 +1,513 @@
+{
+  "valid": [
+    {
+      "meta": {
+        "schema_version": 1,
+        "workspace_key": {
+          "root_path": "/home/u/projects/mast",
+          "distro": "Ubuntu-24.04"
+        },
+        "status": "active",
+        "created_at": "2026-09-24T01:00:00Z",
+        "updated_at": "2026-09-25T02:30:00Z",
+        "last_collected_at": "2026-09-25T02:00:00Z",
+        "model": "gpt-6-luna",
+        "effort": "low",
+        "cursor": {
+          "sess-8f2c": {
+            "agent": "claude",
+            "transcript_path": "/home/u/.claude/projects/mast/sess-8f2c.jsonl",
+            "offset": 65536,
+            "tab": 4
+          }
+        },
+        "next_id": 2,
+        "last_error": null,
+        "limits": ["input_truncated"],
+        "rejected_ops": 1
+      },
+      "title": "관리자 워크스페이스 preview",
+      "headline": "CH7 작업 기억 저장소와 patch 검증기 구현 중",
+      "progress": {
+        "text": "스키마 검증과 flock 저장을 구현했다",
+        "reported_done": false,
+        "verified_done": false
+      },
+      "open_questions": [
+        {
+          "id": "q1",
+          "text": "fixture transcript 원본을 어떻게 확보하나?",
+          "anchor": {
+            "agent": "claude",
+            "session_id": "sess-8f2c",
+            "tab": 4,
+            "line_start": 118,
+            "line_end": 120,
+            "message_id": "msg-7"
+          },
+          "quote": "fixture transcript 원본은 어떻게 확보하지?",
+          "status": "active",
+          "created_at": "2026-09-24T01:05:00Z",
+          "updated_at": "2026-09-24T01:05:00Z",
+          "source": "harness",
+          "resolution": null
+        }
+      ],
+      "decisions": [
+        {
+          "id": "d1",
+          "text": "작업 기억은 워크스페이스별 JSON 파일로 둔다",
+          "anchor": {
+            "agent": "claude",
+            "session_id": "sess-8f2c",
+            "tab": 4,
+            "line_start": 42,
+            "line_end": 44,
+            "message_id": "msg-3"
+          },
+          "quote": "작업 기억은 워크스페이스별 JSON 파일로 두자",
+          "status": "active",
+          "created_at": "2026-09-24T01:06:00Z",
+          "updated_at": "2026-09-24T01:06:00Z",
+          "source": "harness",
+          "resolution": null,
+          "by": "user",
+          "superseded_by": null
+        }
+      ],
+      "next": [
+        {
+          "id": "n1",
+          "text": "CH8 transcript 추출기를 구현한다",
+          "anchor": null,
+          "quote": null,
+          "status": "active",
+          "created_at": "2026-09-24T01:07:00Z",
+          "updated_at": "2026-09-24T01:07:00Z",
+          "source": "harness",
+          "resolution": null
+        }
+      ],
+      "plans": [
+        {
+          "path": "docs/plans/example-plan.md",
+          "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "goal": "관리자 워크스페이스 preview 구현",
+          "steps": [
+            {"text": "CH7 저장소와 patch 검증기", "done": true},
+            {"text": "CH8 transcript 추출", "done": false}
+          ],
+          "status": "active"
+        }
+      ],
+      "git": {"branch": "feature/manager-workspace"}
+    }
+  ],
+  "invalid": [
+    {
+      "meta": {
+        "schema_version": 1,
+        "workspace_key": {"root_path": "/home/u/projects/mast", "distro": null},
+        "status": "paused",
+        "created_at": "2026-09-25T00:00:00Z",
+        "updated_at": "2026-09-25T00:00:00Z",
+        "last_collected_at": null,
+        "model": null,
+        "effort": null,
+        "cursor": {},
+        "next_id": 1,
+        "last_error": null,
+        "limits": [],
+        "rejected_ops": 0
+      },
+      "title": "",
+      "headline": "",
+      "progress": {"text": "", "reported_done": false, "verified_done": false},
+      "open_questions": [],
+      "decisions": [],
+      "next": [],
+      "plans": [],
+      "git": {"branch": null}
+    },
+    {
+      "meta": {
+        "schema_version": 1,
+        "workspace_key": {"root_path": "/home/u/projects/mast", "distro": null},
+        "status": "active",
+        "created_at": "2026-09-25T00:00:00Z",
+        "updated_at": "2026-09-25T00:00:00Z",
+        "last_collected_at": null,
+        "model": null,
+        "effort": null,
+        "cursor": {},
+        "next_id": 1,
+        "last_error": null,
+        "limits": [],
+        "rejected_ops": 0
+      },
+      "title": "",
+      "headline": "",
+      "progress": {"text": "", "reported_done": false, "verified_done": false},
+      "open_questions": [
+        {
+          "id": "q1",
+          "text": "anchor 없는 질문",
+          "anchor": null,
+          "quote": "anchor 없는 질문",
+          "status": "active",
+          "created_at": "2026-09-25T00:00:00Z",
+          "updated_at": "2026-09-25T00:00:00Z",
+          "source": "manager",
+          "resolution": null
+        }
+      ],
+      "decisions": [],
+      "next": [],
+      "plans": [],
+      "git": {"branch": null}
+    },
+    {
+      "meta": {
+        "schema_version": 1,
+        "workspace_key": {"root_path": "/home/u/projects/mast", "distro": null},
+        "status": "active",
+        "created_at": "2026-09-25T00:00:00Z",
+        "updated_at": "2026-09-25T00:00:00Z",
+        "last_collected_at": null,
+        "model": null,
+        "effort": null,
+        "cursor": {},
+        "next_id": 1,
+        "last_error": null,
+        "limits": [],
+        "rejected_ops": 0
+      },
+      "title": "",
+      "headline": "",
+      "progress": {"text": "", "reported_done": false, "verified_done": false},
+      "open_questions": [],
+      "decisions": [],
+      "next": [],
+      "plans": [],
+      "git": {"branch": null},
+      "board": {"pinned": true}
+    }
+  ],
+  "harnessPatch": {
+    "verdict": "update",
+    "notify": "board",
+    "notify_reason": null,
+    "ops": [
+      {
+        "op": "resolve",
+        "kind": null,
+        "id": "q1",
+        "text": null,
+        "by": null,
+        "anchor_ref": "u1",
+        "quote": "fixture transcript 원본은 공개 가능한 걸로 지정할까?",
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "add",
+        "kind": "question",
+        "id": null,
+        "text": "CH8 transcript 추출은 언제 시작하나?",
+        "by": null,
+        "anchor_ref": "u2",
+        "quote": "CH8은 transcript 추출을 맡습니다",
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "add",
+        "kind": "decision",
+        "id": null,
+        "text": "harness patch는 verified_done을 설정할 수 없다",
+        "by": "ai",
+        "anchor_ref": "u4",
+        "quote": "harness patch는 verified_done을 금지합니다",
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "add",
+        "kind": "next",
+        "id": null,
+        "text": "적용은 락 안에서 최신본을 다시 읽어 수행한다",
+        "by": null,
+        "anchor_ref": "u3",
+        "quote": "최신본을 다시 읽고 적용하자",
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "resolve",
+        "kind": null,
+        "id": "n1",
+        "text": null,
+        "by": null,
+        "anchor_ref": "u2",
+        "quote": "CH8은 transcript 추출을 맡습니다",
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "supersede",
+        "kind": null,
+        "id": "d1",
+        "text": "적용은 flock 안에서 최신본을 다시 읽고 수행한다",
+        "by": "user",
+        "anchor_ref": "u3",
+        "quote": "store.lock flock 아래에서 최신본을 다시 읽고 적용하자",
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "set_progress",
+        "kind": null,
+        "id": null,
+        "text": "CH7 저장소와 patch 검증기를 구현했다",
+        "by": null,
+        "anchor_ref": null,
+        "quote": null,
+        "reported_done": false,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "set_title",
+        "kind": null,
+        "id": null,
+        "text": "관리자 작업 기억 저장소",
+        "by": null,
+        "anchor_ref": null,
+        "quote": null,
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "set_headline",
+        "kind": null,
+        "id": null,
+        "text": "CH7 patch 검증기와 flock 저장",
+        "by": null,
+        "anchor_ref": null,
+        "quote": null,
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "set_plan",
+        "kind": null,
+        "id": null,
+        "text": null,
+        "by": null,
+        "anchor_ref": null,
+        "quote": null,
+        "reported_done": null,
+        "verified_done": null,
+        "path": "docs/plans/example-plan.md",
+        "goal": "관리자 워크스페이스 preview 구현",
+        "steps": [
+          {"text": "CH7 저장소와 patch 검증기", "done": true},
+          {"text": "CH8 transcript 추출", "done": false}
+        ]
+      }
+    ]
+  },
+  "managerPatch": {
+    "verdict": "update",
+    "notify": "report",
+    "notify_reason": "question",
+    "ops": [
+      {
+        "op": "add",
+        "kind": "question",
+        "id": null,
+        "text": "검증 실패를 CLI가 어떻게 알리나?",
+        "by": null,
+        "anchor_ref": null,
+        "quote": "관리자 patch 검증 실패는 파일을 바꾸지 않는다",
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "add",
+        "kind": "decision",
+        "id": null,
+        "text": "관리자 patch는 verified_done을 허용한다",
+        "by": "user",
+        "anchor_ref": null,
+        "quote": "관리자 patch는 verified_done을 허용한다",
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "add",
+        "kind": "next",
+        "id": null,
+        "text": "CH8a fixture 원본을 지정한다",
+        "by": null,
+        "anchor_ref": null,
+        "quote": "fixture 원본을 지정해 주자",
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "resolve",
+        "kind": null,
+        "id": "n1",
+        "text": null,
+        "by": null,
+        "anchor_ref": null,
+        "quote": "CH8은 다음 청크다",
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "supersede",
+        "kind": null,
+        "id": "d1",
+        "text": "작업 기억은 워크스페이스별 JSON 파일로 둔다 (v1)",
+        "by": "user",
+        "anchor_ref": null,
+        "quote": "작업 기억은 워크스페이스별 JSON 파일로 둔다",
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "set_progress",
+        "kind": null,
+        "id": null,
+        "text": "CH7 저장소와 patch 검증기를 구현했다",
+        "by": null,
+        "anchor_ref": null,
+        "quote": null,
+        "reported_done": true,
+        "verified_done": true,
+        "path": null,
+        "goal": null,
+        "steps": null
+      },
+      {
+        "op": "set_headline",
+        "kind": null,
+        "id": null,
+        "text": "CH7 완료, CH8a 대기",
+        "by": null,
+        "anchor_ref": null,
+        "quote": null,
+        "reported_done": null,
+        "verified_done": null,
+        "path": null,
+        "goal": null,
+        "steps": null
+      }
+    ]
+  },
+  "utterances": {
+    "u1": {
+      "speaker": "user",
+      "text": "fixture transcript 원본은 공개 가능한 걸로 지정할까? 아니면 수기로 작성할까?",
+      "anchor": {
+        "agent": "claude",
+        "session_id": "sess-8f2c",
+        "tab": 4,
+        "line_start": 118,
+        "line_end": 118,
+        "message_id": "msg-7"
+      }
+    },
+    "u2": {
+      "speaker": "assistant",
+      "text": "CH7은 저장 계층과 patch 검증기를 먼저 구현하고, CH8은 transcript 추출을 맡습니다.",
+      "anchor": {
+        "agent": "claude",
+        "session_id": "sess-8f2c",
+        "tab": 4,
+        "line_start": 140,
+        "line_end": 140,
+        "message_id": "msg-11"
+      }
+    },
+    "u3": {
+      "speaker": "user",
+      "text": "저장은 store.lock flock 아래에서 최신본을 다시 읽고 적용하자.",
+      "anchor": {
+        "agent": "claude",
+        "session_id": "sess-8f2c",
+        "tab": 4,
+        "line_start": 152,
+        "line_end": 152,
+        "message_id": "msg-14"
+      }
+    },
+    "u4": {
+      "speaker": "assistant",
+      "text": "관리자 patch는 verified_done을 허용하고, harness patch는 verified_done을 금지합니다.",
+      "anchor": {
+        "agent": "claude",
+        "session_id": "sess-8f2c",
+        "tab": 4,
+        "line_start": 160,
+        "line_end": 160,
+        "message_id": "msg-16"
+      }
+    },
+    "u5": {
+      "speaker": "user",
+      "text": "결정: 작업 기억은 워크스페이스별 JSON 파일로 두자.",
+      "anchor": {
+        "agent": "claude",
+        "session_id": "sess-8f2c",
+        "tab": 4,
+        "line_start": 170,
+        "line_end": 170,
+        "message_id": "msg-18"
+      }
+    }
+  }
+}

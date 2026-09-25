@@ -42,6 +42,7 @@ function ws(
     agentStatus?: AgentStatus;
     lastAgentMessage?: string | null;
     notification?: NotificationState;
+    manager?: boolean;
   } = {},
 ): Workspace {
   const tab = terminalTab(id * 10, opts.notification ?? "none");
@@ -52,6 +53,7 @@ function ws(
     distro: null,
     gitBranch: null,
     gitDirty: null,
+    manager: opts.manager ?? false,
     layout: { type: "leaf", pane: id },
     panes: { [String(id)]: { id, tabs: [tab], activeTab: tab.id } },
     activePane: id,
@@ -88,7 +90,10 @@ function press(input: HTMLInputElement, key: string): void {
 
 function mount(): {
   sidebar: Sidebar;
+  /** 일반 카드 목록 — 관리자 고정 카드는 여기 없다. */
   cards: () => HTMLElement[];
+  /** 관리자 전용 슬롯의 카드 (없으면 빈 배열). */
+  pinnedCards: () => HTMLElement[];
   dispatched: Command[];
   /** 폴더 선택 흐름은 main.ts 소유라 사이드바는 콜백만 부른다. */
   newWorkspaceCalls: () => number;
@@ -129,6 +134,8 @@ function mount(): {
   );
   const cardsEl = root.querySelector<HTMLElement>(".sidebar-cards");
   if (cardsEl === null) throw new Error("sidebar-cards not mounted");
+  const pinnedEl = root.querySelector<HTMLElement>(".sidebar-pinned");
+  if (pinnedEl === null) throw new Error("sidebar-pinned not mounted");
   const pairEl = root.querySelector<HTMLButtonElement>(".sidebar-pair");
   if (pairEl === null) throw new Error("sidebar-pair not mounted");
   const versionEl = root.querySelector<HTMLSpanElement>(".sidebar-version");
@@ -138,6 +145,7 @@ function mount(): {
   return {
     sidebar,
     cards: () => Array.from(cardsEl.querySelectorAll<HTMLElement>(".ws-card")),
+    pinnedCards: () => Array.from(pinnedEl.querySelectorAll<HTMLElement>(".ws-card")),
     dispatched,
     newWorkspaceCalls: () => newWorkspaceCalls,
     pairBtn: () => pairEl,
@@ -474,6 +482,17 @@ describe("Sidebar close (× 버튼 · Ctrl+Shift+Q)", () => {
     expect(dispatched).toEqual([]);
   });
 
+  it("활성 워크스페이스가 관리자면 확인 없이 조용한 no-op — 고정이라 닫지 않는다", async () => {
+    const confirmSpy = stubConfirm(true);
+    const { sidebar, dispatched } = mount();
+    sidebar.render(snapshot(1, [ws(1), ws(2, { manager: true })], 2));
+
+    await sidebar.closeActive();
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(dispatched).toEqual([]);
+  });
+
   it("× 버튼 툴팁이 단축키를 표기한다 — keys.ts 단일 소스", () => {
     const { sidebar, cards } = mount();
     sidebar.render(snapshot(1, THREE, 1));
@@ -610,6 +629,114 @@ describe("Sidebar drag reordering", () => {
 
     expect(cards()[2].classList.contains("dragging")).toBe(false);
     expect(dispatched).toEqual([]);
+  });
+});
+
+describe("Sidebar pinned manager slot", () => {
+  const PINNED = [ws(1), ws(2, { manager: true }), ws(3)];
+
+  function pointer(el: HTMLElement, type: string, clientY: number): void {
+    el.dispatchEvent(
+      new window.PointerEvent(type, { bubbles: true, clientY, pointerId: 1, button: 0 }),
+    );
+  }
+
+  it("고정 카드는 일반 목록 밖, new workspace 버튼 바로 위 슬롯에 그려진다", () => {
+    const { sidebar, cards, pinnedCards } = mount();
+    sidebar.render(snapshot(1, PINNED, 1));
+
+    expect(cards().map((c) => child(c, ".ws-card-name").textContent)).toEqual(["ws 1", "ws 3"]);
+    expect(cards().map((c) => c.dataset.altShortcut)).toEqual(["1", "2"]);
+    expect(pinnedCards()).toHaveLength(1);
+    const pinned = pinnedCards()[0];
+    expect(child(pinned, ".ws-card-name").textContent).toBe("ws 2");
+    expect(pinned.classList.contains("ws-card--pinned")).toBe(true);
+    // 고정 카드는 Ctrl+1~9 순번 배지를 받지 않는다 (순번에서 제외되는 것과 같은 규칙).
+    expect(pinned.dataset.altShortcut).toBeUndefined();
+
+    const newBtn = document.querySelector<HTMLElement>(".sidebar-new");
+    if (newBtn === null) throw new Error("missing .sidebar-new");
+    expect(
+      pinned.compareDocumentPosition(newBtn) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // 관리자가 사라지면 슬롯도 빈다.
+    sidebar.render(snapshot(2, [ws(1), ws(3)], 1));
+    expect(pinnedCards()).toHaveLength(0);
+  });
+
+  it("고정 카드에는 닫기 버튼이 없다", () => {
+    const { sidebar, cards, pinnedCards } = mount();
+    sidebar.render(snapshot(1, PINNED, 1));
+
+    expect(pinnedCards()[0].querySelector(".ws-card-close")).toBeNull();
+    // 일반 카드는 그대로 × 를 갖는다.
+    expect(child(cards()[0], ".ws-card-close")).not.toBeNull();
+  });
+
+  it("고정 카드는 드래그되지 않고 드롭 대상도 아니다", () => {
+    const { sidebar, cards, pinnedCards, dispatched } = mount();
+    sidebar.render(snapshot(1, PINNED, 1));
+    cards().forEach((card, i) => {
+      const top = i * 100;
+      card.getBoundingClientRect = () =>
+        ({ top, height: 100, bottom: top + 100 }) as DOMRect;
+    });
+    // 고정 슬롯은 목록 아래 별도 위치 — 좌표를 심어도 드롭 후보가 아니다.
+    const pinned = pinnedCards()[0];
+    pinned.getBoundingClientRect = () =>
+      ({ top: 200, height: 100, bottom: 300 }) as DOMRect;
+
+    // 고정 카드에서 시작한 눌림은 드래그가 아니다.
+    pointer(pinned, "pointerdown", 200);
+    pointer(pinned, "pointermove", 10);
+    pointer(pinned, "pointerup", 10);
+    expect(pinned.classList.contains("dragging")).toBe(false);
+
+    // 일반 카드를 고정 카드 위쪽 좌표로 끌어도 before 는 목록 끝(null)이다 —
+    // 고정 카드가 dropBoxes 에 끼어 있었다면 before=2 가 나온다.
+    pointer(cards()[0], "pointerdown", 10);
+    pointer(cards()[0], "pointermove", 150);
+    pointer(cards()[0], "pointerup", 150);
+    expect(dispatched).toEqual([{ type: "moveWorkspace", workspace: 1, before: null }]);
+  });
+
+  it("고정 카드도 클릭 전환과 이름 바꾸기가 된다", () => {
+    const { sidebar, pinnedCards, dispatched } = mount();
+    sidebar.render(snapshot(1, PINNED, 1));
+    const pinned = pinnedCards()[0];
+
+    pinned.click();
+    expect(dispatched).toEqual([{ type: "switchWorkspace", workspace: 2 }]);
+
+    child(pinned, ".ws-card-name").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    const input = renameInput(pinned);
+    expect(input.hidden).toBe(false);
+    input.value = "Manager";
+    press(input, "Enter");
+    expect(dispatched).toEqual([
+      { type: "switchWorkspace", workspace: 2 },
+      { type: "renameWorkspace", workspace: 2, name: "Manager" },
+    ]);
+  });
+
+  it("고정 카드의 동적 필드는 같은 노드에 in-place 패치된다", () => {
+    const { sidebar, pinnedCards } = mount();
+    sidebar.render(snapshot(1, PINNED, 1));
+    const before = pinnedCards()[0];
+
+    sidebar.render(
+      snapshot(
+        2,
+        [ws(1), ws(2, { manager: true, agentStatus: "needsInput", lastAgentMessage: "?" }), ws(3)],
+        1,
+      ),
+    );
+
+    const after = pinnedCards()[0];
+    expect(after).toBe(before);
+    expect(child(after, ".ws-card-status").textContent).toBe("needs input — ?");
+    expect(child(after, ".ws-card-status").classList.contains("needs-input")).toBe(true);
   });
 });
 

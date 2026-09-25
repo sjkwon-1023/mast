@@ -113,6 +113,9 @@ pub struct Workspace {
     /// git 정보 — 타입 공간만 확정, 값 채움은 19단계 (10단계 계획 1장).
     pub git_branch: Option<String>,
     pub git_dirty: Option<bool>,
+    /// 관리자 워크스페이스 표식 — 사이드바 고정과 관리자 권한 판정의 근거이며, [`Command::CreateManagerWorkspace`](crate::command::Command::CreateManagerWorkspace)가 세운다. 구 `state.json`·스냅샷은 `false`로 읽는다.
+    #[serde(default)]
+    pub manager: bool,
     pub layout: SplitTree,
     pub panes: BTreeMap<PaneId, Pane>,
     pub active_pane: PaneId,
@@ -204,6 +207,26 @@ impl AgentStatus {
             AgentStatus::NeedsInput => 2,
         }
     }
+}
+
+/// 이 탭의 transcript 를 남기는 에이전트 종류 — hook 의 `mast-agent` OSC 가 알린다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentKind {
+    Claude,
+    Codex,
+}
+
+/// hook 이 알려 준 에이전트 세션 메타 — 세션 id 와 transcript 파일 경로.
+///
+/// 휘발성 관측값이라 [`Tab::agent_session`] 은 `serde(skip)` 이다. 뒤 청크의 관리자
+/// 조회 응답이 이 타입을 그대로 싣기 때문에 serde 형태는 camelCase 다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSession {
+    pub agent: AgentKind,
+    pub session_id: String,
+    pub transcript_path: String,
 }
 
 /// 탭 알림 상태.
@@ -429,6 +452,12 @@ pub struct Tab {
     /// 스냅샷·persist 에 나가지 않는다.
     #[serde(skip)]
     pub last_agent_message_seq: Option<u64>,
+    /// hook 이 `mast-agent` OSC 로 알린 에이전트 세션 메타. **스냅샷·persist 에
+    /// 나가지 않는다** — 세션 id 와 transcript 경로는 지금 살아 있는 프로세스의
+    /// 관측값이라, 파일에 남기면 재시작 복원이 이미 죽은 세션을 가리킨다.
+    /// 스냅샷 발행 판정(`apply_delta` 의 `changed`)에도 넣지 않는다.
+    #[serde(skip)]
+    pub agent_session: Option<AgentSession>,
 }
 
 /// 탭 종류별 상태 (10단계 계획 1장 "타입 공간은 지금 확정" 기준). 생성 경로는
@@ -474,6 +503,10 @@ pub enum TabKind {
         /// 렌더된 픽셀 offset (enum rustdoc 참조).
         scroll_top: f64,
     },
+    /// 관리자 보드. [`NewTab`](crate::command::NewTab) 에는 없어 일반 경로로 만들 수
+    /// 없고, [`Command::CreateManagerWorkspace`](crate::command::Command::CreateManagerWorkspace)
+    /// 만 띄운다.
+    ManagerBoard,
 }
 
 /// 터미널 탭의 프로세스 상태.
@@ -691,6 +724,7 @@ mod tests {
             distro: None,
             git_branch: None,
             git_dirty: None,
+            manager: false,
             layout: split(4, SplitDirection::Horizontal, leaf(2), leaf(3)),
             panes: [(PaneId(2), test_pane(2)), (PaneId(3), test_pane(3))].into(),
             active_pane: PaneId(2),
@@ -709,6 +743,7 @@ mod tests {
             agent_status: AgentStatus::NeedsInput,
             last_agent_message: Some("approve?".into()),
             last_agent_message_seq: Some(1),
+            agent_session: None,
         }
     }
 
@@ -736,6 +771,47 @@ mod tests {
         let json = serde_json::to_value(idle).unwrap();
         assert_eq!(json["agentStatus"], serde_json::json!("idle"));
         assert_eq!(json["lastAgentMessage"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn agent_session_is_camel_case_and_never_serialized_on_a_tab() {
+        let session = AgentSession {
+            agent: AgentKind::Claude,
+            session_id: "abc-123".into(),
+            transcript_path: "/home/u/.claude/projects/x/abc.jsonl".into(),
+        };
+        let json = serde_json::to_value(&session).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "agent": "claude",
+                "sessionId": "abc-123",
+                "transcriptPath": "/home/u/.claude/projects/x/abc.jsonl",
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<AgentSession>(json).unwrap(),
+            session
+        );
+        assert_eq!(
+            serde_json::to_value(AgentKind::Codex).unwrap(),
+            serde_json::json!("codex")
+        );
+
+        // 탭에 실려 있어도 스냅샷·persist 에는 나가지 않는다 (last_agent_message_seq 선례).
+        let mut tab = test_tab();
+        tab.agent_session = Some(session);
+        let json = serde_json::to_value(tab).unwrap();
+        assert!(
+            json.get("agentSession").is_none(),
+            "세션 메타는 휘발성이라 스냅샷에 나가지 않는다: {json}"
+        );
+
+        // 이 키를 모르는 구 JSON 도 그대로 읽힌다.
+        let mut legacy = serde_json::to_value(test_tab()).unwrap();
+        legacy["agentSession"] = serde_json::json!({ "agent": "codex" });
+        let parsed: Tab = serde_json::from_value(legacy).unwrap();
+        assert_eq!(parsed.agent_session, None);
     }
 
     #[test]
@@ -790,6 +866,31 @@ mod tests {
                 ended_at_ms: None
             }
         );
+    }
+
+    #[test]
+    fn workspace_manager_flag_always_serializes_and_defaults_to_false() {
+        let json = serde_json::to_value(test_workspace()).unwrap();
+        assert_eq!(json["manager"], serde_json::json!(false));
+
+        let mut managed = test_workspace();
+        managed.manager = true;
+        let json = serde_json::to_value(managed).unwrap();
+        assert_eq!(json["manager"], serde_json::json!(true));
+
+        // 이 키가 없는 구 state.json·스냅샷은 false 로 읽힌다.
+        let mut legacy = serde_json::to_value(test_workspace()).unwrap();
+        legacy.as_object_mut().unwrap().remove("manager");
+        let parsed: Workspace = serde_json::from_value(legacy).unwrap();
+        assert!(!parsed.manager);
+    }
+
+    #[test]
+    fn manager_board_kind_round_trips_as_a_fieldless_tag() {
+        let json = serde_json::to_value(TabKind::ManagerBoard).unwrap();
+        assert_eq!(json, serde_json::json!({"type": "managerBoard"}));
+        let parsed: TabKind = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, TabKind::ManagerBoard);
     }
 
     #[test]

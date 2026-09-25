@@ -19,6 +19,8 @@
     {
       "type": "invalidName",
       "message": "workspace name must not be empty or whitespace only"
-    }
+    },
+    { "type": "managerExists" },
+    { "type": "managerPinned" }
   ]
 }

@@ -11,7 +11,8 @@
 //!   [`wsl`]은 WSL 준비 상태 진단과 스폰 게이트를 맡는다.
 //! - 정책과 프로토콜: [`notify`]는 알림 배치, [`send`]는 에이전트 간 전송 규약,
 //!   [`reset`]은 UI 리셋 판정, [`deadline`]은 동기 호출의 시간 상한, [`firewall`]과 [`update`]는
-//!   방화벽·업데이트 판정 로직을 제공한다.
+//!   방화벽·업데이트 판정 로직을 제공한다. [`manager`]는 관리자(preview) 이벤트 링과
+//!   관리자 query 계약(개요·구간 조회·권한)을 보관한다.
 //!
 //! 이 크레이트에는 파일·프로세스·PTY I/O도 있다. 순수 도메인 계층이 아니라
 //! 앱 프레임워크로부터 독립된 실행 코어다. HTTP 입력은 `mast-remote`,
@@ -24,6 +25,7 @@ pub mod document;
 pub mod firewall;
 pub(crate) mod flow;
 pub mod git;
+pub mod manager;
 pub mod model;
 pub mod notify;
 pub mod osc;

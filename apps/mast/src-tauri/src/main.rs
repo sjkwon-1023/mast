@@ -38,6 +38,7 @@ mod firewall;
 mod git;
 mod host;
 mod logfile;
+mod manager;
 mod provision;
 mod platform;
 mod remote;
@@ -142,6 +143,10 @@ fn main() {
             #[cfg(target_os = "macos")]
             platform::macos::initialize(&handle)?;
             let ui = commands::read_ui_settings(&handle).map_err(std::io::Error::other)?;
+            // 관리자 preview 판정 — 객체가 없거나 `enabled: false` 면 꺼진 것이다.
+            // `resolved()` 는 하네스 hello 에 쓸 기본값까지 여기서 채운다.
+            let manager = ui.manager.as_ref().map(commands::ManagerSettings::resolved);
+            let manager_enabled = manager::enabled(manager.as_ref());
             app.manage(browser::BrowserState::new(ui.browser.is_none_or(|b| b.enabled)));
             let sessions = Arc::new(SessionManager::new());
             let sinks = Arc::new(state::SinkRegistry::default());
@@ -244,7 +249,8 @@ fn main() {
             let sessions_for_secure_remote = Arc::clone(&sessions);
 
             // 부팅 시 WSL 이 필요한 작업(초기 탭 생성·재스폰·프로비저닝)의 조정자.
-            let boot_work = Arc::new(boot::BootWork::new(needs_dogfood));
+            // 관리자 preview 가 켜져 있으면 웨이브가 관리자 워크스페이스도 보장한다.
+            let boot_work = Arc::new(boot::BootWork::new(needs_dogfood, manager_enabled));
 
             // manage 를 재스폰보다 먼저 (ADR-0016 결정 8) — 재스폰된 세션의 on_exit 은
             // try_state 로 관리 상태를 찾으므로, 스폰이 먼저면 그 사이 exit
@@ -263,6 +269,22 @@ fn main() {
                 last_audit: Mutex::new(RegistryAudit::default()),
                 exits_in_flight: Mutex::new(HashSet::new()),
             });
+
+            // 관리자 preview — 꺼져 있으면 복원된 관리자 워크스페이스를
+            // 걷어내고, 켜져 있으면 하네스 관리 상태(설정·status·board 캐시)를 만들고
+            // 이벤트 기록을 켜고 관리자 배포판을 WSL 진단 대상에 넣는다. manage 뒤인
+            // 이유는 초기 생성과 같다: 상태가 관리 상태에 실린 뒤의 변이만
+            // publish·저장 경로가 확실하다.
+            if manager_enabled {
+                if let Some(settings) = manager {
+                    app.manage(manager::ManagerRuntime::new(settings));
+                }
+                dispatcher.lock().unwrap().set_manager_events(true);
+                // 초기 워크스페이스와 같은 방식 — 관리자 배포판도 진단 대상이다.
+                wsl_health::include_target(host::resolve_distro(None));
+            } else {
+                manager::remove_workspace(&handle, &dispatcher);
+            }
 
             // sanitize·수리 결과를 즉시 디스크에 반영한다 (ADR-0016 결정 8 초기 저장) —
             // 이 시점 상태가 다음 크래시 복원의 기준선이 된다. **Restored 부팅에만**
@@ -431,6 +453,9 @@ fn main() {
             secure_remote::secure_remote_status,
             secure_remote::secure_remote_firewall_status,
             secure_remote::secure_remote_firewall_allow,
+            // 관리자 보드 — 초기 스냅샷과 이어보기/새로 시작 선택.
+            manager::get_manager_board,
+            manager::manager_action,
         ]))
         .build(tauri::generate_context!())
         .expect("error while building mast")
@@ -444,6 +469,12 @@ fn main() {
                 // 상한이 아니다. 페어링이 없으면 no-op 이라 아래 flush 순서에 영향이 없다.
                 if let Some(managed) = app.try_state::<secure_remote::SecureRemoteManager>() {
                     managed.shutdown();
+                }
+                // 관리자 하네스 감독 정지 — 재시작을 멈추고 중지 API
+                // (stdin EOF → 2초 → kill)로 하네스를 끝낸다. preview 가 꺼져 있거나
+                // 감독이 없으면 no-op 이다.
+                if let Some(managed) = app.try_state::<manager::ManagerRuntime>() {
+                    managed.stop();
                 }
                 // 종료 직전 대기분 flush — debounce 창(≤500ms) 안의 마지막 변이가
                 // 정상 종료에서 유실되지 않게 한다 (크래시 유실은 계획상 수용).

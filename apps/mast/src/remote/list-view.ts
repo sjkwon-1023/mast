@@ -66,7 +66,9 @@ export class ListView {
     this.listEl.replaceChildren(
       ...snapshot.state.workspaces.map((ws) => this.workspaceEl(ws)),
     );
-    if (snapshot.state.workspaces.length === 0) {
+    // "No workspaces" 는 관리자 워크스페이스를 빼고 센다 — 관리자만 있으면
+    // 열 수 있는 일반 워크스페이스가 없는 것이 맞다. 카드 자체는 숨기지 않는다.
+    if (snapshot.state.workspaces.every((ws) => ws.manager)) {
       const empty = document.createElement("div");
       empty.className = "empty";
       empty.textContent = "No workspaces";
@@ -179,6 +181,8 @@ function tabDetail(kind: TabKind): string {
       return "text";
     case "changesViewer":
       return "changes";
+    case "managerBoard":
+      return "board · desktop only";
     default:
       return "markdown";
   }

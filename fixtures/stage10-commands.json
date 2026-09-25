@@ -45,5 +45,11 @@
   },
   { "type": "renameWorkspace", "workspace": 1, "name": "mast (renamed)" },
   { "type": "moveWorkspace", "workspace": 1, "before": 2 },
-  { "type": "moveWorkspace", "workspace": 1, "before": null }
+  { "type": "moveWorkspace", "workspace": 1, "before": null },
+  {
+    "type": "createManagerWorkspace",
+    "rootPath": "/home/dev/.mast/manager",
+    "distro": null
+  },
+  { "type": "removeManagerWorkspace" }
 ]

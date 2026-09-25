@@ -74,6 +74,8 @@ afterAll(() => {
 const INSTALLED_FROM_REPO: [name: string, executable: boolean][] = [
   ["mast-config.py", false],
   ["mast-browser.py", false],
+  ["mast-manager.py", false],
+  ["mast-manager-harness.py", false],
   ["mast-hooks-merge.py", false],
   ["mast-agent-hook.py", false],
   ["mast-claude-hook.sh", true],

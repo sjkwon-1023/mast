@@ -141,6 +141,65 @@ describe("navigation wiring", () => {
     }
   });
 
+  it("Ctrl+1~9 순번은 관리자를 건너뛴다 — 관리자가 벡터 첫째여도", () => {
+    const state = structuredClone(snapshotJson) as unknown as StateSnapshot;
+    const [n1, n2] = state.state.workspaces;
+    const manager = structuredClone(n2);
+    manager.id = 99;
+    manager.name = "Manager";
+    manager.manager = true;
+    // 벡터 순서와 사이드바 순서(일반 카드 다음 고정 슬롯)를 일부러 어긋나게 둔다.
+    state.state.workspaces = [manager, n1, n2];
+    state.state.activeWorkspace = manager.id;
+    const host = context(state);
+
+    runNavAction(host, { type: "switchWorkspace", ordinal: 1 });
+    expect(host.dispatchUI).toHaveBeenLastCalledWith({
+      type: "switchWorkspace",
+      workspace: n1.id,
+    });
+    runNavAction(host, { type: "switchWorkspace", ordinal: 2 });
+    expect(host.dispatchUI).toHaveBeenLastCalledWith({
+      type: "switchWorkspace",
+      workspace: n2.id,
+    });
+    // 일반 워크스페이스가 둘뿐이라 3번은 없다 (조용한 no-op).
+    runNavAction(host, { type: "switchWorkspace", ordinal: 3 });
+    expect(host.dispatchUI).toHaveBeenCalledTimes(2);
+  });
+
+  it("cycle 은 관리자를 포함하고 사이드바 순서(일반 다음 관리자)를 따른다", () => {
+    const state = structuredClone(snapshotJson) as unknown as StateSnapshot;
+    const [n1, n2] = state.state.workspaces;
+    const manager = structuredClone(n2);
+    manager.id = 99;
+    manager.name = "Manager";
+    manager.manager = true;
+    // 벡터 중간에 관리자 — 벡터 순서 그대로면 n1 다음이 관리자다.
+    state.state.workspaces = [n1, manager, n2];
+    const host = context(state);
+
+    runNavAction(host, { type: "cycleWorkspace", delta: 1 });
+    expect(host.dispatchUI).toHaveBeenLastCalledWith({
+      type: "switchWorkspace",
+      workspace: n2.id,
+    });
+
+    state.state.activeWorkspace = n2.id;
+    runNavAction(host, { type: "cycleWorkspace", delta: 1 });
+    expect(host.dispatchUI).toHaveBeenLastCalledWith({
+      type: "switchWorkspace",
+      workspace: manager.id,
+    });
+
+    state.state.activeWorkspace = manager.id;
+    runNavAction(host, { type: "cycleWorkspace", delta: 1 });
+    expect(host.dispatchUI).toHaveBeenLastCalledWith({
+      type: "switchWorkspace",
+      workspace: n1.id,
+    });
+  });
+
   it("consumes recognized keys before the terminal even when the target does not exist", () => {
     const add = vi.spyOn(window, "addEventListener");
     const host = context();

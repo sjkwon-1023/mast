@@ -1086,6 +1086,9 @@ fn summarize_osc(event: &OscEvent) -> String {
         // 에 파일시스템 경로를 흘릴 이유가 없다).
         OscEvent::Osc777Query { kind, .. } => format!("777-query:{kind}"),
         OscEvent::Osc777Started => "777-started".to_string(),
+        // 세션 메타는 **고정 문자열**이다 — transcript 경로와 세션 id 를 stats·로그에
+        // 흘리지 않는다 (질의 요약과 같은 규율).
+        OscEvent::Osc777Agent(_) => "777-agent".to_string(),
         // 색상 질의는 코드(10 = 전경, 11 = 배경)만으로 관측이 끝난다.
         OscEvent::OscColorQuery { code } => format!("color-query:{code}"),
         // 아래 둘은 OSC 가 아니라 리더가 소비하므로 `last_osc` 에 실리지 않는다.

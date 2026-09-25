@@ -170,7 +170,13 @@ struct RemovedUnknownTab {
 fn is_known_tab_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "terminal" | "folderBrowser" | "textViewer" | "markdownViewer" | "changesViewer" | "browser"
+        "terminal"
+            | "folderBrowser"
+            | "textViewer"
+            | "markdownViewer"
+            | "changesViewer"
+            | "browser"
+            | "managerBoard"
     )
 }
 
@@ -722,6 +728,7 @@ mod tests {
                 agent_status: AgentStatus::Idle,
                 last_agent_message: None,
                 last_agent_message_seq: None,
+                agent_session: None,
             }],
             active_tab: Some(TabId(tab_id)),
         }
@@ -738,6 +745,7 @@ mod tests {
                 distro: None,
                 git_branch: None,
                 git_dirty: None,
+                manager: false,
                 layout: SplitTree::Split {
                     id: SplitId(4),
                     direction: SplitDirection::Horizontal,
@@ -920,6 +928,35 @@ mod tests {
         };
         assert!(repairs.is_empty(), "round-trip repairs: {repairs:?}");
         assert_eq!(roundtripped, state);
+    }
+
+    #[test]
+    fn manager_board_tab_survives_a_persist_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        let mut state = sample_state(None, 100);
+        state.workspaces[0].panes.get_mut(&PaneId(2)).unwrap().tabs[0].kind = TabKind::ManagerBoard;
+
+        let value = raw_persisted_value(state.clone());
+        assert_eq!(
+            value.pointer("/state/workspaces/0/panes/2/tabs/0/kind"),
+            Some(&serde_json::json!({"type": "managerBoard"}))
+        );
+
+        save_atomic(&path, &state).unwrap();
+        let LoadOutcome::Restored {
+            state: restored,
+            repairs,
+        } = load(&path)
+        else {
+            panic!("manager board kind is known — restore must succeed");
+        };
+        assert!(repairs.is_empty(), "round-trip repairs: {repairs:?}");
+        assert_eq!(
+            restored.workspaces[0].panes[&PaneId(2)].tabs[0].kind,
+            TabKind::ManagerBoard
+        );
+        assert_eq!(restored, state);
     }
 
     #[test]

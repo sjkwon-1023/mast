@@ -60,6 +60,15 @@ describe("formatCommandError", () => {
     ).toBe("Invalid name: workspace name must not be empty or whitespace only");
   });
 
+  it("formats managerExists and managerPinned (관리자 워크스페이스 고정)", () => {
+    expect(formatCommandError({ type: "managerExists" })).toBe(
+      "A manager workspace already exists",
+    );
+    expect(formatCommandError({ type: "managerPinned" })).toBe(
+      "The manager workspace and its board are pinned",
+    );
+  });
+
   it("passes through non-contract string payloads", () => {
     expect(formatCommandError("ipc timeout")).toBe("Command failed: ipc timeout");
   });

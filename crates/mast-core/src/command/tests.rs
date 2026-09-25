@@ -4,8 +4,13 @@ use std::sync::{Arc, Mutex};
 use super::events::recompute_agent_summary;
 use super::queries::parse_tab_id_target;
 use super::*;
+use crate::manager::{
+    manager_reply_json, AgentEvent, AgentEventKind, ManagerQueryError, ManagerReply,
+    ManagerRequest, MANAGER_EVENT_CAPACITY,
+};
 use crate::model::{
-    AgentStatus, NotificationState, Pane, SplitTree, Tab, TabKind, TerminalStatus, Workspace,
+    AgentKind, AgentSession, AgentStatus, NotificationState, Pane, SplitTree, Tab, TabKind,
+    TerminalStatus, Workspace,
 };
 use crate::notify::OscBatch;
 use crate::osc::OscEvent;
@@ -2178,6 +2183,127 @@ fn apply_osc_bumps_revision_once_per_batch() {
     assert_eq!(d.state().revision, rev + 1);
 }
 
+// ---- mast-agent 세션 메타 ----
+
+fn agent_session(agent: AgentKind, session: &str, transcript: &str) -> AgentSession {
+    AgentSession {
+        agent,
+        session_id: session.into(),
+        transcript_path: transcript.into(),
+    }
+}
+
+#[test]
+fn apply_osc_records_the_agent_session_on_the_tab() {
+    let (mut d, _host) = dispatcher();
+    let (_ws, pane) = create_ws(&mut d, "ws");
+    let (tab, session) = create_terminal_tab(&mut d, pane);
+    assert_eq!(tab_view(&d, tab).agent_session, None);
+
+    let meta = agent_session(
+        AgentKind::Claude,
+        "abc-123",
+        "/home/u/.claude/projects/x/abc.jsonl",
+    );
+    assert!(d.apply_osc(
+        batch(&[(session, OscEvent::Osc777Agent(meta.clone()))]),
+        1_000
+    ));
+    assert_eq!(tab_view(&d, tab).agent_session.as_ref(), Some(&meta));
+
+    // 같은 값이 다시 와도 변화 없음 — changed=false, revision·스냅샷 불변.
+    let before = serde_json::to_value(d.state()).unwrap();
+    let rev = d.state().revision;
+    assert!(!d.apply_osc(
+        batch(&[(session, OscEvent::Osc777Agent(meta.clone()))]),
+        1_000
+    ));
+    assert_eq!(d.state().revision, rev);
+    assert_eq!(serde_json::to_value(d.state()).unwrap(), before);
+
+    // 다른 값은 last-wins 로 교체된다 — 스냅샷 비노출이라 changed=false 여도 된다.
+    let next = agent_session(AgentKind::Codex, "t:0.1", "/home/u/.codex/sessions/x.jsonl");
+    d.apply_osc(
+        batch(&[(session, OscEvent::Osc777Agent(next.clone()))]),
+        1_000,
+    );
+    assert_eq!(tab_view(&d, tab).agent_session.as_ref(), Some(&next));
+}
+
+#[test]
+fn agent_session_never_reaches_the_snapshot() {
+    let (mut d, _host) = dispatcher();
+    let (_ws, pane) = create_ws(&mut d, "ws");
+    let (tab, session) = create_terminal_tab(&mut d, pane);
+    let meta = agent_session(
+        AgentKind::Claude,
+        "abc-123",
+        "/home/u/.claude/projects/x/abc.jsonl",
+    );
+    d.apply_osc(
+        batch(&[(session, OscEvent::Osc777Agent(meta.clone()))]),
+        1_000,
+    );
+    assert_eq!(tab_view(&d, tab).agent_session.as_ref(), Some(&meta));
+
+    let json = serde_json::to_value(d.state()).unwrap();
+    assert!(
+        !json.to_string().contains("agentSession"),
+        "스냅샷 JSON 에 agentSession 키가 없어야 한다: {json}"
+    );
+}
+
+#[test]
+fn a_finished_shell_clears_the_agent_session() {
+    let (mut d, _host) = dispatcher();
+    let (_ws, pane) = create_ws(&mut d, "ws");
+    let (tab, session) = create_terminal_tab(&mut d, pane);
+    let meta = agent_session(
+        AgentKind::Claude,
+        "abc-123",
+        "/home/u/.claude/projects/x/abc.jsonl",
+    );
+    d.apply_osc(batch(&[(session, OscEvent::Osc777Agent(meta))]), 1_000);
+    assert!(tab_view(&d, tab).agent_session.is_some());
+
+    d.apply_event(SessionEvent::SessionExited {
+        session,
+        code: Some(0),
+        ended_at_ms: 1_700_000_000_000,
+    });
+    assert_eq!(tab_view(&d, tab).agent_session, None);
+}
+
+#[test]
+fn respawn_clears_the_agent_session() {
+    let (mut d, _host) = dispatcher();
+    let (_ws, pane) = create_ws(&mut d, "ws");
+    let (tab, session) = create_terminal_tab(&mut d, pane);
+    // 재스폰 가능한 형태(셸 종료 뒤)를 만들고, 세션 메타가 아직 탭에 남은
+    // 상태를 직접 주입한다 — SessionExited 자체의 clear 는 위 테스트가 본다.
+    d.apply_event(SessionEvent::SessionExited {
+        session,
+        code: Some(0),
+        ended_at_ms: 1_700_000_000_000,
+    });
+    let target = d.state.workspaces[0]
+        .panes
+        .get_mut(&pane)
+        .unwrap()
+        .tabs
+        .iter_mut()
+        .find(|t| t.id == tab)
+        .unwrap();
+    target.agent_session = Some(agent_session(
+        AgentKind::Codex,
+        "t:0.1",
+        "/home/u/.codex/sessions/x.jsonl",
+    ));
+
+    d.respawn_tab(tab).unwrap();
+    assert_eq!(tab_view(&d, tab).agent_session, None);
+}
+
 #[test]
 fn an_idle_from_the_tab_that_waited_does_not_mask_another_tabs_running() {
     let (mut d, _host) = dispatcher();
@@ -2463,6 +2589,7 @@ fn sessionless_tab(id: u64, status: TerminalStatus, cwd: Option<&str>) -> Tab {
         agent_status: AgentStatus::Idle,
         last_agent_message: None,
         last_agent_message_seq: None,
+        agent_session: None,
     }
 }
 
@@ -2480,6 +2607,7 @@ fn adopted_state() -> AppState {
             distro: Some("Ubuntu".into()),
             git_branch: None,
             git_dirty: None,
+            manager: false,
             layout: SplitTree::Split {
                 id: SplitId(4),
                 direction: SplitDirection::Horizontal,
@@ -3274,6 +3402,40 @@ fn list_tabs_covers_every_tab_kind_and_pane() {
     assert_eq!(tabs[2].tab, t_term.0);
 }
 
+/// 보드 탭은 일반 명령으로 만들 수 없으므로 상태에 직접 꽂아 열거 계약만 본다.
+#[test]
+fn list_tabs_reports_a_manager_board_as_a_viewer() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    let (t_term, requester) = create_terminal_tab(&mut d, pane);
+
+    let board_id = TabId(1000);
+    let pane_ref = d.state.workspaces[0].panes.get_mut(&pane).unwrap();
+    pane_ref.tabs.push(Tab {
+        id: board_id,
+        title: "Manager".into(),
+        kind: TabKind::ManagerBoard,
+        notification: NotificationState::None,
+        last_activity_ms: None,
+        agent_status: AgentStatus::Idle,
+        last_agent_message: None,
+        last_agent_message_seq: None,
+        agent_session: None,
+    });
+    pane_ref.active_tab = Some(board_id);
+
+    let tabs = d.list_tabs(requester);
+    assert_eq!(
+        tabs.iter().map(|t| t.tab).collect::<Vec<_>>(),
+        vec![t_term.0, board_id.0]
+    );
+    let board = tabs.last().unwrap();
+    assert_eq!(board.workspace_id, ws.0);
+    assert_eq!(board.kind, "managerBoard");
+    assert_eq!(board.status, "viewer");
+    assert!(board.active);
+}
+
 #[test]
 fn list_tabs_is_a_pure_query_and_serializes_camel_case() {
     let (mut d, _host) = dispatcher();
@@ -3565,4 +3727,990 @@ fn disabled_browser_rejects_creation_without_mutating_state() {
     assert!(d.dispatch(Command::CreateWorkspace { name: "web".into(), root_path: None, distro: None,
         tab: Some(NewTab::Browser { url: "https://example.com".into() }) }).is_err());
     assert_eq!(before, serde_json::to_value(d.state()).unwrap());
+}
+
+// ---- 관리자 워크스페이스 (preview) ----
+
+/// 관리자 워크스페이스 생성 헬퍼 — (workspace, pane, 터미널 탭, 보드 탭, 세션).
+fn create_manager(
+    d: &mut Dispatcher,
+    root_path: &str,
+    distro: Option<&str>,
+) -> (WorkspaceId, PaneId, TabId, TabId, SessionId) {
+    let out = d
+        .dispatch(Command::CreateManagerWorkspace {
+            root_path: root_path.into(),
+            distro: distro.map(String::from),
+        })
+        .expect("관리자 워크스페이스 생성");
+    let CommandOutput::WorkspaceCreated {
+        workspace,
+        pane,
+        tab: Some(terminal),
+        session: Some(session),
+    } = out
+    else {
+        panic!("unexpected output: {out:?}");
+    };
+    let board = d.state().workspace(workspace).unwrap().panes[&pane]
+        .tabs
+        .last()
+        .expect("보드 탭")
+        .id;
+    (workspace, pane, terminal, board, session)
+}
+
+#[test]
+fn create_manager_workspace_builds_terminal_and_board_tabs() {
+    let (mut d, host) = dispatcher();
+    let (workspace, pane, terminal, board, session) =
+        create_manager(&mut d, "/home/dev/.mast/manager", Some("Ubuntu"));
+
+    // 발급 순서 workspace → pane → 터미널 탭 → 보드 탭 (peek_id(2) 예측과 일치).
+    assert!(
+        workspace.0 < pane.0 && pane.0 < terminal.0 && terminal.0 < board.0,
+        "id 발급 순서: {workspace:?} {pane:?} {terminal:?} {board:?}"
+    );
+    let ws = d.state().workspace(workspace).unwrap();
+    assert!(ws.manager);
+    assert_eq!(ws.name, "Manager");
+    assert_eq!(ws.root_path.as_deref(), Some("/home/dev/.mast/manager"));
+    assert_eq!(ws.distro, expected_distro("Ubuntu"));
+    assert_eq!(
+        d.state().workspaces.last().unwrap().id,
+        workspace,
+        "목록 끝에 붙는다"
+    );
+    let p = &ws.panes[&pane];
+    assert_eq!(p.tabs.len(), 2);
+    assert_eq!(p.tabs[0].id, terminal);
+    assert_eq!(p.tabs[1].id, board);
+    assert_eq!(p.tabs[1].kind, TabKind::ManagerBoard);
+    assert_eq!(p.active_tab, Some(board), "보드가 active_tab");
+    let TabKind::Terminal {
+        pty_session,
+        status,
+        cwd,
+    } = &p.tabs[0].kind
+    else {
+        panic!("첫 탭이 터미널이 아님");
+    };
+    assert_eq!(*pty_session, Some(session));
+    assert_eq!(*status, TerminalStatus::Running);
+    // cwd 미지정 → root_path 상속, history_tab 은 터미널 탭 id.
+    assert_eq!(cwd.as_deref(), Some("/home/dev/.mast/manager"));
+    assert_eq!(
+        host.spawns()[0].cwd.as_deref(),
+        Some("/home/dev/.mast/manager")
+    );
+    assert_eq!(host.spawns()[0].history_tab, Some(terminal.0));
+    assert_eq!(host.spawns()[0].distro, expected_distro("Ubuntu"));
+    // active_workspace 가 None 이었으니 새 워크스페이스로 정해진다.
+    assert_eq!(d.state().active_workspace, Some(workspace));
+}
+
+#[test]
+fn create_manager_workspace_keeps_the_active_workspace() {
+    let (mut d, _host) = dispatcher();
+    let (existing, _) = create_ws(&mut d, "existing");
+    create_manager(&mut d, "/home/dev/.mast/manager", None);
+    assert_eq!(d.state().active_workspace, Some(existing));
+}
+
+#[test]
+fn create_manager_workspace_rejects_a_second_manager_without_state_change() {
+    let (mut d, host) = dispatcher();
+    create_manager(&mut d, "/home/dev/.mast/manager", None);
+    let before = serde_json::to_value(d.state()).unwrap();
+    let rev = d.state().revision;
+    let next = d.state().next_id;
+
+    let err = d
+        .dispatch(Command::CreateManagerWorkspace {
+            root_path: "/home/dev/other".into(),
+            distro: None,
+        })
+        .unwrap_err();
+    assert_eq!(err, CommandError::ManagerExists);
+    assert_eq!(serde_json::to_value(d.state()).unwrap(), before);
+    assert_eq!(d.state().revision, rev);
+    assert_eq!(d.state().next_id, next);
+    assert_eq!(host.spawns().len(), 1, "검증이 스폰보다 먼저다");
+}
+
+#[test]
+fn create_manager_workspace_rejects_invalid_roots_without_state_change() {
+    let (mut d, host) = dispatcher();
+    create_ws(&mut d, "existing");
+    let before = serde_json::to_value(d.state()).unwrap();
+    let rev = d.state().revision;
+    let next = d.state().next_id;
+
+    // wslpath 거부 규칙별 대표 1개씩 — 사유는 wslpath.rs 테스트가 잠근다.
+    for path in ["relative/path", "/home/dev/../etc", "", r"/home/dev\code"] {
+        let err = d
+            .dispatch(Command::CreateManagerWorkspace {
+                root_path: path.into(),
+                distro: None,
+            })
+            .unwrap_err();
+        assert!(
+            matches!(err, CommandError::InvalidPath { .. }),
+            "{path:?} → {err:?}"
+        );
+    }
+    assert_eq!(serde_json::to_value(d.state()).unwrap(), before);
+    assert_eq!(d.state().revision, rev);
+    assert_eq!(d.state().next_id, next);
+    assert!(host.spawns().is_empty());
+}
+
+#[test]
+#[cfg(not(target_os = "macos"))]
+fn create_manager_workspace_rejects_mnt_roots() {
+    // CreateWorkspace 의 /mnt 규칙이 관리자 생성에도 같은 문구로 적용된다.
+    let (mut d, _host) = dispatcher();
+    let before = serde_json::to_value(d.state()).unwrap();
+    for path in ["/mnt", "/mnt/c/Users/dev/code"] {
+        let err = d
+            .dispatch(Command::CreateManagerWorkspace {
+                root_path: path.into(),
+                distro: None,
+            })
+            .unwrap_err();
+        assert!(matches!(err, CommandError::InvalidPath { .. }), "{path}");
+    }
+    assert_eq!(serde_json::to_value(d.state()).unwrap(), before);
+}
+
+#[test]
+fn create_manager_workspace_spawn_failure_leaves_state_untouched() {
+    let (mut d, host) = dispatcher();
+    let (existing, _) = create_ws(&mut d, "existing");
+    host.set_fail_spawn(true);
+    let before = serde_json::to_value(d.state()).unwrap();
+
+    let err = d
+        .dispatch(Command::CreateManagerWorkspace {
+            root_path: "/home/dev/.mast/manager".into(),
+            distro: None,
+        })
+        .unwrap_err();
+    assert!(matches!(err, CommandError::SpawnFailed { .. }));
+    // 워크스페이스·next_id·revision 전부 불변 (spawn-first 원자성).
+    assert_eq!(serde_json::to_value(d.state()).unwrap(), before);
+    assert_eq!(d.state().active_workspace, Some(existing));
+}
+
+#[test]
+fn remove_manager_workspace_kills_sessions_and_releases_tabs() {
+    let (mut d, host) = dispatcher();
+    let (mgr, _pane, terminal, _board, session) =
+        create_manager(&mut d, "/home/dev/.mast/manager", Some("Ubuntu"));
+    let (other, _) = create_ws(&mut d, "other");
+    let rev = d.state().revision;
+
+    d.dispatch(Command::RemoveManagerWorkspace).unwrap();
+
+    assert_eq!(d.state().revision, rev + 1);
+    assert!(
+        d.state().workspace(mgr).is_none(),
+        "관리자 워크스페이스 제거"
+    );
+    assert_eq!(host.kills(), vec![session]);
+    assert_eq!(
+        host.releases(),
+        vec![(vec![terminal], expected_distro("Ubuntu"))]
+    );
+    assert_eq!(d.state().active_workspace, Some(other));
+}
+
+#[test]
+fn removing_the_active_manager_falls_back_to_the_first_remaining_workspace() {
+    let (mut d, _host) = dispatcher();
+    let (mgr, _pane, _terminal, _board, _session) =
+        create_manager(&mut d, "/home/dev/.mast/manager", None);
+    let (other, _) = create_ws(&mut d, "other");
+    d.dispatch(Command::SwitchWorkspace { workspace: mgr })
+        .unwrap();
+
+    d.dispatch(Command::RemoveManagerWorkspace).unwrap();
+
+    assert_eq!(d.state().active_workspace, Some(other));
+}
+
+#[test]
+fn remove_manager_workspace_without_one_is_unknown_target() {
+    let (mut d, _host) = dispatcher();
+    create_ws(&mut d, "ws");
+    let before = serde_json::to_value(d.state()).unwrap();
+
+    let err = d.dispatch(Command::RemoveManagerWorkspace).unwrap_err();
+    assert_eq!(
+        err,
+        CommandError::UnknownTarget {
+            target: "manager workspace".into()
+        }
+    );
+    assert_eq!(serde_json::to_value(d.state()).unwrap(), before);
+}
+
+#[test]
+fn pinned_manager_targets_are_rejected_without_state_change() {
+    let (mut d, host) = dispatcher();
+    let (mgr, mpane, _terminal, board, _session) =
+        create_manager(&mut d, "/home/dev/.mast/manager", None);
+    let (other, _) = create_ws(&mut d, "other");
+    let before = serde_json::to_value(d.state()).unwrap();
+    let rev = d.state().revision;
+
+    let cases = [
+        // CloseWorkspace{관리자}
+        Command::CloseWorkspace { workspace: mgr },
+        // MoveWorkspace — 자기 자신 및 before 지정 양쪽.
+        Command::MoveWorkspace {
+            workspace: mgr,
+            before: None,
+        },
+        Command::MoveWorkspace {
+            workspace: mgr,
+            before: Some(other),
+        },
+        Command::MoveWorkspace {
+            workspace: other,
+            before: Some(mgr),
+        },
+        // 보드 탭과 그 pane.
+        Command::CloseTab { tab: board },
+        Command::ClosePane { pane: mpane },
+    ];
+    for cmd in cases {
+        let err = d.dispatch(cmd.clone()).unwrap_err();
+        assert_eq!(err, CommandError::ManagerPinned, "{cmd:?}");
+        assert_eq!(d.state().revision, rev, "{cmd:?} 가 revision 을 올림");
+        assert_eq!(
+            serde_json::to_value(d.state()).unwrap(),
+            before,
+            "{cmd:?} 가 상태를 바꿈"
+        );
+    }
+    // 관리자 워크스페이스와 보드 탭이 그대로고 세션도 살아 있다.
+    let ws = d.state().workspace(mgr).unwrap();
+    assert!(ws.manager);
+    assert_eq!(ws.panes[&mpane].tabs.len(), 2);
+    assert!(host.kills().is_empty());
+}
+
+#[test]
+fn manager_workspace_allows_rename_and_terminal_tab_close() {
+    let (mut d, _host) = dispatcher();
+    let (mgr, pane, terminal, board, _session) =
+        create_manager(&mut d, "/home/dev/.mast/manager", None);
+
+    d.dispatch(Command::RenameWorkspace {
+        workspace: mgr,
+        name: "Ops".into(),
+    })
+    .unwrap();
+    assert_eq!(d.state().workspace(mgr).unwrap().name, "Ops");
+
+    d.dispatch(Command::CloseTab { tab: terminal }).unwrap();
+    let p = &d.state().workspace(mgr).unwrap().panes[&pane];
+    assert_eq!(p.tabs.len(), 1);
+    assert_eq!(p.tabs[0].id, board);
+    assert_eq!(p.active_tab, Some(board), "보드가 남아 active 를 유지한다");
+}
+
+// ---- 관리자 이벤트 링 ----
+
+/// 링에 지금 남아 있는 이벤트를 오래된 순으로 복사한다.
+fn recorded(d: &Dispatcher) -> Vec<AgentEvent> {
+    d.manager_events().events().iter().cloned().collect()
+}
+
+fn last_event(d: &Dispatcher) -> AgentEvent {
+    recorded(d).pop().expect("기록된 이벤트가 있어야 한다")
+}
+
+#[test]
+fn manager_events_stay_empty_while_disabled() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "one");
+    let (tab, session) = create_terminal_tab(&mut d, pane);
+    // status·session 경로.
+    d.apply_osc(
+        batch(&[(session, status_notify("mast:needsInput", "approve?"))]),
+        1_000,
+    );
+    d.apply_osc(
+        batch(&[(
+            session,
+            OscEvent::Osc777Agent(agent_session(AgentKind::Claude, "abc", "/t.jsonl")),
+        )]),
+        1_000,
+    );
+    // SessionExited·respawn·CloseTab 경로.
+    d.apply_event(SessionEvent::SessionExited {
+        session,
+        code: Some(0),
+        ended_at_ms: 5,
+    });
+    d.respawn_tab(tab).unwrap();
+    d.dispatch(Command::CloseTab { tab }).unwrap();
+    // ClosePane·CloseWorkspace 경로.
+    let (pane2, _split) = split_empty(&mut d, pane, SplitDirection::Horizontal);
+    let (_tab2, _session2) = create_terminal_tab(&mut d, pane2);
+    let _ = create_terminal_tab(&mut d, pane);
+    d.dispatch(Command::ClosePane { pane: pane2 }).unwrap();
+    d.dispatch(Command::CloseWorkspace { workspace: ws })
+        .unwrap();
+    create_ws(&mut d, "two");
+
+    assert!(
+        d.manager_events().events().is_empty(),
+        "플래그가 꺼져 있으면 모든 경로에서 0건"
+    );
+    assert_eq!(
+        d.manager_events().next_seq(),
+        1,
+        "기록이 없으면 seq 도 그대로"
+    );
+}
+
+#[test]
+fn manager_records_workspace_opened_and_closed_around_tab_gone() {
+    let (mut d, _host) = dispatcher();
+    d.set_manager_events(true);
+
+    let out = d
+        .dispatch(Command::CreateWorkspace {
+            name: "feature-x".into(),
+            root_path: Some("/home/u/p/x".into()),
+            distro: Some("Ubuntu".into()),
+            tab: Some(NewTab::Terminal { cwd: None }),
+        })
+        .unwrap();
+    let CommandOutput::WorkspaceCreated {
+        workspace,
+        pane,
+        tab: Some(tab),
+        ..
+    } = out
+    else {
+        panic!("unexpected output: {out:?}");
+    };
+    let (tab2, _session2) = create_terminal_tab(&mut d, pane);
+
+    let opened = last_event(&d);
+    assert_eq!(opened.seq, 1);
+    assert_eq!(opened.kind, AgentEventKind::WorkspaceOpened);
+    assert_eq!(opened.workspace.id, workspace.0);
+    assert_eq!(opened.workspace.name, "feature-x");
+    assert_eq!(opened.workspace.root_path.as_deref(), Some("/home/u/p/x"));
+    assert_eq!(opened.workspace.distro, expected_distro("Ubuntu"));
+    assert_eq!(opened.tab, None);
+    assert_eq!(opened.status, None);
+    assert_eq!(opened.message, None);
+    assert_eq!(opened.agent_session, None);
+
+    // 닫히기 직전 이름이 workspaceClosed 스냅샷에 실린다.
+    d.dispatch(Command::RenameWorkspace {
+        workspace,
+        name: "renamed".into(),
+    })
+    .unwrap();
+    d.dispatch(Command::CloseWorkspace { workspace }).unwrap();
+
+    let events = recorded(&d);
+    assert_eq!(events.len(), 4, "opened + 터미널 탭 둘의 tabGone + closed");
+    assert_eq!(events[1].kind, AgentEventKind::TabGone);
+    assert_eq!(events[1].seq, 2);
+    assert_eq!(events[1].tab, Some(tab.0));
+    assert_eq!(events[1].workspace.name, "renamed");
+    assert_eq!(events[2].kind, AgentEventKind::TabGone);
+    assert_eq!(events[2].seq, 3);
+    assert_eq!(events[2].tab, Some(tab2.0));
+    let closed = &events[3];
+    assert_eq!(
+        closed.kind,
+        AgentEventKind::WorkspaceClosed,
+        "closed 가 마지막"
+    );
+    assert_eq!(closed.seq, 4);
+    assert_eq!(closed.tab, None);
+    assert_eq!(closed.workspace.name, "renamed");
+    assert_eq!(closed.workspace.root_path.as_deref(), Some("/home/u/p/x"));
+    assert_eq!(closed.status, None);
+    assert_eq!(closed.message, None);
+    assert_eq!(closed.agent_session, None);
+    assert_eq!(d.manager_events().next_seq(), 5);
+}
+
+#[test]
+fn manager_records_status_and_session_only_on_actual_changes() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "ws");
+    d.set_manager_events(true);
+    let (tab, session) = create_terminal_tab(&mut d, pane);
+
+    let meta = agent_session(
+        AgentKind::Claude,
+        "abc-123",
+        "/home/u/.claude/projects/x/abc.jsonl",
+    );
+    d.apply_osc(
+        batch(&[
+            (session, status_notify("mast:needsInput", "approve?")),
+            (session, OscEvent::Osc777Agent(meta.clone())),
+        ]),
+        1_000,
+    );
+
+    let events = recorded(&d);
+    assert_eq!(events.len(), 2);
+    let status = &events[0];
+    assert_eq!(status.seq, 1);
+    assert_eq!(status.kind, AgentEventKind::Status, "status 가 먼저");
+    assert_eq!(status.workspace.id, ws.0);
+    assert_eq!(status.workspace.name, "ws");
+    assert_eq!(status.tab, Some(tab.0));
+    assert_eq!(status.status, Some(AgentStatus::NeedsInput));
+    assert_eq!(status.message.as_deref(), Some("approve?"));
+    assert_eq!(status.agent_session, None);
+    let session_event = &events[1];
+    assert_eq!(session_event.seq, 2);
+    assert_eq!(session_event.kind, AgentEventKind::Session);
+    assert_eq!(session_event.tab, Some(tab.0));
+    assert_eq!(session_event.agent_session.as_ref(), Some(&meta));
+    assert_eq!(session_event.status, None);
+    assert_eq!(session_event.message, None);
+
+    // 같은 status·session 이 다시 와도 0건.
+    d.apply_osc(
+        batch(&[
+            (session, status_notify("mast:needsInput", "approve?")),
+            (session, OscEvent::Osc777Agent(meta.clone())),
+        ]),
+        2_000,
+    );
+    assert_eq!(recorded(&d).len(), 2, "같은 값 반복은 기록하지 않는다");
+
+    // 상태가 바뀌면 기록 — message 는 그 탭의 현재 값(빈 body 는 앞 문구 유지).
+    d.apply_osc(
+        batch(&[(session, status_notify("mast:running", ""))]),
+        3_000,
+    );
+    let events = recorded(&d);
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[2].kind, AgentEventKind::Status);
+    assert_eq!(events[2].status, Some(AgentStatus::Running));
+    assert_eq!(events[2].message.as_deref(), Some("approve?"));
+    assert_eq!(events[2].seq, 3);
+
+    // 다른 세션 메타로 바뀌면 session 기록.
+    let next = agent_session(AgentKind::Codex, "t:0.1", "/home/u/.codex/sessions/x.jsonl");
+    d.apply_osc(
+        batch(&[(session, OscEvent::Osc777Agent(next.clone()))]),
+        4_000,
+    );
+    let events = recorded(&d);
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[3].kind, AgentEventKind::Session);
+    assert_eq!(events[3].agent_session.as_ref(), Some(&next));
+    assert_eq!(events[3].seq, 4);
+}
+
+#[test]
+fn manager_session_meta_advances_the_ring_without_a_state_change() {
+    let (mut d, _host) = dispatcher();
+    d.set_manager_events(true);
+    let (_ws, pane) = create_ws(&mut d, "ws");
+    let (_tab, session) = create_terminal_tab(&mut d, pane);
+
+    // 상태가 바뀌는 첫 배치 — apply_osc 가 true 다.
+    let revision = d.state().revision;
+    assert!(d.apply_osc(
+        batch(&[(session, status_notify("mast:needsInput", "approve?"))]),
+        1_000,
+    ));
+    assert_eq!(d.state().revision, revision + 1);
+    let seq = d.manager_next_seq();
+
+    // 세션 메타만 바뀌는 배치 — 상태 변경은 없지만 링에는 기록된다. 글루가 이
+    // 기록을 보려면 스냅샷 발행 없이도 writer 를 깨워야 한다 (router).
+    let meta = agent_session(
+        AgentKind::Claude,
+        "abc-123",
+        "/home/u/.claude/projects/x/abc.jsonl",
+    );
+    assert!(!d.apply_osc(
+        batch(&[(session, OscEvent::Osc777Agent(meta.clone()))]),
+        1_000,
+    ));
+    assert_eq!(
+        d.state().revision,
+        revision + 1,
+        "상태 변경이 아니므로 revision 은 그대로다"
+    );
+    assert_eq!(d.manager_next_seq(), seq + 1, "세션 이벤트는 링에 기록된다");
+    let last = last_event(&d);
+    assert_eq!(last.kind, AgentEventKind::Session);
+    assert_eq!(last.agent_session.as_ref(), Some(&meta));
+}
+
+#[test]
+fn manager_tab_gone_covers_exit_respawn_close_tab_and_close_pane() {
+    let (mut d, _host) = dispatcher();
+    d.set_manager_events(true);
+    let (_ws, pane) = create_ws(&mut d, "ws");
+    let (tab, session) = create_terminal_tab(&mut d, pane);
+
+    // 셸 종료도 그 탭 에이전트 수명의 끝이다.
+    d.apply_event(SessionEvent::SessionExited {
+        session,
+        code: Some(0),
+        ended_at_ms: 5,
+    });
+    let gone = last_event(&d);
+    assert_eq!(gone.kind, AgentEventKind::TabGone);
+    assert_eq!(gone.tab, Some(tab.0));
+    assert_eq!(gone.status, None);
+    assert_eq!(gone.seq, 2, "seq 1 은 workspaceOpened");
+
+    // respawn — 이전 에이전트를 clear 하는 경로.
+    d.respawn_tab(tab).unwrap();
+    let gone = last_event(&d);
+    assert_eq!(gone.kind, AgentEventKind::TabGone);
+    assert_eq!(gone.tab, Some(tab.0));
+
+    // CloseTab(터미널).
+    d.dispatch(Command::CloseTab { tab }).unwrap();
+    let gone = last_event(&d);
+    assert_eq!(gone.kind, AgentEventKind::TabGone);
+    assert_eq!(gone.tab, Some(tab.0));
+
+    // ClosePane — 터미널 탭만 tabGone, 같은 pane 의 뷰어 탭은 제외한다.
+    let (pane2, _split) = split_empty(&mut d, pane, SplitDirection::Horizontal);
+    let (tab2, _session2) = create_terminal_tab(&mut d, pane2);
+    d.dispatch(Command::CreateTab {
+        pane: pane2,
+        tab: NewTab::FolderBrowser { path: None },
+    })
+    .unwrap();
+    let before = recorded(&d).len();
+    d.dispatch(Command::ClosePane { pane: pane2 }).unwrap();
+    let events = recorded(&d);
+    assert_eq!(events.len(), before + 1, "터미널 탭 1건만");
+    assert_eq!(events.last().unwrap().kind, AgentEventKind::TabGone);
+    assert_eq!(events.last().unwrap().tab, Some(tab2.0));
+}
+
+#[test]
+fn manager_ignores_viewer_tab_retirement() {
+    let (mut d, _host) = dispatcher();
+    d.set_manager_events(true);
+    let (_ws, pane) = create_ws(&mut d, "ws");
+    let out = d
+        .dispatch(Command::CreateTab {
+            pane,
+            tab: NewTab::FolderBrowser { path: None },
+        })
+        .unwrap();
+    let CommandOutput::TabCreated { tab, .. } = out else {
+        panic!("unexpected output: {out:?}");
+    };
+
+    let before = recorded(&d).len();
+    d.dispatch(Command::CloseTab { tab }).unwrap();
+    assert_eq!(
+        recorded(&d).len(),
+        before,
+        "뷰어 탭 은퇴는 tabGone 이 아니다"
+    );
+}
+
+#[test]
+fn manager_events_skip_the_manager_workspace() {
+    let (mut d, _host) = dispatcher();
+    d.set_manager_events(true);
+    let (_mgr, _pane, terminal, _board, session) =
+        create_manager(&mut d, "/home/dev/.mast/manager", Some("Ubuntu"));
+    assert!(recorded(&d).is_empty(), "관리자 생성은 기록하지 않는다");
+
+    // 관리자 탭의 status·session 변화도 0건.
+    let meta = agent_session(AgentKind::Claude, "abc", "/t.jsonl");
+    d.apply_osc(
+        batch(&[
+            (session, status_notify("mast:needsInput", "approve?")),
+            (session, OscEvent::Osc777Agent(meta)),
+        ]),
+        1_000,
+    );
+    assert!(recorded(&d).is_empty(), "관리자 탭 변화는 0건");
+
+    d.apply_event(SessionEvent::SessionExited {
+        session,
+        code: Some(0),
+        ended_at_ms: 5,
+    });
+    assert!(recorded(&d).is_empty(), "관리자 탭 셸 종료도 0건");
+    d.dispatch(Command::CloseTab { tab: terminal }).unwrap();
+    assert!(recorded(&d).is_empty(), "관리자 탭 닫기도 0건");
+    d.dispatch(Command::RemoveManagerWorkspace).unwrap();
+    assert!(recorded(&d).is_empty(), "관리자 제거는 0건");
+}
+
+#[test]
+fn manager_ring_evicts_the_oldest_event_and_keeps_counting() {
+    let (mut d, _host) = dispatcher();
+    d.set_manager_events(true);
+    let (_ws, pane) = create_ws(&mut d, "ws"); // seq 1: workspaceOpened
+    let (_tab, session) = create_terminal_tab(&mut d, pane);
+    // 상태를 매번 뒤집어 이벤트를 정확히 CAPACITY 개 더 만든다.
+    for i in 0..MANAGER_EVENT_CAPACITY {
+        let token = if i % 2 == 0 {
+            "mast:running"
+        } else {
+            "mast:needsInput"
+        };
+        assert!(d.apply_osc(
+            batch(&[(session, status_notify(token, ""))]),
+            i as u64 + 1_000
+        ));
+    }
+
+    let events = recorded(&d);
+    assert_eq!(events.len(), MANAGER_EVENT_CAPACITY);
+    assert_eq!(
+        events.first().unwrap().seq,
+        2,
+        "가장 오래된 workspaceOpened(seq 1)가 빠진다"
+    );
+    assert_eq!(events.first().unwrap().workspace.name, "ws");
+    assert_eq!(
+        events.last().unwrap().seq,
+        MANAGER_EVENT_CAPACITY as u64 + 1
+    );
+    assert_eq!(
+        d.manager_events().next_seq(),
+        MANAGER_EVENT_CAPACITY as u64 + 2,
+        "seq 는 버려진 이벤트를 세며 계속 증가한다"
+    );
+}
+
+#[test]
+fn manager_events_can_be_switched_off_again() {
+    let (mut d, _host) = dispatcher();
+    let (_ws, pane) = create_ws(&mut d, "ws");
+    let (_tab, session) = create_terminal_tab(&mut d, pane);
+    d.set_manager_events(true);
+    d.apply_osc(
+        batch(&[(session, status_notify("mast:running", ""))]),
+        1_000,
+    );
+    assert_eq!(recorded(&d).len(), 1);
+
+    d.set_manager_events(false);
+    d.apply_osc(
+        batch(&[(session, status_notify("mast:needsInput", "wait"))]),
+        2_000,
+    );
+    assert_eq!(recorded(&d).len(), 1, "끄면 새 이벤트가 없다");
+    assert_eq!(d.manager_events().next_seq(), 2, "링과 seq 는 유지된다");
+}
+
+#[test]
+fn manager_events_ignore_failed_commands() {
+    let (mut d, host) = dispatcher();
+    d.set_manager_events(true);
+    let (_ws, pane) = create_ws(&mut d, "ws");
+    let before = recorded(&d).len();
+
+    assert!(d.dispatch(Command::CloseTab { tab: TabId(9_999) }).is_err());
+    assert!(d
+        .dispatch(Command::CloseWorkspace {
+            workspace: WorkspaceId(9_999)
+        })
+        .is_err());
+    assert!(d.respawn_tab(TabId(9_999)).is_err());
+    assert!(d.dispatch(Command::RemoveManagerWorkspace).is_err());
+    assert!(
+        d.dispatch(Command::ClosePane { pane }).is_err(),
+        "마지막 pane 은 닫히지 않는다"
+    );
+    host.set_fail_spawn(true);
+    assert!(d
+        .dispatch(Command::CreateWorkspace {
+            name: "x".into(),
+            root_path: None,
+            distro: None,
+            tab: Some(NewTab::Terminal { cwd: None }),
+        })
+        .is_err());
+    assert!(d
+        .dispatch(Command::CreateManagerWorkspace {
+            root_path: "/home/dev/.mast/manager".into(),
+            distro: None,
+        })
+        .is_err());
+
+    assert_eq!(recorded(&d).len(), before, "실패한 명령은 0건");
+}
+
+// ---- 관리자 overview·events_since·query ----
+
+#[test]
+fn manager_overview_lists_every_workspace_with_list_tabs_ordering() {
+    let (mut d, _host) = dispatcher();
+    let (alpha, pane_a) = create_ws_rooted(&mut d, "alpha", Some("/home/u/p/alpha"));
+    let (t_term, alpha_session) = create_terminal_tab(&mut d, pane_a);
+    set_title(&mut d, alpha_session, "claude");
+    d.apply_osc(
+        batch(&[(alpha_session, status_notify("mast:needsInput", "approve?"))]),
+        1_000,
+    );
+    let meta = agent_session(
+        AgentKind::Claude,
+        "abc",
+        "/home/u/.claude/projects/x/abc.jsonl",
+    );
+    d.apply_osc(
+        batch(&[(alpha_session, OscEvent::Osc777Agent(meta.clone()))]),
+        1_000,
+    );
+    let viewer = create_viewer_tab(
+        &mut d,
+        pane_a,
+        NewTab::MarkdownViewer {
+            path: "/home/u/notes.md".into(),
+        },
+    );
+    let (pane_b, _split) = split_empty(&mut d, pane_a, SplitDirection::Horizontal);
+    let (t_second, _second_session) = create_terminal_tab(&mut d, pane_b);
+
+    let (mgr, _mgr_pane, mgr_terminal, mgr_board, mgr_session) =
+        create_manager(&mut d, "/home/dev/.mast/manager", Some("Ubuntu"));
+
+    let overview = d.overview();
+    assert_eq!(overview.next_seq, 1, "기록이 꺼져 있으면 seq 는 시작값");
+    assert_eq!(
+        overview.workspaces.len(),
+        2,
+        "관리자 워크스페이스도 manager: true 로 포함한다"
+    );
+
+    let alpha_view = &overview.workspaces[0];
+    assert_eq!(alpha_view.id, alpha.0);
+    assert_eq!(alpha_view.name, "alpha");
+    assert_eq!(alpha_view.root_path.as_deref(), Some("/home/u/p/alpha"));
+    assert_eq!(alpha_view.distro, None);
+    assert!(!alpha_view.manager);
+    assert_eq!(alpha_view.agent_status, AgentStatus::NeedsInput);
+    // pane ID 순 → 탭 표시 순 — list_tabs 와 같은 순서.
+    assert_eq!(
+        alpha_view.tabs.iter().map(|t| t.tab).collect::<Vec<_>>(),
+        vec![t_term.0, viewer.0, t_second.0]
+    );
+    let term = &alpha_view.tabs[0];
+    assert_eq!(term.title, "claude");
+    assert_eq!(term.kind, "terminal");
+    assert_eq!(term.status, "running");
+    assert_eq!(term.agent_status, AgentStatus::NeedsInput);
+    assert_eq!(term.last_agent_message.as_deref(), Some("approve?"));
+    assert_eq!(term.agent_session.as_ref(), Some(&meta));
+    let md = &alpha_view.tabs[1];
+    assert_eq!(md.title, "notes.md");
+    assert_eq!(md.kind, "markdownViewer");
+    assert_eq!(md.status, "viewer");
+    assert_eq!(md.agent_session, None);
+    assert_eq!(md.last_agent_message, None);
+
+    let mgr_view = &overview.workspaces[1];
+    assert_eq!(mgr_view.id, mgr.0);
+    assert_eq!(mgr_view.name, "Manager");
+    assert_eq!(mgr_view.distro, expected_distro("Ubuntu"));
+    assert!(mgr_view.manager);
+    assert_eq!(
+        mgr_view.tabs.iter().map(|t| t.tab).collect::<Vec<_>>(),
+        vec![mgr_terminal.0, mgr_board.0]
+    );
+    assert_eq!(mgr_view.tabs[0].kind, "terminal");
+    assert_eq!(mgr_view.tabs[0].status, "running");
+    assert_eq!(mgr_view.tabs[1].kind, "managerBoard");
+    assert_eq!(mgr_view.tabs[1].status, "viewer");
+    assert_eq!(mgr_view.tabs[1].agent_session, None);
+
+    // (kind, status) 매핑은 list_tabs 와 같다 — 같은 요청자의 목록과 항목 단위로 대조한다.
+    for (view, requester) in [(alpha_view, alpha_session), (mgr_view, mgr_session)] {
+        let listed = d.list_tabs(requester);
+        assert_eq!(
+            view.tabs
+                .iter()
+                .map(|t| (t.tab, t.kind, t.status))
+                .collect::<Vec<_>>(),
+            listed
+                .iter()
+                .map(|t| (t.tab, t.kind, t.status))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn manager_query_events_since_follows_the_ring() {
+    let (mut d, _host) = dispatcher();
+    let (_ws, pane) = create_ws(&mut d, "alpha");
+    let (_tab, _session) = create_terminal_tab(&mut d, pane);
+    let (_mgr, _mgr_pane, _mgr_terminal, _mgr_board, mgr_session) =
+        create_manager(&mut d, "/home/dev/.mast/manager", None);
+
+    // 기록이 꺼져 있으면 빈 목록·시작 seq·gap 없음.
+    let off = d.events_since(0);
+    assert!(off.events.is_empty());
+    assert_eq!(off.next_seq, 1);
+    assert!(!off.gap);
+
+    d.set_manager_events(true);
+    let (_beta, pane_b) = create_ws(&mut d, "beta"); // seq 1: workspaceOpened
+    let (_tab_b, session_b) = create_terminal_tab(&mut d, pane_b);
+    d.apply_osc(
+        batch(&[(session_b, status_notify("mast:running", ""))]),
+        1_000,
+    ); // seq 2
+
+    let all = d.events_since(0);
+    assert_eq!(
+        all.events.iter().map(|e| e.seq).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    assert_eq!(all.next_seq, 3);
+    assert!(!all.gap);
+
+    // manager_query 의 events op — 관리자 세션의 증분 조회.
+    let ManagerReply::Events(increment) = d
+        .manager_query(mgr_session, &ManagerRequest::Events { since: 1 })
+        .unwrap()
+    else {
+        panic!("events 응답이 아니다");
+    };
+    assert_eq!(
+        increment.events.iter().map(|e| e.seq).collect::<Vec<_>>(),
+        vec![2]
+    );
+    assert_eq!(increment.next_seq, 3);
+    assert!(!increment.gap);
+
+    // 미래 since → gap + 보존분 전부.
+    let ManagerReply::Events(gap) = d
+        .manager_query(mgr_session, &ManagerRequest::Events { since: 99 })
+        .unwrap()
+    else {
+        panic!("events 응답이 아니다");
+    };
+    assert!(gap.gap);
+    assert_eq!(
+        gap.events.iter().map(|e| e.seq).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+}
+
+#[test]
+fn manager_query_requires_a_manager_workspace_tab() {
+    let (mut d, _host) = dispatcher();
+    let (_ws, pane) = create_ws(&mut d, "alpha");
+    let (_tab, alpha_session) = create_terminal_tab(&mut d, pane);
+
+    // 관리자 워크스페이스가 아직 없다.
+    assert_eq!(
+        d.manager_query(alpha_session, &ManagerRequest::Workspaces),
+        Err(ManagerQueryError::Forbidden)
+    );
+    // 미상 세션.
+    assert_eq!(
+        d.manager_query(999, &ManagerRequest::Events { since: 0 }),
+        Err(ManagerQueryError::Forbidden)
+    );
+
+    let (_mgr, _mgr_pane, _mgr_terminal, _mgr_board, mgr_session) =
+        create_manager(&mut d, "/home/dev/.mast/manager", None);
+    // 일반 워크스페이스 탭은 관리자 워크스페이스가 생겨도 거부된다.
+    assert_eq!(
+        d.manager_query(alpha_session, &ManagerRequest::Workspaces),
+        Err(ManagerQueryError::Forbidden)
+    );
+    // 관리자 터미널 탭은 두 op 모두 성공한다.
+    assert!(matches!(
+        d.manager_query(mgr_session, &ManagerRequest::Workspaces),
+        Ok(ManagerReply::Overview(_))
+    ));
+    assert!(matches!(
+        d.manager_query(mgr_session, &ManagerRequest::Events { since: 0 }),
+        Ok(ManagerReply::Events(_))
+    ));
+
+    // 관리자 워크스페이스를 해체하면 그 세션은 미상이 되어 다시 거부된다.
+    d.dispatch(Command::RemoveManagerWorkspace).unwrap();
+    assert_eq!(
+        d.manager_query(mgr_session, &ManagerRequest::Workspaces),
+        Err(ManagerQueryError::Forbidden)
+    );
+}
+
+#[test]
+fn manager_query_reply_json_matches_the_contract() {
+    let (mut d, _host) = dispatcher();
+    let (_ws, pane) = create_ws(&mut d, "alpha");
+    let (_tab, alpha_session) = create_terminal_tab(&mut d, pane);
+    let (_mgr, _mgr_pane, _mgr_terminal, _mgr_board, mgr_session) =
+        create_manager(&mut d, "/home/dev/.mast/manager", None);
+
+    let json = manager_reply_json(d.manager_query(mgr_session, &ManagerRequest::Workspaces));
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["result"]["nextSeq"], 1);
+    assert!(value["result"]["workspaces"].is_array());
+
+    let json = manager_reply_json(d.manager_query(alpha_session, &ManagerRequest::Workspaces));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&json).unwrap(),
+        serde_json::json!({
+            "error": {
+                "code": "forbidden",
+                "message": "the requesting tab is not in a manager workspace"
+            }
+        })
+    );
+}
+
+#[test]
+fn manager_tab_queries_stay_inside_the_manager_workspace() {
+    let (mut d, _host) = dispatcher();
+    let (_alpha, pane) = create_ws(&mut d, "alpha");
+    let (alpha_tab, alpha_session) = create_terminal_tab(&mut d, pane);
+    set_title(&mut d, alpha_session, "claude");
+
+    let (_mgr, _mgr_pane, mgr_terminal, _mgr_board, mgr_session) =
+        create_manager(&mut d, "/home/dev/.mast/manager", None);
+
+    // list_tabs — 관리자 탭은 자기 워크스페이스만 본다.
+    let listed = d.list_tabs(mgr_session);
+    assert!(!listed.is_empty());
+    assert!(listed.iter().all(|t| t.workspace_name == "Manager"));
+    assert!(listed.iter().all(|t| t.tab != alpha_tab.0));
+    // resolve_send_target — alpha 의 제목·ID 어느 쪽으로도 닿지 않는다.
+    assert_eq!(
+        d.resolve_send_target(mgr_session, "claude"),
+        Err(SendTargetError::NoMatch)
+    );
+    assert_eq!(
+        d.resolve_send_target(mgr_session, &format!("#{}", alpha_tab.0)),
+        Err(SendTargetError::NoMatch)
+    );
+
+    // 반대 방향도 그대로다 — 일반 탭은 관리자 탭을 보지 못한다.
+    let listed = d.list_tabs(alpha_session);
+    assert!(listed.iter().all(|t| t.tab != mgr_terminal.0));
+    assert_eq!(
+        d.resolve_send_target(alpha_session, &format!("#{}", mgr_terminal.0)),
+        Err(SendTargetError::NoMatch)
+    );
 }

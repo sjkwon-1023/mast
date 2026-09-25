@@ -16,6 +16,8 @@
 //! 여기서 나오는 모드 이벤트를 **누가 소비하는지**(sink 가 아니라 세션)와 어떤
 //! 모드를 추적할지는 [`crate::session`] 의 정책이다 — 이 모듈은 감지만 한다.
 
+use crate::model::{AgentKind, AgentSession};
+
 /// 문자열은 payload 를 UTF-8 lossy 변환한 결과다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OscEvent {
@@ -66,6 +68,14 @@ pub enum OscEvent {
     /// (`host.rs::bash_argv` rustdoc). 반면 OSC 777 은 conhost 가 모르는 시퀀스라
     /// 그대로 통과하며, 그 통과는 알림 파이프라인으로 이미 실기 검증됐다(ADR-0006).
     Osc777Started,
+    /// OSC 777 — `mast-agent;<base64>` 형식의 **에이전트 세션 메타**. Claude/Codex
+    /// hook 이 자기 탭의 transcript 경로와 세션 id 를 알려 주는 채널이며, 세 번째
+    /// 필드는 표준 base64(UTF-8 JSON)다.
+    ///
+    /// 전송·질의와 같은 규율 — 세 번째 필드가 없으면 형식 불일치로 이벤트가 되지
+    /// 않는다. 검증 규칙은 이 모듈의 `parse_agent_session` 하나에 모아 두었다:
+    /// 하나라도 실패하면 이벤트도, 코얼레싱 슬롯도 만들어지지 않는다.
+    Osc777Agent(AgentSession),
     /// OSC 10/11 — 전경/배경색 **질의**(`ESC ] 10 ; ? ST`). `code` 는 10 = 전경,
     /// 11 = 배경이다. 앱(글루)이 우리 테마 값으로 **직접 응답**한다
     /// (`apps/mast/src-tauri/src/sink.rs`).
@@ -433,11 +443,76 @@ fn parse_payload(payload: &[u8]) -> Option<OscEvent> {
                 // 전송·질의와 달리 필드를 요구하지 않는다 — 표식은 도착 사실만으로
                 // 의미가 끝나고, 뒤에 무엇이 붙어도 그 사실은 변하지 않는다.
                 "mast-started" => Some(OscEvent::Osc777Started),
+                // 세 번째 필드(payload)가 없으면 형식 불일치 — 빈 메타를 조용히
+                // 기록하지 않는다. base64 표준 알파벳에는 `;` 가 없어 그대로 payload 다.
+                "mast-agent" => {
+                    let session_b64 = parts.next()?;
+                    parse_agent_session(session_b64).map(OscEvent::Osc777Agent)
+                }
                 _ => None,
             }
         }
         _ => None,
     }
+}
+
+/// `mast-agent` payload 상한 (bytes) — 디코드한 JSON 의 크기.
+const MAX_AGENT_PAYLOAD_BYTES: usize = 8 * 1024;
+
+/// `session` 길이 상한 (chars).
+const MAX_AGENT_SESSION_CHARS: usize = 128;
+
+/// `transcript` 길이 상한 (bytes).
+const MAX_AGENT_TRANSCRIPT_BYTES: usize = 4096;
+
+/// `mast-agent` 의 세 번째 필드(base64 UTF-8 JSON)를 검증해 [`AgentSession`] 으로
+/// 바꾼다. **하나라도 실패하면 `None`** — 호출자는 이벤트를 만들지 않고, 글루의
+/// 코얼레싱 배치는 값이 있는 필드만 반영하므로 슬롯도 만들어지지 않는다 (구 코어가
+/// 이 kind 를 통째로 무시하는 것과 같은 결과).
+///
+/// 검증 순서: 디코드 [`decode_send_text`](crate::send::decode_send_text) → ≤ 8 KiB →
+/// UTF-8 JSON 파서 → JSON **객체** → `v == 1` → `agent` ∈ {claude, codex} →
+/// `session` 1~128자 `[A-Za-z0-9._:-]` → `transcript` ≤ 4096 bytes +
+/// [`validate_linux_path`](crate::wslpath::validate_linux_path).
+/// 모르는 추가 키는 무시한다 (전방 호환 — 뒤에 필드가 늘어도 구 코어가 산다).
+fn parse_agent_session(session_b64: &str) -> Option<AgentSession> {
+    let bytes = crate::send::decode_send_text(session_b64).ok()?;
+    if bytes.len() > MAX_AGENT_PAYLOAD_BYTES {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let object = value.as_object()?;
+    if object.get("v")?.as_u64()? != 1 {
+        return None;
+    }
+    let agent = match object.get("agent")?.as_str()? {
+        "claude" => AgentKind::Claude,
+        "codex" => AgentKind::Codex,
+        _ => return None,
+    };
+    let session_id = object.get("session")?.as_str()?;
+    if session_id.is_empty()
+        || session_id.chars().count() > MAX_AGENT_SESSION_CHARS
+        || !session_id.bytes().all(is_agent_session_char)
+    {
+        return None;
+    }
+    let transcript_path = object.get("transcript")?.as_str()?;
+    if transcript_path.len() > MAX_AGENT_TRANSCRIPT_BYTES {
+        return None;
+    }
+    crate::wslpath::validate_linux_path(transcript_path).ok()?;
+    Some(AgentSession {
+        agent,
+        session_id: session_id.to_owned(),
+        transcript_path: transcript_path.to_owned(),
+    })
+}
+
+/// `session` 허용 문자 — `[A-Za-z0-9._:-]`. 경로 구분자·공백·셸 문자를 메타에 실을
+/// 수 없고, ASCII 밖 문자도 거부된다 (길이 상한이 bytes 가 아니라 chars 인 것과 무관).
+fn is_agent_session_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-')
 }
 
 #[cfg(test)]
@@ -642,6 +717,167 @@ mod tests {
             scan(b"\x1b]777;mast-started;7\x07"),
             vec![OscEvent::Osc777Started]
         );
+    }
+
+    /// 테스트 전용 표준 base64 인코더 — 코어에는 인코더가 없다 (디코드만 소비한다).
+    fn b64(input: &[u8]) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in input.chunks(3) {
+            let b0 = chunk[0];
+            let b1 = *chunk.get(1).unwrap_or(&0);
+            let b2 = *chunk.get(2).unwrap_or(&0);
+            out.push(ALPHABET[(b0 >> 2) as usize] as char);
+            out.push(ALPHABET[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+            out.push(if chunk.len() > 1 {
+                ALPHABET[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char
+            } else {
+                '='
+            });
+            out.push(if chunk.len() > 2 {
+                ALPHABET[(b2 & 0x3f) as usize] as char
+            } else {
+                '='
+            });
+        }
+        out
+    }
+
+    fn agent_events(json: &str) -> Vec<OscEvent> {
+        scan(format!("\x1b]777;mast-agent;{}\x07", b64(json.as_bytes())).as_bytes())
+    }
+
+    fn agent_json(value: serde_json::Value) -> Vec<OscEvent> {
+        agent_events(&value.to_string())
+    }
+
+    fn valid_agent() -> serde_json::Value {
+        serde_json::json!({
+            "v": 1,
+            "agent": "claude",
+            "session": "abc-123",
+            "transcript": "/home/u/.claude/projects/x/abc.jsonl",
+        })
+    }
+
+    #[test]
+    fn osc777_agent_parsed() {
+        assert_eq!(
+            agent_json(valid_agent()),
+            vec![OscEvent::Osc777Agent(AgentSession {
+                agent: AgentKind::Claude,
+                session_id: "abc-123".into(),
+                transcript_path: "/home/u/.claude/projects/x/abc.jsonl".into(),
+            })]
+        );
+
+        let mut codex = valid_agent();
+        codex["agent"] = serde_json::json!("codex");
+        codex["session"] = serde_json::json!("t:0.1");
+        codex["transcript"] = serde_json::json!("/home/u/.codex/sessions/x.jsonl");
+        assert_eq!(
+            agent_json(codex),
+            vec![OscEvent::Osc777Agent(AgentSession {
+                agent: AgentKind::Codex,
+                session_id: "t:0.1".into(),
+                transcript_path: "/home/u/.codex/sessions/x.jsonl".into(),
+            })]
+        );
+    }
+
+    #[test]
+    fn osc777_agent_st_terminated_and_split() {
+        let payload = b64(valid_agent().to_string().as_bytes());
+        let seq = format!("\x1b]777;mast-agent;{payload}\x1b\\");
+        let bytes = seq.as_bytes();
+        let split = bytes.len() / 2;
+        let mut s = OscScanner::new();
+        assert_eq!(s.feed(&bytes[..split]), vec![]);
+        assert_eq!(s.feed(&bytes[split..]).len(), 1, "ST 종결·청크 분할");
+    }
+
+    #[test]
+    fn osc777_agent_accepts_boundary_lengths_and_extra_keys() {
+        let mut value = valid_agent();
+        value["session"] = serde_json::json!("a".repeat(MAX_AGENT_SESSION_CHARS));
+        value["transcript"] =
+            serde_json::json!(format!("/{}", "a".repeat(MAX_AGENT_TRANSCRIPT_BYTES - 1)));
+        // 모르는 추가 키는 무시한다 (전방 호환).
+        value["future"] = serde_json::json!({"nested": [1, 2, 3], "unknown": null});
+        let events = agent_json(value);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            OscEvent::Osc777Agent(session) => {
+                assert_eq!(session.session_id.len(), MAX_AGENT_SESSION_CHARS);
+                assert_eq!(session.transcript_path.len(), MAX_AGENT_TRANSCRIPT_BYTES);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn osc777_agent_rejects_each_malformed_field() {
+        // 세 번째 필드 없음 / 잘못된 base64.
+        assert_eq!(scan(b"\x1b]777;mast-agent\x07"), vec![]);
+        assert_eq!(scan(b"\x1b]777;mast-agent;!!!\x07"), vec![]);
+
+        // JSON 아님·객체 아님.
+        assert_eq!(agent_events("not json"), vec![]);
+        assert_eq!(agent_events("[]"), vec![]);
+        assert_eq!(agent_events("\"claude\""), vec![]);
+
+        // 필드 누락.
+        for key in ["v", "agent", "session", "transcript"] {
+            let mut value = valid_agent();
+            value.as_object_mut().unwrap().remove(key);
+            assert_eq!(agent_json(value), vec![], "{key} 누락은 거부");
+        }
+
+        // v 는 정수 1 만.
+        for v in [
+            serde_json::json!(2),
+            serde_json::json!("1"),
+            serde_json::json!(1.5),
+        ] {
+            let mut value = valid_agent();
+            value["v"] = v.clone();
+            assert_eq!(agent_json(value), vec![], "v={v}");
+        }
+
+        // 모르는 agent.
+        let mut value = valid_agent();
+        value["agent"] = serde_json::json!("gemini");
+        assert_eq!(agent_json(value), vec![]);
+
+        // session 빈 값·129자·금지 문자(`/`·공백·비ASCII).
+        for session in [
+            String::new(),
+            "a".repeat(MAX_AGENT_SESSION_CHARS + 1),
+            "abc/def".to_owned(),
+            "abc def".to_owned(),
+            "세션".to_owned(),
+        ] {
+            let mut value = valid_agent();
+            value["session"] = serde_json::json!(session);
+            assert_eq!(agent_json(value), vec![], "session={session:?}");
+        }
+
+        // transcript 비절대·`..` 컴포넌트·4096 bytes 초과.
+        for transcript in [
+            "relative/x.jsonl".to_owned(),
+            "/home/u/../x.jsonl".to_owned(),
+            format!("/{}", "a".repeat(MAX_AGENT_TRANSCRIPT_BYTES)),
+        ] {
+            let mut value = valid_agent();
+            value["transcript"] = serde_json::json!(transcript);
+            assert_eq!(agent_json(value), vec![], "transcript={transcript:?}");
+        }
+
+        // 디코드 결과 8 KiB 초과 — JSON 자체는 멀쩡하고 상한만 넘는다.
+        let mut value = valid_agent();
+        value["pad"] = serde_json::json!("a".repeat(MAX_AGENT_PAYLOAD_BYTES));
+        assert_eq!(agent_json(value), vec![]);
     }
 
     #[test]

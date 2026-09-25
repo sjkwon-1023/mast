@@ -1,8 +1,9 @@
 //! 구조 변경 명령을 실행한다. revision 증가와 최종 불변식 검사는 dispatch가 맡는다.
 
 use super::events::recompute_agent_summary;
-use super::tabs::{path_title, validate_viewer_path, PreparedTab};
-use super::{unknown, Command, CommandError, CommandOutput, Dispatcher};
+use super::tabs::{path_title, validate_viewer_path, viewer_tab, PreparedTab};
+use super::{unknown, Command, CommandError, CommandOutput, Dispatcher, NewTab};
+use crate::manager::{AgentEvent, AgentEventKind};
 use crate::model::{
     AgentStatus, NotificationState, Pane, PaneId, SplitId, SplitTree, TabId, TabKind, Workspace,
     WorkspaceId,
@@ -21,14 +22,7 @@ impl Dispatcher {
                 // 프런트 검사를 우회하는 호출도 이 코어 경계에서 거부한다.
                 #[cfg(not(target_os = "macos"))]
                 if let Some(path) = root_path.as_deref() {
-                    if path == "/mnt" || path.starts_with("/mnt/") {
-                        return Err(CommandError::InvalidPath {
-                            message: format!(
-                                "workspace root cannot live under /mnt (Windows drives are \
-                                 data-only): {path}"
-                            ),
-                        });
-                    }
+                    reject_mnt_root(path)?;
                 }
                 #[cfg(target_os = "macos")]
                 let distro = { let _ = distro; None };
@@ -55,26 +49,125 @@ impl Dispatcher {
                     initial.tabs.push(prepared.into_tab(tab_id));
                     initial.active_tab = Some(tab_id);
                 }
-                self.state.workspaces.push(Workspace {
+                let created = Workspace {
                     id: workspace,
                     name,
                     root_path,
                     distro,
                     git_branch: None,
                     git_dirty: None,
+                    manager: false,
                     layout: SplitTree::Leaf { pane },
                     panes: [(pane, initial)].into(),
                     active_pane: pane,
                     agent_status: AgentStatus::Idle,
                     last_agent_message: None,
-                });
+                };
+                // 기록 시점은 성공한 변이 뒤 — 스냅샷은 방금 만든 값에서 뜬다.
+                let recorded = self.manager_snapshot(&created);
+                self.state.workspaces.push(created);
                 self.state.active_workspace = Some(workspace);
+                if let Some(recorded) = recorded {
+                    self.manager_events
+                        .record(AgentEvent::new(AgentEventKind::WorkspaceOpened, recorded));
+                }
                 Ok(CommandOutput::WorkspaceCreated {
                     workspace,
                     pane,
                     tab: tab_id,
                     session,
                 })
+            }
+
+            Command::CreateManagerWorkspace { root_path, distro } => {
+                // 관리자 워크스페이스는 하나뿐이다 — 검증이 상태 변이보다 먼저라
+                // 실패 시 상태·next_id·revision 이 전부 불변이다.
+                if self.state.workspaces.iter().any(|ws| ws.manager) {
+                    return Err(CommandError::ManagerExists);
+                }
+                crate::wslpath::validate_linux_path(&root_path)
+                    .map_err(|message| CommandError::InvalidPath { message })?;
+                #[cfg(not(target_os = "macos"))]
+                reject_mnt_root(&root_path)?;
+                #[cfg(target_os = "macos")]
+                let distro = {
+                    let _ = distro;
+                    None
+                };
+                // 스폰·할당 순서는 CreateWorkspace 와 같다 — workspace → pane →
+                // 터미널 탭 → 보드 탭 순으로 발급하므로 터미널 탭 id 는 peek_id(2) 다.
+                let history_tab = self.state.peek_id(2);
+                let root = Some(root_path);
+                let prepared = self.prepare_tab_with(
+                    &root,
+                    &distro,
+                    NewTab::Terminal { cwd: None },
+                    history_tab,
+                )?;
+                let workspace = WorkspaceId(self.state.alloc_id());
+                let pane = PaneId(self.state.alloc_id());
+                let terminal = TabId(self.state.alloc_id());
+                debug_assert_eq!(terminal.0, history_tab, "peek 한 탭 id 와 실제 발급 불일치");
+                let board = TabId(self.state.alloc_id());
+                let session = prepared.session();
+                let mut initial = empty_pane(pane);
+                initial.tabs.push(prepared.into_tab(terminal));
+                initial.tabs.push(viewer_tab(
+                    board,
+                    "Manager".to_owned(),
+                    TabKind::ManagerBoard,
+                ));
+                initial.active_tab = Some(board);
+                self.state.workspaces.push(Workspace {
+                    id: workspace,
+                    name: "Manager".to_owned(),
+                    root_path: root,
+                    distro,
+                    git_branch: None,
+                    git_dirty: None,
+                    manager: true,
+                    layout: SplitTree::Leaf { pane },
+                    panes: [(pane, initial)].into(),
+                    active_pane: pane,
+                    agent_status: AgentStatus::Idle,
+                    last_agent_message: None,
+                });
+                // active_workspace 는 바꾸지 않는다 — None 이었을 때만 새 워크스페이스.
+                if self.state.active_workspace.is_none() {
+                    self.state.active_workspace = Some(workspace);
+                }
+                Ok(CommandOutput::WorkspaceCreated {
+                    workspace,
+                    pane,
+                    tab: Some(terminal),
+                    session,
+                })
+            }
+
+            Command::RemoveManagerWorkspace => {
+                let wi = self
+                    .state
+                    .workspaces
+                    .iter()
+                    .position(|ws| ws.manager)
+                    .ok_or_else(|| CommandError::UnknownTarget {
+                        target: "manager workspace".to_owned(),
+                    })?;
+                // 해체는 CloseWorkspace 와 같다 — retire_tabs 가 kill 과 자원 해제를
+                // 모두 맡고, active fallback 은 그대로 첫 워크스페이스다.
+                let removed = self.state.workspaces.remove(wi);
+                let removed_id = removed.id;
+                self.retire_tabs(
+                    removed.distro.as_deref(),
+                    removed.panes.values().flat_map(|pane| &pane.tabs),
+                );
+                if self.state.active_workspace == Some(removed_id) {
+                    self.state.active_workspace = self.state.workspaces.first().map(|ws| ws.id);
+                    if let Some(shown) = self.state.workspaces.first_mut() {
+                        clear_visible_unread(shown);
+                    }
+                }
+                Ok(CommandOutput::Done)
             }
 
             Command::SwitchWorkspace { workspace } => {
@@ -96,7 +189,20 @@ impl Dispatcher {
                     .iter()
                     .position(|ws| ws.id == workspace)
                     .ok_or_else(|| unknown("workspace", workspace.0))?;
+                // 관리자 워크스페이스는 고정 — 제거는 RemoveManagerWorkspace 뿐이다.
+                if self.state.workspaces[wi].manager {
+                    return Err(CommandError::ManagerPinned);
+                }
                 let removed = self.state.workspaces.remove(wi);
+                // 닫히기 직전 이름·경로를 담는다 — 제거 뒤에는 읽을 수 없다.
+                let recorded = self.manager_snapshot(&removed);
+                let terminal_tabs: Vec<TabId> = removed
+                    .panes
+                    .values()
+                    .flat_map(|pane| &pane.tabs)
+                    .filter(|tab| matches!(tab.kind, TabKind::Terminal { .. }))
+                    .map(|tab| tab.id)
+                    .collect();
                 self.retire_tabs(
                     removed.distro.as_deref(),
                     removed.panes.values().flat_map(|pane| &pane.tabs),
@@ -110,6 +216,17 @@ impl Dispatcher {
                     if let Some(shown) = self.state.workspaces.first_mut() {
                         clear_visible_unread(shown);
                     }
+                }
+                // tabGone(터미널 탭마다)을 먼저, workspaceClosed 를 마지막에 — 순서가 계약이다.
+                if let Some(recorded) = recorded {
+                    for tab in terminal_tabs {
+                        self.manager_events.record(
+                            AgentEvent::new(AgentEventKind::TabGone, recorded.clone())
+                                .with_tab(tab),
+                        );
+                    }
+                    self.manager_events
+                        .record(AgentEvent::new(AgentEventKind::WorkspaceClosed, recorded));
                 }
                 Ok(CommandOutput::Done)
             }
@@ -141,13 +258,22 @@ impl Dispatcher {
                     .iter()
                     .position(|ws| ws.id == workspace)
                     .ok_or_else(|| unknown("workspace", workspace.0))?;
+                // 관리자 워크스페이스는 자리도 고정이다 — 자기 이동과 이웃 지정
+                // (before) 양쪽 모두 거부한다.
+                if self.state.workspaces[from].manager {
+                    return Err(CommandError::ManagerPinned);
+                }
                 if let Some(target) = before {
                     if target == workspace {
                         // 자기 앞 = 제자리. 옮길 것이 없다 (variant rustdoc).
                         return Ok(CommandOutput::Done);
                     }
-                    if !self.state.workspaces.iter().any(|ws| ws.id == target) {
+                    let Some(target_ws) = self.state.workspaces.iter().find(|ws| ws.id == target)
+                    else {
                         return Err(unknown("workspace", target.0));
+                    };
+                    if target_ws.manager {
+                        return Err(CommandError::ManagerPinned);
                     }
                 }
 
@@ -228,13 +354,34 @@ impl Dispatcher {
 
             Command::ClosePane { pane } => {
                 let wi = self.ws_index_of_pane(pane)?;
+                // 보드 탭이 든 pane 은 고정 — LastPane 보다 이 판정이 먼저다
+                // (관리자 워크스페이스는 pane 하나뿐이라 그대로면 LastPane 이 된다).
+                if self.state.workspaces[wi].panes[&pane]
+                    .tabs
+                    .iter()
+                    .any(|t| matches!(t.kind, TabKind::ManagerBoard))
+                {
+                    return Err(CommandError::ManagerPinned);
+                }
                 if self.state.workspaces[wi].panes.len() <= 1 {
                     return Err(CommandError::LastPane);
                 }
                 let removed = collapse_pane(&mut self.state.workspaces[wi], pane);
                 recompute_agent_summary(&mut self.state.workspaces[wi]);
                 let distro = self.state.workspaces[wi].distro.clone();
+                let recorded = self.manager_snapshot(&self.state.workspaces[wi]);
                 self.retire_tabs(distro.as_deref(), removed.tabs.iter());
+                // 은퇴하는 터미널 탭마다 tabGone — 뷰어 탭은 에이전트 수명이 없다.
+                if let Some(recorded) = recorded {
+                    for tab in &removed.tabs {
+                        if matches!(tab.kind, TabKind::Terminal { .. }) {
+                            self.manager_events.record(
+                                AgentEvent::new(AgentEventKind::TabGone, recorded.clone())
+                                    .with_tab(tab.id),
+                            );
+                        }
+                    }
+                }
                 Ok(CommandOutput::Done)
             }
 
@@ -275,6 +422,13 @@ impl Dispatcher {
 
             Command::CloseTab { tab } => {
                 let (wi, pane, ti) = self.locate_tab(tab)?;
+                // 보드 탭은 고정 — 관리자 터미널 탭은 기존대로 닫을 수 있다.
+                if matches!(
+                    self.state.workspaces[wi].panes[&pane].tabs[ti].kind,
+                    TabKind::ManagerBoard
+                ) {
+                    return Err(CommandError::ManagerPinned);
+                }
                 let ws = &mut self.state.workspaces[wi];
                 let pane_ref = ws.panes.get_mut(&pane).expect("locate_tab 이 존재를 보장");
                 let removed = pane_ref.tabs.remove(ti);
@@ -305,7 +459,16 @@ impl Dispatcher {
                 }
                 recompute_agent_summary(ws);
                 let distro = ws.distro.clone();
+                let recorded = self.manager_snapshot(&self.state.workspaces[wi]);
                 self.retire_tabs(distro.as_deref(), std::iter::once(&removed));
+                // 은퇴하는 터미널 탭만 tabGone — 뷰어 탭은 에이전트 수명이 없다.
+                if let Some(recorded) = recorded {
+                    if matches!(removed.kind, TabKind::Terminal { .. }) {
+                        self.manager_events.record(
+                            AgentEvent::new(AgentEventKind::TabGone, recorded).with_tab(removed.id),
+                        );
+                    }
+                }
                 Ok(CommandOutput::Done)
             }
 
@@ -357,6 +520,20 @@ impl Dispatcher {
             }
         }
     }
+}
+
+/// Windows 드라이브는 데이터 전용이라 워크스페이스 루트가 될 수 없다 —
+/// CreateWorkspace·CreateManagerWorkspace 공유 계약 (macOS 에는 /mnt 규칙이 없다).
+#[cfg(not(target_os = "macos"))]
+fn reject_mnt_root(path: &str) -> Result<(), CommandError> {
+    if path == "/mnt" || path.starts_with("/mnt/") {
+        return Err(CommandError::InvalidPath {
+            message: format!(
+                "workspace root cannot live under /mnt (Windows drives are data-only): {path}"
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn empty_pane(id: PaneId) -> Pane {

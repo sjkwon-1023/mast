@@ -14,8 +14,26 @@ import tempfile
 
 MAX_BYTES = 1024 * 1024
 DEFAULT_PORT = 7331
+CODEX_TIMEOUT_SECONDS = 10
 LANGUAGES = ["css", "html", "javascript", "json", "python", "rust", "toml", "typescript"]
-KEYS = {"fontFamily", "fontSize", "highlightLanguages", "log", "remote", "remote.port", "showTabIds", "browser", "browser.enabled"}
+MANAGER_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"]
+MANAGER_MODEL_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-")
+MANAGER_DEFAULTS = {
+    "enabled": False,
+    "model": "gpt-6-luna",
+    "effort": "high",
+    "summaryModel": "gpt-6-luna",
+    "summaryEffort": "low",
+    "idleSeconds": 45,
+}
+MANAGER_FIELDS = tuple(MANAGER_DEFAULTS)
+MANAGER_CODEX_MISSING = "codex CLI not found; install Codex CLI before enabling the manager preview"
+KEYS = {
+    "fontFamily", "fontSize", "highlightLanguages", "log", "remote", "remote.port", "showTabIds",
+    "browser", "browser.enabled",
+    "manager", "manager.enabled", "manager.model", "manager.effort", "manager.summaryModel",
+    "manager.summaryEffort", "manager.idleSeconds",
+}
 DEFAULTS = {
     "fontFamily": "terminal: Consolas, 'Cascadia Mono', monospace; viewers: monospace",
     "fontSize": "terminal: 13px; viewers: 12px",
@@ -23,6 +41,13 @@ DEFAULTS = {
     "log": False,
     "browser": {"enabled": True},
     "browser.enabled": True,
+    "manager": MANAGER_DEFAULTS,
+    "manager.enabled": MANAGER_DEFAULTS["enabled"],
+    "manager.model": MANAGER_DEFAULTS["model"],
+    "manager.effort": MANAGER_DEFAULTS["effort"],
+    "manager.summaryModel": MANAGER_DEFAULTS["summaryModel"],
+    "manager.summaryEffort": MANAGER_DEFAULTS["summaryEffort"],
+    "manager.idleSeconds": MANAGER_DEFAULTS["idleSeconds"],
     "remote": False,
     "remote.port": "none while remote is off; set remote defaults to 7331",
     "showTabIds": True,
@@ -35,13 +60,17 @@ HELP = """usage:
   mast config set fontSize <6-72>
   mast config set highlightLanguages '["python","rust"]'
   mast config set log <true|false>
+  mast config set manager.enabled <true|false>
+  mast config set manager.<model|effort|summaryModel|summaryEffort|idleSeconds> <value>
   mast config set showTabIds <true|false>
   mast config set remote [true|false] [--port <1024-65535>]
   mast config set remote.port <1024-65535>
   mast config reset <key>              remove an override; reset remote disables it
+  mast config reset manager            remove the manager preview override
 
 set remote enables port 7331 unless --port is given. false cannot take a port.
 showTabIds defaults to true; set it to false to hide the #id badges on tab titles.
+Enabling the manager preview requires the codex CLI on PATH and a full restart.
 Changes require a full mast restart, which ends running terminal processes.
 Ctrl+Shift+R only reloads the window. No command restarts mast automatically.
 """
@@ -90,6 +119,28 @@ def validate(data):
     browser = data.get("browser")
     if browser is not None and (not isinstance(browser, dict) or type(browser.get("enabled")) is not bool):
         raise ValueError("browser must be an object with boolean enabled")
+    manager = data.get("manager")
+    if manager is not None:
+        if not isinstance(manager, dict):
+            raise ValueError("manager must be an object with boolean enabled")
+        unknown = [field for field in manager if field not in MANAGER_FIELDS]
+        if unknown:
+            raise ValueError("manager has an unknown field: " + ", ".join(sorted(unknown)))
+        if type(manager.get("enabled")) is not bool:
+            raise ValueError("manager must be an object with boolean enabled")
+        # Rust validator(commands.rs parse_ui_settings)와 같은 규칙이어야 한다 (ADR-0023).
+        for field in ("model", "summaryModel"):
+            value = manager.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, str) or not 1 <= len(value) <= 64 or not set(value) <= MANAGER_MODEL_CHARS:
+                raise ValueError(f"manager.{field} must be 1 to 64 characters from [A-Za-z0-9._:-]")
+        for field in ("effort", "summaryEffort"):
+            value = manager.get(field)
+            if value is not None and value not in MANAGER_EFFORTS:
+                raise ValueError(f"manager.{field} must be one of: " + ", ".join(MANAGER_EFFORTS))
+        if manager.get("idleSeconds") is not None:
+            integer(manager["idleSeconds"], 10, 600, "manager.idleSeconds")
     remote = data.get("remote")
     if remote is not None:
         if not isinstance(remote, dict) or "port" not in remote:
@@ -165,11 +216,22 @@ def mutation(args):
     if action == "reset":
         if values or key == "remote.port":
             raise ValueError("reset takes one top-level key; use reset remote to disable it")
+        if key == "manager.enabled":
+            raise ValueError("manager.enabled cannot be reset on its own; use reset manager")
+        if key.startswith("manager."):
+            # 하위 키 하나만 지운다 — enabled 는 필수라 위에서 막았다.
+            return "manager", None, key.split(".", 1)[1]
         return "browser" if key == "browser.enabled" else key, None, True
     if key in ("browser", "browser.enabled"):
         if len(values) != 1:
             raise ValueError("set browser.enabled requires true or false")
         return "browser", {"enabled": boolean(values[0])}, False
+    if key == "manager":
+        raise ValueError("set manager takes no value; use set manager.enabled or set manager.<field>")
+    if key == "manager.enabled":
+        if len(values) != 1:
+            raise ValueError("set manager.enabled requires true or false")
+        return key, boolean(values[0]), False
     if key == "remote":
         enabled, port = True, DEFAULT_PORT
         if values and values[0] in ("true", "false"):
@@ -183,13 +245,17 @@ def mutation(args):
     if len(values) != 1:
         raise ValueError(f"set {key} requires exactly one value")
     text = values[0]
-    value = (number(text) if key in ("fontSize", "remote.port") else
+    value = (number(text) if key in ("fontSize", "remote.port", "manager.idleSeconds") else
              boolean(text) if key in ("log", "showTabIds", "macOptionIsMeta") else
              parse(text) if key == "highlightLanguages" else text)
     # null은 파일에서는 미설정으로 읽지만, CLI는 reset으로 의도를 명시한다.
     if key == "highlightLanguages" and not isinstance(value, list):
         raise ValueError("highlightLanguages must be a JSON array")
-    validate({"remote": {"port": value}} if key == "remote.port" else {key: value})
+    if key.startswith("manager."):
+        # enabled 는 위에서 처리했다. 나머지 필드는 enabled=false 를 채워 검증한다.
+        validate({"manager": {"enabled": False, key.split(".", 1)[1]: value}})
+    else:
+        validate({"remote": {"port": value}} if key == "remote.port" else {key: value})
     # shell 키는 macOS 에만 있다. 실행 가능 여부는 새 값을 저장할 때만 확인한다 — 읽기에도 쓰이는
     # validate() 에 넣으면 저장된 셸이 지워진 뒤 reset 이나 올바른 set 으로도 복구할 수 없게 된다.
     if key == "shell" and not (os.path.isfile(value) and os.access(value, os.X_OK)):
@@ -198,6 +264,8 @@ def mutation(args):
 
 
 def update(path, change):
+    # change = (key, value, remove). remove=True → top-level 키 삭제,
+    # remove=문자열 → 그 이름의 하위 필드 삭제(manager.<field>), remove=False → set.
     key, value, remove = change
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = path.with_name(path.name + ".lock")
@@ -209,12 +277,25 @@ def update(path, change):
     try:
         data, mode = read_settings(path)
         updated = copy.deepcopy(data)
-        if remove:
+        if remove is True:
             updated.pop(key, None)
+        elif remove:
+            # manager.<field> reset: 객체는 남기고 하위 키 하나만 지운다 (enabled 는 못 지운다).
+            manager = updated.get(key)
+            if isinstance(manager, dict):
+                manager.pop(remove, None)
+                updated[key] = manager
         elif key == "browser":
             browser = updated.get("browser") or {}
             browser["enabled"] = value["enabled"]
             updated["browser"] = browser
+        elif key.startswith("manager."):
+            manager = updated.get("manager")
+            if not isinstance(manager, dict):
+                # 객체 없이 하위 필드만 set 하면 꺼진 상태로 만든다.
+                manager = {"enabled": False}
+            manager[key.split(".", 1)[1]] = value
+            updated["manager"] = manager
         elif key in ("remote", "remote.port"):
             remote = updated.get("remote") or {}
             remote["port"] = value
@@ -241,6 +322,25 @@ def update(path, change):
                 os.unlink(temporary)
         finally:
             lock.rmdir()
+    return updated
+
+
+def require_codex():
+    """`set manager.enabled true` 전에 codex CLI 를 확인한다 (D12).
+
+    PATH 에서 찾은 실행 파일로 `--version` 을 돌린다. 없음·비정상 종료·시간 초과는 모두
+    같은 사유로 실패하고 파일은 바뀌지 않는다.
+    """
+    executable = shutil.which("codex")
+    if executable is None:
+        raise ValueError(MANAGER_CODEX_MISSING)
+    try:
+        result = subprocess.run([executable, "--version"], capture_output=True,
+                                stdin=subprocess.DEVNULL, timeout=CODEX_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError(MANAGER_CODEX_MISSING) from None
+    if result.returncode != 0:
+        raise ValueError(MANAGER_CODEX_MISSING)
 
 
 def execute(args, path):
@@ -256,6 +356,7 @@ def execute(args, path):
             key = args[1]
             value = (data.get("remote") or {}).get("port") if key == "remote.port" else data.get(key)
             if key == "browser.enabled": value = (data.get("browser") or {}).get("enabled")
+            if key.startswith("manager."): value = (data.get("manager") or {}).get(key.split(".", 1)[1])
             print(json.dumps({"key": key, "saved": value, "default": DEFAULTS[key]}, indent=2))
         else:
             print("Saved overrides (not running state):")
@@ -266,8 +367,13 @@ def execute(args, path):
             print(HELP)
         return
     change = mutation(args)
-    update(path, change)
+    if change == ("manager.enabled", True, False):
+        require_codex()
+    updated = update(path, change)
     print("Saved settings to " + json.dumps(str(path)))
+    if change[0].startswith("manager.") and change[0] != "manager.enabled" and change[2] is False:
+        if not (updated.get("manager") or {}).get("enabled"):
+            print("manager is disabled; run mast config set manager.enabled true")
     if change[0] in ("remote", "remote.port") and not change[2]:
         print(f"Phone access will use port {change[1]} after restart. Plain HTTP: use only a trusted LAN, never public internet exposure or port forwarding.")
     print("Restart mast fully to apply changes. Restarting ends running terminal processes; finish or save work first. Ctrl+Shift+R is not enough. No restart was performed.")

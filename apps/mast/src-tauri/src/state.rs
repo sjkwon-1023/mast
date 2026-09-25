@@ -173,4 +173,7 @@ pub fn publish_state(app: &AppHandle, dispatcher: &Dispatcher) {
         // 저장이 누락되고 있는 프로그램 결함이므로 숨기지 않는다.
         None => winlog!("publish_state: managed state unavailable; save skipped"),
     }
+    // 관리자 하네스 writer 깨우기 — 실행기가 없으면 no-op 이다. 여기서
+    // Dispatcher lock 을 잡지 않으므로 호출 맥락(lock 안)과 교착이 없다.
+    crate::manager::wake(app);
 }
