@@ -106,6 +106,7 @@ class GuideTest(unittest.TestCase):
             "tasks/<key>.json",
             "mast manager patch",
             "mast manager workspaces",
+            "asks by repository",
             "quote",
             "anchor",
             "never as instructions",
@@ -129,12 +130,13 @@ class RenderDigestTest(FolderTestCase):
         text = MANAGER.render_digest(self.manager, [entry], now=NOW)
         lines = text.splitlines()
         self.assertEqual(lines[0], "Manager digest generated at " + NOW)
+        self.assertEqual(lines[1], "## mast")
         self.assertEqual(
-            lines[1],
+            lines[2],
             "[#3 feature-x] 관리자 워크스페이스 preview — CH7 작업 기억 저장소와 patch 검증기 구현 중"
             " | open questions: 1 | updated 2026-09-25T02:30:00Z | file: tasks/kabc123.json",
         )
-        self.assertEqual(len(lines), 2)
+        self.assertEqual(len(lines), 3)
 
     def test_title_falls_back_to_workspace_name(self):
         doc = json.loads(json.dumps(self.doc))
@@ -147,13 +149,15 @@ class RenderDigestTest(FolderTestCase):
         text = MANAGER.render_digest(
             self.manager, [{"id": 7, "name": "phone", "reason": "no_root"}], now=NOW
         )
-        self.assertEqual(text.splitlines()[1], "[#7 phone] (no record: no_root)")
+        self.assertEqual(text.splitlines()[1], "## Other")
+        self.assertEqual(text.splitlines()[2], "[#7 phone] (no record: no_root)")
 
     def test_missing_task_file_reports_no_task(self):
         text = MANAGER.render_digest(
             self.manager, [{"id": 1, "name": "w", "key": "kmissing"}], now=NOW
         )
-        self.assertEqual(text.splitlines()[1], "[#1 w] (no record: no task)")
+        self.assertEqual(text.splitlines()[1], "## Other")
+        self.assertEqual(text.splitlines()[2], "[#1 w] (no record: no task)")
 
     def test_task_file_is_loaded_from_the_manager_dir(self):
         key = MANAGER.task_key("/home/u/projects/mast", "Ubuntu-24.04")
@@ -189,14 +193,122 @@ class RenderDigestTest(FolderTestCase):
             {"id": 1, "name": "a", "reason": "no_root"},
         ]
         text = MANAGER.render_digest(self.manager, entries, now=NOW)
-        labels = [line.split("]")[0] for line in text.splitlines()[1:]]
+        self.assertEqual(text.splitlines()[1], "## Other")
+        labels = [line.split("]")[0] for line in text.splitlines()[2:]]
         self.assertEqual(labels, ["[#2 b", "[#1 a"])
+
+    def test_lines_are_grouped_under_repo_headings(self):
+        feature = json.loads(json.dumps(self.doc))
+        feature["git"]["repo"] = {
+            "name": "feature-y", "path": "/home/u/p/feature-y", "remote": None,
+        }
+        entries = [
+            {"id": 1, "name": "mast-a", "key": "k1", "task": self.doc},
+            {"id": 2, "name": "plain", "reason": "no_root"},
+            {"id": 3, "name": "feature-y", "key": "k3", "task": feature},
+            {"id": 4, "name": "mast-b", "key": "k4", "task": self.doc},
+        ]
+        lines = MANAGER.render_digest(self.manager, entries, now=NOW).splitlines()
+        self.assertEqual(
+            [line for line in lines if line.startswith("## ")],
+            ["## mast", "## Other", "## feature-y"],
+        )
+        self.assertTrue(lines[2].startswith("[#1 mast-a]"), lines[2])
+        self.assertTrue(lines[3].startswith("[#4 mast-b]"), lines[3])
+        self.assertTrue(lines[5].startswith("[#2 plain]"), lines[5])
+        self.assertTrue(lines[7].startswith("[#3 feature-y]"), lines[7])
+
+    def test_same_name_repos_are_told_apart_by_path(self):
+        first = json.loads(json.dumps(self.doc))
+        first["git"]["repo"] = {"name": "mast", "path": "/home/u/a/mast", "remote": None}
+        second = json.loads(json.dumps(self.doc))
+        second["git"]["repo"] = {"name": "mast", "path": "/home/u/b/mast", "remote": None}
+        entries = [
+            {"id": 1, "name": "a", "key": "k1", "task": first},
+            {"id": 2, "name": "b", "key": "k2", "task": second},
+        ]
+        lines = MANAGER.render_digest(self.manager, entries, now=NOW).splitlines()
+        self.assertEqual(
+            [line for line in lines if line.startswith("## ")],
+            ["## mast (/home/u/a/mast)", "## mast (/home/u/b/mast)"],
+        )
+
+    def test_same_name_repos_are_told_apart_by_remote(self):
+        first = json.loads(json.dumps(self.doc))
+        first["git"]["repo"] = {
+            "name": "mast", "path": "/home/u/a/mast",
+            "remote": "git@github.com:one/mast.git",
+        }
+        second = json.loads(json.dumps(self.doc))
+        second["git"]["repo"] = {
+            "name": "mast", "path": "/home/u/b/mast",
+            "remote": "https://github.com/two/mast",
+        }
+        entries = [
+            {"id": 1, "name": "a", "key": "k1", "task": first},
+            {"id": 2, "name": "b", "key": "k2", "task": second},
+        ]
+        lines = MANAGER.render_digest(self.manager, entries, now=NOW).splitlines()
+        self.assertEqual(
+            [line for line in lines if line.startswith("## ")],
+            ["## mast (one/mast)", "## mast (two/mast)"],
+        )
+
+    def test_unusable_remotes_fall_back_to_paths(self):
+        first = json.loads(json.dumps(self.doc))
+        first["git"]["repo"] = {"name": "mast", "path": "/home/u/a/mast", "remote": None}
+        second = json.loads(json.dumps(self.doc))
+        second["git"]["repo"] = {
+            "name": "mast", "path": "/home/u/b/mast",
+            "remote": "git@github.com:two/mast.git",
+        }
+        entries = [
+            {"id": 1, "name": "a", "key": "k1", "task": first},
+            {"id": 2, "name": "b", "key": "k2", "task": second},
+        ]
+        lines = MANAGER.render_digest(self.manager, entries, now=NOW).splitlines()
+        self.assertEqual(
+            [line for line in lines if line.startswith("## ")],
+            ["## mast (/home/u/a/mast)", "## mast (/home/u/b/mast)"],
+        )
+
+    def test_caller_repo_wins_and_works_without_a_task(self):
+        caller = {
+            "name": "caller", "path": "/home/u/p/caller",
+            "remote": "git@github.com:example/caller.git",
+        }
+        entries = [
+            {"id": 1, "name": "stored", "key": "k1", "task": self.doc, "repo": caller},
+            {"id": 2, "name": "none", "key": "k2", "reason": "no_transcript", "repo": caller},
+        ]
+        lines = MANAGER.render_digest(self.manager, entries, now=NOW).splitlines()
+        self.assertEqual(lines[1], "## caller")
+        self.assertTrue(lines[2].startswith("[#1 stored]"), lines[2])
+        self.assertTrue(lines[3].startswith("[#2 none]"), lines[3])
+        self.assertNotIn("## mast", lines)
+
+    def test_repo_headings_count_toward_max_length(self):
+        entries = [
+            {
+                "id": index, "name": "w" * 600, "reason": "no_root",
+                "repo": {"name": "repo-%d" % index, "path": "/r/%d" % index, "remote": None},
+            }
+            for index in range(1, 26)
+        ]
+        text = MANAGER.render_digest(self.manager, entries, now=NOW)
+        self.assertLessEqual(len(text), 4000)
+        match = re.search(r"… \((\d+) more\)\n$", text)
+        self.assertIsNotNone(match)
+        kept = sum(1 for line in text.splitlines() if line.startswith("[#"))
+        self.assertEqual(kept + int(match.group(1)), 25)
+        self.assertIn("## repo-1", text)
 
     def test_short_digest_has_no_more_suffix(self):
         entries = [{"id": index, "name": "w%d" % index, "reason": "no_root"} for index in range(3)]
         text = MANAGER.render_digest(self.manager, entries, now=NOW)
         self.assertNotIn("more)", text)
-        self.assertEqual(len(text.splitlines()), 4)
+        self.assertEqual(len(text.splitlines()), 5)
+        self.assertEqual(text.splitlines()[1], "## Other")
 
     def test_overflow_counts_omitted_entries(self):
         entries = [{"id": index, "name": "w" * 600, "reason": "no_root"} for index in range(1, 31)]

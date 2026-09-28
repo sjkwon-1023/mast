@@ -200,9 +200,47 @@ class NewTaskAndValidateTest(StoreTestCase):
         self.assertEqual(doc["plans"], [])
         self.assertEqual(doc["progress"], {"text": "", "reported_done": False, "verified_done": False})
         self.assertIsNone(doc["git"]["branch"])
+        self.assertIsNone(doc["git"]["repo"])
 
     def test_fixture_valid_document(self):
         self.assertIsNone(STORE.validate_task(self.fresh()))
+
+    def test_git_repo_is_optional_and_typed(self):
+        doc = self.fresh()
+        del doc["git"]["repo"]
+        self.assertIsNone(STORE.validate_task(doc))
+        doc["git"]["repo"] = {
+            "name": "mast", "path": "/home/u/projects/mast", "remote": None,
+        }
+        self.assertIsNone(STORE.validate_task(doc))
+        doc["git"]["repo"] = {"name": "mast", "path": "/home/u/projects/mast", "remote": ""}
+        self.assertIsNone(STORE.validate_task(doc))
+
+    def test_git_repo_violations_are_rejected(self):
+        cases = [
+            (lambda doc: doc["git"].__setitem__("repo", "mast"), "git.repo"),
+            (lambda doc: doc["git"].__setitem__("repo", []), "git.repo"),
+            (lambda doc: doc["git"].__setitem__("repo", {"name": "mast", "path": "/p"}),
+             "remote"),
+            (lambda doc: doc["git"].__setitem__(
+                "repo", {"name": "", "path": "/p", "remote": None}), "name"),
+            (lambda doc: doc["git"].__setitem__(
+                "repo", {"name": "m" * 121, "path": "/p", "remote": None}), "120"),
+            (lambda doc: doc["git"].__setitem__(
+                "repo", {"name": "m", "path": "/" + "p" * 1024, "remote": None}), "1024"),
+            (lambda doc: doc["git"].__setitem__(
+                "repo", {"name": "m", "path": "/p", "remote": "r" * 1025}), "1024"),
+            (lambda doc: doc["git"].__setitem__(
+                "repo", {"name": "m", "path": "/p", "remote": 7}), "remote"),
+            (lambda doc: doc["git"].__setitem__(
+                "repo", {"name": "m", "path": "/p", "remote": None, "extra": 1}), "unknown"),
+        ]
+        for mutate, snippet in cases:
+            doc = self.fresh()
+            mutate(doc)
+            reason = STORE.validate_task(doc)
+            self.assertIsNotNone(reason, snippet)
+            self.assertIn(snippet, reason)
 
     def test_fixture_invalid_documents_have_distinct_reasons(self):
         expected = ["meta.status", "anchor", "unknown top-level key"]

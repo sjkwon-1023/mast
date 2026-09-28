@@ -259,8 +259,9 @@ the board reads summarized task JSON instead of panes.
   `mast manager patch`, and not touch other tabs or workspaces. There is no `hook` subcommand and
   no generated `.codex/hooks.json`; if a TUI project hook is later confirmed to work, the hook
   path can return.
-- The digest contains one line per task (`[#id name] title — headline | open questions: N |
-  updated … | file: tasks/<key>.json`), so the manager can open the JSON for detail.
+- The digest contains one line per workspace (`[#id name] title — headline | open questions: N |
+  updated … | file: tasks/<key>.json`) under a `## <repo name>` heading (fallback `## Other`,
+  §13), so the manager can open the JSON for detail.
 
 ### 10. Work memory survives close and reopen
 
@@ -295,6 +296,36 @@ the board reads summarized task JSON instead of panes.
   `mast-manager.py` and `mast-manager-harness.py` into `~/.mast/bin/`; the WSL `mast` dispatcher
   and macOS `scripts/macos/mast.py` route `manager …`.
 
+### 13. Repository groups are display-only (added 2026-09-28)
+
+- The unit of memory stays the **task** (one record per workspace identity). There is no
+  repo-level task record: facts shared by a whole repository already live in that repository's
+  `AGENTS.md` and ADRs, so a second store would duplicate them and drift.
+- The harness derives a workspace's repository automatically from
+  `git rev-parse --git-common-dir` (relative results resolve against the root path): `.bare` and
+  `.git` yield the parent directory as the repo root, a bare `x.git` drops the suffix, and
+  anything else takes the directory's basename. A non-empty
+  `git rev-parse --show-superproject-working-tree` that is not an echoed flag (older git prints
+  unknown flags back) marks a submodule (including one inside a
+  linked worktree), whose repo root is its worktree top level.
+- The origin remote is recorded with userinfo stripped when present, else null. `scheme://` URLs
+  also drop the query and fragment (a token can sit in the query); `file://` URLs keep their
+  original text; scp-style `user:token@host:path` URLs drop the user part (only when the part
+  before the first `@` has a `:` and no `/`, so paths containing `@` stay intact).
+- Name, path and remote are cached per root path for the harness lifetime so board generation
+  never calls git. A transient failure (git timeout, or git that cannot run) is not cached and is
+  retried no more often than every 300 seconds; the repo recorded at finish comes from that cache
+  only, so recording it never runs git inside the task lock.
+- A null detection does not erase the stored `git.repo`, so a workspace whose path stops being a
+  git repository stays in its old repository group as long as its task record exists (accepted
+  limit).
+- The task key (`k + sha256(distro + "\0" + root_path)[:20]`) is unchanged — repository grouping
+  is presentation only.
+- The board and the digest group by repository: cards sit under a repo header (`repo.name`, or
+  "Other" when there is none) and digest lines under `## <repo name>` / `## Other`, with same-name
+  repos told apart by their remote or path. A workspace in another WSL distribution keeps
+  `repo: null`: the harness cannot see that filesystem, so it must not claim a repository there.
+
 ## Alternatives rejected
 
 - **A classifier for utterance decisions** (Jev) — the user is on its waitlist, and this work's
@@ -317,6 +348,10 @@ the board reads summarized task JSON instead of panes.
   token refresh could replace the file under the user's real codex login. The measured ~2.2k-token
   overhead of the global `~/.codex/AGENTS.md` (which loads even with `--ignore-user-config`) is
   accepted instead.
+- **Repo-level task memory** (added 2026-09-28) — one record per repository instead of per
+  workspace. Rejected: the unit the user works in is the workspace, repo-wide facts belong in
+  `AGENTS.md` and ADRs, and two workspaces of the same repository (worktrees, branches) would
+  fight over one record.
 
 ## Consequences and limits
 

@@ -33,6 +33,7 @@ import sys
 import tempfile
 import time
 import types
+import urllib.parse
 
 LOG = logging.getLogger("mast-manager-harness")
 
@@ -44,6 +45,11 @@ SUMMARY_TIMEOUT_SECONDS = 180
 NOTIFY_TITLE_MAX = 80
 NOTIFY_BODY_MAX = 200
 GIT_TIMEOUT_SECONDS = 5
+# 일시 실패한 root를 다시 판별하기까지의 최소 간격(초).
+REPO_RETRY_SECONDS = 300.0
+MAX_REPO_NAME = 120
+MAX_REPO_PATH = 1024
+MAX_REPO_REMOTE = 1024
 
 # 요약 자식에게서 지우는 상속 환경. 자식 안에서 hook이 다시 돌지 않게 한다.
 REMOVED_ENV = ("MAST", "MAST_TAB", "MAST_TTY", "CODEX_THREAD_ID")
@@ -623,6 +629,141 @@ def _current_branch(root_path):
     return branch if ok and branch else None
 
 
+def repo_from_common_dir(common_dir):
+    """git 공통 디렉터리 경로에서 레포 이름·루트를 파싱한다. 아니면 None.
+
+    `.bare`·`.git`이면 부모 디렉터리가 레포 루트이고 이름은 그 디렉터리 이름이다.
+    그 밖의 `x.git` 베어 저장소는 `.git` 접미를 뗀 이름을 쓴다.
+    """
+    if not isinstance(common_dir, str) or not common_dir.strip():
+        return None
+    path = os.path.normpath(common_dir.strip())
+    name = os.path.basename(path)
+    if name in (".bare", ".git"):
+        path = os.path.dirname(path)
+        name = os.path.basename(path)
+    elif name.endswith(".git"):
+        name = name[: -len(".git")]
+    if not name:
+        return None
+    return {"name": name, "path": path}
+
+
+def _resolve_common_dir(root_path, output):
+    """`git rev-parse --git-common-dir` 출력을 절대 경로로 해석한다. 아니면 None.
+
+    구버전 git은 모르는 `--` 플래그를 오류 없이 그대로 출력하므로 `-`로 시작하는
+    줄은 버린다. 상대 경로는 root_path 기준으로 해석하고, 해석 뒤에도 절대
+    경로가 아니면 없는 것으로 본다.
+    """
+    lines = output.strip().splitlines()
+    common = lines[0].strip() if lines else ""
+    if not common or common.startswith("-"):
+        return None
+    if not os.path.isabs(common):
+        common = os.path.realpath(os.path.join(root_path, common))
+    if not os.path.isabs(common):
+        return None
+    return common
+
+
+def _remote_without_userinfo(remote):
+    """원격 URL에서 자격 증명과 쿼리·fragment를 제거한다. 해석할 수 없으면 None.
+
+    `scheme://` URL은 netloc의 마지막 `@` 앞을 버리고 쿼리·fragment도 버린다
+    (토큰이 쿼리에 올 수 있다). `file://`은 netloc이 비어도 원문을 유지한다.
+    scp 형식은 첫 `@` 앞이 `u:tok`처럼 `:`를 품고 `/`는 없을 때만 자격 증명으로
+    보고 버린다. 경로에 `@`가 있는 원격(`git@host:o/r@v2.git`, 로컬 경로)은 그대로다.
+    """
+    if not isinstance(remote, str):
+        return None
+    text = remote.strip()
+    if not text:
+        return None
+    if "://" not in text:
+        userinfo, sep, rest = text.partition("@")
+        if sep and ":" in userinfo and "/" not in userinfo:
+            return rest
+        return text
+    try:
+        parsed = urllib.parse.urlsplit(text)
+    except ValueError:
+        return None
+    host = parsed.netloc.rpartition("@")[2]
+    if not host:
+        return text if parsed.scheme == "file" else None
+    return urllib.parse.urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+
+
+def _git_retryable(error):
+    """git 실행 자체가 실패했으면 True (타임아웃·OSError) — 일시적일 수 있다."""
+    return error.endswith(" timed out") or error.startswith("cannot run git: ")
+
+
+def _detect_repo(root_path):
+    """`detect_repo`의 본체. `(repo, retry)` — retry가 True면 캐시하지 않는다."""
+    ok, out, error = _git(root_path, ["rev-parse", "--git-common-dir"])
+    if not ok:
+        return None, _git_retryable(error)
+    common = _resolve_common_dir(root_path, out)
+    if common is None:
+        return None, False
+    repo = repo_from_common_dir(common)
+    if repo is None:
+        return None, False
+    ok, out, error = _git(root_path, ["rev-parse", "--show-superproject-working-tree"])
+    if not ok:
+        if _git_retryable(error):
+            return None, True
+    elif out.strip() and not out.strip().startswith("-"):
+        # 2.13 미만 git은 모르는 플래그를 그대로 출력하므로 `-`로 시작하면 서브모듈이 아니다.
+        # 서브모듈의 공통 디렉터리는 super 안에 있어 레포 루트가 아니다. 워크트리
+        # 루트를 path로, basename을 이름으로 쓴다(linked worktree 안의 서브모듈 포함).
+        ok, out, error = _git(root_path, ["rev-parse", "--show-toplevel"])
+        if ok and out.strip():
+            top = os.path.normpath(out.strip().splitlines()[0].strip())
+            if os.path.isabs(top):
+                repo = {"name": os.path.basename(top), "path": top}
+        elif not ok and _git_retryable(error):
+            return None, True
+    ok, out, error = _git(root_path, ["config", "--get", "remote.origin.url"])
+    if not ok and _git_retryable(error):
+        return None, True
+    remote = _remote_without_userinfo(out.strip() if ok else "")
+    return {
+        "name": _clip(repo["name"], MAX_REPO_NAME),
+        "path": _clip(repo["path"], MAX_REPO_PATH),
+        "remote": _clip(remote, MAX_REPO_REMOTE) if remote else None,
+    }, False
+
+
+def detect_repo(root_path):
+    """root_path의 git 레포 `{name, path, remote}`. git이 아니거나 실패하면 None.
+
+    공통 디렉터리에서 레포 이름·루트를 파싱하고 서브모듈은 워크트리 루트를 쓴다.
+    origin 원격은 자격 증명·쿼리·fragment를 뗀 뒤 붙이고, 없으면 remote는 null이다.
+    이름 120자, 경로·원격 1024자로 자른다.
+    """
+    if isinstance(root_path, Path):
+        root_path = str(root_path)
+    if not isinstance(root_path, str) or not root_path or not os.path.isdir(root_path):
+        return None
+    repo, _ = _detect_repo(root_path)
+    return repo
+
+
+def _task_repo(repos, root_path):
+    """작업에 기록할 repo 값. 락 밖에서 채운 `repos` 매핑에 있는 값만 쓴다.
+
+    매핑에 없거나 null이면 None — 판별하지 않고 저장된 `git.repo`를 유지한다.
+    락 안(`update_task` mutate)에서 git을 부르지 않기 위한 규칙이다.
+    """
+    if not isinstance(repos, dict) or not isinstance(root_path, str) or not root_path:
+        return None
+    repo = repos.get(root_path)
+    return repo if isinstance(repo, dict) else None
+
+
 def _plan_failure(message):
     LOG.warning("%s", message)
     return {"changed": [], "removed": [], "hashes": {}, "error": message}
@@ -782,13 +923,15 @@ def fast_path_no_change(utterances, changed_plans):
 
 
 def finish_summary(manager_dir, workspace, patch, error, utterances, cursor_updates,
-                   plan_hashes, allowed_plan_paths, truncated, settings, now):
+                   plan_hashes, allowed_plan_paths, truncated, settings, now, repos=None):
     """요약 결과를 작업 문서에 적용한다.
 
     `update_task` 락 안에서 최신본을 다시 읽어 처리한다. 성공(patch 있음)이면
     patch를 적용하고 `meta.model`/`effort`·`last_collected_at`·커서를 갱신하며
     사라진 계획을 `status: removed`로 바꾼다. 실패(error 있음)면 `meta.last_error`만
     바꾸고 커서는 그대로 둔다. 반환은 적용·거부·removed 목록, notify 판단, 최종 문서다.
+    `repos`는 락 밖에서 채운 root_path→repo 캐시이며, 매핑에 없으면 판별하지 않고
+    저장된 `git.repo`를 유지한다.
     """
     root_path = workspace.get("rootPath")
     distro = workspace.get("distro")
@@ -838,6 +981,9 @@ def finish_summary(manager_dir, workspace, patch, error, utterances, cursor_upda
         branch = _current_branch(root_path)
         if branch is not None:
             doc["git"]["branch"] = branch
+        repo = _task_repo(repos, root_path)
+        if repo is not None:
+            doc["git"]["repo"] = repo
         return doc
 
     doc = MANAGER.update_task(
@@ -859,11 +1005,13 @@ def finish_summary(manager_dir, workspace, patch, error, utterances, cursor_upda
     }
 
 
-def finish_fast(manager_dir, workspace, cursor_updates, now):
+def finish_fast(manager_dir, workspace, cursor_updates, now, repos=None):
     """LLM 없이 커서와 `last_collected_at`만 갱신한다(빠른 경로).
 
     빠른 경로에서도 사라진 계획은 결정적으로 `status: removed`로 바꾸고
-    `git.branch`를 갱신한다. `meta.last_error`는 그대로 둔다(요약을 하지 않았다).
+    `git.branch`·`git.repo`를 갱신한다. `meta.last_error`는 그대로 둔다(요약을
+    하지 않았다). `repos`는 락 밖에서 채운 root_path→repo 캐시이며, 매핑에 없으면
+    판별하지 않고 저장된 `git.repo`를 유지한다.
     """
     root_path = workspace.get("rootPath")
     distro = workspace.get("distro")
@@ -884,6 +1032,9 @@ def finish_fast(manager_dir, workspace, cursor_updates, now):
         branch = _current_branch(root_path)
         if branch is not None:
             doc["git"]["branch"] = branch
+        repo = _task_repo(repos, root_path)
+        if repo is not None:
+            doc["git"]["repo"] = repo
         return doc
 
     doc = MANAGER.update_task(
@@ -2058,7 +2209,7 @@ def _task_keys(manager_dir):
     return sorted(name[:-len(".json")] for name in names if name.endswith(".json"))
 
 
-def _board_entry(workspace, manager_dir, manager_distro, default_distro):
+def _board_entry(workspace, manager_dir, manager_distro, default_distro, repos=None):
     entry = {
         "workspaceId": workspace.get("id"),
         "key": None,
@@ -2067,6 +2218,7 @@ def _board_entry(workspace, manager_dir, manager_distro, default_distro):
         "task": None,
         "error": None,
         "archive": None,
+        "repo": None,
     }
     root_path = workspace.get("rootPath")
     if not isinstance(root_path, str) or not root_path:
@@ -2077,9 +2229,17 @@ def _board_entry(workspace, manager_dir, manager_distro, default_distro):
     distro = workspace.get("distro")
     entry["key"] = MANAGER.task_key(root_path, distro)
     if _resolve_distro(distro, default_distro) != _resolve_distro(manager_distro, default_distro):
+        # 다른 배포판의 경로는 이 파일시스템에서 볼 수 없다 — 같은 경로를 판별하면
+        # 틀린 레포가 붙으므로 repo는 null로 둔다.
         entry["state"] = "unsupported"
         entry["reason"] = "other_distro"
         return entry
+
+    cached_repo = None
+    if isinstance(repos, dict) and root_path in repos:
+        cached_repo = repos[root_path]
+    if cached_repo is not None:
+        entry["repo"] = cached_repo
 
     doc, error = MANAGER.load_task(manager_dir, entry["key"])
     if error is not None:
@@ -2089,6 +2249,11 @@ def _board_entry(workspace, manager_dir, manager_distro, default_distro):
     if doc is not None:
         entry["state"] = "active"
         entry["task"] = doc
+        if cached_repo is None:
+            # 캐시에 없거나 판별이 null이면 작업의 git.repo로 돌아간다(digest와 같은 규칙).
+            git = doc.get("git")
+            repo = git.get("repo") if isinstance(git, dict) else None
+            entry["repo"] = repo if isinstance(repo, dict) else None
         return entry
 
     archive = _archive_info(manager_dir, entry["key"])
@@ -2102,14 +2267,18 @@ def _board_entry(workspace, manager_dir, manager_distro, default_distro):
     return entry
 
 
-def build_board(overview, manager_dir, manager_distro, default_distro):
-    """BoardEntry 목록. 관리자 워크스페이스는 빼고 64개까지 만든다."""
+def build_board(overview, manager_dir, manager_distro, default_distro, repos=None):
+    """BoardEntry 목록. 관리자 워크스페이스는 빼고 64개까지 만든다.
+
+    `repos`는 root_path→repo 캐시다. 캐시가 없으면 작업의 `git.repo`로 돌아간다.
+    """
     entries = []
     workspaces = overview.get("workspaces") if isinstance(overview, dict) else None
     for workspace in workspaces if isinstance(workspaces, list) else []:
         if not isinstance(workspace, dict) or workspace.get("manager") is True:
             continue
-        entries.append(_board_entry(workspace, manager_dir, manager_distro, default_distro))
+        entries.append(_board_entry(
+            workspace, manager_dir, manager_distro, default_distro, repos))
         if len(entries) >= MAX_BOARD_ENTRIES:
             break
     return entries
@@ -2118,7 +2287,8 @@ def build_board(overview, manager_dir, manager_distro, default_distro):
 def _digest_inputs(overview, entries):
     """digest에 넘길 workspace 목록을 만든다.
 
-    보드가 항목을 만든 관리자 제외 워크스페이스에만 `reason`/`task`/`key`를 더한다.
+    보드가 항목을 만든 관리자 제외 워크스페이스에만 `reason`/`task`/`key`/`repo`를
+    더한다. `repo`는 digest가 레포별로 묶는 데 쓴다.
     """
     by_id = {}
     for entry in entries:
@@ -2135,6 +2305,7 @@ def _digest_inputs(overview, entries):
         item["reason"] = entry["reason"]
         item["task"] = entry["task"]
         item["key"] = entry["key"]
+        item["repo"] = entry["repo"]
         result.append(item)
     return result
 
@@ -2289,6 +2460,9 @@ class Harness:
         self.waiting_since = {}
         self.event_sessions = {}
         self.closed_keys = set()
+        self.repos = {}
+        self.repo_failures = {}
+        self.repo_retry_seconds = REPO_RETRY_SECONDS
 
     @property
     def log_path(self):
@@ -2330,6 +2504,7 @@ class Harness:
         for event in events if isinstance(events, list) else []:
             self.note_event(event)
             _apply_event(self.overview, event)
+        self.prewarm_repos()
         self.send_board()
 
     def note_event(self, event):
@@ -2485,12 +2660,50 @@ class Harness:
         for key in [key for key in self.idle_timers if key[0] == workspace_id]:
             del self.idle_timers[key]
 
+    def repo_for(self, root_path):
+        """root_path의 레포 판별(캐시).
+
+        일시 실패는 실패 시각만 남기고 재시도 간격(REPO_RETRY_SECONDS) 안에는 다시
+        판별하지 않는다(캐시 미스로 취급). 그래서 계속 타임아웃되는 root가 events
+        배치마다 루프를 막지 않는다.
+        """
+        if not isinstance(root_path, str) or not root_path:
+            return None
+        if root_path in self.repos:
+            return self.repos[root_path]
+        failed_at = self.repo_failures.get(root_path)
+        if failed_at is not None and time.monotonic() - failed_at < self.repo_retry_seconds:
+            return None
+        repo, retry = _detect_repo(root_path)
+        if retry:
+            self.repo_failures[root_path] = time.monotonic()
+            return None
+        self.repo_failures.pop(root_path, None)
+        self.repos[root_path] = repo
+        return repo
+
+    def prewarm_repos(self):
+        """overview에 새로 보인 root의 레포 판별을 캐시에 채운다.
+
+        관리자 워크스페이스는 보드가 쓰지 않고, 다른 배포판의 워크스페이스는
+        이 파일시스템에 없으므로 건너뛴다.
+        """
+        workspaces = self.overview.get("workspaces") if isinstance(self.overview, dict) else None
+        for workspace in workspaces if isinstance(workspaces, list) else []:
+            if not isinstance(workspace, dict) or workspace.get("manager") is True:
+                continue
+            distro = workspace.get("distro")
+            if _resolve_distro(distro, self.default_distro) != _resolve_distro(
+                    self.manager_distro, self.default_distro):
+                continue
+            self.repo_for(workspace.get("rootPath"))
+
     def collectible(self, workspace):
         """build_board와 같은 판정. 수집 대상이 아니면 None, 맞으면 BoardEntry."""
         if not isinstance(workspace, dict) or workspace.get("manager") is True:
             return None
         entry = _board_entry(
-            workspace, self.manager_dir, self.manager_distro, self.default_distro)
+            workspace, self.manager_dir, self.manager_distro, self.default_distro, self.repos)
         if entry["state"] in ("unsupported", "choice", "error"):
             return None
         return entry
@@ -2655,7 +2868,8 @@ class Harness:
             if self.workspace_key(workspace) != key:
                 continue
             states.append(_board_entry(
-                workspace, self.manager_dir, self.manager_distro, self.default_distro)["state"])
+                workspace, self.manager_dir, self.manager_distro, self.default_distro,
+                self.repos)["state"])
         for preferred in ("active", "choice"):
             if preferred in states:
                 return preferred
@@ -2667,7 +2881,8 @@ class Harness:
             if self.workspace_key(workspace) != key:
                 continue
             entry = _board_entry(
-                workspace, self.manager_dir, self.manager_distro, self.default_distro)
+                workspace, self.manager_dir, self.manager_distro, self.default_distro,
+                self.repos)
             if entry["state"] == "choice":
                 return workspace
         return None
@@ -2840,6 +3055,9 @@ class Harness:
                 "workspace %s is not collectible; dropping the reservation" % (workspace_id,))
             self.drop_reservation(workspace_id)
             return
+        # 같은 events 배치에서 열리고 닫힌 워크스페이스는 prewarm을 거치지 않았다.
+        # finish는 락 안에서 캐시만 읽으므로 락 밖인 여기서 한 번 채운다.
+        self.repo_for(workspace.get("rootPath"))
         doc, error = MANAGER.load_task(self.manager_dir, entry["key"])
         if error is not None:
             self.log.write("workspace %s task cannot be loaded: %s" % (workspace_id, error))
@@ -2904,7 +3122,7 @@ class Harness:
                 "workspace %s has no new utterances; advancing the cursor without an LLM call"
                 % (workspace_id,))
             try:
-                result = finish_fast(self.manager_dir, workspace, cursor_updates, now)
+                result = finish_fast(self.manager_dir, workspace, cursor_updates, now, self.repos)
             except (OSError, ValueError) as exc:
                 self.log.write("workspace %s fast-path finish failed: %s" % (workspace_id, exc))
                 self.emit_status("failed", _one_line(exc))
@@ -2929,7 +3147,8 @@ class Harness:
             try:
                 result = finish_summary(
                     self.manager_dir, workspace, None, message, utterances, cursor_updates,
-                    plans["hashes"], allowed_plan_paths, truncated, self.settings, now)
+                    plans["hashes"], allowed_plan_paths, truncated, self.settings, now,
+                    self.repos)
             except Exception as inner:
                 self.report_exception(
                     "summary", inner, workspace=workspace, workspace_id=workspace_id)
@@ -2963,7 +3182,7 @@ class Harness:
                 self.manager_dir, workspace, patch, error,
                 context["utterances"], context["cursor_updates"],
                 context["plan_hashes"], context["allowed_plan_paths"],
-                context["truncated"], self.settings, MANAGER._iso(None))
+                context["truncated"], self.settings, MANAGER._iso(None), self.repos)
         except Exception as exc:
             self.report_exception(
                 "summary", exc, workspace=workspace, workspace_id=workspace_id)
@@ -3101,6 +3320,7 @@ class Harness:
             overview = message.get("overview")
             if isinstance(overview, dict):
                 self.overview = overview
+                self.prewarm_repos()
                 self.catch_up()
                 self.adjust_archives()
             self.send_board()
@@ -3122,7 +3342,8 @@ class Harness:
             return
         try:
             entries = build_board(
-                self.overview, self.manager_dir, self.manager_distro, self.default_distro)
+                self.overview, self.manager_dir, self.manager_distro, self.default_distro,
+                self.repos)
             try:
                 self.write_digest(entries)
             except OSError as exc:

@@ -100,7 +100,14 @@
           "status": "active"
         }
       ],
-      "git": {"branch": "feature/manager-workspace"}
+      "git": {
+        "branch": "feature/manager-workspace",
+        "repo": {
+          "name": "mast",
+          "path": "/home/u/projects/mast",
+          "remote": "git@github.com:example/mast.git"
+        }
+      }
     }
   ],
   "invalid": [

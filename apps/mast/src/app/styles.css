@@ -1743,6 +1743,61 @@ body {
   padding: 6px;
 }
 
+/* 레포 그룹 헤더 — 버튼 하나로 접고 펼친다. 카드 제목은 레포를 반복하지 않는다. */
+.board-repo-group {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.board-repo-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-repo-head:hover {
+  background: var(--border);
+}
+
+.board-repo-head::before {
+  content: "▾";
+}
+
+.board-repo-head[aria-expanded="false"]::before {
+  content: "▸";
+}
+
+.board-repo-label {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.board-repo-waiting {
+  margin-left: auto;
+}
+
+.board-repo-waiting.is-waiting {
+  color: var(--warn);
+}
+
+.board-repo-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .board-card {
   flex: 0 0 auto;
   padding: 6px 8px;

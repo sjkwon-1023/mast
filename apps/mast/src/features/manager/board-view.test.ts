@@ -64,6 +64,7 @@ function rawEntry(workspaceId: number, overrides: Record<string, unknown> = {}):
     task: null,
     error: null,
     archive: null,
+    repo: null,
     ...overrides,
   };
 }
@@ -354,6 +355,176 @@ describe("BoardView cards", () => {
     expect(byId.get("3")?.querySelector(".board-reason")?.textContent).toBe("other_distro");
     expect(byId.get("4")?.querySelector(".board-stale")).not.toBeNull();
     expect(byId.get("4")?.querySelector(".board-limit")?.textContent).toBe("input_truncated");
+    h.view.dispose();
+  });
+});
+
+describe("BoardView repo groups", () => {
+  const mast = { name: "mast", path: "/repo/mast", remote: null };
+
+  it("renders the repo header label, card count and waiting count above its cards", async () => {
+    const state = appState([
+      ws(1, { name: "alpha" }),
+      ws(2, { name: "beta" }),
+      ws(3, { name: "gamma" }),
+    ]);
+    const h = await mount({
+      payload: payload([
+        rawEntry(1, { repo: mast, task: rawTask() }),
+        rawEntry(2, {
+          repo: mast,
+          task: rawTask({ questions: [{ id: "q1", text: "ask?", quote: null }] }),
+        }),
+        rawEntry(3, { task: rawTask() }),
+      ]),
+      snapshot: () => snapshot(state),
+    });
+
+    const headers = [...h.view.root.querySelectorAll<HTMLElement>(".board-repo-head")];
+    expect(headers.map((head) => head.querySelector(".board-repo-label")?.textContent)).toEqual([
+      "mast",
+      "Other",
+    ]);
+    expect(headers.map((head) => head.querySelector(".board-repo-count")?.textContent)).toEqual([
+      "2 cards",
+      "1 card",
+    ]);
+    expect(headers.map((head) => head.querySelector(".board-repo-waiting")?.textContent)).toEqual([
+      "1 waiting",
+      "0 waiting",
+    ]);
+    expect(
+      [...h.view.root.querySelectorAll<HTMLElement>(".board-repo-group")].map(
+        (group) => group.querySelectorAll(".board-card").length,
+      ),
+    ).toEqual([2, 1]);
+    h.view.dispose();
+  });
+
+  it("keeps a collapsed repo group collapsed across re-renders", async () => {
+    const state = appState([ws(1, { name: "alpha" })]);
+    const h = await mount({
+      payload: payload([rawEntry(1, { repo: mast, task: rawTask() })]),
+      snapshot: () => snapshot(state),
+    });
+    expect(h.view.root.querySelectorAll(".board-card")).toHaveLength(1);
+
+    click(h, ".board-repo-head");
+    expect(h.view.root.querySelectorAll(".board-card")).toHaveLength(0);
+    expect(h.view.root.querySelector(".board-repo-head")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+
+    h.emit(payload([rawEntry(1, { repo: mast, task: rawTask({ headline: "changed" }) })]));
+    expect(h.view.root.querySelectorAll(".board-card")).toHaveLength(0);
+    expect(h.view.root.querySelector(".board-repo-head")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+
+    click(h, ".board-repo-head");
+    expect(h.view.root.querySelectorAll(".board-card")).toHaveLength(1);
+    expect(h.view.root.querySelector(".board-repo-head")?.getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    h.view.dispose();
+  });
+
+  it("forgets a collapsed Other group when it becomes the only group", async () => {
+    const state = appState([ws(1, { name: "alpha" }), ws(2, { name: "beta" })]);
+    const h = await mount({
+      payload: payload([
+        rawEntry(1, { repo: mast, task: rawTask() }),
+        rawEntry(2, { task: rawTask() }),
+      ]),
+      snapshot: () => snapshot(state),
+    });
+    const otherHead = (): HTMLButtonElement | null =>
+      [...h.view.root.querySelectorAll<HTMLButtonElement>(".board-repo-head")].find(
+        (head) => head.querySelector(".board-repo-label")?.textContent === "Other",
+      ) ?? null;
+
+    click(h, '.board-repo-group[data-repo-key="other"] .board-repo-head');
+    expect(otherHead()?.getAttribute("aria-expanded")).toBe("false");
+    expect(h.view.root.querySelectorAll(".board-card")).toHaveLength(1);
+
+    // 레포 그룹이 모두 사라져 헤더 없는 단일 Other 모드가 된다.
+    h.emit(payload([rawEntry(2, { task: rawTask() })]));
+    expect(h.view.root.querySelectorAll(".board-repo-head")).toHaveLength(0);
+    expect(h.view.root.querySelectorAll(".board-card")).toHaveLength(2);
+
+    // 레포 그룹이 다시 생기면 Other는 접힘이 아니라 펼침으로 나타난다.
+    h.emit(
+      payload([
+        rawEntry(1, { repo: mast, task: rawTask() }),
+        rawEntry(2, { task: rawTask() }),
+      ]),
+    );
+    expect(otherHead()?.getAttribute("aria-expanded")).toBe("true");
+    expect(h.view.root.querySelectorAll(".board-card")).toHaveLength(2);
+    h.view.dispose();
+  });
+
+  it("returns focus to the same repo header after collapsing and expanding", async () => {
+    const state = appState([ws(1, { name: "alpha" })]);
+    const h = await mount({
+      payload: payload([rawEntry(1, { repo: mast, task: rawTask() })]),
+      snapshot: () => snapshot(state),
+    });
+    const head = (): HTMLButtonElement => {
+      const el = h.view.root.querySelector<HTMLButtonElement>(
+        '.board-repo-group[data-repo-key="/repo/mast"] .board-repo-head',
+      );
+      if (el === null) throw new Error("missing repo header");
+      return el;
+    };
+
+    head().focus();
+    head().click();
+    expect(h.view.root.querySelectorAll(".board-card")).toHaveLength(0);
+    expect(document.activeElement).toBe(head());
+
+    head().click();
+    expect(h.view.root.querySelectorAll(".board-card")).toHaveLength(1);
+    expect(document.activeElement).toBe(head());
+    h.view.dispose();
+  });
+
+  it("draws cards without a header when every card is in the Other group", async () => {
+    const state = appState([ws(1, { name: "alpha" }), ws(2, { name: "beta" })]);
+    const h = await mount({
+      payload: payload([
+        rawEntry(1, { task: rawTask() }),
+        rawEntry(2, { task: rawTask() }),
+      ]),
+      snapshot: () => snapshot(state),
+    });
+
+    expect(h.view.root.querySelectorAll(".board-card")).toHaveLength(2);
+    expect(h.view.root.querySelectorAll(".board-repo-head")).toHaveLength(0);
+
+    h.emit(
+      payload([
+        rawEntry(1, { repo: mast, task: rawTask() }),
+        rawEntry(2, { task: rawTask() }),
+      ]),
+    );
+    expect(h.view.root.querySelectorAll(".board-repo-head")).toHaveLength(2);
+    h.view.dispose();
+  });
+
+  it("renders a repo label as text, never as markup", async () => {
+    const state = appState([ws(1, { name: "alpha" })]);
+    const h = await mount({
+      payload: payload([
+        rawEntry(1, { repo: { name: "<img src=x onerror=alert(1)>", path: "/repo/x", remote: null } }),
+      ]),
+      snapshot: () => snapshot(state),
+    });
+
+    expect(h.view.root.querySelector("img")).toBeNull();
+    expect(h.view.root.querySelector(".board-repo-label")?.textContent).toBe(
+      "<img src=x onerror=alert(1)>",
+    );
     h.view.dispose();
   });
 });

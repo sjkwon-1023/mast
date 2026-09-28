@@ -20,8 +20,16 @@ import {
   onManagerBoard,
 } from "../../infrastructure/backend";
 import type { ManagerBoardPayload } from "../../infrastructure/backend";
-import { buildCards, goToTarget, headerModel, parseBoard } from "./board-model";
-import type { BoardCard, GlueStatus, ParsedBoard } from "./board-model";
+import {
+  buildCards,
+  goToTarget,
+  groupCards,
+  headerModel,
+  isWaitingInput,
+  OTHER_GROUP_KEY,
+  parseBoard,
+} from "./board-model";
+import type { BoardCard, BoardGroup, GlueStatus, ParsedBoard } from "./board-model";
 import type { ViewerKind, ViewerView } from "../viewers/viewer-view";
 import type {
   AgentStatus,
@@ -79,6 +87,8 @@ export class BoardView implements ViewerView {
   private readonly cardErrors = new Map<WorkspaceId, string>();
   /** 펼친 quote 의 키 (`<workspaceId>:q:<id>` / `<workspaceId>:d:<id>`). */
   private readonly expanded = new Set<string>();
+  /** 접은 레포 그룹의 키 (repo.path 또는 "other"). 기본은 펼침. */
+  private readonly collapsedGroups = new Set<string>();
   private disposed = false;
   private eventSeen = false;
   private unsubscribe: (() => void) | null = null;
@@ -201,7 +211,26 @@ export class BoardView implements ViewerView {
     setText(this.noticeEl, notice ?? "");
 
     const cards = state === null ? [] : buildCards(state, this.board, this.status, now);
-    this.cardsEl.replaceChildren(...cards.map((card) => this.card(card)));
+    const groups = groupCards(cards);
+    if (
+      groups.length === 1 &&
+      groups[0].key === OTHER_GROUP_KEY &&
+      this.collapsedGroups.delete(OTHER_GROUP_KEY)
+    ) {
+      // 단일 Other 모드에는 접을 헤더가 없다. 접힘을 지워 두면 레포 그룹이 다시
+      // 생길 때 Other가 접힌 채로 나타나지 않는다. 서명도 새 상태로 다시 계산한다.
+      this.signature = this.renderSignature(state);
+    }
+    this.cardsEl.replaceChildren(...this.groupElements(groups));
+  }
+
+  /** 카드 전부가 레포 없는 한 그룹뿐이면 헤더 없이 카드만 그린다. */
+  private groupElements(groups: BoardGroup[]): HTMLElement[] {
+    const only = groups.length === 1 ? groups[0] : undefined;
+    if (only !== undefined && only.key === OTHER_GROUP_KEY) {
+      return only.cards.map((card) => this.card(card));
+    }
+    return groups.map((group) => this.repoGroup(group));
   }
 
   /** 표시에 영향을 주는 입력만 모은다 — 스냅샷 전체(tabs 등)는 이동 버튼이
@@ -214,10 +243,60 @@ export class BoardView implements ViewerView {
       this.subscribeError,
       [...this.cardErrors],
       [...this.expanded].sort(),
+      [...this.collapsedGroups].sort(),
       state === null
         ? null
         : state.workspaces.map((ws) => [ws.id, ws.name, ws.agentStatus, ws.activePane]),
     ]);
+  }
+
+  // ── 레포 그룹 ───────────────────────────────────────────────────────
+
+  /** 레포 헤더(라벨·카드 수·입력 대기 수) + 그 아래 카드. 접으면 카드만 감춘다. */
+  private repoGroup(group: BoardGroup): HTMLElement {
+    const section = document.createElement("section");
+    section.className = "board-repo-group";
+    section.dataset.repoKey = group.key;
+
+    const open = !this.collapsedGroups.has(group.key);
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "board-repo-head";
+    head.setAttribute("aria-expanded", String(open));
+    head.append(this.textSpan("board-repo-label", group.label));
+    const count = group.cards.length;
+    head.append(this.textSpan("board-repo-count", `${count} card${count === 1 ? "" : "s"}`));
+    const waiting = group.cards.filter(isWaitingInput).length;
+    head.append(
+      this.textSpan(
+        waiting > 0 ? "board-repo-waiting is-waiting" : "board-repo-waiting",
+        `${waiting} waiting`,
+      ),
+    );
+    head.addEventListener("click", () => {
+      if (this.collapsedGroups.has(group.key)) this.collapsedGroups.delete(group.key);
+      else this.collapsedGroups.add(group.key);
+      this.render();
+      this.focusRepoHead(group.key);
+    });
+    section.append(head);
+
+    if (open) {
+      const body = document.createElement("div");
+      body.className = "board-repo-cards";
+      body.append(...group.cards.map((card) => this.card(card)));
+      section.append(body);
+    }
+    return section;
+  }
+
+  /** 재렌더로 새로 만들어진 같은 그룹 헤더 버튼으로 포커스를 되돌린다. */
+  private focusRepoHead(key: string): void {
+    for (const section of this.root.querySelectorAll<HTMLElement>(".board-repo-group")) {
+      if (section.dataset.repoKey !== key) continue;
+      section.querySelector<HTMLButtonElement>(".board-repo-head")?.focus();
+      return;
+    }
   }
 
   // ── 카드 ─────────────────────────────────────────────────────────────

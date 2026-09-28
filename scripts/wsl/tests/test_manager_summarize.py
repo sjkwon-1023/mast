@@ -534,6 +534,67 @@ class FinishSummarySuccessTest(HarnessTestCase):
         )
         self.assertEqual(result["doc"]["meta"]["limits"], [])
 
+    def test_repo_cache_is_recorded_and_validated(self):
+        self.seed_task()
+        repo = {"name": "mast", "path": "/home/u/projects/mast", "remote": None}
+        patch = {"verdict": "no_change", "notify": "none", "notify_reason": None, "ops": []}
+        HARNESS.finish_summary(
+            self.manager, self.workspace, patch, None, {}, {}, {}, [], False,
+            self.settings, NOW, {self.workspace["rootPath"]: repo},
+        )
+        doc = self.load_task()
+        self.assertIsNone(STORE.validate_task(doc))
+        self.assertEqual(doc["git"]["repo"], repo)
+
+    def test_null_repo_detection_keeps_the_stored_repo(self):
+        doc = copy.deepcopy(FIXTURE["valid"][0])
+        doc["git"]["repo"] = {"name": "stored", "path": "/stored", "remote": None}
+        self.seed_task(doc)
+        patch = {"verdict": "no_change", "notify": "none", "notify_reason": None, "ops": []}
+        result = HARNESS.finish_summary(
+            self.manager, self.workspace, patch, None, {}, {}, {}, [], False,
+            self.settings, NOW, {self.workspace["rootPath"]: None},
+        )
+        self.assertIsNone(result["error"])
+        self.assertEqual(
+            self.load_task()["git"]["repo"],
+            {"name": "stored", "path": "/stored", "remote": None})
+
+    def test_missing_repo_mapping_keeps_the_stored_repo_without_git(self):
+        stored = {"name": "stored", "path": "/stored", "remote": None}
+        patch = {"verdict": "no_change", "notify": "none", "notify_reason": None, "ops": []}
+        for repos in ({}, None):
+            with self.subTest(repos=repos):
+                doc = copy.deepcopy(FIXTURE["valid"][0])
+                doc["git"]["repo"] = dict(stored)
+                self.seed_task(doc)
+                # 테스트 root가 실제 경로가 아니어도 판별 시도 자체를 잡도록 두 입구를 모두 막는다.
+                with mock.patch.object(HARNESS, "_detect_repo") as detect, \
+                        mock.patch.object(HARNESS, "detect_repo") as public_detect:
+                    result = HARNESS.finish_summary(
+                        self.manager, self.workspace, patch, None, {}, {}, {}, [], False,
+                        self.settings, NOW, repos,
+                    )
+                detect.assert_not_called()
+                public_detect.assert_not_called()
+                self.assertIsNone(result["error"])
+                self.assertEqual(self.load_task()["git"]["repo"], stored)
+
+    def test_failed_summary_keeps_the_stored_repo(self):
+        doc = copy.deepcopy(FIXTURE["valid"][0])
+        doc["git"]["repo"] = {"name": "stored", "path": "/stored", "remote": None}
+        self.seed_task(doc)
+        error = "summary process exited with code 1"
+        result = HARNESS.finish_summary(
+            self.manager, self.workspace, None, error, {}, {}, {}, [], False,
+            self.settings, NOW, {self.workspace["rootPath"]: None},
+        )
+        self.assertEqual(result["error"], error)
+        doc = self.load_task()
+        self.assertIsNone(STORE.validate_task(doc))
+        self.assertEqual(doc["git"]["repo"],
+                         {"name": "stored", "path": "/stored", "remote": None})
+
 
 class FinishSummaryFailureTest(HarnessTestCase):
     def test_schema_combination_errors_are_caught(self):
@@ -749,6 +810,33 @@ class FastPathTest(HarnessTestCase):
         self.assertEqual(doc["meta"]["cursor"]["sess-8f2c"]["offset"], 1024)
         self.assertEqual(doc["meta"]["last_collected_at"], NOW)
 
+    def test_finish_fast_records_the_repo_cache(self):
+        self.seed_task()
+        repo = {
+            "name": "mast",
+            "path": "/home/u/projects/mast",
+            "remote": "git@github.com:example/mast.git",
+        }
+        HARNESS.finish_fast(
+            self.manager, self.workspace, cursor_update(66000), NOW,
+            {self.workspace["rootPath"]: repo},
+        )
+        doc = self.load_task()
+        self.assertIsNone(STORE.validate_task(doc))
+        self.assertEqual(doc["git"]["repo"], repo)
+
+    def test_finish_fast_null_repo_keeps_the_stored_repo(self):
+        doc = copy.deepcopy(FIXTURE["valid"][0])
+        doc["git"]["repo"] = {"name": "stored", "path": "/stored", "remote": None}
+        self.seed_task(doc)
+        HARNESS.finish_fast(
+            self.manager, self.workspace, cursor_update(66000), NOW,
+            {self.workspace["rootPath"]: None},
+        )
+        self.assertEqual(
+            self.load_task()["git"]["repo"],
+            {"name": "stored", "path": "/stored", "remote": None})
+
 
 class PlanDetectionTest(unittest.TestCase):
     def setUp(self):
@@ -858,11 +946,17 @@ class PlanDetectionTest(unittest.TestCase):
         workspace = {"rootPath": str(self.root), "distro": None, "agentStatus": "idle"}
         path = write_task_file(manager, str(self.root), None, task_doc)
         self.assertTrue(HARNESS.fast_path_no_change({}, result["changed"]))
-        HARNESS.finish_fast(manager, workspace, {}, NOW)
+        HARNESS.finish_fast(
+            manager, workspace, {}, NOW,
+            {workspace["rootPath"]: HARNESS.detect_repo(workspace["rootPath"])},
+        )
         final = json.loads(path.read_text(encoding="utf-8"))
         self.assertIsNone(STORE.validate_task(final))
         self.assertEqual(final["plans"][0]["status"], "removed")
         self.assertEqual(final["git"]["branch"], "feature")
+        self.assertEqual(
+            final["git"]["repo"],
+            {"name": "repo", "path": os.path.realpath(str(self.root)), "remote": None})
 
     def test_removed_plan_cap_is_pruned_by_finish(self):
         manager = self.base / "manager"

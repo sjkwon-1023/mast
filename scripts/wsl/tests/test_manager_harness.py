@@ -165,6 +165,46 @@ def sh_quote(value):
     return "'" + str(value).replace("'", "'\\''") + "'"
 
 
+def git_run(root, *args):
+    """테스트용 git 실행. 실패하면 stderr를 담은 AssertionError."""
+    result = subprocess.run(
+        ["git", "-C", str(root)] + list(args),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise AssertionError("git %s failed: %s" % (
+            " ".join(args), result.stderr.decode("utf-8", "replace")))
+    return result.stdout.decode("utf-8", "replace")
+
+
+def real_path(path):
+    """git이 돌려주는 절대 경로에 맞춘 realpath (macOS `/var` 심볼릭 링크)."""
+    return os.path.realpath(str(path))
+
+
+def make_bare_worktree(base, name="mast"):
+    """`<base>/<name>/.bare` 베어 컨테이너와 커밋이 있는 워크트리를 만든다."""
+    seed = base / (name + "-seed")
+    seed.mkdir()
+    git_run(seed, "init", "-b", "main")
+    git_run(seed, "config", "user.email", "tests@example.com")
+    git_run(seed, "config", "user.name", "Repo Test")
+    (seed / "README.md").write_text("seed\n", encoding="utf-8")
+    git_run(seed, "add", ".")
+    git_run(seed, "commit", "-m", "seed")
+    repo = base / name
+    bare = repo / ".bare"
+    bare.parent.mkdir()
+    git_run(seed, "clone", "--bare", ".", str(bare))
+    git_run(bare, "remote", "remove", "origin")
+    worktree = repo / "wt"
+    git_run(bare, "worktree", "add", str(worktree))
+    return repo, bare, worktree
+
+
 class LineStream:
     """파이프를 백그라운드 스레드로 읽어 timeout 있는 줄 단위 접근을 제공한다."""
 
@@ -525,6 +565,22 @@ class BoardTest(HarnessTestCase):
             by_id[7]["archive"],
             {"count": 1, "latestClosedAt": "2026-09-25T03:00:00Z"},
         )
+
+    def test_board_reports_the_bare_worktree_repo(self):
+        repo, _, worktree = make_bare_worktree(self.base)
+        run = self.start_ok()
+        run.send({"type": "snapshot", "overview": {
+            "nextSeq": 1,
+            "workspaces": [workspace(
+                4, "wt", str(worktree), None, tabs=[terminal_tab(4, claude_session())])],
+        }})
+        board = self.read_until(run, "board")
+        self.assertEqual(
+            board["entries"][0]["repo"],
+            {"name": "mast", "path": real_path(repo), "remote": None},
+        )
+        digest = (self.manager / "digest.md").read_text(encoding="utf-8")
+        self.assertIn("## mast\n", digest, "digest가 entry의 repo로 묶는다")
 
     def test_new_tab_events_clear_no_transcript(self):
         run = self.start_ok()
@@ -960,6 +1016,401 @@ class CollectibleTest(unittest.TestCase):
         self.assertNotIn("s0", self.harness.event_sessions[1])
         self.assertNotIn("s1", self.harness.event_sessions[1])
         self.assertIn("s2", self.harness.event_sessions[1])
+
+
+class RepoDetectionTest(unittest.TestCase):
+    """detect_repo: 공통 디렉터리 파싱과 실제 git 저장소 레이아웃."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+
+    def init_repo(self, path):
+        """커밋이 있는 일반 레포를 만들고 경로를 돌려준다."""
+        path.mkdir()
+        git_run(path, "init", "-b", "main")
+        git_run(path, "config", "user.email", "tests@example.com")
+        git_run(path, "config", "user.name", "Repo Test")
+        (path / "README.md").write_text("seed\n", encoding="utf-8")
+        git_run(path, "add", ".")
+        git_run(path, "commit", "-m", "seed")
+        return path
+
+    def test_common_dir_parsing(self):
+        cases = [
+            ("/home/u/p/mast/.bare", {"name": "mast", "path": "/home/u/p/mast"}),
+            ("/home/u/p/x/.git", {"name": "x", "path": "/home/u/p/x"}),
+            ("/home/u/p/x.git", {"name": "x", "path": "/home/u/p/x.git"}),
+            ("/home/u/p/plain", {"name": "plain", "path": "/home/u/p/plain"}),
+        ]
+        for common_dir, expected in cases:
+            self.assertEqual(HARNESS.repo_from_common_dir(common_dir), expected)
+        for value in (None, "", "   ", "/"):
+            self.assertIsNone(HARNESS.repo_from_common_dir(value))
+
+    def test_plain_repository_uses_the_git_parent(self):
+        root = self.base / "plain"
+        root.mkdir()
+        git_run(root, "init", "-b", "main")
+        self.assertEqual(
+            HARNESS.detect_repo(str(root)),
+            {"name": "plain", "path": real_path(root), "remote": None},
+        )
+
+    def test_bare_container_worktree_uses_the_parent_directory(self):
+        repo, bare, worktree = make_bare_worktree(self.base)
+        expected = {"name": "mast", "path": real_path(repo), "remote": None}
+        self.assertEqual(HARNESS.detect_repo(str(worktree)), expected)
+        self.assertEqual(HARNESS.detect_repo(str(bare)), expected)
+
+    def test_bare_repository_with_git_suffix(self):
+        bare = self.base / "x.git"
+        git_run(self.base, "init", "--bare", str(bare))
+        self.assertEqual(
+            HARNESS.detect_repo(str(bare)),
+            {"name": "x", "path": real_path(bare), "remote": None},
+        )
+
+    def test_origin_remote_is_reported(self):
+        root = self.base / "with-remote"
+        root.mkdir()
+        git_run(root, "init", "-b", "main")
+        git_run(root, "remote", "add", "origin", "git@github.com:example/mast.git")
+        self.assertEqual(
+            HARNESS.detect_repo(str(root)),
+            {"name": "with-remote", "path": real_path(root),
+             "remote": "git@github.com:example/mast.git"},
+        )
+
+    def test_non_git_and_missing_roots_are_null(self):
+        plain = self.base / "not-a-repo"
+        plain.mkdir()
+        self.assertIsNone(HARNESS.detect_repo(str(plain)))
+        self.assertIsNone(HARNESS.detect_repo(str(self.base / "missing")))
+        self.assertIsNone(HARNESS.detect_repo(None))
+
+    def test_git_failure_is_null(self):
+        root = self.base / "broken"
+        root.mkdir()
+        with mock.patch.object(HARNESS, "_git", return_value=(False, "", "boom")) as fake:
+            self.assertIsNone(HARNESS.detect_repo(str(root)))
+        self.assertEqual(fake.call_count, 1, "공통 디렉터리 질의가 실패하면 원격은 묻지 않는다")
+
+    def test_common_dir_resolution(self):
+        self.assertEqual(HARNESS._resolve_common_dir("/root", ".git\n"), "/root/.git")
+        self.assertEqual(HARNESS._resolve_common_dir("/root", "sub/../.git\n"), "/root/.git")
+        for output in ("", "   \n", "--path-format=absolute\n.git\n"):
+            self.assertIsNone(HARNESS._resolve_common_dir("/root", output))
+
+    def test_old_git_flag_echo_is_null(self):
+        root = self.base / "flag-echo"
+        root.mkdir()
+        with mock.patch.object(
+                HARNESS, "_git", return_value=(True, "--path-format=absolute\n.git\n", "")):
+            self.assertIsNone(HARNESS.detect_repo(str(root)))
+
+    def test_old_git_superproject_flag_echo_is_not_a_submodule(self):
+        root = self.base / "old-git"
+        root.mkdir()
+        with mock.patch.object(
+                HARNESS, "_git",
+                side_effect=[
+                    (True, str(root / ".git") + "\n", ""),
+                    (True, "--show-superproject-working-tree\n", ""),
+                    (False, "", "no remote")]) as git:
+            repo = HARNESS.detect_repo(str(root))
+        self.assertEqual(repo, {"name": "old-git", "path": str(root), "remote": None})
+        self.assertNotIn(["rev-parse", "--show-toplevel"], [call.args[1] for call in git.call_args_list])
+
+    def test_relative_common_dir_is_resolved_against_the_root(self):
+        root = self.base / "relative"
+        root.mkdir()
+        with mock.patch.object(
+                HARNESS, "_git",
+                side_effect=[
+                    (True, ".git\n", ""), (True, "\n", ""), (False, "", "no remote")]):
+            repo = HARNESS.detect_repo(str(root))
+        self.assertEqual(repo, {"name": "relative", "path": real_path(root), "remote": None})
+
+    def test_plain_subdirectory_uses_the_repository_root(self):
+        root = self.init_repo(self.base / "plain-sub")
+        sub = root / "sub"
+        sub.mkdir()
+        self.assertEqual(
+            HARNESS.detect_repo(str(sub)),
+            {"name": "plain-sub", "path": real_path(root), "remote": None},
+        )
+
+    def test_bare_worktree_subdirectory_uses_the_repository_root(self):
+        repo, _bare, worktree = make_bare_worktree(self.base, "bare-sub")
+        sub = worktree / "sub"
+        sub.mkdir()
+        self.assertEqual(
+            HARNESS.detect_repo(str(sub)),
+            {"name": "bare-sub", "path": real_path(repo), "remote": None},
+        )
+
+    def test_linked_worktree_uses_the_main_repository(self):
+        root = self.init_repo(self.base / "linked-main")
+        linked = self.base / "linked-wt"
+        git_run(root, "worktree", "add", str(linked))
+        self.assertEqual(
+            HARNESS.detect_repo(str(linked)),
+            {"name": "linked-main", "path": real_path(root), "remote": None},
+        )
+
+    def test_submodule_uses_the_worktree_top_level(self):
+        origin = self.init_repo(self.base / "sub-origin")
+        super_repo = self.init_repo(self.base / "sub-super")
+        git_run(super_repo, "-c", "protocol.file.allow=always",
+                "submodule", "add", str(origin), "sub")
+        sub = super_repo / "sub"
+        git_run(sub, "remote", "remove", "origin")
+        self.assertEqual(
+            HARNESS.detect_repo(str(sub)),
+            {"name": "sub", "path": real_path(sub), "remote": None},
+        )
+
+    def test_bare_worktree_submodule_uses_the_worktree_top_level(self):
+        origin = self.init_repo(self.base / "bare-sub-origin")
+        _repo, _bare, worktree = make_bare_worktree(self.base, "bare-submodule")
+        git_run(worktree, "-c", "protocol.file.allow=always",
+                "submodule", "add", str(origin), "libs/sub")
+        sub = worktree / "libs" / "sub"
+        git_run(sub, "remote", "remove", "origin")
+        self.assertEqual(
+            HARNESS.detect_repo(str(sub)),
+            {"name": "sub", "path": real_path(sub), "remote": None},
+        )
+
+    def test_remote_credentials_are_not_recorded(self):
+        root = self.base / "with-token"
+        root.mkdir()
+        git_run(root, "init", "-b", "main")
+        git_run(root, "remote", "add", "origin", "https://tok@github.com/o/r.git")
+        self.assertEqual(
+            HARNESS.detect_repo(str(root))["remote"], "https://github.com/o/r.git")
+
+    def test_remote_without_userinfo_parsing(self):
+        cases = [
+            ("https://tok@github.com/o/r.git", "https://github.com/o/r.git"),
+            ("https://u:p@h/x", "https://h/x"),
+            ("ssh://git@github.com/o/r.git", "ssh://github.com/o/r.git"),
+            ("git@github.com:o/r.git", "git@github.com:o/r.git"),
+        ]
+        for remote, expected in cases:
+            with self.subTest(remote=remote):
+                self.assertEqual(HARNESS._remote_without_userinfo(remote), expected)
+        for value in ("", "   ", "https://", None, 7):
+            with self.subTest(value=value):
+                self.assertIsNone(HARNESS._remote_without_userinfo(value))
+
+    def test_remote_cleanup_drops_query_fragment_and_scp_credentials(self):
+        cases = [
+            # file 원문은 유지한다(자격 증명이 없는 스킴).
+            ("file:///srv/git/r.git", "file:///srv/git/r.git"),
+            ("file://server/share/r.git", "file://server/share/r.git"),
+            # 쿼리·fragment의 토큰은 저장하지 않는다.
+            ("https://host/o/r.git?access_token=abc", "https://host/o/r.git"),
+            ("https://host/o/r.git#main", "https://host/o/r.git"),
+            ("https://u:p@host/o/r.git?x=1#f", "https://host/o/r.git"),
+            ("ssh://git@host:22/o/r.git", "ssh://host:22/o/r.git"),
+            # scp 형식은 `@` 앞에 `:`가 있을 때만 자격 증명을 뗀다.
+            ("u:tok@host:o/r.git", "host:o/r.git"),
+            ("git@github.com:o/r.git", "git@github.com:o/r.git"),
+            # 경로에 `@`가 있는 정상 원격과 로컬 경로는 자르지 않는다.
+            ("git@host:org/repo@v2.git", "git@host:org/repo@v2.git"),
+            ("user@host:/srv/git/pkg@1.0.git", "user@host:/srv/git/pkg@1.0.git"),
+            ("/home/u/a:b@c/repo.git", "/home/u/a:b@c/repo.git"),
+            ("C:/Users/first.last@corp/r.git", "C:/Users/first.last@corp/r.git"),
+        ]
+        for remote, expected in cases:
+            with self.subTest(remote=remote):
+                self.assertEqual(HARNESS._remote_without_userinfo(remote), expected)
+
+    def test_long_values_are_clipped(self):
+        common_dir = "/" + "d" * 1100 + "/" + "n" * 200
+        parsed = HARNESS.repo_from_common_dir(common_dir)
+        self.assertEqual(len(parsed["name"]), 200)
+        root = self.base / "long"
+        root.mkdir()
+        git_run(root, "init", "-b", "main")
+        with mock.patch.object(HARNESS, "_git", side_effect=[
+            (True, common_dir + "\n", ""),
+            (True, "\n", ""),
+            (True, "r" * 1100 + "\n", ""),
+        ]):
+            repo = HARNESS.detect_repo(str(root))
+        self.assertEqual(len(repo["name"]), HARNESS.MAX_REPO_NAME)
+        self.assertEqual(len(repo["path"]), HARNESS.MAX_REPO_PATH)
+        self.assertEqual(len(repo["remote"]), HARNESS.MAX_REPO_REMOTE)
+
+
+class RepoCacheTest(unittest.TestCase):
+    """캐시: 같은 root는 하네스 수명 동안 한 번만 계산하고, 보드는 git을 부르지 않는다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.manager = self.base / "manager"
+        hello = {
+            "managerDir": str(self.manager),
+            "managerDistro": "Ubuntu",
+            "defaultDistro": "Ubuntu",
+            "settings": {"idleSeconds": 1},
+        }
+        settings = HARNESS._hello_settings(hello)
+        log = HARNESS.HarnessLog(
+            self.manager / "logs" / "harness.log", error_stream=io.StringIO())
+        args = HARNESS._parse_args([])
+        self.harness = HARNESS.Harness(hello, settings, log, None, args)
+        self.calls = []
+        self.root = self.base / "root"
+        self.root.mkdir()
+
+    def fake_git(self, root_path, args):
+        self.calls.append((str(root_path), tuple(args)))
+        return False, "", "not a repository"
+
+    def overview(self, workspaces):
+        return {"nextSeq": 0, "workspaces": workspaces}
+
+    def test_collection_fills_the_cache_for_a_workspace_closed_before_prewarm(self):
+        # 같은 배치에서 열리고 닫혀 prewarm을 거치지 않은 워크스페이스도 수집 전에 판별한다.
+        root = str(self.root)
+        self.harness.overview = self.overview([])
+        self.harness.pending_refs[7] = workspace(7, "gone", root, "Ubuntu")
+        self.harness.pending.append(7)
+        with mock.patch.object(HARNESS, "_git", side_effect=self.fake_git), \
+                mock.patch.object(self.harness, "drop_reservation"):
+            self.harness.start_collection(7)
+        self.assertIn(root, self.harness.repos)
+        self.assertTrue(any(args[:1] == ("rev-parse",) for _, args in self.calls))
+
+    def test_each_root_is_detected_once(self):
+        root = str(self.root)
+        self.harness.overview = self.overview([
+            workspace(1, "w", root, None),
+            workspace(2, "w2", root, None),
+        ])
+        with mock.patch.object(HARNESS, "_git", side_effect=self.fake_git):
+            self.harness.prewarm_repos()
+            detected = len(self.calls)
+            self.harness.prewarm_repos()
+            self.assertEqual(self.harness.repo_for(root), None)
+            self.assertEqual(len(self.calls), detected)
+            self.assertEqual(detected, 1, "같은 root는 한 번만 계산한다")
+            self.assertIn(root, self.harness.repos)
+
+    def timeout_git(self, root_path, args):
+        self.calls.append((str(root_path), tuple(args)))
+        return False, "", "git rev-parse --git-common-dir timed out"
+
+    def test_transient_failure_is_not_cached_and_waits_for_the_retry_window(self):
+        root = str(self.root)
+        self.harness.repo_retry_seconds = 0.05
+        replies = [
+            (False, "", "git rev-parse --git-common-dir timed out"),
+            (False, "", "git rev-parse --git-common-dir failed: exit 128"),
+        ]
+        with mock.patch.object(HARNESS, "_git", side_effect=replies) as fake:
+            self.assertIsNone(self.harness.repo_for(root))
+            self.assertNotIn(root, self.harness.repos, "일시 실패는 캐시하지 않는다")
+            self.assertIsNone(self.harness.repo_for(root), "창 안에서는 캐시 미스로 본다")
+            self.assertEqual(fake.call_count, 1, "창 안에서는 다시 판별하지 않는다")
+            time.sleep(0.06)
+            self.assertIsNone(self.harness.repo_for(root))
+            self.assertEqual(fake.call_count, 2, "다음 창에서 다시 판별한다")
+        self.assertIn(root, self.harness.repos, "비git null은 캐시해도 된다")
+        self.assertNotIn(root, self.harness.repo_failures)
+
+    def test_remote_query_timeout_is_not_cached_and_waits_for_the_retry_window(self):
+        root = str(self.root)
+        self.harness.repo_retry_seconds = 0.05
+        replies = [
+            (True, ".git\n", ""),
+            (True, "\n", ""),
+            (False, "", "git config --get remote.origin.url timed out"),
+            (True, ".git\n", ""),
+            (True, "\n", ""),
+            (True, "git@github.com:o/r.git\n", ""),
+        ]
+        with mock.patch.object(HARNESS, "_git", side_effect=replies) as fake:
+            self.assertIsNone(self.harness.repo_for(root))
+            self.assertNotIn(root, self.harness.repos, "원격 질의 일시 실패도 캐시하지 않는다")
+            self.assertIsNone(self.harness.repo_for(root))
+            self.assertEqual(fake.call_count, 3, "창 안에서는 다시 판별하지 않는다")
+            time.sleep(0.06)
+            repo = self.harness.repo_for(root)
+            self.assertEqual(fake.call_count, 6, "다음 창에서 다시 판별한다")
+        self.assertEqual(repo["remote"], "git@github.com:o/r.git")
+        self.assertEqual(self.harness.repos[root], repo)
+
+    def test_events_do_not_retry_a_failing_root_within_the_window(self):
+        root = str(self.root)
+        self.harness.overview = self.overview([workspace(1, "w", root, None)])
+        with mock.patch.object(HARNESS, "_git", side_effect=self.timeout_git) as fake, \
+                mock.patch.object(HARNESS, "_emit"):
+            for _ in range(4):
+                self.harness.on_events([])
+        self.assertEqual(fake.call_count, 1, "events 배치마다 다시 판별하지 않는다")
+        self.assertNotIn(root, self.harness.repos)
+
+    def test_events_retry_a_failing_root_in_the_next_window(self):
+        root = str(self.root)
+        self.harness.repo_retry_seconds = 0.05
+        self.harness.overview = self.overview([workspace(1, "w", root, None)])
+        with mock.patch.object(HARNESS, "_git", side_effect=self.timeout_git) as fake, \
+                mock.patch.object(HARNESS, "_emit"):
+            self.harness.on_events([])
+            self.harness.on_events([])
+            self.assertEqual(fake.call_count, 1)
+            time.sleep(0.06)
+            self.harness.on_events([])
+            self.assertEqual(fake.call_count, 2, "다음 창에서는 다시 시도한다")
+
+    def test_manager_workspace_roots_are_not_prewarmed(self):
+        self.harness.overview = self.overview([
+            workspace(1, "mgr", str(self.root), None, manager=True),
+        ])
+        with mock.patch.object(HARNESS, "_detect_repo", return_value=(None, False)) as fake:
+            self.harness.prewarm_repos()
+        self.assertEqual(fake.call_count, 0, "관리자 워크스페이스의 root는 판별하지 않는다")
+
+    def test_board_reads_the_cache_without_calling_git(self):
+        plain = workspace(
+            1, "w", str(self.root), None, tabs=[terminal_tab(4, claude_session())])
+        self.harness.overview = self.overview([plain])
+        with mock.patch.object(HARNESS, "_git", side_effect=self.fake_git):
+            self.harness.prewarm_repos()
+            detected = len(self.calls)
+            entries = HARNESS.build_board(
+                self.harness.overview, self.manager, "Ubuntu", "Ubuntu", self.harness.repos)
+            entry = self.harness.collectible(plain)
+            self.assertEqual(len(self.calls), detected)
+        self.assertIn("repo", entries[0])
+        self.assertIsNone(entries[0]["repo"])
+        self.assertIn("repo", entry)
+
+    def test_other_distro_workspaces_keep_repo_null_and_skip_git(self):
+        root = str(self.root)
+        self.harness.overview = self.overview([
+            workspace(1, "ubuntu", root, None),
+            workspace(2, "debian", root, "Debian"),
+        ])
+        detected = {"name": "repo", "path": root, "remote": None}
+        with mock.patch.object(
+                HARNESS, "_detect_repo", return_value=(detected, False)) as fake:
+            self.harness.prewarm_repos()
+            self.assertEqual(fake.call_count, 1, "다른 배포판의 root에는 git을 부르지 않는다")
+            entries = HARNESS.build_board(
+                self.harness.overview, self.manager, "Ubuntu", "Ubuntu", self.harness.repos)
+        by_id = {entry["workspaceId"]: entry for entry in entries}
+        self.assertEqual(by_id[1]["repo"], detected)
+        self.assertIsNone(by_id[2]["repo"], "다른 배포판 워크스페이스에는 캐시를 붙이지 않는다")
+        self.assertEqual(by_id[2]["reason"], "other_distro")
 
 
 class SummaryTestCase(HarnessTestCase):
@@ -2053,6 +2504,60 @@ class BuildBoardTest(unittest.TestCase):
             self.assertEqual(len(entries), 64)
             self.assertEqual(entries[0]["workspaceId"], 1)
             self.assertEqual(entries[-1]["workspaceId"], 64)
+
+    def test_every_entry_has_a_repo_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            overview = {"workspaces": [
+                workspace(1, "no-root", None, None),
+                workspace(2, "plain", "/w/2", None),
+            ]}
+            entries = HARNESS.build_board(overview, tmp, None, None)
+            self.assertEqual(set(entries[0]), BOARD_ENTRY_KEYS)
+            self.assertEqual(set(entries[1]), BOARD_ENTRY_KEYS)
+            self.assertIsNone(entries[0]["repo"])
+            self.assertIsNone(entries[1]["repo"])
+
+    def test_active_entry_falls_back_to_the_task_repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = Path(tmp) / "manager"
+            doc = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
+            path = manager / "tasks" / (STORE.task_key("/w/task", None) + ".json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(doc), encoding="utf-8")
+            overview = {"workspaces": [workspace(1, "w", "/w/task", None)]}
+            entries = HARNESS.build_board(overview, manager, None, None)
+            self.assertEqual(entries[0]["state"], "active")
+            self.assertEqual(entries[0]["repo"], doc["git"]["repo"])
+
+    def test_cache_value_wins_over_the_task_repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = Path(tmp) / "manager"
+            doc = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
+            path = manager / "tasks" / (STORE.task_key("/w/task", None) + ".json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(doc), encoding="utf-8")
+            overview = {"workspaces": [workspace(1, "w", "/w/task", None)]}
+            cached = {"name": "cached", "path": "/w/cached", "remote": None}
+            entries = HARNESS.build_board(overview, manager, None, None, {"/w/task": cached})
+            self.assertEqual(entries[0]["state"], "active")
+            self.assertEqual(entries[0]["repo"], cached)
+
+    def test_cached_null_falls_back_to_the_task_repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = Path(tmp) / "manager"
+            doc = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
+            path = manager / "tasks" / (STORE.task_key("/w/task", None) + ".json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(doc), encoding="utf-8")
+            overview = {"workspaces": [workspace(1, "w", "/w/task", None)]}
+            entries = HARNESS.build_board(overview, manager, None, None, {"/w/task": None})
+            self.assertEqual(entries[0]["state"], "active")
+            self.assertEqual(entries[0]["repo"], doc["git"]["repo"])
+            item = dict(overview["workspaces"][0])
+            item.update({"repo": entries[0]["repo"], "task": doc, "key": entries[0]["key"]})
+            text = STORE.render_digest(manager, [item], now="2026-09-25T03:00:00Z")
+            self.assertIn("## mast", text, "보드와 digest가 같은 레포로 묶인다")
+            self.assertNotIn("## Other", text)
 
 
 if __name__ == "__main__":

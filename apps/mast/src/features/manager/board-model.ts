@@ -90,6 +90,13 @@ export interface BoardTask {
   plans: BoardTaskPlan[];
 }
 
+/** 보드 entry 의 repo — 하네스가 git 공통 디렉터리에서 판별한 레포. */
+export interface BoardRepo {
+  name: string;
+  path: string;
+  remote: string | null;
+}
+
 export interface BoardEntry {
   workspaceId: WorkspaceId;
   key: string | null;
@@ -98,6 +105,7 @@ export interface BoardEntry {
   task: BoardTask | null;
   error: string | null;
   archive: BoardArchive | null;
+  repo: BoardRepo | null;
 }
 
 /** 유효 항목은 그대로, 형식 오류 항목은 오류 카드용 표식으로 남는다. */
@@ -160,6 +168,18 @@ function parseArchive(value: unknown, path: string): Parsed<BoardArchive | null>
   const latest = parseNullableString(value.latestClosedAt, `${path}.latestClosedAt`);
   if (!latest.ok) return latest;
   return { ok: true, value: { count: value.count, latestClosedAt: latest.value } };
+}
+
+/** repo 는 카드 표시에만 쓰므로 형식이 틀려도 entry 를 버리지 않고 null 로 둔다. */
+function parseRepo(value: unknown): BoardRepo | null {
+  if (!isRecord(value)) return null;
+  const name = value.name;
+  const path = value.path;
+  const remote = value.remote;
+  if (typeof name !== "string" || name === "") return null;
+  if (typeof path !== "string" || path === "") return null;
+  if (remote !== null && remote !== undefined && typeof remote !== "string") return null;
+  return { name, path, remote: typeof remote === "string" && remote !== "" ? remote : null };
 }
 
 function parseAnchor(value: unknown, path: string): Parsed<BoardTaskAnchor | null> {
@@ -352,6 +372,7 @@ function parseEntry(raw: Record<string, unknown>, path: string): Parsed<BoardEnt
       task,
       error: error.value,
       archive: archive.value,
+      repo: parseRepo(raw.repo),
     },
   };
 }
@@ -431,6 +452,8 @@ export interface CardDecisions {
 export interface BoardCard {
   workspaceId: WorkspaceId;
   workspaceName: string;
+  /** 하네스가 판별한 레포. 없으면 null 이며 그룹에서는 "Other" 로 묶인다. */
+  repo: BoardRepo | null;
   /** task.title 이 비었으면 워크스페이스 이름 (REQ-18·D10). */
   title: string;
   headline: string;
@@ -499,6 +522,7 @@ function buildCard(
   return {
     workspaceId: ws.id,
     workspaceName: ws.name,
+    repo: validEntry?.repo ?? null,
     title: task !== null && task.title.trim() !== "" ? task.title : ws.name,
     headline: task?.headline ?? "",
     progress:
@@ -543,9 +567,14 @@ function buildCard(
   };
 }
 
+/** 입력 대기 — 라이브 needsInput 이거나 답을 기다리는 활성 question 이 있다. */
+export function isWaitingInput(card: BoardCard): boolean {
+  return card.liveStatus === "needsInput" || card.openQuestions.length > 0;
+}
+
 /** 정렬 그룹(R2): needsInput 또는 활성 question → 0, running → 1, 그 외 → 2. */
 function sortGroup(card: BoardCard): number {
-  if (card.liveStatus === "needsInput" || card.openQuestions.length > 0) return 0;
+  if (isWaitingInput(card)) return 0;
   if (card.liveStatus === "running") return 1;
   return 2;
 }
@@ -573,6 +602,102 @@ export function buildCards(
     .filter((ws) => !ws.manager)
     .map((ws) => buildCard(ws, findEntry(board, ws.id), status, now));
   return cards.sort(compareCards);
+}
+
+// ---- 레포 그룹 ----
+
+/** 레포가 없는 카드가 모이는 그룹의 키. */
+export const OTHER_GROUP_KEY = "other";
+const OTHER_GROUP_LABEL = "Other";
+
+export interface BoardGroup {
+  /** 레포 path, 레포가 없으면 "other". */
+  key: string;
+  /** 표시 라벨 — 레포 이름, 없으면 "Other". 같은 이름이 갈리면 구분자를 덧붙인다. */
+  label: string;
+  /** 입력 순서를 지킨 카드 — buildCards 결과를 그대로 받으면 그룹 안 정렬도 유지된다. */
+  cards: BoardCard[];
+}
+
+/** 원격 URL을 "owner/repo" 꼴의 짧은 구분자로 바꾼다. 빈 값이면 null. */
+function shortRemote(remote: string): string | null {
+  let text = remote.trim();
+  if (text === "") return null;
+  const scheme = text.indexOf("://");
+  if (scheme >= 0) {
+    const rest = text.slice(scheme + 3);
+    const slash = rest.indexOf("/");
+    text = slash >= 0 ? rest.slice(slash + 1) : rest;
+  } else {
+    const colon = text.indexOf(":");
+    if (colon >= 0) text = text.slice(colon + 1);
+  }
+  if (text.endsWith(".git")) text = text.slice(0, -4);
+  const segments = text.split("/").filter((segment) => segment !== "");
+  if (segments.length === 0) return null;
+  return segments.slice(-2).join("/");
+}
+
+/** 이름이 같은 레포 그룹의 라벨 뒤에 원격(또는 경로) 구분자를 붙인다. */
+function labelGroups(groups: BoardGroup[], repos: Map<string, BoardRepo | null>): void {
+  const byName = new Map<string, BoardGroup[]>();
+  for (const group of groups) {
+    const seen = byName.get(group.label);
+    if (seen === undefined) byName.set(group.label, [group]);
+    else seen.push(group);
+  }
+  for (const [name, colliding] of byName) {
+    if (colliding.length < 2) continue;
+    const remotes = colliding.map((group) => {
+      const remote = repos.get(group.key)?.remote ?? null;
+      return remote === null ? null : shortRemote(remote);
+    });
+    const remoteUsable =
+      remotes.every((remote): remote is string => remote !== null) &&
+      new Set(remotes).size === remotes.length;
+    for (const [index, group] of colliding.entries()) {
+      const repo = repos.get(group.key) ?? null;
+      const suffix = (remoteUsable ? remotes[index] : null) ?? repo?.path ?? group.key;
+      group.label = `${name} (${suffix})`;
+    }
+  }
+}
+
+/** 그룹 순서 — 가장 우선인 카드의 R2 그룹과 갱신 시각. "Other" 는 동률이면 마지막. */
+function compareGroups(a: BoardGroup, b: BoardGroup): number {
+  const aBest = a.cards[0];
+  const bBest = b.cards[0];
+  if (aBest === undefined || bBest === undefined) return 0;
+  const group = sortGroup(aBest) - sortGroup(bBest);
+  if (group !== 0) return group;
+  if (aBest.updatedAt !== bBest.updatedAt) {
+    if (aBest.updatedAt === null) return 1;
+    if (bBest.updatedAt === null) return -1;
+    return aBest.updatedAt < bBest.updatedAt ? 1 : -1;
+  }
+  const aOther = a.key === OTHER_GROUP_KEY ? 1 : 0;
+  const bOther = b.key === OTHER_GROUP_KEY ? 1 : 0;
+  return aOther - bOther;
+}
+
+/** 카드를 레포 path 로 묶는다. 그룹은 첫 등장 순서로 모은 뒤 R2 우선순위로 정렬한다. */
+export function groupCards(cards: BoardCard[]): BoardGroup[] {
+  const groups: BoardGroup[] = [];
+  const byKey = new Map<string, BoardGroup>();
+  const repos = new Map<string, BoardRepo | null>();
+  for (const card of cards) {
+    const key = card.repo?.path ?? OTHER_GROUP_KEY;
+    let group = byKey.get(key);
+    if (group === undefined) {
+      group = { key, label: card.repo?.name ?? OTHER_GROUP_LABEL, cards: [] };
+      byKey.set(key, group);
+      repos.set(key, card.repo);
+      groups.push(group);
+    }
+    group.cards.push(card);
+  }
+  labelGroups(groups, repos);
+  return groups.sort(compareGroups);
 }
 
 export interface GoToTarget {

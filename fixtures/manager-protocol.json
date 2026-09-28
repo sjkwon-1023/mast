@@ -256,7 +256,8 @@
           "reason": "no_root",
           "task": null,
           "error": null,
-          "archive": null
+          "archive": null,
+          "repo": null
         },
         {
           "workspaceId": 3,
@@ -265,7 +266,8 @@
           "reason": "other_distro",
           "task": null,
           "error": null,
-          "archive": null
+          "archive": null,
+          "repo": null
         },
         {
           "workspaceId": 5,
@@ -274,7 +276,12 @@
           "reason": null,
           "task": null,
           "error": null,
-          "archive": null
+          "archive": null,
+          "repo": {
+            "name": "mast",
+            "path": "/home/u/p/mast",
+            "remote": "git@github.com:example/mast.git"
+          }
         }
       ]
     },

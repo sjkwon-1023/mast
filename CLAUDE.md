@@ -425,7 +425,9 @@ it carries, so read it before reopening the same question. Nothing here blocks t
   PTY tab) fed by a 1024-event core ring; `codex exec` summaries merge as JSON patches; closing a
   workspace archives its record and reopening the same path offers Resume or Start fresh;
   `mast manager workspaces|events|patch|start` is the manager agent's surface. The manager query
-  is read-only and confined to the manager workspace. **Still open**: Windows field checks
+  is read-only and confined to the manager workspace. Since 2026-09-28 the board and digest group
+  tasks by repository, detected from git (`.bare` containers, `.git`, bare, submodules); memory
+  stays per workspace and repo grouping is display-only (ADR-0032 §13). **Still open**: Windows field checks
   (M1–M10 in `docs/WINDOWS-BUILD.md`: the `wsl.exe` harness pipe, other-distro display, toasts),
   summary quality of `gpt-6-luna` low unmeasured, the B1 project-hook injection path to revisit
   if a TUI hook works, and transcript collection for workspaces in other WSL distributions.

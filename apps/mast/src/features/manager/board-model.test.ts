@@ -11,6 +11,7 @@ import {
   buildCards,
   formatUpdatedAgo,
   goToTarget,
+  groupCards,
   headerModel,
   parseBoard,
 } from "./board-model";
@@ -119,6 +120,7 @@ function boardEntry(workspaceId: number, overrides: Partial<BoardEntry> = {}): B
     task: null,
     error: null,
     archive: null,
+    repo: null,
     ...overrides,
   };
 }
@@ -145,6 +147,7 @@ function rawEntry(workspaceId: unknown, overrides: Record<string, unknown> = {})
     task: null,
     error: null,
     archive: null,
+    repo: null,
     ...overrides,
   };
 }
@@ -177,6 +180,7 @@ describe("parseBoard", () => {
     expect(noRoot.reason).toBe("no_root");
     expect(noRoot.task).toBeNull();
     expect(noRoot.archive).toBeNull();
+    expect(noRoot.repo).toBeNull();
 
     const unsupported = parsed.entries[1];
     if (unsupported === undefined || unsupported.kind !== "entry") {
@@ -188,6 +192,38 @@ describe("parseBoard", () => {
     if (choice === undefined || choice.kind !== "entry") throw new Error("third must be valid");
     expect(choice.state).toBe("choice");
     expect(choice.key).toBe("k1a2b3c4d5e6f7081920a");
+    expect(choice.repo).toEqual({
+      name: "mast",
+      path: "/home/u/p/mast",
+      remote: "git@github.com:example/mast.git",
+    });
+  });
+
+  it("treats a malformed repo as null and keeps the entry", () => {
+    const cases: unknown[] = [
+      "mast",
+      { name: "mast" },
+      { name: "", path: "/r/mast" },
+      { name: "mast", path: 7 },
+      { name: "mast", path: "/r/mast", remote: 5 },
+      undefined,
+    ];
+    for (const repo of cases) {
+      const parsed = parseBoard(rawBoard([rawEntry(1, { repo })]));
+      const first = parsed.entries[0];
+      if (first === undefined || first.kind !== "entry") {
+        throw new Error(`entry must stay valid for ${JSON.stringify(repo)}`);
+      }
+      expect(first.repo, JSON.stringify(repo)).toBeNull();
+      expect(first.state, JSON.stringify(repo)).toBe("active");
+    }
+  });
+
+  it("normalizes an empty remote to null", () => {
+    const parsed = parseBoard(rawBoard([rawEntry(1, { repo: { name: "m", path: "/r", remote: "" } })]));
+    const first = parsed.entries[0];
+    if (first === undefined || first.kind !== "entry") throw new Error("must be valid");
+    expect(first.repo).toEqual({ name: "m", path: "/r", remote: null });
   });
 
   it("ignores task fields the board does not read", () => {
@@ -473,6 +509,107 @@ describe("buildCards sorting (R2)", () => {
       NOW,
     );
     expect(cards.map((card) => card.workspaceName)).toEqual(["alpha", "gamma", "beta", "zeta"]);
+  });
+});
+
+describe("groupCards", () => {
+  const mast = { name: "mast", path: "/repo/mast", remote: null };
+
+  it("groups by repo path and labels the repo-less group Other", () => {
+    const state = appState([ws(1, { name: "a" }), ws(2, { name: "b" }), ws(3, { name: "c" })]);
+    const parsed = boardOf(
+      parsedEntry(boardEntry(1, { repo: mast })),
+      parsedEntry(boardEntry(2, { repo: { ...mast } })),
+      parsedEntry(boardEntry(3, { repo: null })),
+    );
+    const groups = groupCards(buildCards(state, parsed, glueStatus(), NOW));
+    expect(groups.map((group) => [group.key, group.label, group.cards.length])).toEqual([
+      ["/repo/mast", "mast", 2],
+      ["other", "Other", 1],
+    ]);
+    expect(groups[0]?.cards.map((card) => card.repo)).toEqual([mast, mast]);
+  });
+
+  it("disambiguates same-name repos by remote, falling back to the path", () => {
+    const byRemote = groupCards(
+      buildCards(
+        appState([ws(1), ws(2)]),
+        boardOf(
+          parsedEntry(
+            boardEntry(1, {
+              repo: { name: "mast", path: "/work/mast", remote: "git@github.com:kwon/mast.git" },
+            }),
+          ),
+          parsedEntry(
+            boardEntry(2, {
+              repo: { name: "mast", path: "/home/mast", remote: "https://github.com/other/mast" },
+            }),
+          ),
+        ),
+        glueStatus(),
+        NOW,
+      ),
+    );
+    expect(byRemote.map((group) => group.label).sort()).toEqual([
+      "mast (kwon/mast)",
+      "mast (other/mast)",
+    ]);
+
+    const byPath = groupCards(
+      buildCards(
+        appState([ws(1), ws(2)]),
+        boardOf(
+          parsedEntry(boardEntry(1, { repo: { name: "mast", path: "/a/mast", remote: null } })),
+          parsedEntry(boardEntry(2, { repo: { name: "mast", path: "/b/mast", remote: null } })),
+        ),
+        glueStatus(),
+        NOW,
+      ),
+    );
+    expect(byPath.map((group) => group.label)).toEqual(["mast (/a/mast)", "mast (/b/mast)"]);
+  });
+
+  it("orders groups by their best card with Other last on ties", () => {
+    const state = appState([
+      ws(1, { name: "quiet" }),
+      ws(2, { name: "busy", agentStatus: "running" }),
+      ws(3, { name: "waiting", agentStatus: "needsInput" }),
+      ws(4, { name: "sibling" }),
+    ]);
+    const parsed = boardOf(
+      parsedEntry(boardEntry(2, { repo: { name: "busy", path: "/r/busy", remote: null } })),
+      parsedEntry(boardEntry(3, { repo: { name: "mixed", path: "/r/mixed", remote: null } })),
+      parsedEntry(boardEntry(4, { repo: { name: "mixed", path: "/r/mixed", remote: null } })),
+    );
+    const groups = groupCards(buildCards(state, parsed, glueStatus(), NOW));
+    expect(groups.map((group) => group.key)).toEqual(["/r/mixed", "/r/busy", "other"]);
+  });
+
+  it("keeps Other after a repo group with the same rank and update time", () => {
+    const updatedAt = "2026-09-25T00:00:00Z";
+    const parsed = boardOf(
+      parsedEntry(boardEntry(1, { task: task({ updatedAt }) })),
+      parsedEntry(boardEntry(2, { repo: mast, task: task({ updatedAt }) })),
+    );
+    const groups = groupCards(buildCards(appState([ws(1), ws(2)]), parsed, glueStatus(), NOW));
+    expect(groups.map((group) => group.key)).toEqual(["/repo/mast", "other"]);
+  });
+
+  it("keeps the card order inside a group", () => {
+    const parsed = boardOf(
+      parsedEntry(boardEntry(1, { repo: mast, task: task({ updatedAt: "2026-09-25T01:00:00Z" }) })),
+      parsedEntry(boardEntry(2, { repo: mast, task: task({ updatedAt: "2026-09-25T02:00:00Z" }) })),
+    );
+    const cards = buildCards(
+      appState([ws(1, { name: "older" }), ws(2, { name: "newer" })]),
+      parsed,
+      glueStatus(),
+      NOW,
+    );
+    const groups = groupCards(cards);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.cards).toEqual(cards);
+    expect(groups[0]?.cards.map((card) => card.workspaceName)).toEqual(["newer", "older"]);
   });
 });
 

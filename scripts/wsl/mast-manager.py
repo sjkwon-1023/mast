@@ -47,6 +47,7 @@ PATCH_VERDICTS = ("no_change", "update")
 PATCH_NOTIFY = ("none", "board", "report")
 NOTIFY_REASONS = ("question", "done", "failed")
 PATCH_OPS = ("add", "resolve", "supersede", "set_progress", "set_title", "set_headline", "set_plan")
+REPO_KEYS = ("name", "path", "remote")
 
 TASK_KEYS = ("meta", "title", "headline", "progress", "open_questions", "decisions", "next", "plans", "git")
 
@@ -70,6 +71,10 @@ MAX_PLAN_STEP = 160
 MAX_PLAN_STEPS = 12
 MIN_QUOTE = 8
 MAX_QUOTE = 300
+
+MAX_REPO_NAME = 120
+MAX_REPO_PATH = 1024
+MAX_REPO_REMOTE = 1024
 
 ISO_Z = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
@@ -264,7 +269,7 @@ def new_task(root_path, distro, now=None):
         "decisions": [],
         "next": [],
         "plans": [],
-        "git": {"branch": None},
+        "git": {"branch": None, "repo": None},
     }
 
 
@@ -490,6 +495,27 @@ def _validate_plan(plan, index):
     return None
 
 
+def _repo_error(repo):
+    if not isinstance(repo, dict):
+        return "git.repo must be an object or null"
+    unknown = sorted(set(repo) - set(REPO_KEYS))
+    if unknown:
+        return "git.repo has unknown keys: " + ", ".join(unknown)
+    for field in REPO_KEYS:
+        if field not in repo:
+            return "git.repo is missing " + field
+    name = repo["name"]
+    if not isinstance(name, str) or not name or len(name) > MAX_REPO_NAME:
+        return "git.repo.name must be a non-empty string of at most 120 characters"
+    path = repo["path"]
+    if not isinstance(path, str) or not path or len(path) > MAX_REPO_PATH:
+        return "git.repo.path must be a non-empty string of at most 1024 characters"
+    remote = repo["remote"]
+    if remote is not None and (not isinstance(remote, str) or len(remote) > MAX_REPO_REMOTE):
+        return "git.repo.remote must be a string of at most 1024 characters or null"
+    return None
+
+
 def validate_task(doc):
     """작업 문서 스키마를 검사한다. 통과하면 None, 아니면 사유 문자열을 반환한다."""
     if not isinstance(doc, dict):
@@ -551,6 +577,11 @@ def validate_task(doc):
     branch = git.get("branch")
     if branch is not None and not isinstance(branch, str):
         return "git.branch must be a string or null"
+    repo = git.get("repo")
+    if repo is not None:
+        reason = _repo_error(repo)
+        if reason is not None:
+            return reason
     return None
 
 
@@ -1145,6 +1176,8 @@ workspaces yourself.
   not in a record.
 - Open the original transcript or plan files only when the records are not
   enough. Get transcript paths from `mast manager workspaces`.
+- When the user asks by repository rather than by workspace, answer from that
+  repo's group (`## <repo name>`) in `digest.md`.
 - If a record looks old or the harness reports a failure, say so instead of
   presenting the record as current.
 
@@ -1240,7 +1273,40 @@ def _digest_key(workspace, doc):
     return task_key(root, distro)
 
 
-def _digest_line(manager_dir, workspace):
+def _task_git_repo(doc):
+    """작업 문서의 `git.repo`. 없거나 형식이 아니면 None."""
+    if not isinstance(doc, dict):
+        return None
+    git = doc.get("git")
+    repo = git.get("repo") if isinstance(git, dict) else None
+    return repo if isinstance(repo, dict) else None
+
+
+def _digest_repo(workspace, doc):
+    """레포 `{name, path, remote}`. 호출자가 준 entry의 repo, 없으면 작업의 git.repo.
+
+    이름·경로가 비어 있지 않은 문자열이 아니면 없는 것으로 본다.
+    """
+    for candidate in (workspace.get("repo"), _task_git_repo(doc)):
+        if not isinstance(candidate, dict):
+            continue
+        name = candidate.get("name")
+        path = candidate.get("path")
+        remote = candidate.get("remote")
+        if not isinstance(name, str) or not name:
+            continue
+        if not isinstance(path, str) or not path:
+            continue
+        return {
+            "name": name,
+            "path": path,
+            "remote": remote if isinstance(remote, str) and remote else None,
+        }
+    return None
+
+
+def _digest_entry(manager_dir, workspace):
+    """digest 한 항목의 `(한 줄, 레포|None)`을 만든다."""
     workspace_id = workspace.get("id")
     name = workspace.get("name") or ("workspace %s" % workspace_id)
     label = "[#%s %s]" % (workspace_id, name)
@@ -1251,20 +1317,82 @@ def _digest_line(manager_dir, workspace):
         if not workspace.get("reason"):
             key = _digest_key(workspace, None)
             if key is not None:
-                doc, error = load_task(manager_dir, key)
+                loaded, error = load_task(manager_dir, key)
                 if error is not None:
-                    return label + " (no record: " + error + ")"
+                    return (
+                        label + " (no record: " + error + ")",
+                        _digest_repo(workspace, None),
+                    )
+                doc = loaded
     if doc is None:
-        return label + " (no record: " + str(workspace.get("reason") or "no task") + ")"
+        return (
+            label + " (no record: " + str(workspace.get("reason") or "no task") + ")",
+            _digest_repo(workspace, None),
+        )
 
     meta = doc.get("meta")
     updated = meta.get("updated_at") if isinstance(meta, dict) else None
     questions = doc.get("open_questions")
     if not isinstance(questions, list):
         questions = []
-    return "%s %s — %s | open questions: %d | updated %s | file: tasks/%s.json" % (
+    line = "%s %s — %s | open questions: %d | updated %s | file: tasks/%s.json" % (
         label, doc.get("title") or name, doc.get("headline") or "",
         _active_count(questions), updated or "unknown", _digest_key(workspace, doc) or "?")
+    return line, _digest_repo(workspace, doc)
+
+
+def _short_remote(remote):
+    """원격 URL을 `owner/repo` 꼴의 짧은 구분자로 바꾼다. 빈 값이면 None.
+
+    보드 `labelGroups`의 `shortRemote`와 같은 규칙이다.
+    """
+    if not isinstance(remote, str):
+        return None
+    text = remote.strip()
+    if text == "":
+        return None
+    scheme = text.find("://")
+    if scheme >= 0:
+        rest = text[scheme + 3:]
+        slash = rest.find("/")
+        text = rest[slash + 1:] if slash >= 0 else rest
+    else:
+        colon = text.find(":")
+        if colon >= 0:
+            text = text[colon + 1:]
+    if text.endswith(".git"):
+        text = text[:-4]
+    segments = [segment for segment in text.split("/") if segment]
+    if not segments:
+        return None
+    return "/".join(segments[-2:])
+
+
+def _disambiguate_groups(groups):
+    """이름이 겹치는 레포 그룹에 원격(`owner/repo`) 또는 경로 구분자를 붙인다.
+
+    모든 원격의 `owner/repo`가 있고 서로 다를 때만 원격을 쓰고, 아니면 그룹의
+    경로를, 경로도 없으면 "other"를 쓴다. 보드 `labelGroups`와 같은 규칙이다.
+    """
+    by_name = {}
+    for group in groups:
+        by_name.setdefault(group["label"], []).append(group)
+    for name, colliding in by_name.items():
+        if len(colliding) < 2:
+            continue
+        remotes = [
+            _short_remote(group["repo"]["remote"]) if group["repo"] is not None else None
+            for group in colliding
+        ]
+        remote_usable = (
+            all(remote is not None for remote in remotes)
+            and len(set(remotes)) == len(remotes)
+        )
+        for index, group in enumerate(colliding):
+            suffix = remotes[index] if remote_usable else None
+            if suffix is None:
+                suffix = group["path"] or "other"
+            group["label"] = "%s (%s)" % (name, suffix)
 
 
 def render_digest(manager_dir, overview_workspaces, now=None):
@@ -1274,19 +1402,47 @@ def render_digest(manager_dir, overview_workspaces, now=None):
     - "reason": 기록이 없을 때 표시할 사유. `task`가 있으면 무시한다.
     - "task": 미리 읽은 작업 문서. 있으면 파일을 다시 읽지 않는다.
     - "key": 미리 계산한 작업 키. 없으면 rootPath·distro나 작업 문서에서 찾는다.
-    순서는 받은 순서를 지킨다. 4,000자를 넘으면 뒤의 항목을 버리고 `… (N more)`를 쓴다.
+    - "repo": 호출자가 아는 레포. 없으면 작업의 `git.repo`를 쓴다.
+    줄은 레포별로 묶어 `## <repo name>`(없으면 `## Other`) 제목 아래에 둔다. 이름이
+    겹치는 그룹은 원격(`owner/repo`) 또는 경로를 덧붙여 구분한다. 그룹은 처음 등장한
+    순서를, 그룹 안 줄은 받은 순서를 지킨다. 4,000자를 넘으면 뒤의 항목을 버리고
+    `… (N more)`를 쓴다 (제목 줄도 길이에 포함한다).
     """
     header = "Manager digest generated at " + _iso(now)
-    workspaces = [header]
+    groups = []
+    by_key = {}
+    total = 0
     for workspace in overview_workspaces:
-        workspaces.append(_digest_line(manager_dir, workspace))
-    lines = workspaces[1:]
-    for keep in range(len(lines), -1, -1):
-        if keep == len(lines):
-            candidate = "\n".join(workspaces) + "\n"
-        else:
-            candidate = "\n".join(
-                [header] + lines[:keep] + ["… (%d more)" % (len(lines) - keep)]) + "\n"
+        line, repo = _digest_entry(manager_dir, workspace)
+        key = repo["path"] if repo is not None else ""
+        group = by_key.get(key)
+        if group is None:
+            group = {
+                "label": repo["name"] if repo is not None else "Other",
+                "path": key,
+                "repo": repo,
+                "lines": [],
+            }
+            by_key[key] = group
+            groups.append(group)
+        group["lines"].append(line)
+        total += 1
+    _disambiguate_groups(groups)
+
+    for keep in range(total, -1, -1):
+        body = []
+        remaining = keep
+        for group in groups:
+            take = min(remaining, len(group["lines"]))
+            if take <= 0:
+                continue
+            body.append("## " + group["label"])
+            body.extend(group["lines"][:take])
+            remaining -= take
+        lines = [header] + body
+        if keep < total:
+            lines.append("… (%d more)" % (total - keep))
+        candidate = "\n".join(lines) + "\n"
         if len(candidate) <= DIGEST_MAX:
             return candidate
     return header + "\n"
