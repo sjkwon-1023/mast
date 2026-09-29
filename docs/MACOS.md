@@ -217,7 +217,9 @@ it does not open arbitrary paths supplied by an agent.
 Resume is **a hint, never automatic execution**. Eligible root agent events save
 `claude --resume <id>`, `codex resume <id>` or `opencode --session <id>` for that
 tab. The next shell displays the command and adds it to that tab's history: use
-Up/Enter when you are ready. IDs are strictly validated before saving or loading
+Up/Enter when you are ready. A shell that is already running adds a newly saved
+hint to its history at the next prompt, silently, so Up right after an agent exits
+offers its resume command. IDs are strictly validated before saving or loading
 hints. Closing a tab deletes its owned history/resume files; quitting the app
 keeps them for restoration.
 
@@ -392,6 +394,10 @@ treating these features as field-verified:
   change global firewall settings for this check.
 - Install agy, observe running/idle, check the below-1.1.10 warning path, test
   `no-agy-hooks`, and verify repair plus marker removal retries a refused merge.
+- Exit Claude Code in a tab and press Up at the next prompt: it offers that
+  session's `claude --resume <id>`. `cd` in a terminal and check that the sidebar
+  card path follows it (`~/…` abbreviated). With WSL not applicable, no empty
+  notice band appears above the workspace.
 
 Do not record any of these manual checks as complete until they have actually
 been run.

@@ -121,6 +121,26 @@ class ShellStartup(unittest.TestCase):
         self.assertIn(b"zsh-tab-42", self.output)
         self.assertFalse((self.home / ".zsh_history").exists())
 
+    def test_zsh_resume_saved_while_the_shell_runs_reaches_history_at_next_prompt(self):
+        self.zsh_profile(self.home)
+        self.start("/bin/zsh")
+        resume = self.home / ".mast/resume"
+        resume.mkdir(parents=True)
+        (resume / "tab-42").write_text("claude --resume live-id\n2\n")
+        self.finish("true\nfc -ln -3 | sed 's/^/HIST:/'")
+        self.assertIn(b"HIST:claude --resume live-id", self.output)
+        self.assertNotIn(b"resume previous agent", self.output)
+
+    def test_bash_resume_saved_while_the_shell_runs_reaches_history_at_next_prompt(self):
+        (self.home / ".bashrc").write_text('PS1="MAST_READY> "\n')
+        self.start("/bin/bash")
+        resume = self.home / ".mast/resume"
+        resume.mkdir(parents=True)
+        (resume / "tab-42").write_text("codex resume live-id\n2\n")
+        self.finish("true\nhistory 3 | sed 's/^/HIST:/'")
+        self.assertRegex(self.output, rb"HIST: *\d+ +codex resume live-id")
+        self.assertNotIn(b"resume previous agent", self.output)
+
     def test_bash_profile_is_not_sourced_twice_and_history_is_per_tab(self):
         (self.home / ".bash_profile").write_text('printf "profile\\n" >> "$HOME/loaded"\nsource "$HOME/.bashrc"\n')
         (self.home / ".bashrc").write_text('printf "rc\\n" >> "$HOME/loaded"\nPS1="MAST_READY> "\n')

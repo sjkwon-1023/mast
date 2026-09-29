@@ -85,3 +85,14 @@ README's "Shells respawn in the directory they were last in" was therefore false
   defines what a mast shell is, and it is covered by the argv contract tests — which now
   actually run, on the Windows CI leg (they had rotted unnoticed because the Linux gate never
   compiled them).
+
+## Amendment (2026-09-30): the sidebar card path follows the tracked cwd
+
+The third line of a sidebar workspace card used to show the workspace `rootPath`, which is fixed
+when the workspace is created, so the card kept naming that folder however far the shell moved.
+The card now shows the active pane's terminal `cwd` — the value this ADR keeps current — and falls
+back to `rootPath` when the shown tab is not a terminal (`sidebar-model.ts` reuses
+`activeTerminalCwd`, the `Ctrl+Shift+N` resolver). `abbreviatePath` also folds macOS's
+`/Users/<user>` into `~`, next to `/home/<user>`. `rootPath` itself is unchanged: it is still the
+default cwd for new tabs, and nothing in the UI edits it. The value is still the last
+prompt-time cwd, so a card does not move while an agent `cd`s on its own.

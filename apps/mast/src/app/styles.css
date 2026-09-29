@@ -122,6 +122,10 @@ body {
   font-size: 12px;
 }
 
+.wsl-notice[hidden] {
+  display: none;
+}
+
 .wsl-notice-text {
   display: flex;
   flex-direction: column;
