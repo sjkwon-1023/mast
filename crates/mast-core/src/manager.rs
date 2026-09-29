@@ -40,7 +40,7 @@ pub enum AgentEventKind {
     TabGone,
 }
 
-/// 이벤트 시점의 워크스페이스 요약 — `{id, name, rootPath, distro}`.
+/// 이벤트 시점의 워크스페이스 요약 — `{id, name, rootPath, repoRoot, distro}`.
 /// 워크스페이스가 사라진 뒤(`workspaceClosed`)에도 그 시점 값을 그대로 싣는다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +48,7 @@ pub struct EventWorkspace {
     pub id: u64,
     pub name: String,
     pub root_path: Option<String>,
+    pub repo_root: Option<String>,
     pub distro: Option<String>,
 }
 
@@ -57,6 +58,7 @@ impl EventWorkspace {
             id: ws.id.0,
             name: ws.name.clone(),
             root_path: ws.root_path.clone(),
+            repo_root: ws.repo_root.clone(),
             distro: ws.distro.clone(),
         }
     }
@@ -138,6 +140,8 @@ pub struct OverviewWorkspace {
     pub id: u64,
     pub name: String,
     pub root_path: Option<String>,
+    /// 사용자가 지정한 레포 묶음 루트 — null 이면 하네스가 rootPath 에서 판별한다.
+    pub repo_root: Option<String>,
     pub distro: Option<String>,
     pub manager: bool,
     /// 워크스페이스의 저장 파생값 (탭 상태에서 재계산된 값).
@@ -552,6 +556,7 @@ mod tests {
             id,
             name: "feature-x".into(),
             root_path: Some("/home/u/p/x".into()),
+            repo_root: None,
             distro: None,
         }
     }
@@ -576,6 +581,7 @@ mod tests {
                     "id": 1,
                     "name": "feature-x",
                     "rootPath": "/home/u/p/x",
+                    "repoRoot": null,
                     "distro": null
                 },
                 "tab": 4,
@@ -623,6 +629,7 @@ mod tests {
                     "id": 7,
                     "name": "feature-x",
                     "rootPath": "/home/u/p/x",
+                    "repoRoot": null,
                     "distro": null
                 },
                 "tab": 9,
@@ -802,6 +809,7 @@ mod tests {
                         "id": 1,
                         "name": "feature-x",
                         "rootPath": "/home/u/p/x",
+                        "repoRoot": null,
                         "distro": null
                     },
                     "tab": null,
@@ -823,6 +831,7 @@ mod tests {
                 id: 1,
                 name: "feature-x".into(),
                 root_path: Some("/home/u/p/x".into()),
+                repo_root: None,
                 distro: None,
                 manager: false,
                 agent_status: AgentStatus::Idle,
@@ -849,6 +858,7 @@ mod tests {
                     "id": 1,
                     "name": "feature-x",
                     "rootPath": "/home/u/p/x",
+                    "repoRoot": null,
                     "distro": null,
                     "manager": false,
                     "agentStatus": "idle",

@@ -61,6 +61,7 @@ function ws(
     name: opts.name ?? `ws ${id}`,
     rootPath: opts.rootPath ?? null,
     distro: null,
+    repoRoot: null,
     gitBranch: null,
     gitDirty: null,
     manager: opts.manager ?? false,

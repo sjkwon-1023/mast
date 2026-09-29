@@ -132,6 +132,23 @@ pub enum Command {
     /// 관리자 워크스페이스를 해체한다 — 세션 kill·탭 자원 해제·active fallback 이
     /// CloseWorkspace 와 같다. 없으면 [`CommandError::UnknownTarget`].
     RemoveManagerWorkspace,
+    /// 워크스페이스 루트(새 탭의 기본 cwd이자 관리자 작업 기억의 키)를 바꾼다. 열린
+    /// 탭의 cwd 는 그대로다. 경로 규칙은 CreateManagerWorkspace 와 같고 위반은
+    /// [`CommandError::InvalidPath`], 관리자 워크스페이스는 [`CommandError::ManagerPinned`].
+    /// 관리자 이벤트는 옛 루트의 workspaceClosed → 새 루트의 workspaceOpened → 세션이
+    /// 있는 탭마다 session 순이다: 하네스는 옛 작업 기억을 보관하고 새 루트에서 새로
+    /// 시작한다 (ADR-0032 §14). 같은 값이면 이벤트 없이 끝난다.
+    SetWorkspaceRoot {
+        workspace: WorkspaceId,
+        root_path: String,
+    },
+    /// 관리자 보드가 이 워크스페이스를 묶을 레포 루트를 지정한다. None 이면 root_path
+    /// 에서 git 으로 판별하는 기본 동작으로 돌아간다. 경로 규칙·관리자 거부는
+    /// SetWorkspaceRoot 와 같고, 관리자 이벤트는 갱신용 workspaceOpened 하나다.
+    SetWorkspaceRepoRoot {
+        workspace: WorkspaceId,
+        repo_root: Option<String>,
+    },
 }
 
 /// 탭 생성 명세 — CreateTab·SplitPane·CreateWorkspace 가 공유한다. 21단계 뷰어

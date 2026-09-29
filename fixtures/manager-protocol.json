@@ -6,6 +6,7 @@
         "id": 1,
         "name": "feature-x",
         "rootPath": "/home/u/p/x",
+        "repoRoot": null,
         "distro": null,
         "manager": false,
         "agentStatus": "running",
@@ -29,6 +30,7 @@
         "id": 7,
         "name": "manager",
         "rootPath": "/home/u/.mast/manager",
+        "repoRoot": null,
         "distro": "Ubuntu",
         "manager": true,
         "agentStatus": "idle",
@@ -64,6 +66,7 @@
           "id": 1,
           "name": "feature-x",
           "rootPath": "/home/u/p/x",
+          "repoRoot": null,
           "distro": null
         },
         "tab": 4,
@@ -82,6 +85,7 @@
           "id": 1,
           "name": "feature-x",
           "rootPath": "/home/u/p/x",
+          "repoRoot": null,
           "distro": null
         },
         "tab": 4,
@@ -142,6 +146,7 @@
             "id": 1,
             "name": "feature-x",
             "rootPath": "/home/u/p/x",
+            "repoRoot": null,
             "distro": null,
             "manager": false,
             "agentStatus": "running",
@@ -165,6 +170,7 @@
             "id": 7,
             "name": "manager",
             "rootPath": "/home/u/.mast/manager",
+            "repoRoot": null,
             "distro": "Ubuntu",
             "manager": true,
             "agentStatus": "idle",
@@ -202,6 +208,7 @@
             "id": 1,
             "name": "feature-x",
             "rootPath": "/home/u/p/x",
+            "repoRoot": null,
             "distro": null
           },
           "tab": 4,
@@ -220,6 +227,7 @@
             "id": 1,
             "name": "feature-x",
             "rootPath": "/home/u/p/x",
+            "repoRoot": null,
             "distro": null
           },
           "tab": 4,

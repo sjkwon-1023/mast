@@ -77,6 +77,7 @@ function workspace(id: number, panes: Pane[], activePane: number): Workspace {
     name: `ws ${id}`,
     rootPath: null,
     distro: null,
+    repoRoot: null,
     gitBranch: null,
     gitDirty: null,
     manager: false,

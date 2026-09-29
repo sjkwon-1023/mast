@@ -10,6 +10,8 @@
 // 슬롯을 따로 본다 — 벡터 중간에 관리자가 있어도 일반 카드 순서는 흔들리지 않는다.
 //
 // 카드는 3줄이다: 이름(+ unread dot) / 상태 텍스트 + 메시지 첫 줄 / 축약 경로.
+// 경로는 워크스페이스 rootPath 가 아니라 활성 pane 터미널의 cwd(OSC 7 이 갱신)다 —
+// 셸이 이동하면 카드도 따라가고, 터미널이 아닌 탭이 보이면 rootPath 로 돌아간다.
 // pane·탭 개수와 git branch 는 카드에 싣지 않는다 — 개수는 화면(split tree)이
 // 이미 보여주고, gitBranch/gitDirty 는 19단계가 v2 로 미뤄져 v1 에서 항상 null
 // 이다 (코어 모델 필드는 예약된 채 남는다).
@@ -18,6 +20,7 @@
 // id 멤버십·필드 동일성만으로 결정되는 순수 판정이라, DOM 없는 vitest 로 잠글 수
 // 있어야 한다 (view-reconcile 이 뷰 수명에 대해 하는 일과 같은 구도).
 
+import { activeTerminalCwd } from "../../shared/keys";
 import type { AgentStatus, Workspace, WorkspaceId } from "../../shared/types";
 
 export interface WorkspaceCardModel {
@@ -38,7 +41,7 @@ export interface WorkspaceCardModel {
    *  알림은 agent_status 를 바꾸지 않으므로(18단계 규약), 집계 dot 이 없으면
    *  백그라운드 워크스페이스에서 그 알림이 어디에도 안 보인다 (3층 중 워크스페이스 층). */
   unread: boolean;
-  /** rootPath 축약 (~/ 치환 + 뒤 2세그먼트 유지) — null 이면 null. */
+  /** 활성 pane 터미널 cwd(없으면 rootPath) 축약 (~/ 치환 + 뒤 2세그먼트 유지) — null 이면 null. */
   path: string | null;
 }
 
@@ -49,13 +52,13 @@ const STATUS_LABELS: Record<AgentStatus, string> = {
   idle: "idle",
 };
 
-/** rootPath 축약 — `/home/<user>` 접두를 `~` 로 치환하고, 나머지 세그먼트가
+/** 경로 축약 — `/home/<user>`(WSL)·`/Users/<user>`(macOS) 접두를 `~` 로 치환하고, 나머지 세그먼트가
  *  2개를 넘으면 중간을 `…` 로 접어 뒤 2세그먼트만 남긴다.
  *  예: `/home/u/a/b/c` → `~/…/b/c`, `/home/u/code` → `~/code`,
  *  `/srv/a/b/c` → `…/b/c`, `/srv/data` → 원문 유지. */
 export function abbreviatePath(rootPath: string | null): string | null {
   if (rootPath === null) return null;
-  const home = rootPath.replace(/^\/home\/[^/]+(?=\/|$)/, "~");
+  const home = rootPath.replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, "~");
   const isHome = home.startsWith("~");
   const rest = isHome ? home.slice(1) : home;
   // 후행 슬래시·중복 슬래시를 흡수한다.
@@ -123,7 +126,7 @@ export function sidebarModel(
       unread: Object.values(ws.panes).some((pane) =>
         pane.tabs.some((tab) => tab.notification === "unread"),
       ),
-      path: abbreviatePath(ws.rootPath),
+      path: abbreviatePath(activeTerminalCwd(ws)),
     };
     if (model.pinned) pinned = model;
     else cards.push(model);

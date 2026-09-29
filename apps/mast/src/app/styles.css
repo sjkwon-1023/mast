@@ -122,6 +122,10 @@ body {
   font-size: 12px;
 }
 
+.wsl-notice[hidden] {
+  display: none;
+}
+
 .wsl-notice-text {
   display: flex;
   flex-direction: column;
@@ -1982,6 +1986,55 @@ body {
   border-color: var(--border);
   color: var(--fg-muted);
   cursor: default;
+}
+
+/* 워크스페이스 Root / Repo 줄 — 긴 경로는 말줄임하고 전체는 title 로 보여 준다. */
+.board-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.board-path-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.board-path-label {
+  flex: 0 0 34px;
+  color: var(--fg-muted);
+}
+
+.board-path-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+}
+
+.board-change-root,
+.board-set-repo,
+.board-auto-repo {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.board-change-root:hover,
+.board-set-repo:hover,
+.board-auto-repo:hover {
+  background: var(--border);
 }
 
 .board-card-actions {

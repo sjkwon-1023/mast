@@ -890,6 +890,23 @@ class EventApplyTest(unittest.TestCase):
         self.assertEqual(overview["workspaces"][0]["agentStatus"], "idle")
 
 
+class RepoRootEventTest(unittest.TestCase):
+    def test_workspace_opened_adds_and_refreshes_the_repo_root(self):
+        overview = {"nextSeq": 0, "workspaces": []}
+        ref = {"id": 1, "name": "w", "rootPath": "/w", "repoRoot": "/r", "distro": None}
+        HARNESS._apply_event(overview, {"kind": "workspaceOpened", "workspace": ref})
+        self.assertEqual(overview["workspaces"][0]["repoRoot"], "/r")
+        HARNESS._apply_event(overview, {
+            "kind": "workspaceOpened", "workspace": dict(ref, repoRoot=None)})
+        self.assertIsNone(overview["workspaces"][0]["repoRoot"])
+        self.assertEqual(len(overview["workspaces"]), 1)
+
+    def test_repo_source_prefers_the_repo_root(self):
+        self.assertEqual(HARNESS._repo_source({"rootPath": "/w", "repoRoot": "/r"}), "/r")
+        self.assertEqual(HARNESS._repo_source({"rootPath": "/w", "repoRoot": None}), "/w")
+        self.assertEqual(HARNESS._repo_source({"rootPath": "/w"}), "/w")
+
+
 class CollectibleTest(unittest.TestCase):
     """대상 판정: build_board와 같은 제외 규칙."""
 
@@ -2105,6 +2122,29 @@ class LifetimeTest(SummaryTestCase):
         self.assertTrue(doc["meta"]["cursor"], "커서는 보관본 안에 그대로 남는다")
         self.assertEqual(len(self.codex_calls()), 1)
 
+    def test_root_change_archives_the_old_task_and_starts_a_new_one(self):
+        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.seed_task(str(self.repo), None)
+        run = self.start_ok(idle_seconds=5)
+        self.send_snapshot(run)
+        next_root = self.base / "repo-next"
+        next_root.mkdir()
+        opened = self.event("workspaceOpened")
+        opened["workspace"]["rootPath"] = str(next_root)
+        session = self.event("session", tab=4, agent_session=self.session())
+        session["workspace"]["rootPath"] = str(next_root)
+        # 코어의 SetWorkspaceRoot 가 내는 순서: 옛 루트 closed → 새 루트 opened → session.
+        self.send_events(run, [self.event("workspaceClosed"), opened, session])
+
+        next_task = self.manager / "tasks" / (STORE.task_key(str(next_root), None) + ".json")
+        self.wait_until(
+            lambda: not self.task_path().exists() and next_task.exists(),
+            message="the old task archived and the new root's task created")
+        self.assertEqual(len(self.archive_paths()), 1)
+        doc = json.loads(next_task.read_text(encoding="utf-8"))
+        self.assertEqual(doc["meta"]["workspace_key"]["root_path"], str(next_root))
+        self.assertIn("sess-one", doc["meta"]["cursor"], "살아 있는 세션을 새 작업이 이어 모은다")
+
     def test_workspace_closed_collects_sessions_added_after_an_idle_reservation(self):
         self.configure_codex(patch=NO_CHANGE_PATCH)
         second_path = self.transcripts / "session-b.jsonl"
@@ -2541,6 +2581,24 @@ class BuildBoardTest(unittest.TestCase):
             entries = HARNESS.build_board(overview, manager, None, None, {"/w/task": cached})
             self.assertEqual(entries[0]["state"], "active")
             self.assertEqual(entries[0]["repo"], cached)
+
+    def test_repo_root_override_names_the_group_and_keeps_the_detected_remote(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            item = workspace(1, "w", "/w/mast/main", None)
+            item["repoRoot"] = "/w/mast/"
+            detected = {"name": "other", "path": "/w/elsewhere", "remote": "git@h:o/mast.git"}
+            entries = HARNESS.build_board(
+                {"workspaces": [item]}, tmp, None, None, {"/w/mast/": detected})
+            self.assertEqual(
+                entries[0]["repo"],
+                {"name": "mast", "path": "/w/mast/", "remote": "git@h:o/mast.git"})
+
+    def test_repo_root_override_without_detection_has_no_remote(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            item = workspace(1, "w", "/w/task", None)
+            item["repoRoot"] = "/w/group"
+            entries = HARNESS.build_board({"workspaces": [item]}, tmp, None, None, {})
+            self.assertEqual(entries[0]["repo"], {"name": "group", "path": "/w/group", "remote": None})
 
     def test_cached_null_falls_back_to_the_task_repo(self):
         with tempfile.TemporaryDirectory() as tmp:

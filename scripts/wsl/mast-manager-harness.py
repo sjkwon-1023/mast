@@ -752,16 +752,37 @@ def detect_repo(root_path):
     return repo
 
 
-def _task_repo(repos, root_path):
-    """작업에 기록할 repo 값. 락 밖에서 채운 `repos` 매핑에 있는 값만 쓴다.
+def _repo_source(workspace):
+    """레포 판별을 돌릴 경로 — 사용자가 지정한 `repoRoot`, 없으면 `rootPath`."""
+    repo_root = workspace.get("repoRoot") if isinstance(workspace, dict) else None
+    if isinstance(repo_root, str) and repo_root:
+        return repo_root
+    return workspace.get("rootPath") if isinstance(workspace, dict) else None
 
-    매핑에 없거나 null이면 None — 판별하지 않고 저장된 `git.repo`를 유지한다.
-    락 안(`update_task` mutate)에서 git을 부르지 않기 위한 규칙이다.
+
+def _workspace_repo(workspace, repos):
+    """워크스페이스의 repo 값. 락 밖에서 채운 `repos` 매핑(경로→판별)만 읽는다.
+
+    `repoRoot`가 지정돼 있으면 그 경로가 곧 레포 루트다: 이름은 basename, 경로는
+    지정값 그대로이고 원격만 판별 결과에서 가져온다(git이 아니면 null). 지정이
+    없으면 `rootPath`의 판별 결과이며, 매핑에 없거나 null이면 None — 판별하지 않고
+    저장된 `git.repo`를 유지한다. 락 안(`update_task` mutate)에서 git을 부르지 않기
+    위한 규칙이다.
     """
-    if not isinstance(repos, dict) or not isinstance(root_path, str) or not root_path:
+    source = _repo_source(workspace)
+    if not isinstance(source, str) or not source:
         return None
-    repo = repos.get(root_path)
-    return repo if isinstance(repo, dict) else None
+    detected = repos.get(source) if isinstance(repos, dict) else None
+    detected = detected if isinstance(detected, dict) else None
+    repo_root = workspace.get("repoRoot")
+    if isinstance(repo_root, str) and repo_root:
+        name = os.path.basename(os.path.normpath(repo_root)) or repo_root
+        return {
+            "name": _clip(name, MAX_REPO_NAME),
+            "path": _clip(repo_root, MAX_REPO_PATH),
+            "remote": detected.get("remote") if detected is not None else None,
+        }
+    return detected
 
 
 def _plan_failure(message):
@@ -930,7 +951,7 @@ def finish_summary(manager_dir, workspace, patch, error, utterances, cursor_upda
     patch를 적용하고 `meta.model`/`effort`·`last_collected_at`·커서를 갱신하며
     사라진 계획을 `status: removed`로 바꾼다. 실패(error 있음)면 `meta.last_error`만
     바꾸고 커서는 그대로 둔다. 반환은 적용·거부·removed 목록, notify 판단, 최종 문서다.
-    `repos`는 락 밖에서 채운 root_path→repo 캐시이며, 매핑에 없으면 판별하지 않고
+    `repos`는 락 밖에서 채운 경로→repo 캐시이며(`_workspace_repo` 규칙), 매핑에 없으면 판별하지 않고
     저장된 `git.repo`를 유지한다.
     """
     root_path = workspace.get("rootPath")
@@ -981,7 +1002,7 @@ def finish_summary(manager_dir, workspace, patch, error, utterances, cursor_upda
         branch = _current_branch(root_path)
         if branch is not None:
             doc["git"]["branch"] = branch
-        repo = _task_repo(repos, root_path)
+        repo = _workspace_repo(workspace, repos)
         if repo is not None:
             doc["git"]["repo"] = repo
         return doc
@@ -1010,7 +1031,7 @@ def finish_fast(manager_dir, workspace, cursor_updates, now, repos=None):
 
     빠른 경로에서도 사라진 계획은 결정적으로 `status: removed`로 바꾸고
     `git.branch`·`git.repo`를 갱신한다. `meta.last_error`는 그대로 둔다(요약을
-    하지 않았다). `repos`는 락 밖에서 채운 root_path→repo 캐시이며, 매핑에 없으면
+    하지 않았다). `repos`는 락 밖에서 채운 경로→repo 캐시이며(`_workspace_repo` 규칙), 매핑에 없으면
     판별하지 않고 저장된 `git.repo`를 유지한다.
     """
     root_path = workspace.get("rootPath")
@@ -1032,7 +1053,7 @@ def finish_fast(manager_dir, workspace, cursor_updates, now, repos=None):
         branch = _current_branch(root_path)
         if branch is not None:
             doc["git"]["branch"] = branch
-        repo = _task_repo(repos, root_path)
+        repo = _workspace_repo(workspace, repos)
         if repo is not None:
             doc["git"]["repo"] = repo
         return doc
@@ -2235,9 +2256,7 @@ def _board_entry(workspace, manager_dir, manager_distro, default_distro, repos=N
         entry["reason"] = "other_distro"
         return entry
 
-    cached_repo = None
-    if isinstance(repos, dict) and root_path in repos:
-        cached_repo = repos[root_path]
+    cached_repo = _workspace_repo(workspace, repos)
     if cached_repo is not None:
         entry["repo"] = cached_repo
 
@@ -2270,7 +2289,7 @@ def _board_entry(workspace, manager_dir, manager_distro, default_distro, repos=N
 def build_board(overview, manager_dir, manager_distro, default_distro, repos=None):
     """BoardEntry 목록. 관리자 워크스페이스는 빼고 64개까지 만든다.
 
-    `repos`는 root_path→repo 캐시다. 캐시가 없으면 작업의 `git.repo`로 돌아간다.
+    `repos`는 경로→repo 캐시다(`_workspace_repo` 규칙). 캐시가 없으면 작업의 `git.repo`로 돌아간다.
     """
     entries = []
     workspaces = overview.get("workspaces") if isinstance(overview, dict) else None
@@ -2380,6 +2399,7 @@ def _apply_event(overview, event):
                 "id": workspace_id,
                 "name": workspace_ref.get("name"),
                 "rootPath": workspace_ref.get("rootPath"),
+                "repoRoot": workspace_ref.get("repoRoot"),
                 "distro": workspace_ref.get("distro"),
                 "manager": False,
                 "agentStatus": "idle",
@@ -2388,6 +2408,7 @@ def _apply_event(overview, event):
         else:
             existing["name"] = workspace_ref.get("name")
             existing["rootPath"] = workspace_ref.get("rootPath")
+            existing["repoRoot"] = workspace_ref.get("repoRoot")
             existing["distro"] = workspace_ref.get("distro")
         return
     if kind == "workspaceClosed":
@@ -2696,7 +2717,7 @@ class Harness:
             if _resolve_distro(distro, self.default_distro) != _resolve_distro(
                     self.manager_distro, self.default_distro):
                 continue
-            self.repo_for(workspace.get("rootPath"))
+            self.repo_for(_repo_source(workspace))
 
     def collectible(self, workspace):
         """build_board와 같은 판정. 수집 대상이 아니면 None, 맞으면 BoardEntry."""
@@ -3057,7 +3078,7 @@ class Harness:
             return
         # 같은 events 배치에서 열리고 닫힌 워크스페이스는 prewarm을 거치지 않았다.
         # finish는 락 안에서 캐시만 읽으므로 락 밖인 여기서 한 번 채운다.
-        self.repo_for(workspace.get("rootPath"))
+        self.repo_for(_repo_source(workspace))
         doc, error = MANAGER.load_task(self.manager_dir, entry["key"])
         if error is not None:
             self.log.write("workspace %s task cannot be loaded: %s" % (workspace_id, error))

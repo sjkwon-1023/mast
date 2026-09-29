@@ -228,6 +228,9 @@ the board reads summarized task JSON instead of panes.
 
 ### 8. The board is read-only; corrections go through `mast manager patch`
 
+(Amended 2026-09-29: the board also edits a workspace's root and repo root — §14. Task content
+stays read-only on the board.)
+
 - `apps/mast/src/features/manager/board-model.ts` validates each board entry (a malformed entry
   becomes an error card instead of disappearing), sorts cards (live needsInput or an open question
   → running → idle), and produces the card model: title, headline, progress (reported vs
@@ -235,7 +238,8 @@ the board reads summarized task JSON instead of panes.
   cannot be collected say why: `no_root`, `other_distro`, `no_transcript`, or an error.
   `board-view.ts` renders it and dispatches Go to / Open plan / Open log / Resume / Start fresh;
   the board tab has no close button.
-- No UI control touches another workspace. The manager agent records user decisions and
+- Apart from the root and repo-root controls (§14), no UI control touches another workspace.
+  The manager agent records user decisions and
   corrections with `mast manager patch <workspace-id>`, which reuses the core `manager_query`
   authority and validates the same op table (the manager side may set `verified_done`; `set_plan`
   is refused there). Valid ops apply under the lock, and the harness picks the change up by
@@ -326,6 +330,37 @@ the board reads summarized task JSON instead of panes.
   repos told apart by their remote or path. A workspace in another WSL distribution keeps
   `repo: null`: the harness cannot see that filesystem, so it must not claim a repository there.
 
+### 14. The board edits a workspace's root and repo root (added 2026-09-29)
+
+- Each board card shows the workspace's **Root** and **Repo** lines. *Change…* on Root and
+  *Set…* on Repo open the native folder picker; *Auto* on Repo clears it. Picking a folder in a
+  different WSL distribution than a workspace with an explicit `distro` is refused on the card; a
+  workspace with `distro: null` cannot be compared by name and accepts the pick.
+- `Command::SetWorkspaceRoot { workspace, root_path }` replaces `root_path`, the default cwd for
+  new tabs and the task identity. Open tabs keep their cwd. The path rules are
+  `CreateManagerWorkspace`'s (`InvalidPath`, `/mnt` refused outside macOS) and the manager
+  workspace is `ManagerPinned`. An unchanged value records no events.
+- A root change is **a fresh start for task memory** (user decision): the core records
+  `workspaceClosed` with the old root, `workspaceOpened` with the new root, then one `session`
+  event per tab that still has an agent session. The harness archives the old key through the
+  normal close path and the new key starts collecting from those live sessions (first read is the
+  64 KiB tail, §6). The final pass for the old key is skipped — `pending_workspace` resolves the
+  reservation to the live, already re-rooted workspace — so the last uncollected delta of the old
+  root is not summarized (accepted). Moving back to the old root later shows the usual
+  Resume/Start fresh choice.
+- `Workspace.repo_root` (`#[serde(default)]`, always serialized, TS `repoRoot: string | null`)
+  overrides §13's detection. `Command::SetWorkspaceRepoRoot { workspace, repo_root }` sets it
+  (`None` returns to detection) under the same path rules and records one refreshing
+  `workspaceOpened`. `EventWorkspace` and `OverviewWorkspace` carry `repoRoot`.
+- With an override the repository **is** that folder: name = its basename, path = the value as
+  given, remote = the origin detected at that folder (null when it is not a git repository). The
+  harness runs detection on `repoRoot` instead of `rootPath` (`_repo_source`) and builds the value
+  in `_workspace_repo`, which the board, the digest and the recorded `git.repo` all share.
+- The task key is still `root_path`'s (§5); the override changes grouping only.
+- The sidebar card path is not `root_path` any more: it shows the active pane's terminal cwd
+  (OSC 7, ADR-0011) and falls back to `root_path` when the shown tab is not a terminal, with
+  `/home/<user>` and `/Users/<user>` abbreviated to `~`.
+
 ## Alternatives rejected
 
 - **A classifier for utterance decisions** (Jev) — the user is on its waitlist, and this work's
@@ -385,6 +420,10 @@ the board reads summarized task JSON instead of panes.
   board shows the same record for both.
 - **Every terminal tab in the manager workspace carries manager authority**, not just the first
   one; the flag is the workspace's, not a tab's.
+- **Clearing a repo root on a folder git does not recognize keeps the old group** while the task
+  record exists: the stored `git.repo` still holds the override, and §13's "a null detection does
+  not erase `git.repo`" rule keeps it. Setting another repo root, or a root git recognizes, moves
+  the card.
 - **The manager workspace's authority is query-only in v1**: list workspaces/status, read events,
   read task records. Cross-workspace send, workspace creation/rename and pane input stay out.
 - **The event ring is process-local and bounded** (1024). After a restart a manager query reports
@@ -432,6 +471,10 @@ child and its temporary directory can be left behind (accepted limit).
   `toolUseResult` (B2); project hooks did not fire under `codex exec` (B1, fallback chosen); the
   global AGENTS.md overhead was measured (B6); the real summary path produced valid patches once
   (~11 s, 0 rejected ops).
+- **§14 (2026-09-29), macOS local**: `cargo test -p mast-core` (new command, event and fixture
+  tests), `cargo test -p mast-app --locked`, both Python suites (harness root-change archive and
+  repo override tests), frontend build + vitest against the same node-26 baseline (board path
+  controls, sidebar cwd path, command fixture).
 - **CI** (`gates` on Linux, `windows-gates` on Windows) runs on the merge request; it is the only
   Windows/Linux compile gate for this feature.
 - **Not run**: the M1–M10 field checks. `docs/MACOS.md` and `docs/WINDOWS-BUILD.md` list them; no

@@ -11,6 +11,8 @@
 // - 라이브 상태(정렬 그룹·배지)는 스냅샷이 필요하므로 workspace-view 가 생성자에
 //   snapshot getter 를 넘기고, 뷰어 update() 마다 재렌더한다. IPC 재호출은 없다.
 // - 접힘·펼침(quote)과 카드별 action 오류는 이 뷰의 로컬 상태라 재렌더에도 남는다.
+// - 카드의 Root/Repo 줄은 스냅샷의 rootPath·repoRoot 를 그대로 보여 주고, 폴더 선택기로
+//   고른 경로를 setWorkspaceRoot / setWorkspaceRepoRoot 로 보낸다 (ADR-0032 §14).
 //
 // dispose 뒤 갱신은 전부 무시한다(이벤트 콜백·get 콜백·action 콜백의 disposed 가드).
 
@@ -18,6 +20,7 @@ import {
   getManagerBoard,
   managerAction,
   onManagerBoard,
+  pickWorkspaceFolder,
 } from "../../infrastructure/backend";
 import type { ManagerBoardPayload } from "../../infrastructure/backend";
 import {
@@ -37,6 +40,7 @@ import type {
   Command,
   CommandOutput,
   StateSnapshot,
+  Workspace,
   WorkspaceId,
 } from "../../shared/types";
 
@@ -83,7 +87,7 @@ export class BoardView implements ViewerView {
   private loadError: string | null = null;
   /** 구독 실패 문구 — 이벤트가 영영 오지 않는다는 뜻이라 payload 로 지우지 않는다. */
   private subscribeError: string | null = null;
-  /** 카드별 managerAction 실패 문구 — 카드에 남고 다음 성공에 지운다. */
+  /** 카드별 managerAction·경로 변경 실패 문구 — 카드에 남고 다음 성공에 지운다. */
   private readonly cardErrors = new Map<WorkspaceId, string>();
   /** 펼친 quote 의 키 (`<workspaceId>:q:<id>` / `<workspaceId>:d:<id>`). */
   private readonly expanded = new Set<string>();
@@ -246,7 +250,14 @@ export class BoardView implements ViewerView {
       [...this.collapsedGroups].sort(),
       state === null
         ? null
-        : state.workspaces.map((ws) => [ws.id, ws.name, ws.agentStatus, ws.activePane]),
+        : state.workspaces.map((ws) => [
+            ws.id,
+            ws.name,
+            ws.agentStatus,
+            ws.activePane,
+            ws.rootPath,
+            ws.repoRoot,
+          ]),
     ]);
   }
 
@@ -338,6 +349,8 @@ export class BoardView implements ViewerView {
       this.appendPlans(el, card);
     }
 
+    const workspace = this.workspace(card.workspaceId);
+    if (workspace !== null) el.append(this.paths(workspace));
     el.append(this.actions(card));
 
     const error = this.cardErrors.get(card.workspaceId);
@@ -478,6 +491,78 @@ export class BoardView implements ViewerView {
     return actions;
   }
 
+  /** Root 는 새 탭의 기본 cwd 이자 작업 기억의 키, Repo 는 보드의 레포 묶음 루트다.
+   *  Repo 가 지정되지 않았으면 하네스가 Root 에서 git 으로 판별한다. */
+  private paths(ws: Workspace): HTMLElement {
+    const paths = document.createElement("div");
+    paths.className = "board-paths";
+
+    const root = document.createElement("div");
+    root.className = "board-path-row";
+    root.append(this.textSpan("board-path-label", "Root"));
+    const rootValue = this.textSpan("board-path-value board-root-path", ws.rootPath ?? "none");
+    rootValue.title = ws.rootPath ?? "";
+    root.append(rootValue);
+    root.append(
+      this.pathButton("board-change-root", "Change…", "Change the workspace root folder", () =>
+        this.pickPath(ws.id, (path) => ({ type: "setWorkspaceRoot", workspace: ws.id, rootPath: path })),
+      ),
+    );
+
+    const repo = document.createElement("div");
+    repo.className = "board-path-row";
+    repo.append(this.textSpan("board-path-label", "Repo"));
+    const repoValue = this.textSpan(
+      "board-path-value board-repo-root",
+      ws.repoRoot ?? "auto (from git)",
+    );
+    repoValue.title = ws.repoRoot ?? "";
+    repo.append(repoValue);
+    repo.append(
+      this.pathButton("board-set-repo", "Set…", "Choose the repository root that groups this card", () =>
+        this.pickPath(ws.id, (path) => ({
+          type: "setWorkspaceRepoRoot",
+          workspace: ws.id,
+          repoRoot: path,
+        })),
+      ),
+    );
+    if (ws.repoRoot !== null) {
+      repo.append(
+        this.pathButton("board-auto-repo", "Auto", "Detect the repository from git again", () => {
+          void this.applyPathCommand(ws.id, {
+            type: "setWorkspaceRepoRoot",
+            workspace: ws.id,
+            repoRoot: null,
+          });
+        }),
+      );
+    }
+
+    paths.append(root, repo);
+    return paths;
+  }
+
+  private pathButton(
+    className: string,
+    label: string,
+    title: string,
+    onClick: () => void,
+  ): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = className;
+    button.textContent = label;
+    button.title = title;
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  private workspace(workspaceId: WorkspaceId): Workspace | null {
+    const state = this.deps.snapshot()?.state ?? null;
+    return state?.workspaces.find((candidate) => candidate.id === workspaceId) ?? null;
+  }
+
   private entryKey(workspaceId: WorkspaceId): string | null {
     for (const entry of this.board?.entries ?? []) {
       if (entry.kind === "entry" && entry.workspaceId === workspaceId) return entry.key;
@@ -532,6 +617,47 @@ export class BoardView implements ViewerView {
       pane: ws.activePane,
       tab: { type: "textViewer", path: logPath },
     });
+  }
+
+  /** 폴더 선택기로 고른 경로를 명령으로 보낸다. 취소는 조용한 no-op 이다. 다른 WSL
+   *  배포판의 폴더는 워크스페이스 배포판에서 같은 경로가 아니므로 거부한다 — 워크스페이스
+   *  배포판이 null(기본값)이면 이름을 비교할 수 없어 그대로 받는다. */
+  private pickPath(workspaceId: WorkspaceId, command: (path: string) => Command): void {
+    void (async () => {
+      let picked;
+      try {
+        picked = await pickWorkspaceFolder();
+      } catch (err) {
+        this.setCardError(workspaceId, String(err));
+        return;
+      }
+      if (picked === null || this.disposed) return;
+      const distro = this.workspace(workspaceId)?.distro ?? null;
+      if (distro !== null && picked.distro !== null && picked.distro !== distro) {
+        this.setCardError(
+          workspaceId,
+          `the folder is in WSL distribution ${picked.distro}, but this workspace uses ${distro}`,
+        );
+        return;
+      }
+      await this.applyPathCommand(workspaceId, command(picked.linux_path));
+    })();
+  }
+
+  /** 실패 문구는 dispatch 글루가 상태 라인에 띄우므로, 여기서는 카드 오류만 지운다. */
+  private async applyPathCommand(workspaceId: WorkspaceId, command: Command): Promise<void> {
+    const out = await this.deps.dispatch(command);
+    if (out !== null) this.setCardError(workspaceId, null);
+  }
+
+  private setCardError(workspaceId: WorkspaceId, message: string | null): void {
+    if (this.disposed) return;
+    if (message === null) {
+      if (!this.cardErrors.delete(workspaceId)) return;
+    } else {
+      this.cardErrors.set(workspaceId, message);
+    }
+    this.render();
   }
 
   private choose(card: BoardCard, action: "resume" | "fresh", key: string): void {

@@ -32,6 +32,8 @@ export interface Workspace {
   id: WorkspaceId;
   name: string;
   rootPath: string | null;
+  /** 관리자 보드의 레포 묶음 루트 지정값 — null 이면 하네스가 rootPath 에서 판별한다. */
+  repoRoot: string | null;
   distro: string | null;
   /** git 정보 — 타입 공간만 확정, 값 채움은 19단계. */
   gitBranch: string | null;
@@ -174,7 +176,12 @@ export type Command =
    *  불량하면 invalidPath. */
   | { type: "createManagerWorkspace"; rootPath: string; distro: string | null }
   /** 관리자 워크스페이스를 해체한다 — 없으면 unknownTarget. */
-  | { type: "removeManagerWorkspace" };
+  | { type: "removeManagerWorkspace" }
+  /** 워크스페이스 루트(새 탭 기본 cwd·관리자 작업 기억의 키)를 바꾼다. 열린 탭의 cwd 는
+   *  그대로다. 경로 형태가 불량하면 invalidPath, 관리자 워크스페이스는 managerPinned. */
+  | { type: "setWorkspaceRoot"; workspace: WorkspaceId; rootPath: string }
+  /** 관리자 보드의 레포 묶음 루트 지정 — null 이면 git 자동 판별로 돌아간다. */
+  | { type: "setWorkspaceRepoRoot"; workspace: WorkspaceId; repoRoot: string | null };
 
 /** dispatch 성공 결과 (command.rs CommandOutput). */
 export type CommandOutput =

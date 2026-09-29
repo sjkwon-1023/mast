@@ -2607,6 +2607,7 @@ fn adopted_state() -> AppState {
             distro: Some("Ubuntu".into()),
             git_branch: None,
             git_dirty: None,
+            repo_root: None,
             manager: false,
             layout: SplitTree::Split {
                 id: SplitId(4),
@@ -4218,6 +4219,127 @@ fn manager_records_status_and_session_only_on_actual_changes() {
     assert_eq!(events[3].kind, AgentEventKind::Session);
     assert_eq!(events[3].agent_session.as_ref(), Some(&next));
     assert_eq!(events[3].seq, 4);
+}
+
+#[test]
+fn set_workspace_root_changes_the_default_cwd_and_keeps_tab_cwds() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws_rooted(&mut d, "ws", Some("/home/u/old"));
+    let (tab, _session) = create_terminal_tab(&mut d, pane);
+    let before = d.state().revision;
+
+    d.dispatch(Command::SetWorkspaceRoot {
+        workspace: ws,
+        root_path: "/home/u/new".into(),
+    })
+    .unwrap();
+
+    let workspace = d.state().workspace(ws).unwrap();
+    assert_eq!(workspace.root_path.as_deref(), Some("/home/u/new"));
+    assert_eq!(d.state().revision, before + 1);
+    assert_eq!(tab_cwd(&d, tab).as_deref(), Some("/home/u/old"), "열린 탭의 cwd 는 그대로다");
+}
+
+#[test]
+fn set_workspace_root_and_repo_root_reject_bad_targets_without_state_change() {
+    let (mut d, _host) = dispatcher();
+    let (ws, _pane) = create_ws_rooted(&mut d, "ws", Some("/home/u/p"));
+    let (manager, ..) = create_manager(&mut d, "/home/u/.mast/manager", None);
+    let snapshot = d.state().clone();
+
+    for (command, expected) in [
+        (
+            Command::SetWorkspaceRoot { workspace: ws, root_path: "relative".into() },
+            "InvalidPath",
+        ),
+        (
+            Command::SetWorkspaceRepoRoot { workspace: ws, repo_root: Some("/a/../b".into()) },
+            "InvalidPath",
+        ),
+        (
+            Command::SetWorkspaceRoot { workspace: manager, root_path: "/home/u/x".into() },
+            "ManagerPinned",
+        ),
+        (
+            Command::SetWorkspaceRepoRoot { workspace: manager, repo_root: None },
+            "ManagerPinned",
+        ),
+        (
+            Command::SetWorkspaceRoot { workspace: WorkspaceId(999), root_path: "/home/u/x".into() },
+            "UnknownTarget",
+        ),
+    ] {
+        let err = d.dispatch(command).unwrap_err();
+        assert!(format!("{err:?}").starts_with(expected), "{err:?}");
+        assert_eq!(d.state(), &snapshot);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn set_workspace_root_rejects_mnt_roots() {
+    let (mut d, _host) = dispatcher();
+    let (ws, _pane) = create_ws_rooted(&mut d, "ws", Some("/home/u/p"));
+    let err = d
+        .dispatch(Command::SetWorkspaceRoot { workspace: ws, root_path: "/mnt/c/x".into() })
+        .unwrap_err();
+    assert!(matches!(err, CommandError::InvalidPath { .. }), "{err:?}");
+}
+
+#[test]
+fn manager_sees_a_root_change_as_close_then_open_with_live_sessions() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws_rooted(&mut d, "ws", Some("/home/u/old"));
+    let (tab, session) = create_terminal_tab(&mut d, pane);
+    let (_idle_tab, _idle_session) = create_terminal_tab(&mut d, pane);
+    let meta = agent_session(AgentKind::Claude, "abc", "/home/u/.claude/projects/x/abc.jsonl");
+    d.apply_osc(batch(&[(session, OscEvent::Osc777Agent(meta.clone()))]), 1_000);
+    d.set_manager_events(true);
+
+    d.dispatch(Command::SetWorkspaceRoot { workspace: ws, root_path: "/home/u/new".into() })
+        .unwrap();
+
+    let events = recorded(&d);
+    assert_eq!(events.len(), 3, "closed + opened + 세션 있는 탭 하나의 session");
+    assert_eq!(events[0].kind, AgentEventKind::WorkspaceClosed);
+    assert_eq!(events[0].workspace.root_path.as_deref(), Some("/home/u/old"));
+    assert_eq!(events[1].kind, AgentEventKind::WorkspaceOpened);
+    assert_eq!(events[1].workspace.root_path.as_deref(), Some("/home/u/new"));
+    assert_eq!(events[2].kind, AgentEventKind::Session);
+    assert_eq!(events[2].tab, Some(tab.0));
+    assert_eq!(events[2].agent_session.as_ref(), Some(&meta));
+    assert_eq!(events[2].workspace.root_path.as_deref(), Some("/home/u/new"));
+
+    // 같은 값은 이벤트를 남기지 않는다.
+    d.dispatch(Command::SetWorkspaceRoot { workspace: ws, root_path: "/home/u/new".into() })
+        .unwrap();
+    assert_eq!(recorded(&d).len(), 3);
+}
+
+#[test]
+fn set_workspace_repo_root_is_stored_and_refreshes_the_manager_view() {
+    let (mut d, _host) = dispatcher();
+    let (ws, _pane) = create_ws_rooted(&mut d, "ws", Some("/home/u/mast/main"));
+    d.set_manager_events(true);
+
+    d.dispatch(Command::SetWorkspaceRepoRoot {
+        workspace: ws,
+        repo_root: Some("/home/u/mast".into()),
+    })
+    .unwrap();
+    assert_eq!(d.state().workspace(ws).unwrap().repo_root.as_deref(), Some("/home/u/mast"));
+    let opened = last_event(&d);
+    assert_eq!(opened.kind, AgentEventKind::WorkspaceOpened);
+    assert_eq!(opened.workspace.repo_root.as_deref(), Some("/home/u/mast"));
+    assert_eq!(opened.workspace.root_path.as_deref(), Some("/home/u/mast/main"));
+    assert_eq!(
+        d.overview().workspaces[0].repo_root.as_deref(),
+        Some("/home/u/mast")
+    );
+
+    d.dispatch(Command::SetWorkspaceRepoRoot { workspace: ws, repo_root: None }).unwrap();
+    assert_eq!(d.state().workspace(ws).unwrap().repo_root, None);
+    assert_eq!(last_event(&d).workspace.repo_root, None);
 }
 
 #[test]

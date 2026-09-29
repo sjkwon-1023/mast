@@ -27,6 +27,7 @@ const SNAPSHOT: StateSnapshot = {
         name: "mast",
         rootPath: "/tmp/mast",
         distro: null,
+        repoRoot: null,
         gitBranch: null,
         gitDirty: null,
         manager: false,

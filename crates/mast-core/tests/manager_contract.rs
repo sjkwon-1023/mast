@@ -20,6 +20,7 @@ fn event_workspace() -> EventWorkspace {
         id: 1,
         name: "feature-x".into(),
         root_path: Some("/home/u/p/x".into()),
+        repo_root: None,
         distro: None,
     }
 }
@@ -40,6 +41,7 @@ fn overview() -> ManagerOverview {
                 id: 1,
                 name: "feature-x".into(),
                 root_path: Some("/home/u/p/x".into()),
+                repo_root: None,
                 distro: None,
                 manager: false,
                 agent_status: AgentStatus::Running,
@@ -57,6 +59,7 @@ fn overview() -> ManagerOverview {
                 id: 7,
                 name: "manager".into(),
                 root_path: Some("/home/u/.mast/manager".into()),
+                repo_root: None,
                 distro: Some("Ubuntu".into()),
                 manager: true,
                 agent_status: AgentStatus::Idle,

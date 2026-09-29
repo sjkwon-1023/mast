@@ -77,6 +77,7 @@ function snapshot(): StateSnapshot {
     name: "ws",
     rootPath: null,
     distro: null,
+    repoRoot: null,
     gitBranch: null,
     gitDirty: null,
     manager: false,

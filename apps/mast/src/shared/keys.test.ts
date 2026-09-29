@@ -395,6 +395,7 @@ describe("activeTerminalCwd / pathBasename", () => {
       name: "w",
       rootPath,
       distro: null,
+      repoRoot: null,
       gitBranch: null,
       gitDirty: null,
       manager: false,

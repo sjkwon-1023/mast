@@ -108,6 +108,10 @@ pub struct Workspace {
     pub name: String,
     /// 워크스페이스의 정체성이자 새 탭의 기본 cwd (계획 v2 4장).
     pub root_path: Option<String>,
+    /// 관리자 보드가 이 워크스페이스를 묶는 레포 루트의 사용자 지정값. None 이면 하네스가
+    /// root_path 에서 git 으로 판별한다 (ADR-0032 §13). 구 `state.json`·스냅샷은 None 으로 읽는다.
+    #[serde(default)]
+    pub repo_root: Option<String>,
     /// 이 워크스페이스의 터미널이 연결될 WSL 배포판 (계획 v2 5장).
     pub distro: Option<String>,
     /// git 정보 — 타입 공간만 확정, 값 채움은 19단계 (10단계 계획 1장).
@@ -724,6 +728,7 @@ mod tests {
             distro: None,
             git_branch: None,
             git_dirty: None,
+            repo_root: None,
             manager: false,
             layout: split(4, SplitDirection::Horizontal, leaf(2), leaf(3)),
             panes: [(PaneId(2), test_pane(2)), (PaneId(3), test_pane(3))].into(),

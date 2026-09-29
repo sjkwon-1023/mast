@@ -745,6 +745,7 @@ mod tests {
                 distro: None,
                 git_branch: None,
                 git_dirty: None,
+                repo_root: None,
                 manager: false,
                 layout: SplitTree::Split {
                     id: SplitId(4),

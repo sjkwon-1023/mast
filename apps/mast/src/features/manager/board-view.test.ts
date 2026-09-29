@@ -10,7 +10,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getManagerBoard, managerAction, onManagerBoard } from "../../infrastructure/backend";
+import {
+  getManagerBoard,
+  managerAction,
+  onManagerBoard,
+  pickWorkspaceFolder,
+} from "../../infrastructure/backend";
 import { buildCards, headerModel, parseBoard } from "./board-model";
 import { BoardView } from "./board-view";
 import type { GlueStatus } from "./board-model";
@@ -33,6 +38,7 @@ vi.mock("../../infrastructure/backend", async (importOriginal) => {
     getManagerBoard: vi.fn(),
     managerAction: vi.fn(),
     onManagerBoard: vi.fn(),
+    pickWorkspaceFolder: vi.fn(),
   };
 });
 
@@ -154,6 +160,7 @@ function ws(
     name: options.name ?? `ws ${id}`,
     rootPath: options.rootPath ?? null,
     distro: null,
+    repoRoot: null,
     gitBranch: null,
     gitDirty: null,
     manager: options.manager ?? false,
@@ -632,6 +639,85 @@ describe("BoardView buttons", () => {
 
     expect(h.view.root.querySelector(".board-card-error")?.textContent).toBe(
       "manager harness is not running",
+    );
+    h.view.dispose();
+  });
+});
+
+describe("BoardView workspace paths", () => {
+  function text(h: Harness, selector: string): string | null | undefined {
+    return h.view.root.querySelector(selector)?.textContent;
+  }
+
+  it("shows the root and an automatic repo, and offers Auto only for a set repo root", async () => {
+    const state = appState([
+      ws(1, { rootPath: "/repo/main" }),
+      { ...ws(2, { rootPath: "/other" }), repoRoot: "/repo" },
+    ]);
+    const h = await mount({
+      payload: payload([rawEntry(1), rawEntry(2)]),
+      snapshot: () => snapshot(state),
+    });
+
+    const cards = [...h.view.root.querySelectorAll<HTMLElement>(".board-card")];
+    const byId = (id: number) => cards.find((card) => card.dataset.workspaceId === String(id));
+    expect(byId(1)?.querySelector(".board-root-path")?.textContent).toBe("/repo/main");
+    expect(byId(1)?.querySelector(".board-repo-root")?.textContent).toBe("auto (from git)");
+    expect(byId(1)?.querySelector(".board-auto-repo")).toBeNull();
+    expect(byId(2)?.querySelector(".board-repo-root")?.textContent).toBe("/repo");
+    expect(byId(2)?.querySelector(".board-auto-repo")).not.toBeNull();
+    h.view.dispose();
+  });
+
+  it("sends the picked folder as the new root or repo root, and Auto clears the repo root", async () => {
+    const state = appState([{ ...ws(1, { rootPath: "/repo/main" }), repoRoot: "/repo" }]);
+    const h = await mount({ payload: payload([rawEntry(1)]), snapshot: () => snapshot(state) });
+    vi.mocked(pickWorkspaceFolder).mockResolvedValue({
+      linux_path: "/repo/next",
+      distro: null,
+      name: "next",
+    });
+
+    click(h, ".board-change-root");
+    await flush();
+    click(h, ".board-set-repo");
+    await flush();
+    click(h, ".board-auto-repo");
+    await flush();
+
+    expect(h.emitted).toEqual([
+      { type: "setWorkspaceRoot", workspace: 1, rootPath: "/repo/next" },
+      { type: "setWorkspaceRepoRoot", workspace: 1, repoRoot: "/repo/next" },
+      { type: "setWorkspaceRepoRoot", workspace: 1, repoRoot: null },
+    ]);
+    h.view.dispose();
+  });
+
+  it("ignores a cancelled picker and shows picker failures and a distro mismatch on the card", async () => {
+    const state = appState([{ ...ws(1, { rootPath: "/repo" }), distro: "Ubuntu" }]);
+    const h = await mount({ payload: payload([rawEntry(1)]), snapshot: () => snapshot(state) });
+
+    vi.mocked(pickWorkspaceFolder).mockResolvedValue(null);
+    click(h, ".board-change-root");
+    await flush();
+    expect(h.emitted).toEqual([]);
+    expect(h.view.root.querySelector(".board-card-error")).toBeNull();
+
+    vi.mocked(pickWorkspaceFolder).mockRejectedValue("selected path is not valid UTF-8");
+    click(h, ".board-change-root");
+    await flush();
+    expect(text(h, ".board-card-error")).toBe("selected path is not valid UTF-8");
+
+    vi.mocked(pickWorkspaceFolder).mockResolvedValue({
+      linux_path: "/home/u/x",
+      distro: "Debian",
+      name: "x",
+    });
+    click(h, ".board-set-repo");
+    await flush();
+    expect(h.emitted).toEqual([]);
+    expect(text(h, ".board-card-error")).toBe(
+      "the folder is in WSL distribution Debian, but this workspace uses Ubuntu",
     );
     h.view.dispose();
   });

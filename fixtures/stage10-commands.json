@@ -51,5 +51,8 @@
     "rootPath": "/home/dev/.mast/manager",
     "distro": null
   },
-  { "type": "removeManagerWorkspace" }
+  { "type": "removeManagerWorkspace" },
+  { "type": "setWorkspaceRoot", "workspace": 1, "rootPath": "/home/dev/code/mast-next" },
+  { "type": "setWorkspaceRepoRoot", "workspace": 1, "repoRoot": "/home/dev/code" },
+  { "type": "setWorkspaceRepoRoot", "workspace": 1, "repoRoot": null }
 ]

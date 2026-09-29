@@ -217,7 +217,9 @@ it does not open arbitrary paths supplied by an agent.
 Resume is **a hint, never automatic execution**. Eligible root agent events save
 `claude --resume <id>`, `codex resume <id>` or `opencode --session <id>` for that
 tab. The next shell displays the command and adds it to that tab's history: use
-Up/Enter when you are ready. IDs are strictly validated before saving or loading
+Up/Enter when you are ready. A shell that is already running adds a newly saved
+hint to its history at the next prompt, silently, so Up right after an agent exits
+offers its resume command. IDs are strictly validated before saving or loading
 hints. Closing a tab deletes its owned history/resume files; quitting the app
 keeps them for restoration.
 
@@ -397,6 +399,11 @@ treating these features as field-verified:
   core-only needsInput toasts, `mast manager start` with the digest fallback and `mast manager
   patch` board refresh, a killed harness recovering, archive → Resume/Start fresh, plan cards,
   and preview-off removal with `~/.mast/manager` kept.
+- Exit Claude Code in a tab and press Up at the next prompt: it offers that
+  session's `claude --resume <id>`. `cd` in a terminal and check that the sidebar
+  card path follows it (`~/…` abbreviated). On a manager board card, change Root
+  (the old record is archived and a new one starts) and set Repo, then Auto; the
+  card moves between repository groups. No yellow WSL notice band appears.
 
 Do not record any of these manual checks as complete until they have actually
 been run.

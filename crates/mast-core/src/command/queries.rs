@@ -144,6 +144,7 @@ impl Dispatcher {
                     id: ws.id.0,
                     name: ws.name.clone(),
                     root_path: ws.root_path.clone(),
+                    repo_root: ws.repo_root.clone(),
                     distro: ws.distro.clone(),
                     manager: ws.manager,
                     agent_status: ws.agent_status,

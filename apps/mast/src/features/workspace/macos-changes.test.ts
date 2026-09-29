@@ -64,6 +64,7 @@ function workspace(id: number, tab: Tab | null): Workspace {
     name: `workspace ${id}`,
     rootPath: null,
     distro: null,
+    repoRoot: null,
     gitBranch: null,
     gitDirty: null,
     manager: false,

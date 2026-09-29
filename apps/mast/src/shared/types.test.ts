@@ -176,6 +176,14 @@ function commandTag(cmd: Command): string {
       return cmd.type;
     case "removeManagerWorkspace":
       return cmd.type;
+    case "setWorkspaceRoot":
+      expect(typeof cmd.workspace).toBe("number");
+      expect(cmd.rootPath.startsWith("/")).toBe(true);
+      return cmd.type;
+    case "setWorkspaceRepoRoot":
+      expect(typeof cmd.workspace).toBe("number");
+      expect(cmd.repoRoot === null || cmd.repoRoot.startsWith("/")).toBe(true);
+      return cmd.type;
     default:
       return assertNever(cmd);
   }
@@ -440,6 +448,9 @@ describe("stage10-commands.json", () => {
       "moveWorkspace",
       "createManagerWorkspace",
       "removeManagerWorkspace",
+      "setWorkspaceRoot",
+      "setWorkspaceRepoRoot",
+      "setWorkspaceRepoRoot",
     ]);
   });
 
@@ -526,6 +537,17 @@ describe("stage10-commands.json", () => {
     const removeManager = commandsFixture[20];
     if (removeManager.type !== "removeManagerWorkspace")
       throw new Error("21st must be removeManagerWorkspace");
+
+    // 워크스페이스 루트·레포 루트 변경 — repoRoot 는 null(자동 판별)도 싣는다.
+    const setRoot = commandsFixture[21];
+    if (setRoot.type !== "setWorkspaceRoot") throw new Error("22nd must be setWorkspaceRoot");
+    expect(setRoot.rootPath).toBe("/home/dev/code/mast-next");
+    const setRepo = commandsFixture[22];
+    const clearRepo = commandsFixture[23];
+    if (setRepo.type !== "setWorkspaceRepoRoot" || clearRepo.type !== "setWorkspaceRepoRoot")
+      throw new Error("23rd and 24th must be setWorkspaceRepoRoot");
+    expect(setRepo.repoRoot).toBe("/home/dev/code");
+    expect(clearRepo.repoRoot).toBeNull();
   });
 });
 

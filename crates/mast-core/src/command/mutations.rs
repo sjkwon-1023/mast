@@ -56,6 +56,7 @@ impl Dispatcher {
                     distro,
                     git_branch: None,
                     git_dirty: None,
+                    repo_root: None,
                     manager: false,
                     layout: SplitTree::Leaf { pane },
                     panes: [(pane, initial)].into(),
@@ -125,6 +126,7 @@ impl Dispatcher {
                     distro,
                     git_branch: None,
                     git_dirty: None,
+                    repo_root: None,
                     manager: true,
                     layout: SplitTree::Leaf { pane },
                     panes: [(pane, initial)].into(),
@@ -166,6 +168,58 @@ impl Dispatcher {
                     if let Some(shown) = self.state.workspaces.first_mut() {
                         clear_visible_unread(shown);
                     }
+                }
+                Ok(CommandOutput::Done)
+            }
+
+            Command::SetWorkspaceRoot {
+                workspace,
+                root_path,
+            } => {
+                validate_workspace_root(&root_path)?;
+                let wi = self.editable_workspace(workspace)?;
+                if self.state.workspaces[wi].root_path.as_deref() == Some(root_path.as_str()) {
+                    return Ok(CommandOutput::Done);
+                }
+                let before = self.manager_snapshot(&self.state.workspaces[wi]);
+                self.state.workspaces[wi].root_path = Some(root_path);
+                let ws = &self.state.workspaces[wi];
+                if let (Some(before), Some(after)) = (before, self.manager_snapshot(ws)) {
+                    let sessions: Vec<_> = ws
+                        .panes
+                        .values()
+                        .flat_map(|pane| &pane.tabs)
+                        .filter_map(|tab| Some((tab.id, tab.agent_session.clone()?)))
+                        .collect();
+                    self.manager_events
+                        .record(AgentEvent::new(AgentEventKind::WorkspaceClosed, before));
+                    self.manager_events
+                        .record(AgentEvent::new(AgentEventKind::WorkspaceOpened, after.clone()));
+                    // 하네스의 overview 는 workspaceClosed 에서 탭을 버리므로 살아 있는
+                    // 세션을 다시 알려야 새 루트의 작업이 그 세션부터 모은다.
+                    for (tab, session) in sessions {
+                        self.manager_events.record(
+                            AgentEvent::new(AgentEventKind::Session, after.clone())
+                                .with_tab(tab)
+                                .with_session(session),
+                        );
+                    }
+                }
+                Ok(CommandOutput::Done)
+            }
+
+            Command::SetWorkspaceRepoRoot {
+                workspace,
+                repo_root,
+            } => {
+                if let Some(path) = repo_root.as_deref() {
+                    validate_workspace_root(path)?;
+                }
+                let wi = self.editable_workspace(workspace)?;
+                self.state.workspaces[wi].repo_root = repo_root;
+                if let Some(recorded) = self.manager_snapshot(&self.state.workspaces[wi]) {
+                    self.manager_events
+                        .record(AgentEvent::new(AgentEventKind::WorkspaceOpened, recorded));
                 }
                 Ok(CommandOutput::Done)
             }
@@ -522,8 +576,33 @@ impl Dispatcher {
     }
 }
 
+/// 워크스페이스·레포 루트의 경로 규칙 — CreateManagerWorkspace 와 같다.
+fn validate_workspace_root(path: &str) -> Result<(), CommandError> {
+    crate::wslpath::validate_linux_path(path)
+        .map_err(|message| CommandError::InvalidPath { message })?;
+    #[cfg(not(target_os = "macos"))]
+    reject_mnt_root(path)?;
+    Ok(())
+}
+
+impl Dispatcher {
+    /// 경로를 바꿀 수 있는 워크스페이스의 인덱스 — 관리자 워크스페이스는 고정이다.
+    fn editable_workspace(&self, workspace: WorkspaceId) -> Result<usize, CommandError> {
+        let wi = self
+            .state
+            .workspaces
+            .iter()
+            .position(|ws| ws.id == workspace)
+            .ok_or_else(|| unknown("workspace", workspace.0))?;
+        if self.state.workspaces[wi].manager {
+            return Err(CommandError::ManagerPinned);
+        }
+        Ok(wi)
+    }
+}
+
 /// Windows 드라이브는 데이터 전용이라 워크스페이스 루트가 될 수 없다 —
-/// CreateWorkspace·CreateManagerWorkspace 공유 계약 (macOS 에는 /mnt 규칙이 없다).
+/// CreateWorkspace·CreateManagerWorkspace·루트 변경 명령 공유 계약 (macOS 에는 /mnt 규칙이 없다).
 #[cfg(not(target_os = "macos"))]
 fn reject_mnt_root(path: &str) -> Result<(), CommandError> {
     if path == "/mnt" || path.starts_with("/mnt/") {

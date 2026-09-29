@@ -140,7 +140,7 @@ fn commands_fixture_round_trips() {
     // moveWorkspace 의 before 두 형태 중 나머지 하나(null = 맨 뒤) —
     // variant 추가 시 fixture 도 갱신할 것 (새 variant 는 뒤에 덧붙인다:
     // 앞에 끼우면 아래 인덱스 단언이 전부 밀린다).
-    assert_eq!(parsed.len(), 21);
+    assert_eq!(parsed.len(), 24);
 
     // 뷰어 NewTab 잠금 (21단계): folderBrowser 의 path 는 nullable(= 워크스페이스
     // root_path 상속), textViewer·markdownViewer 는 필수다.
@@ -213,6 +213,34 @@ fn commands_fixture_round_trips() {
         matches!(&parsed[20], Command::RemoveManagerWorkspace),
         "removeManagerWorkspace 엔트리: {:?}",
         parsed[20]
+    );
+
+    // 워크스페이스 루트·레포 루트 변경 — repoRoot 는 null(자동 판별) 형태도 잠근다.
+    assert!(
+        matches!(
+            &parsed[21],
+            Command::SetWorkspaceRoot { workspace: WorkspaceId(1), root_path }
+                if root_path == "/home/dev/code/mast-next"
+        ),
+        "setWorkspaceRoot 엔트리: {:?}",
+        parsed[21]
+    );
+    assert!(
+        matches!(
+            &parsed[22],
+            Command::SetWorkspaceRepoRoot { workspace: WorkspaceId(1), repo_root: Some(path) }
+                if path == "/home/dev/code"
+        ),
+        "setWorkspaceRepoRoot 엔트리: {:?}",
+        parsed[22]
+    );
+    assert!(
+        matches!(
+            &parsed[23],
+            Command::SetWorkspaceRepoRoot { workspace: WorkspaceId(1), repo_root: None }
+        ),
+        "setWorkspaceRepoRoot(null) 엔트리: {:?}",
+        parsed[23]
     );
 
     // 재직렬화는 None 을 "tab": null 로 명시하므로, 원본의 compat 엔트리에
