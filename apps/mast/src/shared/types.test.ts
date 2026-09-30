@@ -156,6 +156,11 @@ function commandTag(cmd: Command): string {
     case "activateTab":
       expect(typeof cmd.tab).toBe("number");
       return cmd.type;
+    case "moveTab":
+      expect(typeof cmd.tab).toBe("number");
+      expect(typeof cmd.pane).toBe("number");
+      expect(cmd.before === null || typeof cmd.before === "number").toBe(true);
+      return cmd.type;
     case "closeTab":
       expect(typeof cmd.tab).toBe("number");
       return cmd.type;
@@ -418,6 +423,8 @@ describe("stage10-commands.json", () => {
       "renameWorkspace",
       "moveWorkspace",
       "moveWorkspace",
+      "moveTab",
+      "moveTab",
     ]);
   });
 
@@ -442,6 +449,13 @@ describe("stage10-commands.json", () => {
     const toEnd = commandsFixture[18];
     if (toEnd.type !== "moveWorkspace") throw new Error("19th must be moveWorkspace");
     expect(toEnd.before).toBeNull();
+
+    const tabBefore = commandsFixture[19];
+    if (tabBefore.type !== "moveTab") throw new Error("20th must be moveTab");
+    expect(tabBefore).toEqual({ type: "moveTab", tab: 3, pane: 2, before: 4 });
+    const tabToEnd = commandsFixture[20];
+    if (tabToEnd.type !== "moveTab") throw new Error("21st must be moveTab");
+    expect(tabToEnd.before).toBeNull();
 
     // 이름 변경 (F2 사이드바 인라인 편집) — workspace + name 두 필드뿐이다.
     const rename = commandsFixture[16];

@@ -3565,3 +3565,203 @@ fn disabled_browser_rejects_creation_without_mutating_state() {
         tab: Some(NewTab::Browser { url: "https://example.com".into() }) }).is_err());
     assert_eq!(before, serde_json::to_value(d.state()).unwrap());
 }
+
+fn pane_tabs(d: &Dispatcher, pane: PaneId) -> Vec<TabId> {
+    d.state()
+        .workspaces
+        .iter()
+        .find_map(|ws| ws.panes.get(&pane))
+        .expect("pane 존재")
+        .tabs
+        .iter()
+        .map(|t| t.id)
+        .collect()
+}
+
+fn pane_active(d: &Dispatcher, pane: PaneId) -> Option<TabId> {
+    d.state()
+        .workspaces
+        .iter()
+        .find_map(|ws| ws.panes.get(&pane))
+        .expect("pane 존재")
+        .active_tab
+}
+
+#[test]
+fn moving_a_tab_within_its_pane_reorders_without_touching_sessions() {
+    let (mut d, host) = dispatcher();
+    let (_ws, pane) = create_ws(&mut d, "ws");
+    let (a, _) = create_terminal_tab(&mut d, pane);
+    let (b, _) = create_terminal_tab(&mut d, pane);
+    let (c, _) = create_terminal_tab(&mut d, pane);
+
+    d.dispatch(Command::MoveTab {
+        tab: c,
+        pane,
+        before: Some(a),
+    })
+    .unwrap();
+    assert_eq!(pane_tabs(&d, pane), [c, a, b]);
+
+    // 앞에서 뒤로 — 삽입 위치를 뺀 뒤의 목록에서 찾지 않으면 한 칸 어긋난다.
+    d.dispatch(Command::MoveTab {
+        tab: c,
+        pane,
+        before: Some(b),
+    })
+    .unwrap();
+    assert_eq!(pane_tabs(&d, pane), [a, c, b]);
+
+    d.dispatch(Command::MoveTab {
+        tab: a,
+        pane,
+        before: None,
+    })
+    .unwrap();
+    assert_eq!(pane_tabs(&d, pane), [c, b, a]);
+
+    d.dispatch(Command::MoveTab {
+        tab: b,
+        pane,
+        before: Some(b),
+    })
+    .unwrap();
+    assert_eq!(pane_tabs(&d, pane), [c, b, a]);
+
+    assert_eq!(pane_active(&d, pane), Some(c));
+    assert!(host.kills().is_empty());
+}
+
+#[test]
+fn moving_a_tab_to_another_pane_activates_it_there_and_follows_focus() {
+    let (mut d, host) = dispatcher();
+    let (ws, left) = create_ws(&mut d, "ws");
+    let (a, _) = create_terminal_tab(&mut d, left);
+    let (b, sb) = create_terminal_tab(&mut d, left);
+    let (right, _) = split_empty(&mut d, left, SplitDirection::Horizontal);
+    let (c, _) = create_terminal_tab(&mut d, right);
+    d.dispatch(Command::FocusPane { pane: left }).unwrap();
+
+    d.dispatch(Command::MoveTab {
+        tab: b,
+        pane: right,
+        before: Some(c),
+    })
+    .unwrap();
+
+    assert_eq!(pane_tabs(&d, left), [a]);
+    assert_eq!(pane_active(&d, left), Some(a));
+    assert_eq!(pane_tabs(&d, right), [b, c]);
+    assert_eq!(pane_active(&d, right), Some(b));
+    let ws_ref = d.state().workspaces.iter().find(|w| w.id == ws).unwrap();
+    assert_eq!(ws_ref.active_pane, right);
+    // 세션은 탭과 함께 옮겨지고 죽지 않는다.
+    assert!(host.kills().is_empty());
+    assert!(matches!(
+        &tab_view(&d, b).kind,
+        TabKind::Terminal { pty_session: Some(s), .. } if *s == sb
+    ));
+}
+
+#[test]
+fn moving_the_last_tab_out_collapses_the_source_pane() {
+    let (mut d, host) = dispatcher();
+    let (ws, left) = create_ws(&mut d, "ws");
+    let (a, _) = create_terminal_tab(&mut d, left);
+    let (right, _) = split_empty(&mut d, left, SplitDirection::Vertical);
+    let (b, _) = create_terminal_tab(&mut d, right);
+
+    d.dispatch(Command::MoveTab {
+        tab: a,
+        pane: right,
+        before: None,
+    })
+    .unwrap();
+
+    let ws_ref = d.state().workspaces.iter().find(|w| w.id == ws).unwrap();
+    assert!(!ws_ref.panes.contains_key(&left));
+    assert_eq!(ws_ref.layout.leaves(), [right]);
+    assert_eq!(ws_ref.active_pane, right);
+    assert_eq!(pane_tabs(&d, right), [b, a]);
+    assert!(host.kills().is_empty());
+}
+
+#[test]
+fn moving_a_tab_to_an_unknown_target_changes_nothing() {
+    let (mut d, _host) = dispatcher();
+    let (_ws1, pane1) = create_ws(&mut d, "one");
+    let (a, _) = create_terminal_tab(&mut d, pane1);
+    let (b, _) = create_terminal_tab(&mut d, pane1);
+    let (_ws2, pane2) = create_ws(&mut d, "two");
+    let (c, _) = create_terminal_tab(&mut d, pane2);
+    let before = d.state().clone();
+
+    // 다른 워크스페이스의 pane 으로는 옮기지 않는다.
+    let err = d
+        .dispatch(Command::MoveTab {
+            tab: a,
+            pane: pane2,
+            before: None,
+        })
+        .unwrap_err();
+    assert!(matches!(err, CommandError::UnknownTarget { .. }), "{err:?}");
+    // before 는 대상 pane 의 탭이어야 한다.
+    let err = d
+        .dispatch(Command::MoveTab {
+            tab: a,
+            pane: pane1,
+            before: Some(c),
+        })
+        .unwrap_err();
+    assert!(matches!(err, CommandError::UnknownTarget { .. }), "{err:?}");
+    let err = d
+        .dispatch(Command::MoveTab {
+            tab: TabId(999),
+            pane: pane1,
+            before: Some(b),
+        })
+        .unwrap_err();
+    assert!(matches!(err, CommandError::UnknownTarget { .. }), "{err:?}");
+
+    assert_eq!(d.state(), &before);
+}
+
+#[test]
+fn a_tab_moved_into_view_is_read() {
+    let (mut d, _host) = dispatcher();
+    let (_ws, left) = create_ws(&mut d, "ws");
+    let (a, sa) = create_terminal_tab(&mut d, left);
+    let (_b, _) = create_terminal_tab(&mut d, left);
+    let (right, _) = split_empty(&mut d, left, SplitDirection::Horizontal);
+    let (_c, _) = create_terminal_tab(&mut d, right);
+    d.apply_osc(batch(&[(sa, status_notify("mast:idle", "a"))]), 1_000);
+    assert_eq!(tab_view(&d, a).notification, NotificationState::Unread);
+
+    d.dispatch(Command::MoveTab {
+        tab: a,
+        pane: right,
+        before: None,
+    })
+    .unwrap();
+    assert_eq!(tab_view(&d, a).notification, NotificationState::None);
+}
+
+#[test]
+fn a_tab_moved_in_a_background_workspace_stays_unread() {
+    let (mut d, _host) = dispatcher();
+    let (_ws1, left) = create_ws(&mut d, "one");
+    let (a, sa) = create_terminal_tab(&mut d, left);
+    let (_b, _) = create_terminal_tab(&mut d, left);
+    let (right, _) = split_empty(&mut d, left, SplitDirection::Horizontal);
+    let (_c, _) = create_terminal_tab(&mut d, right);
+    create_ws(&mut d, "two");
+    d.apply_osc(batch(&[(sa, status_notify("mast:idle", "a"))]), 1_000);
+
+    d.dispatch(Command::MoveTab {
+        tab: a,
+        pane: right,
+        before: None,
+    })
+    .unwrap();
+    assert_eq!(tab_view(&d, a).notification, NotificationState::Unread);
+}

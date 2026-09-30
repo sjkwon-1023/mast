@@ -60,6 +60,28 @@ deliberate under-forecast: the stage needed real core-contract growth (recorded 
    use it). This is also the manual verification path for the reset safety net until the
    automatic triggers land (계획 v2 section 12, stage 16).
 
+## Amendment (2026-09-30): moving tabs by drag and drop
+
+- `MoveTab { tab, pane, before }` reorders a tab inside its pane or moves it to another
+  pane **of the same workspace**; `before: null` is the end, `before == tab` is a no-op, and
+  a pane or neighbour outside that workspace is `UnknownTarget` with the state unchanged.
+  Like `MoveWorkspace`, it names a neighbour rather than an index so a stale snapshot fails
+  cleanly.
+- A cross-pane move keeps the session. The moved tab becomes the target pane's active tab
+  and focus follows it; the source pane picks its next tab with the `CloseTab` rule and
+  collapses when empty (it is never the last pane, since the target is in the same
+  workspace). "Visible = read" applies to both the moved and the promoted tab.
+- The keep-alive terminal view moves with the tab: the registry re-parents the live view
+  into the new pane and refits it instead of detaching and replaying. Mounted viewers
+  follow the same way.
+- The tab strip uses pointer events with the sidebar's 4px threshold, captures only after
+  the threshold, swallows the click that ends a drag and holds strip renders while a drag
+  is live, for the same node-identity reason as decision 7. Drops are hit-tested through
+  `data-pane-id`, so any pane's strip or content is a target.
+- Not included: moving a tab to another workspace (the send, `ls` and notification rules
+  are workspace-scoped) and dropping on a pane edge to split, which is the open
+  "split around an existing split" question.
+
 ## Verification
 
 - Automated gates green throughout: core 94 tests (incl. new resize/atomic-split/

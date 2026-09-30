@@ -851,3 +851,139 @@ describe("exitedNoticeText", () => {
     );
   });
 });
+
+describe("PaneView tab drag", () => {
+  // happy-dom 에는 레이아웃이 없다 — 탭 가로 위치와 포인터 아래 요소를 직접 심는다.
+  // 탭 너비 100, 가운데는 50/150/250.
+  function layout(tabs: HTMLElement[]): void {
+    tabs.forEach((tab, i) => {
+      const left = i * 100;
+      tab.getBoundingClientRect = () => ({ left, width: 100, right: left + 100 }) as DOMRect;
+    });
+  }
+
+  let hit: Element | null = null;
+  const originalElementFromPoint = document.elementFromPoint;
+  afterEach(() => {
+    document.elementFromPoint = originalElementFromPoint;
+    hit = null;
+  });
+  function pointAt(el: Element | null): void {
+    hit = el;
+    document.elementFromPoint = () => hit;
+  }
+
+  function pointer(el: HTMLElement, type: string, clientX: number): void {
+    el.dispatchEvent(
+      new window.PointerEvent(type, { bubbles: true, clientX, clientY: 5, pointerId: 1, button: 0 }),
+    );
+  }
+
+  function drag(tab: HTMLElement, fromX: number, toX: number, over: Element | null): void {
+    pointer(tab, "pointerdown", fromX);
+    pointAt(over);
+    pointer(tab, "pointermove", toX);
+    pointer(tab, "pointerup", toX);
+    // 브라우저는 pointerup 뒤 click 을 발화한다 — 삼켜지는지까지 계약이다.
+    tab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  }
+
+  it("같은 탭바 안에서 끌면 그 자리 앞으로 옮기고, 활성화는 보내지 않는다", () => {
+    const { view, tabs, dispatched } = mount();
+    view.update(pane(THREE, 10), true, null, null);
+    layout(tabs());
+
+    drag(tabs()[2], 250, 10, tabs()[0]);
+
+    expect(dispatched).toEqual([{ type: "moveTab", tab: 12, pane: 1, before: 10 }]);
+  });
+
+  it("마지막 탭 뒤로 끌면 before 가 null 이다", () => {
+    const { view, tabs, dispatched } = mount();
+    view.update(pane(THREE, 10), true, null, null);
+    layout(tabs());
+
+    drag(tabs()[0], 50, 290, tabs()[2]);
+
+    expect(dispatched).toEqual([{ type: "moveTab", tab: 10, pane: 1, before: null }]);
+  });
+
+  it("제자리에 놓으면 아무것도 보내지 않는다", () => {
+    const { view, tabs, dispatched } = mount();
+    view.update(pane(THREE, 10), true, null, null);
+    layout(tabs());
+
+    drag(tabs()[1], 150, 190, tabs()[1]);
+
+    expect(dispatched).toEqual([]);
+  });
+
+  it("다른 pane 의 콘텐츠 위에 놓으면 그 pane 맨 뒤로 옮긴다", () => {
+    const source = mount(1);
+    const target = mount(2);
+    document.body.replaceChildren(source.view.root, target.view.root);
+    source.view.update(pane(THREE, 10), true, null, null);
+    target.view.update({ id: 2, tabs: [terminalTab(20)], activeTab: 20 }, false, null, null);
+    layout(source.tabs());
+
+    drag(source.tabs()[1], 150, 400, child(target.view.root, ".pane-content"));
+
+    expect(source.dispatched).toEqual([{ type: "moveTab", tab: 11, pane: 2, before: null }]);
+    expect(document.querySelector(".tab-drop-target")).toBeNull();
+  });
+
+  it("다른 pane 의 탭바 위에 놓으면 그 탭 앞으로 옮긴다", () => {
+    const source = mount(1);
+    const target = mount(2);
+    document.body.replaceChildren(source.view.root, target.view.root);
+    source.view.update(pane(THREE, 10), true, null, null);
+    target.view.update({ id: 2, tabs: [terminalTab(20), terminalTab(21)], activeTab: 20 }, false, null, null);
+    layout(target.tabs());
+
+    drag(source.tabs()[0], 50, 120, target.tabs()[1]);
+
+    expect(source.dispatched).toEqual([{ type: "moveTab", tab: 10, pane: 2, before: 21 }]);
+  });
+
+  it("문턱을 못 넘은 움직임은 클릭이다", () => {
+    const { view, tabs, dispatched } = mount();
+    view.update(pane(THREE, 10), true, null, null);
+    layout(tabs());
+
+    drag(tabs()[2], 250, 252, tabs()[0]);
+
+    expect(dispatched).toEqual([{ type: "activateTab", tab: 12 }]);
+  });
+
+  it("× 위에서 시작한 끌기는 드래그가 아니다", () => {
+    const { view, tabs, dispatched } = mount();
+    view.update(pane(THREE, 10), true, null, null);
+    layout(tabs());
+    const close = child(tabs()[2], ".tab-close");
+
+    pointer(close, "pointerdown", 250);
+    pointAt(tabs()[0]);
+    pointer(close, "pointermove", 10);
+    pointer(close, "pointerup", 10);
+
+    expect(tabs()[2].classList.contains("dragging")).toBe(false);
+    expect(dispatched).toEqual([]);
+  });
+
+  it("드래그 중의 렌더는 끄는 노드를 갈지 않고, 놓은 뒤에 반영한다", () => {
+    const { view, tabs } = mount();
+    view.update(pane(THREE, 10), true, null, null);
+    layout(tabs());
+    const dragged = tabs()[2];
+
+    pointer(dragged, "pointerdown", 250);
+    pointAt(tabs()[0]);
+    pointer(dragged, "pointermove", 10);
+    view.update(pane([...THREE, terminalTab(13)], 10), true, null, null);
+    expect(tabs()).toHaveLength(3);
+    expect(tabs()[2]).toBe(dragged);
+
+    pointer(dragged, "pointerup", 10);
+    expect(tabs()).toHaveLength(4);
+  });
+});

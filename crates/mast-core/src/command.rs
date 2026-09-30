@@ -103,6 +103,16 @@ pub enum Command {
     CloseTab {
         tab: TabId,
     },
+    /// tab 을 같은 워크스페이스의 `pane` 안 `before` 바로 앞에 옮긴다. None 은 맨 뒤,
+    /// 자기 자신은 무변경이다. 세션은 건드리지 않는다.
+    /// 다른 pane 으로 옮기면 그 pane 의 활성 탭이 되고 포커스도 따라가며, 원래 pane 은
+    /// CloseTab 과 같은 규칙으로 활성 탭을 고르고 비면 collapse 한다.
+    /// `pane` 이 tab 의 워크스페이스에 없거나 `before` 가 그 pane 에 없으면 UnknownTarget 이다.
+    MoveTab {
+        tab: TabId,
+        pane: PaneId,
+        before: Option<TabId>,
+    },
     /// folderBrowser 탭의 경로를 바꾼다 — 디렉터리 탐색도 뷰 내부 상태가 아니라
     /// dispatcher 를 경유한다. 대상이
     /// folderBrowser 가 아니면 [`CommandError::KindMismatch`], 경로 형태가

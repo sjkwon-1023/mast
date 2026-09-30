@@ -773,6 +773,26 @@ body {
   color: var(--fg);
 }
 
+/* 탭 드래그 — 사이드바 카드와 같은 규율로 inset box-shadow 만 쓴다 (레이아웃을 밀면
+   포인터 아래의 자리가 표시 때문에 바뀐다). */
+.tab.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.tab.drop-before {
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+
+.tab.drop-after {
+  box-shadow: inset -2px 0 0 0 var(--accent);
+}
+
+.pane.tab-drop-target {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
 .tab-title {
   min-width: 0;
   overflow: hidden;

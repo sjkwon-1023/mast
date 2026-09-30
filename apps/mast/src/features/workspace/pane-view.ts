@@ -35,9 +35,17 @@ import { IS_MAC } from "../../shared/platform";
 import { respawnTab } from "../../infrastructure/backend";
 import { paneTerminalCwd, shortcutBadge, shortcutLabel } from "../../shared/keys";
 import type { ShortcutId } from "../../shared/keys";
-import { paneNeedsInput, paneUnread, sameTabButton, tabStripModel, tabStripPlan } from "./tab-strip-model";
+import {
+  paneNeedsInput,
+  paneUnread,
+  sameTabButton,
+  tabDropBefore,
+  tabMoveChangesOrder,
+  tabStripModel,
+  tabStripPlan,
+} from "./tab-strip-model";
 import { tabIdsVisible } from "./tab-id-settings";
-import type { TabButtonModel } from "./tab-strip-model";
+import type { TabBox, TabButtonModel } from "./tab-strip-model";
 import type { TerminalView } from "../terminal/view";
 import type { ViewerView } from "../viewers/viewer-view";
 import type { VisibleView, VisibleViewer } from "./view-reconcile";
@@ -184,6 +192,65 @@ function localHourMinute(ms: number): string | null {
   return `${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
+/** 포인터가 이만큼 움직여야 드래그로 친다 — 흔들린 클릭이 탭을 옮기면 안 된다
+ *  (사이드바 카드 드래그와 같은 문턱). */
+const TAB_DRAG_THRESHOLD_PX = 4;
+
+/** 놓을 자리 — 대상 pane 과 그 안에서 앞에 놓일 탭 (`moveTab` 계약). */
+interface TabDrop {
+  pane: PaneId;
+  before: TabId | null;
+}
+
+/** 진행 중인 탭 드래그. `moving` 이 false 인 동안은 아직 클릭으로 끝날 수 있는 눌림이다. */
+interface TabDrag {
+  tab: TabId;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  moving: boolean;
+  drop: TabDrop | null;
+}
+
+/** 포인터 아래의 pane 과 놓을 자리. pane 은 DOM 의 `data-pane-id` 로 찾으므로 다른
+ *  PaneView 의 탭바·콘텐츠 위에서도 판정된다. 탭바 위면 가로 위치로 자리를 고르고,
+ *  콘텐츠 위면 그 pane 의 맨 뒤다. */
+function tabDropAt(x: number, y: number): TabDrop | null {
+  const hit = document.elementFromPoint(x, y);
+  const paneEl = hit?.closest<HTMLElement>(".pane[data-pane-id]") ?? null;
+  if (paneEl === null) return null;
+  const pane = Number(paneEl.dataset.paneId) as PaneId;
+  const strip = hit?.closest(".pane-tabs") ?? null;
+  if (strip === null) return { pane, before: null };
+  const boxes: TabBox[] = [];
+  for (const el of strip.querySelectorAll<HTMLElement>(".tab[data-tab-id]")) {
+    const rect = el.getBoundingClientRect();
+    boxes.push({ tab: Number(el.dataset.tabId) as TabId, left: rect.left, width: rect.width });
+  }
+  return { pane, before: tabDropBefore(boxes, x) };
+}
+
+function clearTabDropIndicator(): void {
+  for (const el of document.querySelectorAll(".tab-drop-target, .tab.drop-before, .tab.drop-after")) {
+    el.classList.remove("tab-drop-target", "drop-before", "drop-after");
+  }
+}
+
+/** 놓을 자리 표시 — 대상 pane 전체에 윤곽을, 탭바의 자리에 accent 선을 둔다. 맨 뒤면
+ *  마지막 탭의 오른쪽에 둔다 (탭이 없으면 pane 윤곽만). */
+function showTabDropIndicator(drop: TabDrop): void {
+  clearTabDropIndicator();
+  const paneEl = document.querySelector(`.pane[data-pane-id="${drop.pane}"]`);
+  if (paneEl === null) return;
+  paneEl.classList.add("tab-drop-target");
+  if (drop.before === null) {
+    const tabs = paneEl.querySelectorAll(".tab[data-tab-id]");
+    tabs[tabs.length - 1]?.classList.add("drop-after");
+  } else {
+    paneEl.querySelector(`.tab[data-tab-id="${drop.before}"]`)?.classList.add("drop-before");
+  }
+}
+
 export class PaneView {
   readonly root: HTMLDivElement;
   private readonly contentEl: HTMLDivElement;
@@ -206,6 +273,9 @@ export class PaneView {
   private shown: TabId | null = null;
   /** 마지막 update 의 pane 스냅샷 — 헤더 버튼이 클릭 시점의 표시 탭 cwd 를 읽는다. */
   private pane: Pane | undefined = undefined;
+  private drag: TabDrag | null = null;
+  /** 드래그로 끝난 제스처 뒤의 click 한 번을 삼킨다 — 옮기려고 끈 탭이 활성화까지 되면 안 된다. */
+  private dragged = false;
 
   constructor(
     readonly paneId: PaneId,
@@ -475,6 +545,9 @@ export class PaneView {
   private renderTabStrip(pane: Pane): void {
     const model = tabStripModel(pane);
     const prev = this.lastStrip;
+    // 드래그 중에는 탭바를 다시 그리지 않는다 — 끌고 있는 노드가 갈리면 포인터 캡처가
+    // 끊긴다. 밀린 렌더는 endTabDrag 가 만회한다.
+    if (this.drag?.moving) return;
     const plan = tabStripPlan(prev, model);
     if (plan === "skip") return;
     if (plan === "rebuild") {
@@ -505,6 +578,7 @@ export class PaneView {
     // 컨테이너는 div — X 가 <button> 이라 버튼 중첩을 피한다.
     const el = document.createElement("div");
     el.className = "tab";
+    el.dataset.tabId = String(model.tab);
 
     const title = document.createElement("span");
     title.className = "tab-title";
@@ -562,8 +636,75 @@ export class PaneView {
     const nodes: TabNodes = { root: el, title, id, needsInput, dot, exited, notStarted, model };
     this.applyTab(nodes, model);
 
-    el.addEventListener("click", () => this.onTabClick(nodes.model));
+    el.addEventListener("pointerdown", (ev) => this.onTabPointerDown(ev, nodes));
+    el.addEventListener("pointermove", (ev) => this.onTabPointerMove(ev, el));
+    el.addEventListener("pointerup", () => this.endTabDrag(true));
+    el.addEventListener("pointercancel", () => this.endTabDrag(false));
+    el.addEventListener("lostpointercapture", () => this.endTabDrag(false));
+    el.addEventListener("click", () => {
+      if (this.dragged) {
+        this.dragged = false;
+        return;
+      }
+      this.onTabClick(nodes.model);
+    });
     return nodes;
+  }
+
+  /** 탭 눌림 — 문턱을 넘어야 드래그가 된다. × 위의 눌림은 닫기 버튼의 것이다. */
+  private onTabPointerDown(ev: PointerEvent, nodes: TabNodes): void {
+    // 드래그가 탭 밖에서 끝나면 click 이 오지 않으므로 삼킴 플래그는 여기서 만료된다.
+    this.dragged = false;
+    if (ev.button !== 0) return;
+    if (ev.target instanceof HTMLElement && ev.target.closest("button") !== null) return;
+    this.drag = {
+      tab: nodes.model.tab,
+      pointerId: ev.pointerId,
+      startX: ev.clientX,
+      startY: ev.clientY,
+      moving: false,
+      drop: null,
+    };
+  }
+
+  private onTabPointerMove(ev: PointerEvent, el: HTMLElement): void {
+    const drag = this.drag;
+    if (drag === null || ev.pointerId !== drag.pointerId) return;
+    if (!drag.moving) {
+      const dx = Math.abs(ev.clientX - drag.startX);
+      const dy = Math.abs(ev.clientY - drag.startY);
+      if (dx < TAB_DRAG_THRESHOLD_PX && dy < TAB_DRAG_THRESHOLD_PX) return;
+      drag.moving = true;
+      // 캡처는 문턱을 넘은 뒤에만 잡는다 — 먼저 잡으면 평범한 클릭까지 붙들린다.
+      el.setPointerCapture(ev.pointerId);
+      el.classList.add("dragging");
+    }
+    drag.drop = tabDropAt(ev.clientX, ev.clientY);
+    if (drag.drop === null) clearTabDropIndicator();
+    else showTabDropIndicator(drag.drop);
+  }
+
+  /** 드래그 종료. `commit` 이고 자리가 실제로 바뀌면 moveTab 을 보낸다. */
+  private endTabDrag(commit: boolean): void {
+    const drag = this.drag;
+    if (drag === null) return;
+    this.drag = null;
+    if (!drag.moving) return;
+    this.dragged = true;
+    clearTabDropIndicator();
+    this.tabNodes.get(drag.tab)?.root.classList.remove("dragging");
+
+    const drop = drag.drop;
+    if (commit && drop !== null && this.movesTab(drag.tab, drop)) {
+      void this.dispatch({ type: "moveTab", tab: drag.tab, pane: drop.pane, before: drop.before });
+    }
+    if (this.pane !== undefined) this.renderTabStrip(this.pane);
+  }
+
+  private movesTab(tab: TabId, drop: TabDrop): boolean {
+    if (drop.pane !== this.paneId) return true;
+    const tabs = (this.lastStrip ?? []).map((m) => m.tab);
+    return tabMoveChangesOrder(tabs, tab, drop.before);
   }
 
   /** 탭 모델을 기존 노드에 반영 — 조립 직후와 in-place 패치가 같은 경로를 탄다. */

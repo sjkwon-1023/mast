@@ -364,7 +364,14 @@ export class WorkspaceView {
       // 붙어 있다. 그대로 재사용하면 상태는 running 으로 돌아가 배너만 걷히고 화면과
       // 입력은 계속 죽은 채로 남는다 — 빈 탭에서 Retry 를 누르는 핵심 경로가 성공한
       // 것처럼 보이면서 아무것도 고쳐지지 않는다.
-      if (existing.session === session) return existing;
+      if (existing.session === session) {
+        // 탭이 다른 pane 으로 옮겨졌으면 살아 있는 뷰를 그 pane 으로 옮긴다 (reattach 없음).
+        if (existing.root.parentElement !== parent) {
+          parent.append(existing.root);
+          existing.scheduleFit();
+        }
+        return existing;
+      }
       existing.dispose();
       this.views.delete(tab);
     }
@@ -403,7 +410,11 @@ export class WorkspaceView {
    *  안전망(계약)으로 남긴다. */
   private ensureViewerView(target: VisibleViewer, parent: HTMLElement): ViewerView | null {
     const existing = this.viewerViews.get(target.tab);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      // 탭이 다른 pane 으로 옮겨졌으면 마운트된 뷰어도 따라간다.
+      if (existing.root.parentElement !== parent) parent.append(existing.root);
+      return existing;
+    }
     const ws = this.lastSnapshot === null ? null : activeWorkspace(this.lastSnapshot);
     const distro = ws?.distro ?? null;
     const created = new LazyViewerView(parent, target.kind, async () => {
