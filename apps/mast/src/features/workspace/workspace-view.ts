@@ -1,27 +1,27 @@
-// 활성 워크스페이스의 split tree 렌더 진입점 (11단계 청크 B → 12단계 청크 C).
+// 활성 워크스페이스의 split tree 렌더 진입점.
 //
-// 렌더 전략 (계획 1-B):
+// 렌더 전략:
 // - structureKey 가 직전과 같으면 각 split 컨테이너 자식의 flex 만 in-place
 //   갱신한다. 단 드래그 활성 split(activeDrags — splitter 가 등록)은 건너뛴다:
 //   드래그 중 도착하는 스냅샷이 프리뷰 ratio 를 밟지 않게 하는 D2 가드다.
 // - 다르면 DOM 을 재구축하되 pane 콘텐츠 엘리먼트(PaneView.root)는 레지스트리
 //   에서 재사용(reparent)해 xterm 재attach·replay 왕복을 피한다 — 현 렌더러가
 //   DOM 이라 reparent 리스크가 낮다 (WebGL 활성화 시 재평가).
-// - split 컨테이너는 SplitId 로 키잉한다 (경로 인덱스 금지 — 계획 D1).
+// - split 컨테이너는 SplitId 로 키잉한다 (경로 인덱스 금지).
 //
-// keep-alive 뷰 수명 (12단계 — 계획 D3·D4-b): 탭별 TerminalView 레지스트리
+// keep-alive 뷰 수명: 탭별 TerminalView 레지스트리
 // (Map<TabId, TerminalView>)를 여기서 소유하고, 스냅샷마다 planViewSync 로
 // dispose(탭 사라짐·워크스페이스 밖) / detachSessions(attach 안 하는 세션 전부 —
 // fire-and-forget 스윕, 부트 첫 스냅샷 포함) / visible(pane 별 표시 탭)을 집행한다.
 //
 // 터미널 스크롤 기억 (ADR-0019): 워크스페이스를 떠나 dispose 되는 터미널 뷰의
 // 스크롤 위치(하단 기준 줄 수)를 탭별로 들고 있다가, 돌아와 뷰를 새로 만들 때
-// 1회성으로 넘긴다. 경계는 **페이지 세션**이다 (ADR-0019 개정 2026-09-20) —
+// 1회성으로 넘긴다. 경계는 **페이지 세션**이다 (ADR-0019) —
 // 위치는 sessionStorage 에도 남아 자동 리로드(hidden·워치독)를 넘기고, 리로드
 // 직전 살아 있던 탭들은 pagehide 에서 쟁긴다 (captureLiveScroll). 앱(=WebView)
 // 종료는 넘기지 못한다.
 //
-// 뷰어 뷰 수명 (21단계): 시맨틱이 반대라(활성 탭만 마운트 — features/viewers/viewer-view.ts)
+// 뷰어 뷰 수명: 시맨틱이 반대라(활성 탭만 마운트 — features/viewers/viewer-view.ts)
 // 병렬 레지스트리 viewerViews 를 두고 planViewerSync 로 집행한다. 두 레지스트리의
 // 키는 겹치지 않는다 — 셸이 끝난 터미널 탭도 뷰어로 마운트되지만(기록 뷰,
 // ADR-0018) 그 전이에서 planViewSync 가 터미널 뷰를 먼저 dispose 한다.
@@ -29,7 +29,7 @@
 // 모델에 남기고, 탭 자체가 사라졌으면 flush 없이 바로 내린다 — 없는 탭에 setViewerScroll 을
 // 보내면 unknownTarget 잡음이 되기 때문이다.
 //
-// focus 보상 경로 (계획 D7 — attach 자동 focus 제거의 대가): pendingFocus 1칸을
+// focus 보상 경로: pendingFocus 1칸을
 // 두고 ① 부트/리로드 첫 리컨실 후 활성 pane 의 뷰, ② main.dispatchUI 가
 // requestFocus 로 넘긴 대상(TabCreated/PaneCreated 의 새 탭, ActivateTab 탭,
 // FocusPane 의 pane)을 렌더 후 해소한다. 요청 즉시도 1회 시도한다 — state-changed
@@ -68,7 +68,7 @@ import type {
 
 type DispatchFn = (cmd: Command) => Promise<CommandOutput | null>;
 
-/** focus 보상 대상 (계획 D7). "pane" 은 그 pane 의 표시 중 뷰를 뜻한다 —
+/** focus 보상 대상. "pane" 은 그 pane 의 표시 중 뷰를 뜻한다 —
  *  FocusPane 은 cmd 에 pane 이 있어 activePane 스냅샷 도착을 기다릴 필요가 없다. */
 export type FocusRequest =
   | { kind: "tab"; tab: TabId }
@@ -94,20 +94,20 @@ export class WorkspaceView {
   private lastKey: string | null = null;
   private lastSnapshot: StateSnapshot | null = null;
 
-  /** 탭별 keep-alive 터미널 뷰 — 앱 수준 레지스트리 (계획 D3). */
+  /** 탭별 keep-alive 터미널 뷰 — 앱 수준 레지스트리. */
   private readonly views = new Map<TabId, TerminalView>();
-  /** 탭별 뷰어 뷰 — 활성 탭만 들어 있는 병렬 레지스트리 (21단계, 파일 상단). */
+  /** 탭별 뷰어 뷰 — 활성 탭만 들어 있는 병렬 레지스트리. */
   private readonly viewerViews = new Map<TabId, ViewerView>();
   /** 워크스페이스를 떠난 터미널 탭의 스크롤 위치 (ADR-0019 — 파일 상단).
    *  수명 규칙(1회성 인출·프룬)은 순수 클래스가 들고 테스트가 잠근다. */
   private readonly scrollMemory = new ScrollMemory();
   /** 보상 focus 보류 1칸. rendersLeft: 미해소 렌더가 이만큼 지나면 stale 로
    *  폐기한다 — invoke 응답이 앞선 무관 이벤트 렌더보다 먼저 처리되는 race 에서
-   *  구 revision 렌더가 보상을 조기 폐기하지 않게 하면서(리뷰 finding), 닫힌 탭
+   *  구 revision 렌더가 보상을 조기 폐기하지 않게 하면서, 닫힌 탭
    *  대상 요청이 영구 보류로도 남지 않게 한다. */
   private pendingFocus: { req: FocusRequest; rendersLeft: number } | null = null;
   /** detach 스윕 전이 추적 — 직전 렌더에서 이미 미부착이던 세션은 재스윕하지
-   *  않는다 (멱등이지만 매 revision 반복 invoke 는 잡음 — 리뷰 finding). */
+   *  않는다 (멱등이지만 매 revision 반복 invoke 는 잡음이다). */
   private sweptSessions = new Set<SessionId>();
   /** 부트 보상 focus 를 첫 리컨실(워크스페이스 존재) 1회로 제한하는 래치. */
   private booted = false;
@@ -124,7 +124,7 @@ export class WorkspaceView {
     ensure: (tab, session, parent, onAttachError) => this.ensureView(tab, session, parent, onAttachError),
   };
 
-  /** 뷰어 뷰 레지스트리 접근 계약 (21단계) — 터미널과 같은 규약이다: 생성·조회만
+  /** 뷰어 뷰 레지스트리 접근 계약 — 터미널과 같은 규약이다: 생성·조회만
    *  노출하고 dispose 는 리컨실(render)이 독점한다. */
   private readonly viewerRegistry: ViewerRegistry = {
     get: (tab) => this.viewerViews.get(tab),
@@ -144,7 +144,7 @@ export class WorkspaceView {
   constructor(
     private readonly rootEl: HTMLElement,
     private readonly dispatch: DispatchFn,
-    /** 전환 지연 tracer (14단계) — ensureView 의 새 attach 를 계측 대상으로
+    /** 전환 지연 tracer — ensureView 의 새 attach 를 계측 대상으로
      *  등록한다. trace 미진행 시 markAttachStart 가 즉시 false 라 오버헤드 없음. */
     private readonly tracer: SwitchTracer,
   ) {
@@ -171,7 +171,7 @@ export class WorkspaceView {
     this.lastSnapshot = snapshot;
 
     // keep-alive 리컨실 — 구조 렌더보다 먼저: dispose 로 뷰가 정리된 뒤에
-    // updatePanes 가 가시성·lazy attach 를 만진다 (계획 D3·D4-b).
+    // updatePanes 가 가시성·lazy attach 를 만진다.
     const plan = planViewSync(this.views.keys(), snapshot);
     const existing = existingTabIds(snapshot);
     for (const tab of plan.dispose) {
@@ -204,8 +204,7 @@ export class WorkspaceView {
     for (const session of plan.detachSessions) {
       // fire-and-forget 스윕 (멱등) — 부트 첫 스냅샷 포함. F5 후 미방문 탭
       // 세션의 죽은 채널이 paused 에 고착되는 것을 여기서 치운다 (D4-b).
-      // 직전 렌더에서 이미 미부착이던 세션은 건너뛴다 — 전이 시점 1회면 충분
-      // (매 revision 반복 invoke 잡음 방지, 리뷰 finding).
+      // 직전 렌더에서 이미 미부착이던 세션은 건너뛴다 — 전이 시점 1회면 충분하다.
       if (this.sweptSessions.has(session)) continue;
       void detachTerminal(session).catch((err) =>
         console.error("detach sweep failed", session, err),
@@ -213,7 +212,7 @@ export class WorkspaceView {
     }
     this.sweptSessions = unattached;
 
-    // 뷰어 리컨실 (21단계) — 터미널과 같은 자리에서, 같은 이유로 구조 렌더보다
+    // 뷰어 리컨실 — 터미널과 같은 자리에서, 같은 이유로 구조 렌더보다
     // 먼저 돈다. 마운트는 updatePanes 가 pane 별로 수행한다.
     const viewerPlan = planViewerSync(this.viewerViews.keys(), snapshot);
     for (const item of viewerPlan.dispose) {
@@ -258,7 +257,7 @@ export class WorkspaceView {
     this.tryResolveFocus(true);
   }
 
-  /** focus 보상 요청 (main.dispatchUI 성공 경로 — 계획 D7). 즉시 1회 시도하고,
+  /** focus 보상 요청 (main.dispatchUI 성공 경로). 즉시 1회 시도하고,
    *  대상이 아직 없으면(스냅샷 미도착) 다음 render 가 해소한다. */
   /** 화면 좌표(CSS px)에 보이는 터미널 뷰 — macOS 파일 드롭의 대상 판정이다. 그 자리가
    *  터미널이 아니면(뷰어·사이드바·헤더) null 이다. 숨은 탭은 레이아웃이 없어 맞지 않는다. */
@@ -280,7 +279,7 @@ export class WorkspaceView {
     if (req.kind !== "activePane" || req.after !== undefined) this.tryResolveFocus(false);
   }
 
-  /** 현재 렌더된 pane 들의 화면 기하 (20단계) — 키보드 pane 이동(Windows Alt+Shift+방향키,
+  /** 현재 렌더된 pane 들의 화면 기하 — 키보드 pane 이동(Windows Alt+Shift+방향키,
    *  macOS ⌘⌥방향키)의 방향 판정 재료다. 레이아웃 트리를 걷지 않고 pane DOM 의 실측 rect 를 쓴다:
    *  중첩 split 의 시각 배치를 트리 순회로 재구성하는 것보다 정확하고, 판정
    *  (keys.paneInDirection)이 순수 함수로 남는다. paneViews 는 활성 워크스페이스
@@ -318,8 +317,8 @@ export class WorkspaceView {
   }
 
   /** 요청 → focus 할 뷰. 숨은 뷰는 대상이 아니다 (display:none 은 focus 불가) —
-   *  표시 여부는 pane 의 shownTab 으로 판정한다. 뷰어 뷰도 대상이다 (21단계):
-   *  둘 다 focus() 를 가지므로 20단계 키보드 내비·D7 보상이 뷰어 탭에서도
+   *  표시 여부는 pane 의 shownTab 으로 판정한다. 뷰어 뷰도 대상이다:
+   *  둘 다 focus() 를 가지므로 키보드 내비·focus 보상이 뷰어 탭에서도
    *  그대로 성립한다 — 기록 뷰(ADR-0018)까지 포함해서다. 두 레지스트리는 키가
    *  겹치지 않아 순서 의존이 없다: 한 탭이 터미널 뷰와 기록 뷰를 동시에 갖는
    *  중간 상태는 planViewSync 의 dispose 가 닫는다 (view-reconcile 상단). */
@@ -369,7 +368,7 @@ export class WorkspaceView {
       existing.dispose();
       this.views.delete(tab);
     }
-    // 전환 계측 (14단계): 진행 중 trace 가 이 탭의 새 attach 를 수락한 경우에만
+    // 전환 계측: 진행 중 trace 가 이 탭의 새 attach 를 수락한 경우에만
     // replay 완료 훅을 단다 — keep-alive 재사용(위 early return)은 replay 왕복이
     // 없어 계측 대상이 아니다. attach 가 실패하면 trace 는 완주하지 못하고 다음
     // begin 이 폐기한다 (실패 자체는 아래 catch 가 별도로 노출한다).
@@ -396,7 +395,7 @@ export class WorkspaceView {
     return created;
   }
 
-  /** 뷰어 레지스트리 ensure 구현 (21단계) — 없으면 생성해 parent 에 마운트한다.
+  /** 뷰어 레지스트리 ensure 구현 — 없으면 생성해 parent 에 마운트한다.
    *  distro 는 최신 채택 스냅샷의 활성 워크스페이스 값이다 (없으면 null — 글루가
    *  MAST_DISTRO·기본 배포판 순으로 해석한다). Changes 뷰어까지 네 종류가 모두
    *  착지해
@@ -559,7 +558,7 @@ export class WorkspaceView {
     this.splitters = [];
     this.splitContainers.clear();
     this.activeDrags.clear();
-    // pendingFocus 는 유지한다 (리뷰 finding) — 명령 응답과 그 스냅샷 사이에
+    // pendingFocus 는 유지한다 — 명령 응답과 그 스냅샷 사이에
     // ws-null 렌더가 끼는 경로(마지막 워크스페이스 닫기 직후 재생성 등)에서
     // 보상이 살아남아야 한다. stale 요청은 rendersLeft 가 정리한다.
     this.lastKey = null;

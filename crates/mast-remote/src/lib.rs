@@ -10,8 +10,8 @@
 //!
 //! 설정·토큰 경로·서버 기동·정적 자산·로그 연결은 `apps/mast/src-tauri`가 소유한다.
 //!
-//! 계약: `docs/adr/0016-remote-surface-over-lan.md` (HTTP), Secure Remote 는 이 계획의
-//! 후속 ADR.
+//! 계약: `docs/adr/0016-remote-surface-over-lan.md` (HTTP),
+//! `docs/adr/0028-secure-remote-webtransport.md` (Secure Remote).
 //!
 //! 이 크레이트가 밖으로 내보내는 것은 두 서버의 기동과 토큰 로딩, Secure Remote
 //! 페어링마다 새로 만드는 토큰(`generate_secure_token`), 그리고 Secure Remote 입력

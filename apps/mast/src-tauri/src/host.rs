@@ -1,6 +1,5 @@
 //! `SessionHost` 구현 — Dispatcher 의 PTY 부수효과 포트를 `SessionManager` 위에
-//! 실현한다. `dispatch` 가 Dispatcher lock 아래에서 호출하므로(스폰 포함 — 계획
-//! 0-3 수용) 여기서 Dispatcher lock 을 다시 잡는 코드는 금지다.
+//! 실현한다. `dispatch` 가 Dispatcher lock 아래에서 호출하므로(스폰 포함) 여기서 Dispatcher lock 을 다시 잡는 코드는 금지다.
 
 use std::cell::Cell;
 use std::sync::{Arc, OnceLock};
@@ -26,7 +25,7 @@ pub struct TauriHost {
     app: AppHandle,
     sessions: Arc<SessionManager>,
     sinks: Arc<SinkRegistry>,
-    /// 새로 만드는 sink 에 물려 줄 OSC 라우터 핸들 (18단계 glue 계약).
+    /// 새로 만드는 sink 에 물려 줄 OSC 라우터 핸들.
     router: Arc<OscRouter>,
     /// 닫힌 탭의 기록 파일을 지우는 데 쓰는 저장소 핸들 — 관리 상태와 같은 `Arc` 다
     /// ([`SessionHost::release_tabs`], ADR-0018 수명 규칙).
@@ -99,7 +98,7 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
             args.push("-d".to_string());
             args.push(distro);
         }
-        // `--` 가 아니라 `--exec` 인 이유 (실기 버그 2026-08-12): `--` 는 명령을 WSL
+        // `--` 가 아니라 `--exec` 인 이유: `--` 는 명령을 WSL
         // **기본 셸을 한 번 거쳐** 실행해 래퍼 스크립트가 셸 평가를 두 번 받는다.
         // $HOME/$PATH 같은 환경 변수는 바깥 평가에서도 같은 값이라 티가 안 났지만,
         // 스크립트 안에서 정의하는 변수($RESUME/$cmd)는 바깥 평가가 빈 값으로
@@ -145,7 +144,7 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
 /// 수 있기 때문이다 (`mast-send` 스킬의 자가 인지 조건). `history_tab` 이 Some
 /// 이면 `MAST_TAB` 으로 자기 탭 id 까지 알려 주고, 그 탭 전용 HISTFILE 을 물린다
 /// — 탭의 안정 ID 는 재시작을 넘어 유지되므로 재시작 후에도 같은 탭의 history 만
-/// 복원된다 (체크포인트 2 UX 요청). 셸 안에서 `mkdir -p` 로 디렉터리를 만드는 이유
+/// 복원된다. 셸 안에서 `mkdir -p` 로 디렉터리를 만드는 이유
 /// 는 Windows 쪽에서 WSL 파일시스템 경로를 추측하지 않기 위해서이고, `$HOME` 은
 /// 공백이 섞여도 안전하도록 따옴표로 감싼다. `VAR=... exec bash -l` 의 할당은
 /// exec 되는 프로세스의 환경으로 전달되며(= 그 셸의 자식들에게도 상속된다),
@@ -173,7 +172,7 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
 /// 상속돼 들어오면** bash 가 export 속성을 유지하지만, spawn 환경은 mast 가 이
 /// 함수에서 통째로 정하므로 그런 값은 오지 않는다.
 ///
-/// 힌트 1행은 **읽는 쪽에서도 형태를 검증한다** (리뷰 finding): 기록 형식과 대칭인
+/// 힌트 1행은 **읽는 쪽에서도 형태를 검증한다**: 기록 형식과 대칭인
 /// `claude --resume <영숫자·-·_ 토큰>` 과 `codex resume <영숫자·-·_ 토큰>` 정확 일치만
 /// 통과시키고, 그 외(escape 시퀀스·셸 메타문자·다른 명령)는 조용히 무시한다 — 같은
 /// uid 가 파일을 바꿔치기해도 "↑+Enter 를 유도하는 임의 명령 표면"이 되지 않는다.
@@ -202,8 +201,7 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
 ///
 /// **3자 동기화 계약**: 같은 값을 쓰는 세 번째 자리가 `sink.rs` 의
 /// `COLOR_REPLY_FOREGROUND`/`COLOR_REPLY_BACKGROUND` 다 — OSC 10/11 **질의**에 앱이
-/// 직접 답하는 응답기로, 위 "conhost 가 대신 응답한다"는 전제가 실기 probe 에서
-/// 뒤집힌(아무도 응답하지 않았다) 뒤 2026-08-11 에 추가됐다. 셋 중 하나를 바꾸면
+/// 직접 답하는 응답기다 (conhost 는 이 질의에 응답하지 않는다). 셋 중 하나를 바꾸면
 /// 나머지 둘도 같이 바꾼다.
 #[cfg(windows)]
 fn bash_argv(history_tab: Option<u64>, cwd: Option<&str>) -> Vec<String> {

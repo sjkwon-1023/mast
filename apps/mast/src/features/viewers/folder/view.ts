@@ -2,13 +2,13 @@
 // 디렉터리 클릭은 NavigateFolder, 파일 클릭은 뷰어 탭 생성(확장자에 따라
 // markdownViewer 또는 textViewer)으로 잇는다.
 //
-// 탐색이 뷰 내부 상태가 아니라 **dispatcher 명령**인 것이 이 파일의 핵심 계약이다
-// (계획 v2 4장): 현재 경로는 모델(TabKind::FolderBrowser.path)이 소유하고,
+// 탐색이 뷰 내부 상태가 아니라 **dispatcher 명령**인 것이 이 파일의 핵심 계약이다:
+// 현재 경로는 모델(TabKind::FolderBrowser.path)이 소유하고,
 // 뷰는 스냅샷이 내려준 kind 를 그릴 뿐이다. 그래서 앱을 재시작해도
 // 경로가 복원되고(persist), 어떤 탐색이든 revision 을 남긴다. 파일 **내용** 읽기
 // (fs_*)만 attach_terminal 류 콘텐츠 플레인 직접 invoke 다.
 //
-// 키보드만으로도 탐색이 된다 (체크포인트 2 UX): 리스트 컨테이너가 focus 를 갖고
+// 키보드만으로도 탐색이 된다: 리스트 컨테이너가 focus 를 갖고
 // 선택 행 1개를 유지하며, 방향키·Home/End·PageUp/PageDown 이 선택을 옮기고
 // Enter 가 클릭과 같은 라우팅을, Backspace 가 `..` 와 같은 상위 이동을 한다.
 // 이 keydown 은 **뷰 내부 리스너**라 전역 가로채기(shared/keys.ts 의 window capture)와

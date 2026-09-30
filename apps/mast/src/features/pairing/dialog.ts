@@ -236,7 +236,7 @@ export function allowOutcomeMessage(
  *  (VPN·Tailscale·포트포워딩)가 있을 때만 가능하다. "인터넷에 아무것도 열리지
  *  않는다" 같은 절대 표현은 쓰지 않는다 — 서버는 모든 인터페이스에 바인드하고
  *  (0.0.0.0), 외부 도달 여부는 그 경로와 방화벽이 정한다. QR 의 1회용 토큰과
- *  연결별 인증서 SHA-256, 전체 신뢰 저장소가 아님은 실제 동작이다 (계획 계약). */
+ *  연결별 인증서 SHA-256, 전체 신뢰 저장소가 아님은 실제 동작이다. */
 export const SECURE_REMOTE_NOTE =
   "The phone connects directly to this PC over TLS (WebTransport) at the LAN address in " +
   "the QR. Reaching it from outside that network needs a separate path you set up — VPN, " +

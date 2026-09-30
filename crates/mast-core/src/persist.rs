@@ -1,4 +1,4 @@
-//! 상태 영속화 (15단계 계획 B-1) — `state.json` 의 load / atomic save / debounce Saver.
+//! 상태 영속화 — `state.json` 의 load / atomic save / debounce Saver.
 //!
 //! # 계약
 //!
@@ -13,9 +13,9 @@
 //! - **전 terminal 탭의 `pty_session` 을 무조건 `None` 으로 소거한다.** PTY 의
 //!   [`SessionId`](crate::session::SessionId) 는 프로세스 수명의 휘발성 u32 라,
 //!   저장된 구 id 를 남겨두면 재시작 후 새 레지스트리가 발급한 동일 숫자의 다른
-//!   세션과 충돌(오배선)한다. 재스폰 시 새 id 가 다시 채워진다 (B-2).
-//! - **에이전트 상태·알림도 pty_session 소거와 동급으로 무조건 초기화한다**
-//!   (18단계 계획, 터미널-계획-v2.md 11장): 전 탭의 `agent_status` = `Idle`,
+//!   세션과 충돌(오배선)한다. 재스폰 시 새 id 가 다시 채워진다.
+//! - **에이전트 상태·알림도 pty_session 소거와 동급으로 무조건 초기화한다**:
+//!   전 탭의 `agent_status` = `Idle`,
 //!   `last_agent_message`·`last_agent_message_seq` = `None`, `notification` =
 //!   `NotificationState::None`, `last_activity_ms` = `None`, 그리고 그 파생값인
 //!   각 워크스페이스의 `agent_status` = `Idle`, `last_agent_message` = `None`.
@@ -23,8 +23,8 @@
 //!   사이드바에 유령처럼 남는 걸 막는다.
 //! - **`NotStarted` 탭만 `Running` 으로 되돌린다**. 그 상태로 저장되면 부팅 재스폰 열거
 //!   ([`Dispatcher::running_terminal_tabs`](crate::command::Dispatcher::running_terminal_tabs))
-//!   에서 빠져 사용자가 탭마다 Retry 를 눌러야 한다 — 실기에서 되살린 탭 11개가 콜드 VM
-//!   에 몰려 6개가 시작 표식을 못 낸 채 남은 상태다 (2026-08-20).
+//!   에서 빠져 사용자가 탭마다 Retry 를 눌러야 한다 — 콜드 VM 에 재스폰이 몰리면 일부
+//!   탭이 이 상태로 남는다 (ADR-0010 개정).
 //! - **`Exited` 는 그대로 둔다** (ADR-0018 D3, ADR-0010 의 되돌림을 반쪽 뒤집는다).
 //!   끝난 탭의 마지막 화면은 기록 파일로 남아 있어 복원 후에도 그대로 읽히고, 되살릴
 //!   길은 pane 배너의 Restart 다 — ADR-0010 의 되돌림은 그 버튼이 없던 시절 "되살릴
@@ -307,11 +307,11 @@ fn backup_corrupt(path: &Path) -> Result<PathBuf, String> {
 }
 
 /// 이전 크래시 런이 남긴 stale tmp(`<파일명>.tmp-<다른 pid>`)를 best-effort 로
-/// 청소한다 — pid 가 런마다 달라 저절로 누적되기 때문 (리뷰 finding). 삭제 실패는
+/// 청소한다 — pid 가 런마다 달라 저절로 누적되기 때문이다. 삭제 실패는
 /// 무시한다 (진단 증거보다 누적 방지가 목적이고, 다음 부팅이 재시도한다).
 /// 동시 실행 중인 다른 인스턴스가 쓰는 중인 tmp 를 지울 수도 있다 — 그쪽 rename
 /// 이 loud 실패 후 다음 저장에서 자연 재시도되므로 무해 (두 인스턴스 동시 실행은
-/// MVP 수용 — 계획 0장).
+/// MVP 수용).
 fn sweep_stale_tmp(path: &Path) {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
     else {
@@ -332,7 +332,7 @@ fn sweep_stale_tmp(path: &Path) {
 /// 앱 수준 구조 검증 — 각 워크스페이스의 불변식 + `active_workspace` 존재 +
 /// **안정 id 전역 유일성**. id 는 단일 카운터 발급이라 종류 불문 전역에서 겹칠 수
 /// 없다 — 디스크는 신뢰 경계(수기 편집·손상)이므로 중복을 통과시키면 by-id
-/// dispatch 의 표적(`locate_*` 첫 매치)이 모호해진다 (14~15 리뷰 finding).
+/// dispatch 의 표적(`locate_*` 첫 매치)이 모호해진다.
 fn validate_app(state: &AppState) -> Result<(), String> {
     let mut seen = std::collections::BTreeSet::new();
     let mut claim = |id: u64, what: &str| -> Result<(), String> {
@@ -435,7 +435,7 @@ fn max_used_id(state: &AppState) -> u64 {
 /// 강등되어 부분 쓰기가 관측될 수 있다. 부모 디렉터리가 없으면 만든다. 실패 시
 /// tmp 파일은 진단 증거로 남을 수 있다 — 같은 프로세스 안에서는 파일명이 pid 로
 /// 고정이라 누적되지 않지만, **크래시 런마다 pid 가 달라 stale tmp 가 쌓일 수
-/// 있으므로** 다음 부팅의 [`load`] 가 best-effort 로 청소한다 (리뷰 finding).
+/// 있으므로** 다음 부팅의 [`load`] 가 best-effort 로 청소한다.
 pub fn save_atomic(path: &Path, state: &AppState) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -492,12 +492,12 @@ struct SaverSlot {
     /// 완료 판정이 세대인 이유: "`pending` 이 빌 때까지" 로 판정하면 저장이 상태
     /// 갱신보다 느린 환경에서 슬롯이 영영 비지 않아 종료 경로(`main.rs` 의
     /// `router.flush_now()` → `saver.flush()`)가 끝나지 않는다 — OSC 프로듀서는
-    /// `flush_now()` 로 멈추지 않는다 (2026-09-12 리뷰).
+    /// `flush_now()` 로 멈추지 않는다.
     written: u64,
     /// flush 를 기다리는 호출자가 지목한 세대 — `written` 이 여기 닿을 때까지 worker 는
     /// deadline 을 무시하고 즉시 쓴다. 불리언 플래그가 아닌 이유: 플래그는 "슬롯이 비는
     /// 순간" 말고는 내릴 자리가 없어, 프로듀서가 write 마다 슬롯을 다시 채우는 동안
-    /// 한 번의 flush 가 trailing debounce 를 영구히 꺼 버린다 (2026-09-12 리뷰).
+    /// 한 번의 flush 가 trailing debounce 를 영구히 꺼 버린다.
     flush_target: u64,
     /// Saver 가 Drop 중 — worker 는 대기분을 쓰고 종료한다.
     closed: bool,
@@ -535,7 +535,7 @@ impl Drop for WorkerDeadGuard<'_> {
 /// (대기분 ≤ 1), 첫 schedule 시점부터 `debounce` 경과 후 한 번 기록한다 (trailing).
 ///
 /// - **유실 창**: 프로세스가 크래시하면 마지막 기록 이후 debounce 창(≤ `debounce`)
-///   안의 변이는 유실된다 — MVP 수용 (계획 B-1). deadline 을 첫 schedule 에
+///   안의 변이는 유실된다 — MVP 수용. deadline 을 첫 schedule 에
 ///   고정하므로 연속 변이 중에도 유실 창은 `debounce` 로 유계다.
 /// - **메모리**: 대기분은 항상 1개 — `schedule` 은 큐에 넣지 않고 슬롯을 교체한다.
 /// - **저장 실패**: loud stderr 만 남기고 패닉하지 않는다. 별도 재시도 루프 없이
@@ -1161,8 +1161,7 @@ mod tests {
     fn sanitize_revives_not_started_terminal_tabs() {
         let dir = tempfile::tempdir().unwrap();
         let path = state_path(&dir);
-        // 실기 재현(2026-08-20): 되살린 탭 11개가 콜드 WSL 에 몰려 6개가 시작 표식을
-        // 못 낸 채 남았다. 그 상태로 저장되면 다음 부팅에서도 재스폰 대상이 아니라
+        // 콜드 WSL 에 재스폰이 몰리면 일부 탭이 시작 표식을 못 낸 채 남는다. 그 상태로 저장되면 다음 부팅에서도 재스폰 대상이 아니라
         // 사용자가 탭마다 Restart 를 눌러야 한다.
         let mut state = sample_state(Some(9), 7);
         for pane in state.workspaces[0].panes.values_mut() {
@@ -1193,7 +1192,7 @@ mod tests {
     fn sanitize_keeps_exited_terminal_tabs() {
         let dir = tempfile::tempdir().unwrap();
         let path = state_path(&dir);
-        // 실기 재현(2026-08-20): 앱이 살아 있는 동안 PC 절전으로 WSL 이 내려가 전 탭이
+        // 앱이 살아 있는 동안 PC 절전으로 WSL 이 내려가 전 탭이
         // 강제 종료 코드와 함께 Exited 로 저장된 상태. 기록 파일이 남아 있으므로 복원
         // 후에도 마지막 화면이 그대로 읽히고, 되살리기는 배너의 Restart 다 (ADR-0018 D3).
         let mut state = sample_state(Some(9), 7);
@@ -1243,7 +1242,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = state_path(&dir);
         // 채워진 알림/에이전트 상태로 저장 — 죽은 세션의 needsInput 이 재시작을
-        // 넘지 않아야 한다 (18단계 계획, pty_session 소거와 동급 규칙).
+        // 넘지 않아야 한다.
         let mut state = sample_state(None, 7);
         {
             let ws = &mut state.workspaces[0];

@@ -172,7 +172,7 @@ fn create_workspace_with_tab_creates_tab_atomically() {
             tab: Some(NewTab::Terminal { cwd: None }),
         })
         .unwrap();
-    // 생성된 안정 ID 전부 반환 (계획 13-D1) — 발급 순서는 workspace →
+    // 생성된 안정 ID 전부 반환 — 발급 순서는 workspace →
     // pane → tab.
     let CommandOutput::WorkspaceCreated {
         workspace,
@@ -235,7 +235,7 @@ fn create_workspace_with_tab_spawn_failure_leaves_state_untouched() {
 
 #[test]
 fn create_workspace_tab_field_missing_deserializes_to_none() {
-    // 하위호환 (계획 13-D1): 13단계 이전 클라이언트의 tab 필드 없는 JSON 은
+    // 하위호환: tab 필드 없는 JSON 은
     // tab: None 으로 파싱된다 (fixture 쪽 잠금은 dispatcher.rs 참조).
     let cmd: Command = serde_json::from_str(
         r#"{ "type": "createWorkspace", "name": "ws", "rootPath": null, "distro": null }"#,
@@ -515,7 +515,7 @@ fn split_pane_with_tab_creates_pane_and_tab_atomically() {
             tab: Some(NewTab::Terminal { cwd: None }),
         })
         .unwrap();
-    // 생성된 안정 ID 전부 반환 (계획 D5) — 발급 순서는 pane → split → tab.
+    // 생성된 안정 ID 전부 반환 — 발급 순서는 pane → split → tab.
     let CommandOutput::PaneCreated {
         pane: pane2,
         split,
@@ -573,7 +573,7 @@ fn split_pane_with_tab_spawn_failure_leaves_state_untouched() {
 #[test]
 fn close_last_tab_collapses_pane_and_fixes_focus() {
     // multi-pane 워크스페이스에서 pane 의 마지막 탭 닫기 → 세션 kill +
-    // collapse + active_pane fixup (계획 D6).
+    // collapse + active_pane fixup.
     let (mut d, host) = dispatcher();
     let (ws, pane1) = create_ws(&mut d, "ws");
     let out = d
@@ -683,7 +683,7 @@ fn create_tab_uses_workspace_defaults_for_spawn() {
     assert_eq!(cwd.as_deref(), Some("/proj"));
 }
 
-/// 탭별 명령 history 계약 (체크포인트 2 UX): 스폰 3경로 전부에서 호스트가
+/// 탭별 명령 history 계약: 스폰 3경로 전부에서 호스트가
 /// 받은 `history_tab` 이 **그 스폰으로 생긴 탭의 안정 ID** 와 같아야 한다.
 /// 스폰이 id 발급보다 먼저라 peek 으로 계산하는 값이므로, 할당 순서가 바뀌면
 /// 핸들러의 debug_assert 와 이 테스트가 함께 터진다.
@@ -750,7 +750,7 @@ fn close_tab_adjusts_active_to_previous() {
     assert_eq!(active(&d), Some(tab2));
 
     // 마지막 탭 닫기 → 워크스페이스의 마지막 pane 이므로 collapse 예외:
-    // 빈 pane (active_tab = None)으로 남는다 (계획 D6).
+    // 빈 pane (active_tab = None)으로 남는다.
     d.dispatch(Command::CloseTab { tab: tab2 }).unwrap();
     assert_eq!(active(&d), None);
     let w = d.state().workspace(ws).unwrap();
@@ -974,7 +974,7 @@ fn revision_increases_by_one_per_successful_dispatch() {
     assert_eq!(d.snapshot().revision, 2);
 }
 
-// ---- 뷰어 탭 (21단계 계획 청크 A) ----
+// ---- 뷰어 탭 ----
 
 /// root_path 를 지정해 워크스페이스를 만드는 헬퍼 (뷰어 기본값 검증용).
 fn create_ws_rooted(
@@ -1033,7 +1033,7 @@ fn create_folder_browser_inherits_root_path_without_spawning() {
 
 #[test]
 fn folder_browser_falls_back_to_root_when_both_paths_are_none() {
-    // 탭 path 도 워크스페이스 root_path 도 없으면 "/" (계획 21단계 core 계약).
+    // 탭 path 도 워크스페이스 root_path 도 없으면 "/".
     let (mut d, _host) = dispatcher();
     let (_ws, pane) = create_ws(&mut d, "ws");
     let tab = create_viewer_tab(&mut d, pane, NewTab::FolderBrowser { path: None });
@@ -1068,7 +1068,7 @@ fn create_text_viewer_starts_at_offset_zero() {
 #[test]
 fn create_markdown_viewer_starts_at_pixel_zero() {
     // markdownViewer 는 TextViewer 와 같은 생성 계약(스폰 없음·basename 제목)
-    // 이고 scroll_top 만 px 시맨틱이다 (21단계 청크 D).
+    // 이고 scroll_top 만 px 시맨틱이다.
     let (mut d, host) = dispatcher();
     let (_ws, pane) = create_ws_rooted(&mut d, "ws", Some("/proj"));
     let tab = create_viewer_tab(
@@ -1411,7 +1411,7 @@ fn set_viewer_scroll_records_offset_and_rejects_bad_values() {
 #[test]
 fn set_viewer_scroll_records_pixel_offset_for_markdown_viewer() {
     // 같은 명령이 markdownViewer 도 받는다 — 값은 렌더 px 지만 코어는 단위를
-    // 해석하지 않고 f64 를 그대로 보관한다 (21단계 청크 D).
+    // 해석하지 않고 f64 를 그대로 보관한다.
     let (mut d, _host) = dispatcher();
     let (_ws, pane) = create_ws(&mut d, "ws");
     let tab = create_viewer_tab(
@@ -1451,7 +1451,7 @@ fn set_viewer_scroll_records_pixel_offset_for_markdown_viewer() {
 #[test]
 fn viewer_tabs_survive_persist_round_trip() {
     // 뷰어 탭은 sanitize 대상이 아니다 — 경로·스크롤이 재시작을 넘어 남아야
-    // 뷰어 재로드(계획 v2 "상태 저장")가 성립한다.
+    // 뷰어 재로드가 성립한다.
     let (mut d, _host) = dispatcher();
     let (_ws, pane) = create_ws_rooted(&mut d, "ws", Some("/proj"));
     let (terminal, _s) = create_terminal_tab(&mut d, pane);
@@ -1528,7 +1528,7 @@ fn viewer_tabs_survive_persist_round_trip() {
     assert_eq!(adopted.running_terminal_tabs(), vec![terminal]);
 }
 
-// ---- OSC 델타 반영 (18단계 계획 core 계약) ----
+// ---- OSC 델타 반영 ----
 
 fn status_notify(token: &str, body: &str) -> OscEvent {
     OscEvent::Osc777Notify {
@@ -1971,7 +1971,7 @@ fn moving_a_workspace_before_itself_changes_nothing() {
 
 #[test]
 fn a_move_does_not_change_the_active_workspace() {
-    // 정리하려고 끈 드래그가 화면까지 바꾸면 안 된다 (사용자 결정 2026-08-22).
+    // 정리하려고 끈 드래그가 화면까지 바꾸면 안 된다.
     let (mut d, _host) = dispatcher();
     let (a, _) = create_ws(&mut d, "a");
     let (b, _) = create_ws(&mut d, "b");
@@ -2623,7 +2623,7 @@ fn respawn_fills_session_and_bumps_revision() {
 }
 
 /// 재스폰은 탭 id 를 그대로 history 키로 쓴다 — 재시작 후에도 같은 탭이 같은
-/// history 파일을 물게 하는 것이 탭별 history 의 요점이다 (체크포인트 2 UX).
+/// history 파일을 물게 하는 것이 탭별 history 의 요점이다.
 #[test]
 fn respawn_carries_history_tab_of_the_same_tab() {
     let (mut d, host) = adopted_dispatcher();
@@ -2893,8 +2893,7 @@ fn resolve_send_target_matches_title_substring_case_insensitively() {
     assert_eq!(d.resolve_send_target(sender, "Build Shell"), Ok(s_build));
 }
 
-/// 격리 반증 (사용자 결정 2026-08-11): 제목이 정확히 일치해도 다른 워크스페이스의
-/// 탭에는 닿지 않는다. 예전 계약("전 워크스페이스 도달")을 뒤집은 테스트다.
+/// 격리 반증: 제목이 정확히 일치해도 다른 워크스페이스의 탭에는 닿지 않는다.
 #[test]
 fn resolve_send_target_is_confined_to_the_senders_workspace() {
     let (mut d, _host) = dispatcher();

@@ -1,5 +1,5 @@
 // 상태 소유자는 Rust dispatcher 이고 프론트는 뷰다: 여기서는 스냅샷을 보관·중계만
-// 하며, stale 스냅샷은 revision 가드로 폐기한다 (10단계 계획 2장).
+// 하며, stale 스냅샷은 revision 가드로 폐기한다.
 
 import { getState, onStateChanged } from "../infrastructure/backend";
 import type { StateSnapshot } from "../shared/types";

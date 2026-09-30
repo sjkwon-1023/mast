@@ -24,7 +24,7 @@ export interface PointerPos {
 }
 
 /** ratio 개구간 (0, 1) 보장용 최소 여유. 모델이 0·1 을 loud-fail 하므로
- *  (CommandError::InvalidRatio — 계획 D2) UI 는 어떤 입력이 와도 이 폭만큼
+ *  (CommandError::InvalidRatio) UI 는 어떤 입력이 와도 이 폭만큼
  *  안쪽으로 클램프해 dispatch 가 절대 경계값을 보내지 않게 한다. */
 export const OPEN_INTERVAL_EPS = 0.001;
 

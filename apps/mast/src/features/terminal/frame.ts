@@ -1,7 +1,6 @@
 // 채널 프레임 `[u64 LE offset][bytes]` 파서 — I/O 없는 순수 함수 (vitest 대상).
 // attach_terminal 응답은 `[u64 LE end_offset][u8 first_attach][replay bytes]` 로
-// 플래그 1바이트가 추가된 별도 형식이다 (parseAttachBody — 체크포인트 1 재시작
-// 빈 화면 버그 수정: 최초 attach 판정).
+// 최초 attach 플래그 1바이트가 추가된 별도 형식이다 (parseAttachBody).
 
 /** offset 은 chunk 시작 시점의 누적 스트림 오프셋
  *  (attach 응답에서는 스냅샷 끝 오프셋 end_offset). */
@@ -33,8 +32,8 @@ export function parseFrame(data: ArrayBuffer | Uint8Array): Frame {
 
 /** attach_terminal 응답 `[u64 LE end_offset][u8 first_attach][replay bytes]`.
  *  `firstAttach` 가 true 면 replay 속 단말 질의는 아직 응답 안 된 라이브 질의라
- *  xterm 자동 응답을 허용해야 하고(억제 시 conhost 가 CPR 대기로 셸 정지 —
- *  체크포인트 1 재시작 빈 화면 버그), false 면 이미 응답된 낡은 질의라 억제해야
+ *  xterm 자동 응답을 허용해야 하고(억제 시 conhost 가 CPR 대기로 셸이 멈춘다),
+ *  false 면 이미 응답된 낡은 질의라 억제해야
  *  한다 (stray `R` 버그). */
 export interface AttachBody {
   endOffset: number;

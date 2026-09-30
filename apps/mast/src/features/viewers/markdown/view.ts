@@ -17,23 +17,21 @@ import { markdownDraft, keepMarkdownDraft, discardMarkdownDraft, markdownSaved, 
 //    렌더·편집을 거부하고 "open as text" 안내만 준다.
 //    마크다운 렌더는 파일 전체를 문자열로 올려야 해서 textViewer 의 윈도우 전략
 //    (메모리 상주 = 창 1개)이 성립하지 않기 때문이다.
-// 3. **폴링 수명 = 뷰 수명** (계획 21단계). 뷰어 뷰는 활성 탭일 때만 마운트되므로
+// 3. **폴링 수명 = 뷰 수명**. 뷰어 뷰는 활성 탭일 때만 마운트되므로
 //    (features/viewers/viewer-view.ts) 폴링 자체가 활성 탭 한정이고, 별도 게이팅이 필요 없다.
 //    대신 dispose 에서 타이머·리스너·구독을 반드시 정리해야 하며(누수 금지),
 //    창이 숨은 동안은 아예 무장하지 않는다 (숨은 창의 9P 왕복 0). 숨김 판정은
-//    `document.hidden` **또는** 창 최소화(infrastructure/window-visibility.ts)다 — 체크포인트 2
-//    실기에서 WebView2 가 최소화·Alt+Tab 에 visibilitychange 도 document.hidden 도
-//    주지 않아 fs_stat 이 계속 나갔기 때문이다. 최소화만 숨김으로 치고 비포커스-
+//    `document.hidden` **또는** 창 최소화(infrastructure/window-visibility.ts)다 — WebView2 는
+//    최소화·Alt+Tab 에 visibilitychange 도 document.hidden 도 주지 않는다. 최소화만 숨김으로 치고 비포커스-
 //    가시 상태는 폴링을 유지한다 (다른 창에서 .md 를 편집하며 미리보기를 보는 것이
 //    핵심 사용례 — 근거는 infrastructure/window-visibility.ts). 상태기계는 DOM 무의존 클래스
-//    MtimePoller 로 분리해 주입 타이머로 테스트한다 (ack-batcher 전례 — 이 레포에
-//    setInterval 은 없다).
+//    MtimePoller 로 분리해 주입 타이머로 테스트한다.
 //
 // 스크롤 왕복은 textViewer 의 인프라(ScrollSettle·shouldAdoptScroll)를 그대로
 // 재사용한다. 단위만 다르다: textViewer 는 전역 byte offset, markdownViewer 는
 // 렌더 컨테이너의 **px** 다 (모델 TabKind rustdoc 이 정본).
 //
-// 그 px 좌표가 **줌**(v0.3.8)과 정면으로 부딪힌다: 글자 크기가 바뀌면 산문이
+// 그 px 좌표가 **줌**과 정면으로 부딪힌다: 글자 크기가 바뀌면 산문이
 // 리플로우돼 문서 전체 높이가 달라지므로 같은 px 가 다른 자리를 가리킨다. 그래서
 // 이 뷰는 viewer-font 의 레지스트리에 등록해 크기가 바뀔 때 상대 위치 앵커로
 // 화면을 되돌린다 (beforeViewerFontSize / setViewerFontSize).
@@ -317,8 +315,8 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
 
     this.bodyEl = document.createElement("div");
     this.bodyEl.className = "markdown-body";
-    // 링크는 href 가 없어 이미 무동작이지만, 클릭 자체도 기본 동작을 끊는다
-    // (계획 21단계 — 뷰어에서 문서 밖으로 나가는 경로를 만들지 않는다).
+    // 링크는 href 가 없어 이미 무동작이지만, 뷰어에서 문서 밖으로 나가는 경로를 만들지
+    // 않도록 클릭 자체도 기본 동작을 끊는다.
     this.bodyEl.addEventListener("click", this.onBodyClick);
     this.scrollEl.append(this.bodyEl);
 

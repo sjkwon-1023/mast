@@ -1,20 +1,19 @@
-//! 애플리케이션 순수 상태 모델 (계획 v2 4장, 10단계 계획 3-B).
+//! 애플리케이션 순수 상태 모델.
 //!
 //! UI·PTY·Tauri 에 의존하지 않는 상태 트리. 계층은
 //! `AppState → Workspace → SplitTree → Pane → Tab` 이며, 워크스페이스 레벨 탭은
-//! 없다 — 탭 층은 pane 내부 하나뿐이다 (계획 v2 4장).
+//! 없다 — 탭 층은 pane 내부 하나뿐이다.
 //!
 //! # 안정 ID
 //!
 //! [`WorkspaceId`]/[`PaneId`]/[`TabId`]/[`SplitId`] 는 `AppState::next_id` **단일
-//! u64 카운터**에서 발급되는 세션 내 안정 ID 다 (persistence 15단계·MCP v2 의
-//! 참조 대상). PTY 의 휘발성 [`SessionId`](crate::session::SessionId)(u32 alias)
+//! u64 카운터**에서 발급되는 안정 ID 다 (persistence 와 외부 채널의 참조 대상). PTY 의 휘발성 [`SessionId`](crate::session::SessionId)(u32 alias)
 //! 와는 newtype 으로 타입 수준에서 구분된다.
 //!
 //! # 직렬화 계약
 //!
 //! 전 타입 `#[serde(rename_all = "camelCase")]`. 이 JSON 형태가 프론트 스냅샷과
-//! 15단계 persistence 의 계약이며, golden fixture(`fixtures/stage10-*.json`)를
+//! persistence 의 계약이며, golden fixture(`fixtures/stage10-*.json`)를
 //! cargo test 와 프론트 vitest 가 공유 소비해 표류를 막는다. `panes` 맵의 키는
 //! JSON 에서 문자열 숫자(`"2"`)로 직렬화된다 (JSON object 키 제약).
 
@@ -38,7 +37,7 @@ pub struct TabId(pub u64);
 
 /// split 노드의 안정 ID — ResizeSplit 등 커맨드의 대상 지정에 쓰인다. 경로
 /// 인덱스 주소는 트리 변이 후 다른 노드를 조용히 가리킬 수 있어(silent
-/// misdirection) 배제했다 (11~12단계 계획 D1).
+/// misdirection) 배제했다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SplitId(pub u64);
 
@@ -106,11 +105,11 @@ impl AppState {
 pub struct Workspace {
     pub id: WorkspaceId,
     pub name: String,
-    /// 워크스페이스의 정체성이자 새 탭의 기본 cwd (계획 v2 4장).
+    /// 워크스페이스의 정체성이자 새 탭의 기본 cwd.
     pub root_path: Option<String>,
-    /// 이 워크스페이스의 터미널이 연결될 WSL 배포판 (계획 v2 5장).
+    /// 이 워크스페이스의 터미널이 연결될 WSL 배포판.
     pub distro: Option<String>,
-    /// git 정보 — 타입 공간만 확정, 값 채움은 19단계 (10단계 계획 1장).
+    /// git 정보 — 예약만 되어 있고 아직 채우지 않는다.
     pub git_branch: Option<String>,
     pub git_dirty: Option<bool>,
     pub layout: SplitTree,
@@ -125,7 +124,7 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// 상태 불변식 검사 — Result 판. persistence 복원(15단계) 등 릴리즈 빌드에서도
+    /// 상태 불변식 검사 — Result 판. persistence 복원 등 릴리즈 빌드에서도
     /// 신뢰할 수 없는 입력(디스크의 state.json)을 검증해야 하는 경로가 쓴다.
     ///
     /// - layout 의 leaf 집합 == `panes` 키 집합 (중복 leaf 도 불허)
@@ -184,7 +183,7 @@ impl Workspace {
     }
 }
 
-/// 에이전트 상태 3값 enum — 이진 unread 가 아니다 (계획 v2 9장).
+/// 에이전트 상태 3값 enum — 이진 unread 가 아니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentStatus {
@@ -226,7 +225,7 @@ pub enum SplitDirection {
 ///
 /// JSON 은 다른 계약(TabKind·Command 등)과 동일한 internal tag 를 쓴다:
 /// `{"type": "leaf", "pane": 2}` | `{"type": "split", ...}` — TS 쪽이 `type`
-/// discriminant 하나로 일관되게 narrowing 하고, persistence(15단계)도 같은
+/// discriminant 하나로 일관되게 narrowing 하고, persistence도 같은
 /// 규약을 따른다.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -235,7 +234,7 @@ pub enum SplitTree {
     Leaf { pane: PaneId },
     #[serde(rename_all = "camelCase")]
     Split {
-        /// split 노드의 안정 ID — ResizeSplit 의 대상 주소 (계획 D1).
+        /// split 노드의 안정 ID — ResizeSplit 의 대상 주소.
         id: SplitId,
         direction: SplitDirection,
         /// first 가 차지하는 비율 (0.0~1.0 개구간). 생성 시 0.5, 이후
@@ -251,7 +250,7 @@ pub enum SplitTree {
 impl SplitTree {
     /// `target` leaf 를 `Split` 로 치환한다. 기존 pane 이 `first`(좌/상),
     /// 새 pane 이 `second`(우/하)로 들어가며 ratio 는 0.5. 새 split 노드의 id 는
-    /// 호출자가 발급해 주입한다 (트리는 allocator 접근이 없다 — 계획 D1).
+    /// 호출자가 발급해 주입한다 (트리는 allocator 접근이 없다).
     /// `target` 이 tree 에 없으면 false 를 반환하고 변경 없음.
     pub fn split(
         &mut self,
@@ -342,7 +341,7 @@ impl SplitTree {
 
     /// ratio 가 finite·개구간 (0,1) 인지 재귀 검증한다 — persistence 복원 경로용.
     /// 커맨드 경로는 ResizeSplit 검증이 막지만, JSON 은 5.0·음수 같은 범위 밖
-    /// 값을 실을 수 있어 디스크 입력에는 별도 검증이 필요하다 (14~15 리뷰 finding).
+    /// 값을 실을 수 있어 디스크 입력에는 별도 검증이 필요하다.
     pub fn validate_ratios(&self) -> Result<(), String> {
         match self {
             SplitTree::Leaf { .. } => Ok(()),
@@ -392,9 +391,9 @@ impl SplitTree {
 }
 
 /// pane(= TabContainer). 탭이 0개인 빈 pane 이 남는 경로는 두 가지다:
-/// **워크스페이스의 마지막 pane**(CloseTab auto-collapse 의 예외 — 11~12단계 계획
-/// D6, `Command::CloseTab` rustdoc 참조)과 `SplitPane { tab: None }`(dev 훅·MCP 용
-/// 존치 경로 — UI 분할 아이콘은 항상 tab 을 실어 원자 생성한다).
+/// **워크스페이스의 마지막 pane**(CloseTab auto-collapse 의 예외 — `Command::CloseTab`
+/// rustdoc 참조)과 `SplitPane { tab: None }`(dev 훅 경로 — UI 분할 아이콘은 항상 tab 을
+/// 실어 원자 생성한다).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pane {
@@ -431,9 +430,7 @@ pub struct Tab {
     pub last_agent_message_seq: Option<u64>,
 }
 
-/// 탭 종류별 상태 (10단계 계획 1장 "타입 공간은 지금 확정" 기준). 생성 경로는
-/// folderBrowser·textViewer 가 21단계, markdownViewer 는 그 마지막 청크다
-/// (`command::NewTab` 은 착지한 종류만 싣는다).
+/// 탭 종류별 상태.
 ///
 /// # scroll_top 시맨틱
 ///

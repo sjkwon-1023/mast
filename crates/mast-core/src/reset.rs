@@ -1,4 +1,4 @@
-//! 자동 UI 리셋 정책 (계획 v2 12장 "WebView 리셋 안전망").
+//! 자동 UI 리셋 정책.
 //!
 //! 모든 영속 상태(PTY 세션·레이아웃·replay buffer)가 Rust 에 있으므로 WebView 는
 //! 세션 손실 없이 통째로 리로드할 수 있다. 이 모듈은 "언제 리셋해도 안전한가"만
@@ -6,7 +6,7 @@
 //! 단조 u64 ms 틱(원점 임의)으로만 흐른다. 실제 리로드·메모리 측정·이벤트 배선은
 //! src-tauri 글루(reset supervisor)가 담당한다.
 //!
-//! # 트리거 3종 (계획 v2 12장 기반 — 2번은 의도적 보수화, 아래 참조)
+//! # 트리거 3종
 //!
 //! 1. **Idle**: 마지막 실제 사용자 입력에서 `idle_ms` 경과 시 1회 발화 후 disarm.
 //!    재무장은 다음 실제 입력([`ResetPolicy::on_user_input`])뿐이다 — 리셋 후의
@@ -15,11 +15,9 @@
 //!    그 질의는 replay 재생에도 들어 있어, stdin 을 활동으로 치면 리셋 후 재발화
 //!    자기루프가 된다. 실제 타이핑은 프론트 활동 핑이 잡는다).
 //! 2. **Hidden**: unfocused **또는** invisible 인 상태가 `hidden_ms` 연속되면
-//!    발화 — 계획 v2 원문("최소화 또는 포커스 아웃") 그대로의 **OR** 판정이다.
-//!    실기 이력: AND(둘 다 숨김)는 최소화 시 visibility 신호가 도착하지 않아
-//!    미발화였고(체크포인트 1 — wry 가 최소화에서 WebView2 IsVisible 을 갱신하지
-//!    않는 것으로 추정), visibility 단독도 같은 이유로 미발화였다. OR 는 두 신호
-//!    중 어느 쪽이 도착해도 카운트한다. "포커스만 잃고 창이 보이는데 사용자가
+//!    발화하는 **OR** 판정이다. wry 는 최소화에서 WebView2 IsVisible 을 갱신하지 않는
+//!    것으로 보여 visibility 신호가 오지 않을 수 있으므로, 두 신호 중 어느 쪽이 도착해도
+//!    카운트한다. "포커스만 잃고 창이 보이는데 사용자가
 //!    지켜보는 중" 우려는 활동 핑(wheel 등)의 재무장과 기본 10분 임계로 완화한다.
 //!    같은 연속 숨김 구간에서는 1회만 발화하며, 완전 표시 복귀(focused && visible)
 //!    또는 실제 입력이 카운트다운을 재시작한다.
@@ -28,7 +26,7 @@
 //!    ([`ResetPolicy::poll`]) 또는 워크스페이스 전환 직후
 //!    ([`ResetPolicy::on_workspace_switch`]) — 에만 한다.
 //!
-//! # 3금지 (계획 v2 12장 원문)
+//! # 3금지
 //!
 //! - 활성 사용 중 발화 금지 — 모든 발화 경로가 입력·표시 상태로 게이트된다.
 //! - 무조건적 주기 타이머 금지 — 모든 데드라인은 상태 전이(입력·숨김·pending)에서
@@ -160,7 +158,7 @@ impl ResetPolicy {
         self.sync_hidden(now);
     }
 
-    /// unfocused **또는** invisible 이면 숨김 (계획 v2 원문 OR, 모듈 문서 트리거 2).
+    /// unfocused **또는** invisible 이면 숨김.
     fn sync_hidden(&mut self, now: u64) {
         let hidden = !self.visible || !self.focused;
         match (hidden, self.hidden_since) {
@@ -438,7 +436,7 @@ mod tests {
 
     #[test]
     fn hidden_counts_on_either_focus_loss_or_invisibility() {
-        // OR 판정 (계획 v2 원문): 포커스 상실 단독으로도 카운트한다 — 실기에서
+        // OR 판정: 포커스 상실 단독으로도 카운트한다 — 실기에서
         // 최소화 시 visibility 신호가 도착하지 않는 환경의 커버리지.
         let mut p = ResetPolicy::new(hidden_only(), 0);
         p.on_focus(false, 0);

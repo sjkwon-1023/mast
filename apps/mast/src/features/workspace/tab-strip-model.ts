@@ -11,7 +11,7 @@ export interface TabButtonModel {
   title: string;
   /** 강조 + 클릭 no-op 판정에 쓰인다. */
   active: boolean;
-  /** Exited 배지 — 계획 1-C. */
+  /** Exited 배지. */
   exited: boolean;
   /** exited 와 나누는 이유는 사용자에게 다른 상황이기 때문이다 — 끝난 게 아니라
    *  시작을 못 한 것이고, 늦게라도 표식이 오면 저절로 걷힌다. */
@@ -81,7 +81,7 @@ export function tabStripPlan(
 
 /** 탭 dot 과 따로 두는 이유: 탭바는 폭이 모자라면 넘치는 탭을 잘라 감추므로
  *  (app/styles.css `.pane-tabs` overflow) 숨은 탭의 dot 은 화면에 없다. 배지가 그
- *  알림을 pane 층에서 대신 표면화한다 (계획 v2 9장 3층 중 pane 층). */
+ *  알림을 pane 층에서 대신 표면화한다. */
 export function paneUnread(models: TabButtonModel[]): boolean {
   return models.some((m) => m.notification);
 }

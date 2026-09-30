@@ -132,7 +132,7 @@ pub trait SessionSink: Send + Sync + 'static {
     /// 상태에서 프론트가 사라지면(ack 두절) 리더는 read 자체를 안 하므로 Dropped
     /// 경로가 실행되지 않고 휴면이 지속되며, (b) Dropped 전환 시점의 잔여 pending
     /// 이 low_water 를 웃돌면 롤백 후에도 paused 가 남는다. 두 경우 모두
-    /// `reset_flow()`(detach 시점 자동 치유 — 계획 D4)·`reattach()`(flow reset
+    /// `reset_flow()`(detach 시점 자동 치유)·`reattach()`(flow reset
     /// 포함) 또는 `kill()` 이 회복 경로다.
     fn on_output(&self, offset: u64, bytes: &[u8]) -> Delivery;
     /// 감지된 OSC 이벤트. 같은 chunk 의 `on_output` 보다 먼저 호출된다.
@@ -668,7 +668,7 @@ impl PtySession {
     }
 
     /// flow 계정 리셋(pending = 0, paused = false) + paused 로 대기 중인 리더
-    /// wake — **detach 자동 치유 경로** (11~12단계 계획 D4).
+    /// wake — **detach 자동 치유 경로**.
     ///
     /// detach(채널 분리)만으로는 자유 진행이 보장되지 않는다: **이미 paused 인
     /// 상태에서 채널이 죽으면**(F5 리로드 등 — dispose 를 타지 않는 소멸) 리더는

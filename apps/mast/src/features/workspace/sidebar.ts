@@ -11,11 +11,8 @@
 //
 // 왜 전체 재조립이면 안 되나: 클릭 진행 중(mousedown~click 사이) 렌더가 눌린 카드
 // 엘리먼트를 갈아치우면 브라우저가 click 을 발화하지 않아 클릭이 유실된다
-// (ADR-0003 결정 7 의 탭바 스왈로와 같은 결함). 13단계의 "모델 직렬화 키가 같으면
-// 스킵" 가드는 agentStatus 가 idle 고정·message 가 null 이던 시절에만 성립했고,
-// 18단계에서 status·message·집계 unread 가 OSC 마다 변하는 동적 필드가 되면서
-// 무관 알림 하나로도 뚫린다 — 그래서 스킵 가드는 skip 판정으로만 남기고, 값이
-// 변한 경우의 기본 경로를 in-place 패치로 바꾼다.
+// (ADR-0003 결정 7 의 탭바 스왈로와 같은 결함). status·message·집계 unread 는 OSC 마다
+// 바뀌므로 값이 변한 경우의 기본 경로는 in-place 패치다.
 //
 // 상호작용:
 // - 카드 클릭 = SwitchWorkspace (이미 활성이면 no-op 스킵 — 무변경 revision 잡음 방지).

@@ -1,8 +1,7 @@
-// Tauri 백엔드 커맨드·이벤트 계약 래퍼 (10단계 계획 3-C).
+// Tauri 백엔드 커맨드·이벤트 계약 래퍼.
 // 커맨드 인자 키는 Tauri v2 기본 규칙(JS camelCase → Rust snake_case)을 따른다.
-// write_stdin/send_raw/resize/ack_output/get_stats 는 spike 글루의 이식이라
-// 인자 이름(id)·DTO(snake_case)를 그대로 유지하고, dispatch/get_state/
-// attach_terminal 은 10단계 신규 계약이다.
+// write_stdin/send_raw/resize/ack_output/get_stats 는 spike 글루에서 옮겨 와
+// 인자 이름(id)·DTO(snake_case)를 그대로 유지한다.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -127,15 +126,15 @@ export function getResetEnabled(): Promise<boolean> {
   return invoke<boolean>("get_reset_enabled");
 }
 
-/** 활동 핑 (16단계 C-3) — throttled 사용자 입력 신호. `visible` 은
+/** 활동 핑 — throttled 사용자 입력 신호. `visible` 은
  *  visibilitychange 보조 신호(즉시), 순수 활동 핑은 null. 백엔드 자동 리셋
  *  정책의 idle·hidden 타이머를 재무장한다. */
 export function userActivity(visible: boolean | null): Promise<void> {
   return invoke<void>("user_activity", { visible });
 }
 
-/** 수동 WebView 리셋 — dev 훅(window.__mast.resetUi) 전용, UI 버튼 금지
- *  (계획 v2 12장). 백엔드가 WebView 를 reload 한다 — location.reload() 와 달리
+/** 수동 WebView 리셋 — dev 훅(window.__mast.resetUi) 전용, UI 버튼 금지.
+ *  백엔드가 WebView 를 reload 한다 — location.reload() 와 달리
  *  자동 리셋과 같은 경로(perform_reset)를 검증할 수 있다. */
 export function resetUi(): Promise<void> {
   return invoke<void>("reset_ui");
@@ -363,7 +362,7 @@ export function secureRemoteFirewallAllow(): Promise<AllowOutcome> {
   return invoke<AllowOutcome>("secure_remote_firewall_allow");
 }
 
-// --- 뷰어 파일 접근 (21단계) --------------------------------------------------
+// --- 뷰어 파일 접근 --------------------------------------------------
 // folderBrowser·textViewer 가 쓰는 읽기 전용 커맨드 3종. 백엔드가 Windows 에서
 // \\wsl.localhost UNC 로 접근하므로 프론트는 항상 **리눅스 경로**를 넘긴다.
 // distro 는 워크스페이스 설정값(없으면 null) — 백엔드가 null 이면 MAST_DISTRO,
@@ -461,7 +460,7 @@ export function gitDiff(
   return invoke<GitDiff>("git_diff", { distro, request });
 }
 
-// --- WSL 준비 상태 (2026-09-22) ---------------------------------------------
+// --- WSL 준비 상태 --------------------------------------------------------
 //
 // 백엔드 `wsl_health::WslStatusDto` 미러 (camelCase). 진단은 부팅에 한 번
 // 비동기로 돌고 명시적 재검사로만 갱신되며, 결과는 `wsl-status-changed` 로도 온다.

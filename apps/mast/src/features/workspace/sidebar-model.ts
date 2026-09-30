@@ -2,15 +2,15 @@
 //
 // Workspace 배열 + activeWorkspace 를 렌더 가능한 카드 모델 배열로 사영한다.
 // DOM 조립(features/workspace/sidebar.ts)과 판정 로직을 분리해 상태 매핑·경로 축약·null 생략을
-// 순수 테스트로 잠근다 (tab-strip-model 과 같은 구도). 18단계부터 agentStatus·
-// message·unread 는 OSC 라우팅으로 실제 값이 들어오는 동적 필드다.
+// 순수 테스트로 잠근다 (tab-strip-model 과 같은 구도). agentStatus·message·unread 는
+// OSC 라우팅으로 값이 들어오는 동적 필드다.
 //
 // 카드는 3줄이다: 이름(+ unread dot) / 상태 텍스트 + 메시지 첫 줄 / 축약 경로.
 // 경로는 워크스페이스 rootPath 가 아니라 활성 pane 터미널의 cwd(OSC 7 이 갱신)다 —
 // 셸이 이동하면 카드도 따라가고, 터미널이 아닌 탭이 보이면 rootPath 로 돌아간다.
 // pane·탭 개수와 git branch 는 카드에 싣지 않는다 — 개수는 화면(split tree)이
-// 이미 보여주고, gitBranch/gitDirty 는 19단계가 v2 로 미뤄져 v1 에서 항상 null
-// 이다 (코어 모델 필드는 예약된 채 남는다).
+// 이미 보여주고, gitBranch/gitDirty 는 아직 채워지지 않아 항상 null 이다 (코어 모델
+// 필드는 예약된 채 남는다).
 //
 // 여기에 렌더 판정(reconcilePlan)까지 두는 이유: DOM 재조립 여부는 카드 모델의
 // id 멤버십·필드 동일성만으로 결정되는 순수 판정이라, DOM 없는 vitest 로 잠글 수
@@ -25,13 +25,13 @@ export interface WorkspaceCardModel {
   /** 하이라이트 + 클릭 no-op 판정에 쓰인다. */
   active: boolean;
   status: AgentStatus;
-  /** 상태 표시 텍스트 — 아이콘 대신 단어로 읽힌다 (계획 v2 6장의 3상태 그대로). */
+  /** 상태 표시 텍스트 — 아이콘 대신 단어로 읽힌다. */
   statusLabel: string;
   /** lastAgentMessage 의 첫 줄 미리보기 — null·공백뿐이면 null (상태 줄에서 생략). */
   message: string | null;
   /** 워크스페이스 집계 unread dot — 어느 pane 의 어느 탭이든 미확인 알림이 있으면
    *  true. agentStatus 와 별개인 이유: 토큰 불일치 777·OSC 9 같은 **상태 중립**
-   *  알림은 agent_status 를 바꾸지 않으므로(18단계 규약), 집계 dot 이 없으면
+   *  알림은 agent_status 를 바꾸지 않으므로, 집계 dot 이 없으면
    *  백그라운드 워크스페이스에서 그 알림이 어디에도 안 보인다 (3층 중 워크스페이스 층). */
   unread: boolean;
   /** 활성 pane 터미널 cwd(없으면 rootPath) 축약 (~/ 치환 + 뒤 2세그먼트 유지) — null 이면 null. */
@@ -161,10 +161,8 @@ export function dropBefore(boxes: CardBox[], y: number): WorkspaceId | null {
 /** 직전 렌더 모델(첫 렌더면 null) × 이번 모델 → 렌더 판정. 순수 함수 —
  *  실행(재조립·패치)은 features/workspace/sidebar.ts 몫이다.
  *
- *  판정을 id 멤버십·순서와 필드 동일성으로 쪼개는 것이 이 단계의 핵심이다:
- *  18단계부터 status·message·unread 가 매 OSC 마다 변하는 동적 필드가 되어
- *  "모델 전체 직렬화 키가 같을 때만 스킵"하던 기존 가드가 상시로 뚫린다.
- *  그때 리스트를 통째로 재조립하면 눌린 카드 엘리먼트가 mousedown~click 사이에
+ *  판정을 id 멤버십·순서와 필드 동일성으로 쪼개는 이유: status·message·unread 는
+ *  매 OSC 마다 변하는데, 그때 리스트를 통째로 재조립하면 눌린 카드 엘리먼트가 mousedown~click 사이에
  *  갈아치워져 클릭이 유실된다 (ADR-0003 결정 7 의 탭바 스왈로와 같은 결함). */
 export function reconcilePlan(
   prev: WorkspaceCardModel[] | null,

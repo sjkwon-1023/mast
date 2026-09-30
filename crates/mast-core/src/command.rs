@@ -70,7 +70,7 @@ pub enum Command {
     },
     /// `pane` 의 leaf 를 분할해 새 pane 을 second(우/하)로 만들고 포커스를 새
     /// pane 으로 옮긴다. `tab` 이 Some 이면 새 pane 에 그 탭까지 **원자적으로**
-    /// 생성한다 (계획 D5 — CreateTab 과 동일한 spawn-first 순서라 스폰 실패 시
+    /// 생성한다 (CreateTab 과 동일한 spawn-first 순서라 스폰 실패 시
     /// 트리·panes 불변이고, 분할만 된 중간 상태가 스냅샷에 노출되지 않는다).
     /// None 이면 기존처럼 빈 pane 을 만든다 (dev 훅·MCP 용).
     SplitPane {
@@ -80,14 +80,14 @@ pub enum Command {
     },
     /// `split` 노드의 ratio 를 갱신한다. ratio 는 finite 하고 개구간 (0, 1) 안이
     /// 어야 한다 — 아니면 [`CommandError::InvalidRatio`] (검증은 모델이 loud 하게,
-    /// 픽셀 클램프는 UI 가 분담 — 계획 D2). 스테일 split id 는 UnknownTarget.
+    /// 픽셀 클램프는 UI 가 분담). 스테일 split id 는 UnknownTarget.
     ResizeSplit {
         split: SplitId,
         ratio: f64,
     },
     /// 소속 세션 kill + tree collapse. 워크스페이스의 마지막 pane 은 닫을 수 없다
-    /// ([`CommandError::LastPane`]). 12단계 UI 의 pane 정리는 CloseTab
-    /// auto-collapse 가 담당하고, 이 커맨드는 dev 훅·MCP 용으로 존치한다 (계획 D6).
+    /// ([`CommandError::LastPane`]). UI 의 pane 정리는 CloseTab auto-collapse 가
+    /// 담당하고, 이 커맨드는 dev 훅용이다.
     ClosePane {
         pane: PaneId,
     },
@@ -104,7 +104,7 @@ pub enum Command {
         tab: TabId,
     },
     /// folderBrowser 탭의 경로를 바꾼다 — 디렉터리 탐색도 뷰 내부 상태가 아니라
-    /// dispatcher 를 경유한다 (계획 v2 4장 + persist 최신성, 21단계). 대상이
+    /// dispatcher 를 경유한다. 대상이
     /// folderBrowser 가 아니면 [`CommandError::KindMismatch`], 경로 형태가
     /// 불량하면 [`CommandError::InvalidPath`] (실존 여부는 검사하지 않는다 —
     /// 코어 무 I/O). 성공 시 `Tab.title` 도 새 경로의 basename 으로 갱신된다.
@@ -120,9 +120,9 @@ pub enum Command {
     },
 }
 
-/// 탭 생성 명세 — CreateTab·SplitPane·CreateWorkspace 가 공유한다. 21단계 뷰어
-/// 3종이 모두 착지해 [`crate::model::TabKind`] 와 종류가 일대일이다 (terminal 은 스폰을
-/// 동반하고, 뷰어 3종은 순수 변이다).
+/// 탭 생성 명세 — CreateTab·SplitPane·CreateWorkspace 가 공유한다.
+/// [`crate::model::TabKind`] 와 종류가 일대일이다 (terminal 은 스폰을 동반하고, 뷰어는
+/// 순수 변이다).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -132,13 +132,13 @@ pub enum Command {
 pub enum NewTab {
     Browser { url: String },
     Terminal {
-        /// None 이면 워크스페이스 root_path 를 기본 cwd 로 쓴다 (계획 v2 4장).
+        /// None 이면 워크스페이스 root_path 를 기본 cwd 로 쓴다.
         cwd: Option<String>,
     },
     /// 디렉터리 탐색 탭. spawn 이 없는 순수 변이로 생성된다.
     FolderBrowser {
         /// None 이면 워크스페이스 root_path, 그것도 None 이면 `"/"` (Terminal
-        /// cwd 와 대칭 — 계획 21단계 core 계약).
+        /// cwd 와 대칭).
         path: Option<String>,
     },
     ChangesViewer {
@@ -148,7 +148,7 @@ pub enum NewTab {
     TextViewer {
         path: String,
     },
-    /// 마크다운 렌더 뷰어 탭 (21단계 청크 D). TextViewer 와 같은 파일을 다른
+    /// 마크다운 렌더 뷰어 탭. TextViewer 와 같은 파일을 다른
     /// 방식으로 볼 뿐이라 계약은 동일하다 — 읽기 전용, 경로 필수. 스크롤
     /// 시맨틱만 다르다 (렌더된 px — [`crate::model::TabKind`] rustdoc).
     MarkdownViewer {
@@ -164,18 +164,18 @@ pub enum NewTab {
     rename_all_fields = "camelCase"
 )]
 pub enum CommandOutput {
-    /// CreateWorkspace 결과 — 생성된 안정 ID 전부를 돌려준다 (계획 13-D1).
+    /// CreateWorkspace 결과 — 생성된 안정 ID 전부를 돌려준다.
     /// `tab` 은 `CreateWorkspace.tab` 이 Some 이었을 때만 Some 이고, `session`
-    /// 은 그 탭이 **terminal 일 때만** Some 이다 (뷰어 탭은 스폰이 없다 — 21단계).
+    /// 은 그 탭이 **terminal 일 때만** Some 이다 (뷰어 탭은 스폰이 없다).
     WorkspaceCreated {
         workspace: WorkspaceId,
         pane: PaneId,
         tab: Option<TabId>,
         session: Option<SessionId>,
     },
-    /// SplitPane 결과 — 생성된 안정 ID 전부를 돌려준다 (계획 D5). `tab` 은
+    /// SplitPane 결과 — 생성된 안정 ID 전부를 돌려준다. `tab` 은
     /// `SplitPane.tab` 이 Some 이었을 때만 Some 이고, `session` 은 그 탭이
-    /// **terminal 일 때만** Some 이다 (뷰어 탭은 스폰이 없다 — 21단계).
+    /// **terminal 일 때만** Some 이다 (뷰어 탭은 스폰이 없다).
     PaneCreated {
         pane: PaneId,
         split: SplitId,
@@ -185,7 +185,7 @@ pub enum CommandOutput {
     TabCreated {
         tab: TabId,
         /// terminal 탭이면 스폰된 PTY 세션 id, 뷰어 탭이면 None (스폰 없는 순수
-        /// 변이 — 21단계).
+        /// 변이).
         session: Option<SessionId>,
     },
     /// id 를 새로 만들지 않는 명령의 성공.
@@ -207,14 +207,14 @@ pub enum CommandError {
     /// 셸 스폰 실패 — 탭은 추가되지 않았다 (spawn 이 탭 추가보다 먼저).
     SpawnFailed { message: String },
     /// ResizeSplit 의 ratio 가 유효 범위 밖 — finite 하고 개구간 (0, 1) 안이어야
-    /// 한다 (계획 D2 — 모델은 loud-fail, 픽셀 클램프는 UI 분담).
+    /// 한다.
     InvalidRatio { ratio: f64 },
     /// 대상 탭의 종류가 이 명령을 받을 수 없다 — NavigateFolder 는
     /// folderBrowser 만, SetViewerScroll 은 스크롤 위치를 모델에 가진 뷰어만
-    /// 받는다 (21단계).
+    /// 받는다.
     KindMismatch { tab: TabId },
     /// 뷰어 경로의 형태가 불량하다 — 사유는 `wslpath::validate_linux_path` 의
-    /// 문자열을 그대로 싣는다 (21단계). 실존 여부와는 무관하다 (코어 무 I/O).
+    /// 문자열을 그대로 싣는다. 실존 여부와는 무관하다 (코어 무 I/O).
     InvalidPath { message: String },
     /// SetViewerScroll 의 scroll_top 이 finite·0 이상이 아니다 (InvalidRatio 와
     /// 같은 loud-fail 방침).
@@ -280,7 +280,7 @@ pub enum SessionEvent {
 }
 
 /// 셸 스폰 요청. cols/rows 는 기본 80×24 — 실측 resize 는 attach 후 프론트가
-/// 수행한다 (10단계 계획 2장 attach 프로토콜).
+/// 수행한다.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShellSpawnReq {
     pub cwd: Option<String>,
@@ -288,7 +288,7 @@ pub struct ShellSpawnReq {
     pub cols: u16,
     pub rows: u16,
     /// 이 셸이 쓸 **탭별 명령 history** 의 키 — 이 세션이 실릴 터미널 탭의 안정
-    /// ID 다 (체크포인트 2 UX 요청). 안정 ID 는 재시작을 넘어 유지되므로 글루가
+    /// ID 다. 안정 ID 는 재시작을 넘어 유지되므로 글루가
     /// 탭마다 다른 HISTFILE 을 물려 주면 재시작 후에도 같은 탭의 history 만
     /// 복원된다. 코어는 값을 만들어 넘기기만 하고 파일 배치는 글루 몫이다.
     /// None 이면 셸 기본 history 파일 (히스토리 분리 없음).
@@ -376,8 +376,8 @@ impl Dispatcher {
         }
     }
 
-    /// 복원(sanitize 완료)된 상태를 **스폰 없이** 채택한다 — manage-first 부팅
-    /// (계획 15단계 B-2)의 코어 절반. 글루는 이 dispatcher 를 즉시 manage 한 뒤
+    /// 복원(sanitize 완료)된 상태를 **스폰 없이** 채택한다 — manage-first 부팅의
+    /// 코어 절반. 글루는 이 dispatcher 를 즉시 manage 한 뒤
     /// [`Self::running_terminal_tabs`] 로 대상을 뽑아 탭별로 [`Self::respawn_tab`]
     /// 을 호출해 재스폰한다. adopt 시점에는 살아 있는 PTY 가 없다 — persist
     /// sanitize 가 전 터미널 탭의 `pty_session` 을 소거한 상태를 전제한다.

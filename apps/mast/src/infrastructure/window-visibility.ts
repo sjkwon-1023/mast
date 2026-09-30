@@ -1,4 +1,4 @@
-// 창 숨김(최소화) 상태 — Tauri 창 이벤트 기반 fallback (체크포인트 2 실기 결함).
+// 창 숨김(최소화) 상태 — Tauri 창 이벤트 기반 fallback.
 //
 // 왜 이게 필요한가: WebView2 실환경에서 창을 최소화하거나 Alt+Tab 으로 넘어가도
 // `visibilitychange` 가 오지 않고 `document.hidden` 도 계속 false 다. 그래서
