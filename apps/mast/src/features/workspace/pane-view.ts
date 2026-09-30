@@ -678,6 +678,8 @@ export class PaneView {
       // 캡처는 문턱을 넘은 뒤에만 잡는다 — 먼저 잡으면 평범한 클릭까지 붙들린다.
       el.setPointerCapture(ev.pointerId);
       el.classList.add("dragging");
+      // 문턱 전의 움직임이 이미 만든 선택이 드래그 내내 남지 않게 한다.
+      window.getSelection()?.removeAllRanges();
     }
     drag.drop = tabDropAt(ev.clientX, ev.clientY);
     if (drag.drop === null) clearTabDropIndicator();

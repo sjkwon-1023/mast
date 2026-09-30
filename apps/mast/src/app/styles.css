@@ -239,6 +239,8 @@ body {
   padding: 5px 8px;
   background: var(--bg);
   cursor: pointer;
+  /* WKWebView(macOS)는 접두사 속성만 읽는다 — 없으면 카드를 끌 때 이름이 선택된다. */
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -761,6 +763,8 @@ body {
   font-size: 11px;
   color: var(--fg-muted);
   cursor: pointer;
+  /* WKWebView(macOS)는 접두사 속성만 읽는다 — 없으면 탭을 끌 때 제목이 선택된다. */
+  -webkit-user-select: none;
   user-select: none;
 }
 
