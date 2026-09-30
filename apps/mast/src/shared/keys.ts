@@ -6,7 +6,7 @@ import { IS_MAC } from "./platform";
 // 담당이 따로 있다. 터미널 안의 ⌘←/→/⌫ 줄 편집, ⌘K 지우기, Fn+↑/↓/←/→ 스크롤,
 // ⇧Fn+↑/↓ 는 아래 표의 macOS 행(features/terminal/view.ts 소유)이다. 목록에 없는
 // Ctrl/Option 조합은 계속 PTY 몫이다 (Option+←/→ 는 xterm Mac 기본 `ESC b`/`ESC f`).
-// 키보드 판정 — DOM 무의존 순수 모듈 (계획 v2 "키보드 모델" 장).
+// 키보드 판정 — DOM 무의존 순수 모듈.
 //
 // 3층 구조(워크스페이스 / pane / 탭)의 이동 키와, 마우스로만 되던 조작
 // (탭 생성·닫기·분할·새 워크스페이스)의 전역 단축키를 한곳에서 판정한다.
@@ -14,7 +14,7 @@ import { IS_MAC } from "./platform";
 // 무엇인가"까지고, 스냅샷 해석·dispatch·preventDefault 배선은 app/main.ts 글루,
 // pane 기하 실측은 workspace-view 의 paneRects() 가 맡는다.
 //
-// ## 키보드 가로채기 목록 (canonical — 계획 v2 "키보드 가로채기 목록" 장)
+// ## 키보드 가로채기 목록 (canonical)
 //
 // 앱이 가로채는 키의 **전량**이다. 여기 없는 키는 전부 터미널(PTY) 소유다.
 // 가로채기를 추가·변경하면 이 표를 같이 갱신한다 (목록과 코드를 한곳에 두기
@@ -46,7 +46,6 @@ import { IS_MAC } from "./platform";
 // | macOS `⌘K` (터미널 내, 일반 버퍼에서만) | 화면 + 스크롤백 지우기 (xterm `clear()`, PTY 에는 보내지 않음). alt 버퍼(vim 등)에서는 가로채지 않는다 | 같은 곳 |
 // | macOS `PgUp` / `PgDn` / `Home` / `End` = `Fn+↑/↓/←/→` (터미널 내, 수식 없이) | 일반 버퍼이고 마우스 추적이 꺼져 있을 때만 스크롤백 한 페이지 위/아래·맨 위/맨 아래. alt 버퍼·마우스 추적 중에는 가로채지 않는다(PTY 몫) | 같은 곳 |
 // | macOS `Shift+PgUp` / `Shift+PgDn` (터미널 내) | 스크롤하지 않고 `ESC[5~`/`ESC[6~` 를 PTY 로 (Terminal.app 관례 — xterm 기본은 이 조합을 스크롤에 쓴다) | 같은 곳 |
-// | `Esc` (send-mode 활성 중에만 — **현재 UI 진입점 없음: 휴면**) | 전달 대상 선택 취소 — 평시 Esc 는 PTY 소유 | features/workspace/workspace-view.ts (모드 활성 중에만 설치) |
 // | `Ctrl+PgUp` / `Ctrl+PgDn` (textViewer 포커스 중에만) | 이전/다음 512KiB 윈도우 | features/viewers/text/view.ts 뷰 내부 keydown |
 // | `Ctrl+Home` / `Ctrl+End` (textViewer 포커스 중에만; macOS 는 `⌘↑` / `⌘↓` 도) | 처음/마지막 윈도우 | features/viewers/text/view.ts 뷰 내부 keydown |
 // | `PgUp` / `PgDn` (textViewer 포커스 중에만) | 행높이 배수 페이지 스크롤 | features/viewers/text/view.ts 뷰 내부 keydown |
@@ -116,8 +115,7 @@ export type KeyAction =
   /** 사이드바 순서로 이전/다음 워크스페이스 (끝에서 순환) — 대상 해석은 글루. */
   | { type: "cycleWorkspace"; delta: 1 | -1 }
   /** 활성 터미널의 현재 경로로 새 워크스페이스를 즉시 만든다 (대화상자 없음 —
-   *  사용자 결정 2026-08-11: 키보드 흐름은 "지금 있는 곳에서 바로", 임의 폴더는
-   *  사이드바 + 버튼의 픽커가 담당한다). cwd 해석·dispatch 는 글루 몫이다. */
+   *  키보드 흐름은 "지금 있는 곳에서 바로", 임의 폴더는 사이드바 + 버튼의 픽커가 담당한다). cwd 해석·dispatch 는 글루 몫이다. */
   | { type: "newWorkspaceHere" }
   /** 활성 워크스페이스 닫기 — 사이드바 × 버튼과 **같은 명령**이다. 실행 중인
    *  터미널 세션이 있으면 confirm 을 거치는데, 그 판정·문구는 × 버튼 구현
@@ -257,8 +255,7 @@ export function shortcutBadge(id: ShortcutId, mac = IS_MAC): string {
  *  경로(ADR-0011), 아니면 스폰 시점 경로 — 뷰어·빈 pane 이면 null. null 은 NewTab 의
  *  "워크스페이스 rootPath" 기본값과 같은 뜻이라 그대로 넘길 수 있다. 새 터미널 탭·분할이
  *  그 pane 의 셸이 있는 곳에서 열리게 하는 해석은 코어가 아니라 여기서 한다 — 코어의
- *  `cwd: None → root_path` 계약과 그 테스트를 건드리지 않는 쪽이 가벼워서다 (사용자 결정
- *  2026-09-05). */
+ *  `cwd: None → root_path` 계약과 그 테스트를 건드리지 않는 쪽이 가벼워서다. */
 export function paneTerminalCwd(pane: Pane | undefined): string | null {
   const active = pane?.activeTab ?? null;
   const tab = active === null ? undefined : pane?.tabs.find((t) => t.id === active);
@@ -295,7 +292,7 @@ export function keyAction(spec: KeySpec, mac = IS_MAC): KeyAction | null {
   }
   if ((spec.ctrl !== spec.alt) && spec.shift) {
     // pane 이동은 `Alt+Shift+방향키` 뿐이다. `Ctrl+Shift+방향키`는 편집기·셸의 단어 선택
-    // 관례라 가로채지 않고 터미널로 흘려보낸다 (사용자 결정 2026-09-23, ADR-0007 개정).
+    // 관례라 가로채지 않고 터미널로 흘려보낸다 (ADR-0007).
     const dir = ARROW_DIRS[spec.key];
     if (dir !== undefined) return spec.alt ? { type: "focusPane", dir } : null;
     // Shift 가 눌린 keydown 의 key 는 대문자라 소문자로 접어 비교한다. 표에 없는

@@ -105,7 +105,7 @@ impl Dispatcher {
                     // 닫은 워크스페이스가 active 였으면 남은 것 중 첫 번째로,
                     // 없으면 None (마지막 워크스페이스 닫기 허용). fallback 으로
                     // 드러나는 워크스페이스에는 SwitchWorkspace 와 같은
-                    // "가시화 = 읽음" 규칙을 적용한다 (18단계 리뷰 finding).
+                    // "가시화 = 읽음" 규칙을 적용한다.
                     self.state.active_workspace = self.state.workspaces.first().map(|ws| ws.id);
                     if let Some(shown) = self.state.workspaces.first_mut() {
                         clear_visible_unread(shown);
@@ -286,7 +286,7 @@ impl Dispatcher {
                     } else {
                         Some(pane_ref.tabs[ti.saturating_sub(1)].id)
                     };
-                    // 승격도 가시화다 (18단계 리뷰 finding): 이 워크스페이스가
+                    // 승격도 가시화다: 이 워크스페이스가
                     // 보이는 중이면 화면에 드러난 승격 탭의 unread 를 내린다.
                     if self.state.active_workspace == Some(ws.id) {
                         if let Some(promoted) = pane_ref.active_tab {
@@ -296,7 +296,7 @@ impl Dispatcher {
                         }
                     }
                 }
-                // auto-collapse (계획 D6): 마지막 탭이 닫혀 pane 이 비면 pane 자체
+                // auto-collapse: 마지막 탭이 닫혀 pane 이 비면 pane 자체
                 // 를 collapse 한다 — 단 워크스페이스의 마지막 pane 은 예외로 빈
                 // pane 으로 남긴다 (variant rustdoc 의 규칙 명세 참조).
                 if pane_ref.tabs.is_empty() && ws.panes.len() > 1 {

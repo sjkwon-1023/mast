@@ -1,5 +1,4 @@
-//! 자동 UI 리셋 supervisor — `mast_core::reset::ResetPolicy` 의 글루 (계획 16단계
-//! C-2, 계획 v2 12장 "WebView 리셋 안전망").
+//! 자동 UI 리셋 supervisor — `mast_core::reset::ResetPolicy` 의 글루.
 //!
 //! 순수 정책(코어)이 "언제 리셋해도 안전한가"를 판정하고, 이 모듈은 그 주변만
 //! 담당한다: env 설정 파싱, 단조 시계(ms) 공급, 신호 수신(입력·focus·visibility·
@@ -10,7 +9,7 @@
 //!
 //! supervisor 스레드 1개가 `Mutex<Guarded>` + `Condvar` 로 잔다. 정책의
 //! `next_deadline` 까지 `wait_timeout` 하고, 신호 메서드는 상태 반영 후 notify 로
-//! 재계산을 깨운다 — 무조건적 주기 타이머 금지(계획 v2 12장)는 코어 정책의
+//! 재계산을 깨운다 — 무조건적 주기 타이머 금지는 코어 정책의
 //! 데드라인 파생 구조가 보장하고, 여기는 그 데드라인까지만 잔다 (예외: 메모리
 //! 워치독 on 이면 샘플 주기마다 깨어나는데, 이는 12장이 명시한 워치독 샘플링
 //! 자체다).
@@ -54,7 +53,7 @@ fn env_u64(name: &str, default: u64) -> u64 {
     }
 }
 
-/// env 6종 → [`ResetConfig`] (계획 C-2). 트리거 3종(idle·hidden·mem)은 0=off,
+/// env 6종 → [`ResetConfig`]. 트리거 3종(idle·hidden·mem)은 0=off,
 /// safe_idle·cooldown 의 0 은 유효값(즉시 safe / cooldown 없음), 샘플 주기 0 은
 /// busy-loop 이 되는 설정 오류라 기본값으로 되돌린다 (loud).
 fn config_from_env() -> ResetConfig {
@@ -73,7 +72,7 @@ fn config_from_env() -> ResetConfig {
 
     let mem_limit_bytes = nonzero(mem_mb).map(|mb| mb.saturating_mul(1024 * 1024));
     // 비Windows 에는 메모리 측정 구현이 없다 — 가짜 0 샘플로 워치독이 살아있는
-    // 척하지 않고, 미지원을 부팅 1회 명시한 뒤 off 로 둔다 (계획 0장).
+    // 척하지 않고, 미지원을 부팅 1회 명시한 뒤 off 로 둔다.
     #[cfg(not(windows))]
     let mem_limit_bytes = match mem_limit_bytes {
         Some(_) => {
@@ -140,7 +139,7 @@ pub struct ResetSupervisor {
 
 impl ResetSupervisor {
     /// 활성 트리거가 있을 때만 정책과 worker를 만든다. 유효 설정을 부팅
-    /// 로그로 남긴다 (체크포인트 검증에서 env 반영 여부를 눈으로 확인하는 근거).
+    /// 로그로 남긴다.
     pub fn spawn(app: AppHandle) -> Self {
         let cfg = config_from_env();
         winlog!(
@@ -192,9 +191,7 @@ impl ResetSupervisor {
     /// 실제 사용자 입력 신호 — dispatch 성공·activity 핑. attach/resize/ack/
     /// stdin 은 부르지 않는다 (리셋 후 자동 동작·단말 자동 응답의 자기루프 차단).
     ///
-    /// `source` 는 로그 파일 전용 출처 태그다 — 체크포인트 1 에서 idle 이 무입력에도
-    /// 재발화한 원인을 판별하려면 재무장이 어디서 왔는지가 필요했다. 콘솔에서는
-    /// 소음이라 걷어냈고(2026-08-22), 로그 파일이 생기면서 제자리를 찾았다.
+    /// `source` 는 로그 파일 전용 출처 태그다 — idle 재무장이 어디서 왔는지 가린다.
     pub fn user_input(&self, source: &'static str) {
         let Some(shared) = &self.shared else {
             return;
@@ -260,14 +257,13 @@ impl ResetSupervisor {
     }
 
     /// dev 훅(`reset_ui`) 전용 수동 리셋 — 정책(트리거·cooldown)을 거치지 않는
-    /// 직접 경로다. **UI 버튼으로 노출하지 않는다** (계획 v2 12장 원칙 — 디버깅·
-    /// 향후 MCP 전용).
+    /// 직접 경로다. 디버깅 전용이라 **UI 버튼으로 노출하지 않는다**.
     pub fn reset_now(&self) {
         perform_reset(&self.app, "trigger=manual (reset_ui dev hook)", None);
     }
 }
 
-/// 발화 로그용 상세 — 트리거·경과·수치 (계획 C-2 loud 계약).
+/// 발화 로그용 상세 — 트리거·경과·수치.
 fn describe_trigger(trigger: ResetTrigger, g: &Guarded, cfg: &ResetConfig, now: u64) -> String {
     let since_input = now.saturating_sub(g.last_input_at);
     match trigger {
@@ -289,7 +285,7 @@ fn describe_trigger(trigger: ResetTrigger, g: &Guarded, cfg: &ResetConfig, now: 
 }
 
 /// WebView 리로드 — 세션·레이아웃·replay 는 전부 Rust 소유라 UI 만 원점으로
-/// 돌아가고, 프론트는 attach 프로토콜로 복원한다 (계획 v2 12장). 실패는 삼키지
+/// 돌아가고, 프론트는 attach 프로토콜로 복원한다. 실패는 삼키지
 /// 않고 loud — 다음 트리거·수동 리로드(Ctrl+Shift+R)가 재시도 경로다.
 fn perform_reset(app: &AppHandle, reason: &str, trigger: Option<ResetTrigger>) {
     winlog!("reset: reloading webview ({reason})");
@@ -365,7 +361,7 @@ fn worker(shared: &Shared) {
                 }
                 Ok(_) => {
                     // 자손 0개 — 같은 user data folder 의 다른 인스턴스가 WebView2
-                    // 브라우저 프로세스를 소유한 공유 케이스 (계획 0장). 측정
+                    // 브라우저 프로세스를 소유한 공유 케이스. 측정
                     // 불능이므로 0 으로 넣는다 (pending 유지 근거도 함께 사라짐)
                     // — 단 반드시 loud 로 드러낸다.
                     if !g.zero_scan_logged {
@@ -436,7 +432,7 @@ fn worker(shared: &Shared) {
 /// Windows 프로세스 측정 (Windows 전용). 워치독이 쓰는
 /// [`scan_descendant_webviews`] 는 Toolhelp 스냅샷으로 자기 PID 의 자손 트리를 만들고,
 /// 이미지명이 msedgewebview2.exe 인 프로세스의 PrivateUsage
-/// (PROCESS_MEMORY_COUNTERS_EX)를 합산한다 (계획 C-2). 프로세스 하나를 재는
+/// (PROCESS_MEMORY_COUNTERS_EX)를 합산한다. 프로세스 하나를 재는
 /// [`memory`]·[`handle_count`]·[`thread_count`] 는 백엔드 **자신**을 재는 진단
 /// ([`crate::diagnostics`], ADR-0018)도 쓴다 — 그래서 이 모듈이 `pub(crate)` 다.
 #[cfg(windows)]
@@ -528,7 +524,7 @@ pub(crate) mod mem {
         if ok == 0 {
             // 첫 호출 실패 — 빈 목록(ERROR_NO_MORE_FILES)과 실제 열거 에러를
             // 구분한다. 구분 없이 빈 Ok 를 돌려주면 호출측이 "자손 0개(공유
-            // 브라우저 프로세스 케이스)"로 오진단한다 (리뷰 finding).
+            // 브라우저 프로세스 케이스)"로 오진단한다.
             // SAFETY: 실패 직후의 스레드-로컬 에러 코드 조회.
             let err = unsafe { GetLastError() };
             // SAFETY: 위에서 연 스냅샷 핸들.

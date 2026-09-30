@@ -35,7 +35,7 @@ import {
   detectNeedsInputOnset,
   needsInputToasts,
   needsInputToastTargets,
-} from "../features/notifications/chime";
+} from "../features/notifications/needs-input";
 import { formatCommandError } from "../shared/command-error";
 import { activeTerminalCwd, activeWorkspace, pathBasename } from "../shared/keys";
 import { openPairingDialog } from "../features/pairing/dialog";
@@ -127,11 +127,6 @@ class App {
     this.viewEl,
     (cmd) => this.dispatchUI(cmd),
     this.tracer,
-
-    {
-      setPrompt: (text) => this.setPrompt(text),
-      flashError: (text) => this.showError(text),
-    },
   );
   private readonly sidebar = new Sidebar(
     requireElement("sidebar"),
@@ -183,8 +178,6 @@ class App {
   private infoTimer: ReturnType<typeof setTimeout> | null = null;
 
   private picking = false;
-
-  private promptText: string | null = null;
 
   async init(): Promise<void> {
     window.__mast = {
@@ -451,7 +444,9 @@ class App {
     try {
       const closingDrafts = closingMarkdownDrafts(cmd, this.store.snapshot);
       if (closingDrafts.length > 0 && !(await confirmAction("Close and discard unsaved Markdown edits?"))) return null;
-      if (cmd.type === "switchWorkspace") {
+      // 전환 계측은 개발 빌드(`npm run tauri dev`)에서만 켠다. begin 이 없으면 tracer 의
+      // 나머지 호출은 모두 no-op 이다.
+      if (import.meta.env.DEV && cmd.type === "switchWorkspace") {
         const active = this.store.snapshot?.state.activeWorkspace ?? null;
         if (active !== cmd.workspace) {
           traceToken = this.tracer.begin(cmd.workspace, performance.now());
@@ -524,12 +519,6 @@ class App {
     this.renderStatusLine();
   }
 
-  private setPrompt(text: string | null): void {
-    if (this.promptText === text) return;
-    this.promptText = text;
-    this.renderStatusLine();
-  }
-
   private clearError(): void {
     if (this.errorTimer !== null) {
       clearTimeout(this.errorTimer);
@@ -572,7 +561,6 @@ class App {
 
   private renderStatusLine(): void {
     const parts: string[] = [];
-    if (this.promptText !== null) parts.push(this.promptText);
     if (this.errorText !== null) parts.push(`ERROR: ${this.errorText}`);
     if (this.infoText !== null) parts.push(this.infoText);
     this.statusEl.textContent = parts.join(" · ");

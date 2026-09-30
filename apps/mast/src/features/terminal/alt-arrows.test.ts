@@ -38,13 +38,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { TerminalView } from "./view";
-
-/** attach 응답 `[u64 LE end_offset][u8 first_attach][replay bytes]` — 빈 재생. */
-function attachBody(): ArrayBuffer {
-  const out = new Uint8Array(9);
-  out[8] = 1; // firstAttach — replayDone 이 즉시 선다.
-  return out.buffer;
-}
+import { attachBody, termOf } from "../../test-helpers";
 
 const KEY_CODES: Record<string, number> = {
   ArrowUp: 38,
@@ -63,10 +57,6 @@ function arrowEvent(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
   });
   Object.defineProperty(ev, "keyCode", { get: () => KEY_CODES[key] });
   return ev;
-}
-
-function termOf(view: TerminalView): Terminal {
-  return (view as unknown as { term: Terminal }).term;
 }
 
 async function attachedView(): Promise<TerminalView> {

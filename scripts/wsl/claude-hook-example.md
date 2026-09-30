@@ -347,7 +347,7 @@ Detailed rules:
 - **Badges and toasts follow the tab.** A tab at `needsInput` shows a `!` badge separate from
   its unread dot, and the pane header badge takes a needs-input style while any of its tabs
   waits. A toast fires once for every tab that newly enters `needsInput`
-  (`apps/mast/src/features/notifications/chime.ts`), so a second tab starting to wait in an
+  (`apps/mast/src/features/notifications/needs-input.ts`), so a second tab starting to wait in an
   already-waiting workspace still announces itself. It is suppressed only while the window has
   OS focus **and** that tab's workspace is the active one. The title is
   `mast — <workspace> · <tab title>`, the body the first line of that tab's own message

@@ -56,7 +56,7 @@ export class LazyViewerView implements ViewerView {
     } catch (err) {
       if (this.disposed) return;
       console.error("viewer load failed", err);
-      this.placeholder.textContent = `cannot load viewer: ${String(err)}`;
+      this.placeholder.textContent = `cannot load viewer: ${err}`;
     }
   }
 }

@@ -35,8 +35,8 @@ import type { TabId } from "../../../shared/types";
 export const EMPTY_RECORD_NOTICE = "no screen was recorded for this tab\r\n";
 
 /** 기록 바이트 → 터미널. 뷰에서 떼어낸 **순수 함수**이고 xterm 의 write 만
- *  요구한다 — v0.3.18 이 blind 로 나간 원인이 정확히 이 배선(라이브러리 인스턴스와
- *  콜백 사이)의 미검증이었으므로, 스텁과 실제 headless 인스턴스 양쪽으로 잠근다.
+ *  요구한다 — 라이브러리 인스턴스와 콜백 사이의 배선은 스텁만으로 검증되지 않아
+ *  실제 headless 인스턴스로도 잠근다.
  *
  *  바이트는 **Uint8Array 로** 넘긴다: 기록은 UTF-8 로 디코드되지 않는 바이트를
  *  담을 수 있고(부분 시퀀스가 replay 창 경계에서 잘린다), 문자열로 바꾸면 그

@@ -21,7 +21,8 @@ knowledge.
    class); ~236ms with a 1MiB replay buffer (known perf item, visible flicker).
 2. **Replay snapshots trim to a line boundary after eviction (14)** (4KB scan cap; TUI
    frames without newlines stay untrimmed and rely on the SIGWINCH nudge). A pure
-   `SwitchTracer` reports switch timing to `window.__mast.lastSwitch`.
+   `SwitchTracer` reports switch timing to `window.__mast.lastSwitch` (dev builds only since
+   2026-09-30).
 3. **Persistence (15).** `state.json` (`%APPDATA%/app.mast.desktop/`) holds a
    versioned camelCase envelope of `AppState`. Load validates structure (including
    global stable-id uniqueness and split-ratio ranges — disk is a trust boundary),

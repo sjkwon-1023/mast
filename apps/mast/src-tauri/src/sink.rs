@@ -1,14 +1,14 @@
 //! `SessionSink` 구현 — 세션 출력·이벤트를 프론트엔드로 나른다.
 //!
 //! - 터미널 출력: `tauri::ipc::Channel` 에 `[u64 LE offset][bytes]` 프레임을
-//!   `InvokeResponseBody::Raw` 로 전송한다 (JSON 직렬화 금지 — 계획 v2 2·12장).
-//!   프론트는 offset 으로 replay 스냅샷과의 겹침을 dedup 한다 (계획 2장).
+//!   `InvokeResponseBody::Raw` 로 전송한다 (JSON 직렬화 금지).
+//!   프론트는 offset 으로 replay 스냅샷과의 겹침을 dedup 한다.
 //! - exit: 마지막 화면을 기록 파일로 남기고, Dispatcher 에 `SessionExited` 를
 //!   반영하고 `publish_state` 로 `state-changed` emit + 저장 예약한 뒤 세션·sink 를
-//!   레지스트리에서 놓는다 (dispatch 와 함께 상태 변이의 유일한 두 경로 — 계획
-//!   15단계 B-2 저장 훅. 순서 계약은 [`SinkHandle::on_exit`]).
+//!   레지스트리에서 놓는다 (dispatch 와 함께 상태 변이의 유일한 두 경로. 순서 계약은
+//!   [`SinkHandle::on_exit`]).
 //! - OSC: [`OscRouter`] 에 밀어넣기만 한다 — 모델 반영은 라우터 worker 가 flush
-//!   창당 한 번 한다 (18단계 계획 glue 계약). 리더 스레드에서 Dispatcher lock 을
+//!   창당 한 번 한다. 리더 스레드에서 Dispatcher lock 을
 //!   잡지 않는 경계가 여기다.
 //! - pane 간 전송(`OSC 777;mast-send`)·탭 열거 질의(`OSC 777;mast-query`)·
 //!   색상 질의(`OSC 10/11 ;?`)만 예외로 라우터를 타지 않는다 — 상태 델타가 아니라
@@ -47,8 +47,7 @@ pub struct TerminalSink {
     /// 이 세션에 채널이 장착된 적이 있는가 — attach_terminal 이 "최초 attach"
     /// 판정에 쓴다. 최초 attach 의 replay 에 담긴 단말 질의(ConPTY 의 ESC[6n 등)
     /// 는 아직 아무도 응답하지 않은 **라이브 질의**라 xterm 이 응답해야 하고
-    /// (미응답 시 conhost 가 CPR 을 기다리며 셸이 멈춘다 — 체크포인트 1 재시작
-    /// 빈 화면 버그), 재-attach 의 replay 질의는 이전 프론트가 이미 응답한 낡은
+    /// (미응답 시 conhost 가 CPR 을 기다리며 셸이 멈춰 빈 화면이 된다), 재-attach 의 replay 질의는 이전 프론트가 이미 응답한 낡은
     /// 질의라 응답을 억제해야 한다 (stray `R` 버그).
     attached_once: std::sync::atomic::AtomicBool,
     /// OSC 배치 라우터 — [`SessionSink::on_osc`] 가 이벤트를 흘려보내는 곳.
@@ -301,7 +300,7 @@ impl SessionSink for SinkHandle {
     }
 }
 
-/// 진행 중 blocking 태스크 상한 (보안 리뷰 finding) — 전송([`deliver_send`])과
+/// 진행 중 blocking 태스크 상한 — 전송([`deliver_send`])과
 /// 질의([`deliver_query`])가 **하나의 카운터를 공유**한다. 임의 PTY 프로그램이
 /// 이 채널들을 고속 연사하면 태스크가 무한히 쌓여 blocking 풀을 포화시키고,
 /// paused 대상에의 write 도 9P 회신 파일 쓰기도 스레드를 오래 점유할 수 있다.
@@ -611,21 +610,18 @@ const COLOR_REPLY_BACKGROUND: &str = "\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\";
 
 /// OSC 10/11 색상 질의에 **질의를 낸 그 세션의 stdin** 으로 우리 테마 값을 답한다.
 ///
-/// # 왜 앱이 답하나 (판단 반전)
+/// # 왜 앱이 답하나
 ///
-/// 종전 판단은 "conhost 가 먼저 답하므로 응답기는 중복 = 역효과"였다. 2026-08-11
-/// 실기 probe 가 그 전제를 뒤집었다 — **OSC 11 질의에 아무도 답하지 않았다**
-/// (conhost 도, xterm 도). Codex 는 배경색을 못 받으면 입력창 배경을 아예 그리지
+/// 실측에서 **OSC 11 질의에 아무도 답하지 않았다** (conhost 도, xterm 도). Codex 는 배경색을 못 받으면 입력창 배경을 아예 그리지
 /// 않으므로 그 미응답이 곧 "입력칸 구분 없음"이다. 그래서 질의가 conhost 를
 /// **통과해 우리 출력 스트림까지 도달한 경우**에 한해 우리가 덮어 답한다. 도달하지
 /// 않으면 코어 스캐너가 이벤트를 내지 않아 이 경로가 발동조차 하지 않는다(무해).
 /// 자세한 계약은 [`OscEvent::OscColorQuery`] rustdoc.
 ///
-/// # 진단 관측점 (v0.3.1)
+/// # 진단 관측점
 ///
-/// 응답할 때마다 stderr 에 한 줄 남긴다. **로그가 찍히지 않으면 질의가 conhost
-/// 에서 소멸한 것**이고, 그러면 이 문제는 앱 밖(conhost) 문제로 종결된다 —
-/// 검증 절차는 `docs/WINDOWS-BUILD.md` §10 "v0.3.1 — verification" 1번.
+/// 응답할 때마다 한 줄 남긴다. **로그가 찍히지 않으면 질의가 conhost 에서 소멸한
+/// 것**이다 (`docs/WINDOWS-BUILD.md` §10 "v0.3.1 — verification" 1번).
 ///
 /// # 스레드·잠금
 ///
@@ -675,7 +671,6 @@ fn answer_color_query(app: &AppHandle, session: SessionId, code: u8) {
             winlog!("color query: write to session {session} failed: {err:#}");
             return;
         }
-        // v0.3.1 진단 관측점 — 이 줄이 없으면 질의가 conhost 에서 소멸한 것이다.
         winlog!("color query {code} answered (session={session})");
     });
 }

@@ -453,7 +453,8 @@ button, 계획 v2 section 12).
 3. **Corrupt state recovers loudly** — corrupt `state.json` (e.g. truncate it) in the app
    data dir, restart → the app starts fresh, keeps the original as
    `state.json.corrupt-<epoch>`, and logs the reason to stderr.
-4. **Switch latency readout** — build a 4-pane workspace plus a second workspace, switch
+4. **Switch latency readout** — in a dev build (`npm run tauri dev`; release builds do not
+   trace since 2026-09-30), build a 4-pane workspace plus a second workspace, switch
    back and forth → read `window.__mast.lastSwitch` in the dev console: total should be
    in the ~100ms class, with per-tab replay timings populated.
 5. **Replay trim keeps lines whole** — flood 1MB+ of colored output (e.g.
@@ -1273,7 +1274,7 @@ batch, from a console (`npm run tauri dev`) unless an item says otherwise.
    The chime already covers
    the focused case; the toast exists for the moment mast is *not* the window you are
    looking at. It rides the same onset rule as the chime
-   ([`apps/mast/src/features/notifications/chime.ts`](../apps/mast/src/features/notifications/chime.ts), `detectNeedsInputOnset`), so
+   ([`apps/mast/src/features/notifications/needs-input.ts`](../apps/mast/src/features/notifications/needs-input.ts), `detectNeedsInputOnset`), so
    drive it the same way: let an agent (Claude Code) reach a state where it waits for you —
    a permission prompt is the easiest.
    - **Unfocused → toast** — click another window (an editor, Explorer) so mast loses
@@ -1570,7 +1571,6 @@ Every `settings.json` edit needs the app closed and relaunched (there is no sett
      already at `needs input` gets a toast of its own.
    - **No mast chime, ever** — the app's own two-tone chime is gone, including in the focused
      case that used to be sound-only: if you hear it, this build is not the one you think it is.
-     (The synthesiser is kept dormant in [`features/notifications/chime.ts`](../apps/mast/src/features/notifications/chime.ts), unwired.)
      What you *may* still hear is **Windows' own notification sound** when a toast appears — we
      do not set an `<audio>` element, so the OS plays its default. That is Windows, not mast,
      and it is silenced in Windows' notification settings, not here.

@@ -194,7 +194,7 @@ impl Dispatcher {
     /// 워크스페이스 기본값(cwd·distro)을 적용해 터미널 셸을 스폰한다 — CreateTab·
     /// SplitPane(tab 포함)이 공유하는 spawn-first 원자성의 앞단: **모든 상태 변이
     /// 전에** 호출해 실패 시 상태 불변을 보장한다. 탭 cwd 미지정 시 워크스페이스
-    /// root_path 가 기본 (계획 v2 4장). 반환: (세션 id, 탭에 기록할 실제 cwd).
+    /// root_path 가 기본. 반환: (세션 id, 탭에 기록할 실제 cwd).
     fn spawn_terminal(
         &self,
         wi: usize,

@@ -4,11 +4,10 @@
 //! chunk 단위 VecDeque 와 총 바이트 계정으로 구현하며, 상한 초과 시 오래된
 //! chunk 를 통째로 evict 한다.
 //!
-//! # evicted head 트림 (14단계)
+//! # evicted head 트림
 //!
 //! evict 는 chunk 경계에서 일어나고 chunk 는 PTY read 단위라 아무 데서나 잘린다
-//! — 스냅샷 선두가 행 중간·escape 시퀀스 중간에서 시작할 수 있다. Spike 에서
-//! "escape-cut 허용"이던 이 한계는 14단계에서 **완화됐다**: evict 가 한 번이라도
+//! — 스냅샷 선두가 행 중간·escape 시퀀스 중간에서 시작할 수 있다. 그래서 evict 가 한 번이라도
 //! 일어난 버퍼의 [`ReplayBuffer::snapshot`] 은 앞쪽 `TRIM_SCAN_BYTES` 내 첫
 //! `\n` 뒤부터 반환해 행 경계 시작을 보장한다 (휴리스틱 근거는 해당 rustdoc).
 //! 트림이 못 미치는 무개행 출력(TUI 전체 화면 프레임)의 재그리기는 attach 시
@@ -233,7 +232,7 @@ mod tests {
         assert_eq!(buf.snapshot(), b"abcabc");
     }
 
-    // --- evicted head 트림 (14단계 계획 1장 A-1) ---
+    // --- evicted head 트림 ---
 
     #[test]
     fn trims_snapshot_head_to_line_boundary_after_evict() {

@@ -119,7 +119,7 @@ async fn serve(request: Request, shared: &ServerShared, deadline: tokio::time::I
     let ip = request.conn().remote_address().ip();
     let conn = request.conn().clone();
     // 인증 전 단계(응답 헤더 → 첫 스트림 → 첫 프레임)의 **총** 마감이다. 단계마다 같은
-    // `auth` 를 새로 주면 최대 세 배가 열린 채 남는다 — 계획의 "연결 후 10초".
+    // `auth` 를 새로 주면 최대 세 배가 열린 채 남는다 — 계약은 "연결 후 10초"다.
     // QUIC 수락 시 만든 마감을 이어받아 CONNECT 이전 대기도 포함한다.
 
     let session = match timeout_at(deadline, request.ok()).await {

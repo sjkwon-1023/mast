@@ -2,13 +2,13 @@
 // 디렉터리 클릭은 NavigateFolder, 파일 클릭은 뷰어 탭 생성(확장자에 따라
 // markdownViewer 또는 textViewer)으로 잇는다.
 //
-// 탐색이 뷰 내부 상태가 아니라 **dispatcher 명령**인 것이 이 파일의 핵심 계약이다
-// (계획 v2 4장): 현재 경로는 모델(TabKind::FolderBrowser.path)이 소유하고,
+// 탐색이 뷰 내부 상태가 아니라 **dispatcher 명령**인 것이 이 파일의 핵심 계약이다:
+// 현재 경로는 모델(TabKind::FolderBrowser.path)이 소유하고,
 // 뷰는 스냅샷이 내려준 kind 를 그릴 뿐이다. 그래서 앱을 재시작해도
 // 경로가 복원되고(persist), 어떤 탐색이든 revision 을 남긴다. 파일 **내용** 읽기
 // (fs_*)만 attach_terminal 류 콘텐츠 플레인 직접 invoke 다.
 //
-// 키보드만으로도 탐색이 된다 (체크포인트 2 UX): 리스트 컨테이너가 focus 를 갖고
+// 키보드만으로도 탐색이 된다: 리스트 컨테이너가 focus 를 갖고
 // 선택 행 1개를 유지하며, 방향키·Home/End·PageUp/PageDown 이 선택을 옮기고
 // Enter 가 클릭과 같은 라우팅을, Backspace 가 `..` 와 같은 상위 이동을 한다.
 // 이 keydown 은 **뷰 내부 리스너**라 전역 가로채기(shared/keys.ts 의 window capture)와
@@ -25,6 +25,7 @@ import type { DirEntry, DirListing } from "../../../infrastructure/backend";
 import type { KeySpec } from "../../../shared/keys";
 import { IS_MAC } from "../../../shared/platform";
 import type { ViewerKind, ViewerView } from "../viewer-view";
+import { setBanner } from "../viewer-view";
 import type { Command, CommandOutput, NewTab, PaneId, TabId } from "../../../shared/types";
 
 /** UI 발 dispatch — main.ts dispatchUI 래퍼 (실패는 상태 라인에 표면화되고 null). */
@@ -192,12 +193,6 @@ export function folderKeyAction(spec: KeySpec, mac = IS_MAC): FolderKeyAction | 
   return null;
 }
 
-/** 로드 실패 payload 의 표시 문자열 — 글루는 `Result<_, String>` 이라 문자열이
- *  오지만, IPC 레벨 실패 등 계약 밖 값도 삼키지 않는다. */
-function describeError(err: unknown): string {
-  return typeof err === "string" ? err : String(err);
-}
-
 export class FolderView implements ViewerView {
   readonly root: HTMLDivElement;
   private readonly bannerEl: HTMLDivElement;
@@ -280,7 +275,7 @@ export class FolderView implements ViewerView {
 
   private load(): void {
     const token = ++this.loadToken;
-    this.setBanner("loading…", false);
+    setBanner(this.bannerEl, "loading…", false);
     // 로드 중에도 이전 목록을 그대로 둔다 — 깜빡임 없이 배너만 바뀐다.
     fsListDir(this.distro, this.path).then(
       (listing) => {
@@ -295,7 +290,7 @@ export class FolderView implements ViewerView {
   }
 
   private renderListing(listing: DirListing): void {
-    this.setBanner(
+    setBanner(this.bannerEl, 
       listing.truncated
         ? `showing the first ${listing.entries.length} entries — this directory was truncated`
         : null,
@@ -308,14 +303,8 @@ export class FolderView implements ViewerView {
    *  모델에 남아 재시도·수정이 가능해야 한다). 막다른 길이 되지 않게 `..` 행은
    *  남긴다. */
   private renderError(err: unknown): void {
-    this.setBanner(`cannot list ${this.path}: ${describeError(err)}`, true);
+    setBanner(this.bannerEl, `cannot list ${this.path}: ${err}`, true);
     this.renderRows(folderRows(this.path, []));
-  }
-
-  private setBanner(text: string | null, error: boolean): void {
-    this.bannerEl.textContent = text ?? "";
-    this.bannerEl.hidden = text === null;
-    this.bannerEl.classList.toggle("error", error);
   }
 
   /** 목록 교체 — 선택은 **항상 첫 행으로 리셋**한다. 목록이 갈리면(탐색·재로드)

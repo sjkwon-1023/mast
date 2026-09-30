@@ -5,17 +5,13 @@
 # - gates (ubuntu, 모든 PR + main/v* push): Linux 게이트 — core/remote 테스트, Cargo.lock
 #   검사, 프런트 빌드+vitest, Secure Remote 번들 감사.
 # - windows-gates (windows, 모든 PR + main/v* push): Windows 타깃 컴파일 게이트 — x64·ARM64
-#   clippy 와 x64 workspace check, 그리고 x64 네이티브 테스트(mast-remote, 글루
-#   secure_remote). ring 같은 네이티브 TLS 스택의 build script 는 check 에서도 C 컴파일을
+#   clippy(`--all-targets` 라 lib·bin 컴파일 검사를 포함한다)와 x64 네이티브 테스트(mast-remote,
+#   글루 secure_remote). ring 같은 네이티브 TLS 스택의 build script 는 check 에서도 C 컴파일을
 #   하며 MSVC C 툴체인(lib.exe/clang)을 요구한다 (2026-09 확인) — ubuntu 에서 Windows
 #   타깃으로 도는 예전 방식은 이 의존성과 함께 성립하지 않는다. 공개 저장소의 표준
 #   Windows 러너는 무료이고, 러너 이미지에 ARM64 도구와 Clang 이 들어 있다.
 # - windows-artifacts (windows, 수동/태그만): 릴리스 빌드(x64 + ARM64 아티팩트)와
 #   Release 첨부. 매 push 가 아니라 ARM64 실기 테스트(23단계)용 산출이 목적이다.
-#
-# 과거에는 "check-family 는 링크를 하지 않아 MSVC import 라이브러리가 필요 없다"는
-# 전제로 ubuntu 한 job 에 Windows 타깃 clippy/check 를 넣었다. 전제 자체는 여전히
-# 유효하지만(링크는 안 한다) C 의존의 빌드 스크립트가 크로스 C 툴체인을 요구해 깨졌다.
 
 name: CI
 
@@ -106,9 +102,6 @@ jobs:
 
       - name: Clippy (ARM64 Windows target)
         run: cargo clippy --workspace --all-targets --target aarch64-pc-windows-msvc -- -D warnings
-
-      - name: Workspace check (x64 Windows target)
-        run: cargo check --workspace --target x86_64-pc-windows-msvc
 
       # Secure Remote 의 런타임 검증은 Linux 테스트만으로 충분하지 않다. WT 서버 통합
       # 테스트(`crates/mast-remote/tests/wt.rs`)는 unix 전용이라 Windows 에서는

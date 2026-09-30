@@ -193,7 +193,7 @@ impl std::error::Error for ReplyPathError {}
 /// 접두 검사 앞의 `validate_linux_path` 가 `..`·백슬래시·NUL 을 이미 거부하므로
 /// `/tmp/../home/u/.bashrc` 같은 traversal 은 성립하지 않는다. 단 이 검사는
 /// 심볼릭 링크를 보지 못한다 — `/tmp/x → $HOME` 같은 링크를 미리 만들면 쓰기가
-/// 밖으로 따라간다 (리뷰 finding). 링크까지 막으려면 쓰기 시점 canonicalize 재검사가
+/// 밖으로 따라간다. 링크까지 막으려면 쓰기 시점 canonicalize 재검사가
 /// 필요한데 9P 위 의미론이 실기 미검증이라 넣지 않았다 (CLAUDE.md 백로그) —
 /// 심링크 경로는 아래 협력 전제에 맡긴다.
 ///

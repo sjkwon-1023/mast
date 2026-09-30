@@ -4,7 +4,7 @@
 // 부분을 잠근다: 판정이 patch 여도 렌더가 실제로 탭 버튼을 갈아치우면 클릭이
 // mousedown~click 사이에 유실된다 (ADR-0003 결정 7 의 스왈로). 그래서 "같은 노드
 // 객체(===)에 제목·dot 만 갱신됐는가"를 실제 DOM 으로 단언한다. pane 층 배지의
-// on/off 와, mousedown(FocusPane·send-mode) → click(ActivateTab) 순서도 함께 건다.
+// on/off 와, mousedown(FocusPane) → click(ActivateTab) 순서도 함께 건다.
 //
 // 21단계에서 뷰어 seam 이 붙는다: placeholder 는 터미널도 뷰어도 없을 때만 뜬다는
 // 상호 배타 규칙과, 헤더 폴더 버튼의 CreateTab 명세를 여기서 잠근다.
@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { PaneView, exitedNoticeText } from "./pane-view";
-import type { SendController, ViewRegistry, ViewerRegistry } from "./pane-view";
+import type { ViewRegistry, ViewerRegistry } from "./pane-view";
 import { applyTabIdSettings } from "./tab-id-settings";
 import type { VisibleViewer } from "./view-reconcile";
 import type { ViewerKind, ViewerView } from "../viewers/viewer-view";
@@ -123,7 +123,6 @@ interface Harness {
   placeholder: () => HTMLElement;
   headerButton: (title: string) => HTMLButtonElement;
   dispatched: Command[];
-  send: { active: boolean; resolved: PaneId[] };
   viewers: Map<number, FakeViewerView>;
   /** ensure 가 null 을 주는 탭 — 아직 구현이 없는 뷰어 종류를 흉내낸다. */
   unmountable: Set<number>;
@@ -131,7 +130,6 @@ interface Harness {
 
 function mount(paneId = 1): Harness {
   const dispatched: Command[] = [];
-  const send = { active: false, resolved: [] as PaneId[] };
   const viewers = new Map<number, FakeViewerView>();
   const unmountable = new Set<number>();
   // 터미널 뷰 레지스트리는 쓰지 않는다 — 이 테스트들은 visible=null 로만
@@ -153,14 +151,6 @@ function mount(paneId = 1): Harness {
       return created;
     },
   };
-  // send-mode 스텁 — arm 진입점은 UI 에서 빠졌지만(⤷/⤷⏎ 버튼 제거) resolve
-  // 분기는 살아 있어 프로그램적으로 활성화해 잠근다 (pane-view 상단 휴면 주석).
-  const controller: SendController = {
-    isActive: () => send.active,
-    arm: () => {},
-    resolve: (target) => send.resolved.push(target),
-    flashError: () => {},
-  };
   const view = new PaneView(
     paneId,
     async (cmd) => {
@@ -169,7 +159,6 @@ function mount(paneId = 1): Harness {
     },
     views,
     viewerRegistry,
-    controller,
   );
   document.body.replaceChildren(view.root);
   return {
@@ -187,7 +176,6 @@ function mount(paneId = 1): Harness {
       return found;
     },
     dispatched,
-    send,
     viewers,
     unmountable,
   };
@@ -574,20 +562,6 @@ describe("PaneView tab interaction across patches", () => {
       { type: "activateTab", tab: 11 },
     ]);
   });
-
-  // send-mode 는 arm 진입점(⤷/⤷⏎ 버튼)이 UI 에서 빠져 휴면이지만, 경로 자체는
-  // 그대로 살아 있다 — 버튼에 의존하지 않고 컨트롤러를 프로그램적으로 활성화해
-  // mousedown 분기를 잠근다 (재배선 시 이 계약이 그대로 쓰인다).
-  it("resolves the send target instead of focusing while send-mode is armed", () => {
-    const { view, tabs, dispatched, send } = mount(3);
-    view.update(pane(THREE, 10), false, null, null);
-    send.active = true;
-
-    tabs()[1].dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-
-    expect(send.resolved).toEqual([3]);
-    expect(dispatched).toEqual([]);
-  });
 });
 
 describe("PaneView viewer seam (21단계)", () => {
@@ -666,13 +640,12 @@ describe("PaneView header buttons", () => {
     );
   }
 
-  it("has the six working buttons — the send pair is retired", () => {
+  it("has the six working buttons", () => {
     const { view } = mount();
     view.update(pane(THREE, 10), true, null, null);
 
     const titles = headerButtons(view).map((b) => b.title);
     expect(titles).toHaveLength(6);
-    expect(titles.filter((t) => t.toLowerCase().includes("send"))).toEqual([]);
     // 툴팁의 기능 설명 부분만 본다 — 뒤에 붙는 단축키 표기는 shared/keys.ts 소유.
     expect(titles.map((t) => t.replace(/ \(.*\)$/, ""))).toEqual([
       "New terminal tab",

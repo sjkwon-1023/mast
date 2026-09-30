@@ -2,7 +2,7 @@
 // 무의존이라 vitest 가 정책을 잠근다. 소유자는 workspace-view 의 리컨실이고,
 // 값은 TerminalView 가 dispose 직전에 읽어 준 "하단으로부터의 줄 수"다.
 //
-// 수명은 **페이지 세션**이다 (ADR-0019 개정 2026-09-20). 위치를 sessionStorage
+// 수명은 **페이지 세션**이다 (ADR-0019). 위치를 sessionStorage
 // 에도 남긴다: 리셋 supervisor 의 자동 리로드(hidden 600s·워크스페이스 전환의
 // 대기 워치독)와 Ctrl+Shift+R 은 JS 컨텍스트를 통째로 버리므로, 메모리만으로는
 // 리로드 순간 살아 있던 탭의 위치가 함께 사라진다. sessionStorage 는 페이지

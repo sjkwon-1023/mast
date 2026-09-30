@@ -23,6 +23,27 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, describe, expect, it } from "vitest";
 
+import {
+  AGY_MAST,
+  CLAUDE_HOOK_CMD,
+  claudeGroup,
+  CODEX_HOOK_CMD,
+  codexGroup,
+  command,
+  dispatcher,
+  fileText,
+  fingerprint,
+  FRESH_CLAUDE,
+  FRESH_CODEX,
+  idle,
+  NEEDS_INPUT_MATCHER,
+  needsInput,
+  NOTIFY_CMD,
+  readJson,
+  running,
+  shellQuote,
+} from "./provision-fixtures";
+
 // merge 헬퍼와 agy 훅은 WSL 쪽 python3·bash 로 돈다. Windows 러너에는 그 환경이 없어 건너뛰고,
 // 그 밖의 OS 에서 도구가 없으면 skip 이 아니라 실패로 드러낸다.
 const onWindows = process.platform === "win32";
@@ -69,64 +90,7 @@ afterAll(() => {
 // 훅 게이트와 탭 id 는 이 테스트를 돌리는 셸(mast 안의 Claude Code 등)에서 새어 들어오면 안 된다.
 const SCRUBBED_ENV = ["CLAUDECODE", "CODEX_THREAD_ID", "MAST", "MAST_TAB", "CODEX_HOME", "BASH_ENV"];
 
-const NOTIFY_CMD = '"$HOME/.mast/bin/mast-notify.sh"';
-const CLAUDE_HOOK_CMD = '"$HOME/.mast/bin/mast-claude-hook.sh"';
-const CODEX_HOOK_CMD = '"$HOME/.mast/bin/mast-codex-hook.sh"';
-const AGY_HOOK_CMD = '"$HOME/.mast/bin/mast-agy-hook.sh"';
 const CONTRACT_DOC = "scripts/wsl/claude-hook-example.md";
-const NEEDS_INPUT_MATCHER = [
-  "permission_prompt",
-  "elicitation_dialog",
-  "elicitation_url_dialog",
-  "agent_needs_input",
-  "quota_auto_resume_stale",
-  "worker_permission_prompt",
-].join("|");
-
-type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
-
-const command = (text: string, extra: Record<string, Json> = {}) => ({ type: "command", command: text, ...extra });
-const claudeGroup = (text: string, matcher = "") => ({ matcher, hooks: [command(text)] });
-const running = claudeGroup(`${NOTIFY_CMD} mast:running`);
-const needsInput = claudeGroup(`${NOTIFY_CMD} mast:needsInput 'needs input'`, NEEDS_INPUT_MATCHER);
-const idle = claudeGroup(`${NOTIFY_CMD} mast:idle done`);
-const dispatcher = claudeGroup(CLAUDE_HOOK_CMD);
-
-const FRESH_CLAUDE = {
-  hooks: {
-    SessionStart: [dispatcher],
-    UserPromptSubmit: [running, dispatcher],
-    PermissionRequest: [dispatcher],
-    PostToolUse: [dispatcher],
-    PostToolUseFailure: [dispatcher],
-    PostToolBatch: [dispatcher],
-    SubagentStop: [dispatcher],
-    Notification: [needsInput],
-    Stop: [idle, dispatcher],
-  },
-};
-
-const codexGroup = (timeout: number, async = false) => ({
-  hooks: [command(CODEX_HOOK_CMD, async ? { timeout, async: true } : { timeout })],
-});
-
-const FRESH_CODEX = {
-  hooks: {
-    UserPromptSubmit: [codexGroup(5)],
-    PreToolUse: [codexGroup(5)],
-    PermissionRequest: [codexGroup(10, true)],
-    PostToolUse: [codexGroup(5)],
-    SubagentStop: [codexGroup(5)],
-    Stop: [codexGroup(5)],
-    Interrupt: [codexGroup(3)],
-  },
-};
-
-const AGY_MAST = {
-  PreInvocation: [command(`${AGY_HOOK_CMD} running`, { timeout: 5 })],
-  Stop: [command(`${AGY_HOOK_CMD} idle`, { timeout: 5 })],
-};
-
 type ModeCase = {
   mode: string;
   file: (home: Home) => string;
@@ -391,25 +355,8 @@ class Home {
   }
 }
 
-function fileText(value: unknown): string {
-  return `${JSON.stringify(value, null, 2)}\n`;
-}
-
-function readJson(path: string): any {
-  return JSON.parse(readFileSync(path, "utf8"));
-}
-
-function fingerprint(path: string): { text: string; ino: number; mtimeMs: number } {
-  const stats = statSync(path);
-  return { text: readFileSync(path, "utf8"), ino: stats.ino, mtimeMs: stats.mtimeMs };
-}
-
 function leftovers(dir: string): string[] {
   return readdirSync(dir).filter((name) => name.includes(".mast-tmp."));
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function snippetOf(stderr: string): unknown {

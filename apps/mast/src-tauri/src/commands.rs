@@ -1,6 +1,6 @@
 //! Tauri 커맨드 — 프론트엔드 ↔ mast-core 글루.
 //!
-//! 세 갈래로 나뉜다 (10단계 계획 0-3 잠금 배치 + 21단계 뷰어):
+//! 세 갈래로 나뉜다:
 //!
 //! - **구조 변이** (`dispatch`, `get_state`): `Mutex<Dispatcher>` 를 잡는다.
 //!   dispatch 는 내부 스폰이 블로킹이라 전체를 `spawn_blocking` 에서 돈다.
@@ -9,7 +9,7 @@
 //!   레지스트리의 짧은 내부 lock 만 스친다. write·resize 는 블로킹 가능성이
 //!   있어 `spawn_blocking`, ack 은 뮤텍스 갱신 + condvar notify 뿐이라 sync 즉시
 //!   처리한다 (paused 재개 최단 경로 — spike 와 동일 규율).
-//! - **뷰어 파일 접근** (`fs_list_dir`/`fs_stat`/`fs_read_chunk` — 21단계): 상태를
+//! - **뷰어 파일 접근** (`fs_list_dir`/`fs_stat`/`fs_read_chunk`): 상태를
 //!   건드리지 않는 읽기 전용 콘텐츠 플레인이라 Dispatcher lock 도 관리 상태도
 //!   타지 않는다. 9P(`\\wsl.localhost`) I/O 와 distro 질의(프로세스 스폰)가 전부
 //!   블로킹이라 **경로 해석까지 통째로** `spawn_blocking` 안에서 돈다.
@@ -93,8 +93,8 @@ pub async fn dispatch(
     let provision_app = app.clone();
     let audit_app = app.clone();
     // 전체를 spawn_blocking 에서: CreateTab 의 셸 스폰(프로세스 생성 — 수십 ms
-    // 블로킹)이 Dispatcher lock 아래에서 일어난다 (계획 0-3 — 핫패스와 무간섭
-    // 이라 수용). 메인(이벤트 루프) 스레드는 잡지 않는다.
+    // 블로킹)이 Dispatcher lock 아래에서 일어난다 (출력 핫패스와 무관해 수용한다).
+    // 메인(이벤트 루프) 스레드는 잡지 않는다.
     let dispatcher = Arc::clone(&state.dispatcher);
     let wsl_for_dispatch = Arc::clone(&state.wsl);
     let wsl_for_provision = Arc::clone(&state.wsl);
@@ -125,7 +125,7 @@ pub async fn dispatch(
     // join 실패 = 위 클로저의 패닉(락 poison 등 프로그램 결함) — 가려서 ok 로
     // 만들지 않고 그대로 크게 터뜨린다.
     .expect("dispatch task panicked");
-    // 성공한 dispatch 는 실제 사용자 활동이다 (UI·dev 훅 발) — 계획 16단계 C-2.
+    // 성공한 dispatch 는 실제 사용자 활동이다 (UI·dev 훅 발).
     // SwitchWorkspace 성공은 추가로 pending 워치독의 "안전한 순간" 신호.
     if result.is_ok() {
         state.reset.user_input("dispatch");
@@ -253,7 +253,7 @@ pub async fn read_tab_record(state: State<'_, AppState>, tab: u64) -> Result<Res
 /// 현재 상태 스냅샷 (`{ revision, state }`) — 부팅·재동기화용.
 /// async 인 이유: dispatch(spawn_blocking)가 스폰 수십 ms 동안 Dispatcher lock 을
 /// 쥘 수 있는데, sync 커맨드로 메인 스레드에서 그 lock 을 기다리면 뒤에 줄 선
-/// sync 핫패스(ack_output)까지 지연이 전파된다 (리뷰 finding).
+/// sync 핫패스(ack_output)까지 지연이 전파된다.
 #[tauri::command]
 pub async fn get_state(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let dispatcher = Arc::clone(&state.dispatcher);
@@ -305,9 +305,9 @@ pub fn attach_terminal(
 }
 
 /// 출력 채널 분리 — 뷰 dispose 시, 그리고 부트 리컨실 스윕(attach 하지 않는 전
-/// 터미널 세션 대상 — 프론트 배선은 12단계 청크 C)에서 호출된다. 채널 분리 후 이후
+/// 터미널 세션 대상)에서 호출된다. 채널 분리 후 이후
 /// 출력은 Dropped(detach 모드)로 보상 롤백된다 (`TerminalSink::detach` rustdoc).
-/// 이어서 `reset_flow()` 로 flow 계정까지 리셋한다 (계획 D4 자동 치유) — 이미
+/// 이어서 `reset_flow()` 로 flow 계정까지 리셋한다 — 이미
 /// paused 인 세션은 리더가 read 를 안 해 Dropped 롤백 경로 자체가 실행되지
 /// 않으므로, detach 시점에 리셋해야 detach 된 세션이 어떤 경로로든 paused 에
 /// 고착되지 않는다. 미지 id 는 무해한 no-op (이미 닫힌 세션의 늦은 dispose 가
@@ -335,7 +335,7 @@ pub async fn write_stdin(
         .await
         .map_err(|err| format!("write task join failed (id={id}): {err}"))?
         .map_err(|err| format!("write_stdin failed (id={id}): {err:#}"))
-    // 주의: stdin 기록은 활동 신호로 치지 **않는다** (16단계 리뷰 finding).
+    // 주의: stdin 기록은 활동 신호로 치지 **않는다**.
     // xterm 의 onData 는 사용자 타이핑뿐 아니라 단말 질의(DA·DSR·OSC 색상 질의)에
     // 대한 **자동 응답**에도 발화하고, 그 질의는 replay 에 보존돼 리셋 후 재생된다
     // — 여기서 활동으로 집계하면 리셋 → replay → 자동 응답 → idle 재무장의
@@ -387,14 +387,14 @@ pub fn get_reset_enabled(state: State<'_, AppState>) -> bool {
     state.reset.enabled()
 }
 
-/// 프론트 활동 핑 (계획 16단계 C-2/C-3) — throttled 사용자 입력 신호
+/// 프론트 활동 핑 — throttled 사용자 입력 신호
 /// (wheel/mousedown/keydown, 10초당 1회) + `document.visibilitychange` 보조 신호.
 /// `visible` 이 Some 이면 visibility 전이도 함께 반영한다. 순수 열람(스크롤백
 /// wheel)도 여기로 잡혀 "활성 사용 중 절대 리셋 금지"가 성립한다 (ADR-0016 결정 8).
 #[tauri::command]
 pub fn user_activity(state: State<'_, AppState>, visible: Option<bool>) {
     match visible {
-        // visibility 전이 보고는 **활동이 아니다** (체크포인트 1 버그 4·5).
+        // visibility 전이 보고는 **활동이 아니다**.
         // 활동으로 집계하면: 최소화 보고(visible=false)가 hidden 카운트다운을
         // 스스로 재무장해 hidden 리셋이 영원히 발화하지 못하고, 리로드 직후의
         // visible=true 동기화는 idle 을 재무장해 30초 주기 재발화 루프가 된다.
@@ -405,7 +405,7 @@ pub fn user_activity(state: State<'_, AppState>, visible: Option<bool>) {
 }
 
 // ---------------------------------------------------------------------------
-// WSL 준비 상태 (2026-09-22)
+// WSL 준비 상태
 //
 // 진단 자체는 `wsl_health` 모듈이 소유한다 — 여기는 프론트 계약(조회·재검사)과
 // 앱 설정 파일 열기뿐이다.
@@ -499,7 +499,7 @@ pub async fn open_settings_file() -> Result<(), String> {
 // UI 설정 (`settings.json`)
 //
 // 설정 **UI 는 없다** — 사용자가 앱 설정 디렉터리의 `settings.json` 을 직접 쓰고
-// 앱을 재시작한다 (v0.3.1 범위). 그래서 이 커맨드는 부팅 때 한 번 불린다.
+// 앱을 재시작한다. 그래서 이 커맨드는 부팅 때 한 번 불린다.
 // ---------------------------------------------------------------------------
 
 /// 설정 파일에서 오는 프론트 UI 설정 — 터미널 폰트와 뷰어 하이라이트 언어 목록.
@@ -649,7 +649,7 @@ fn parse_ui_settings(text: &str, path: &Path) -> Result<UiSettings, String> {
             ));
         }
     }
-    // fontSize 와 같은 loud-fail 대칭 (리뷰 finding): 공백뿐인 fontFamily 를 조용히
+    // fontSize 와 같은 loud-fail 대칭: 공백뿐인 fontFamily 를 조용히
     // 넘기면 xterm 등폭 렌더가 깨진 채 원인이 숨는다.
     if let Some(family) = &settings.font_family {
         if family.trim().is_empty() {
@@ -676,8 +676,7 @@ fn parse_ui_settings(text: &str, path: &Path) -> Result<UiSettings, String> {
 /// 프론트엔드가 런타임 로그 파일에 한 줄 남긴다 — 로그가 켜져 있을 때만이고,
 /// 꺼져 있으면 이 커맨드 자체가 no-op 이다 (프론트도 꺼져 있으면 부르지 않는다).
 ///
-/// **이 창구가 있는 이유**: 2026-08-22 한글 IME 조합이 풀리지 않던 건처럼 전부
-/// WebView 안에서 벌어지는 문제는 글루 로그로는 한 줄도 안 잡힌다.
+/// **이 창구가 있는 이유**: 한글 IME 조합처럼 전부 WebView 안에서 벌어지는 문제는 글루 로그로는 한 줄도 안 잡힌다.
 ///
 /// 길이를 자르는 것은 방어다 — 프론트의 버그 하나가 루프에서 부르면 로그가 그
 /// 내용으로만 차 정작 필요한 줄이 회전으로 밀려난다. 자를 때는 잘랐다는 사실을
@@ -700,7 +699,7 @@ pub fn log_line(text: String) {
 }
 
 /// 수동 WebView 리셋 — **dev 훅(`window.__mast.resetUi`)·향후 MCP 전용이며 UI
-/// 버튼으로 노출하지 않는다** (계획 v2 12장 원칙). 코어 Command bus 는 구조 변이
+/// 버튼으로 노출하지 않는다**. 코어 Command bus 는 구조 변이
 /// 전용(ADR-0002)이고 리셋은 상태 무변이·Tauri 의존 동작이라 글루 커맨드로 둔다
 /// (ADR-0016 결정 8의 의도적 이탈 — ADR 증류 시 기록).
 #[tauri::command]
@@ -720,21 +719,15 @@ const TOAST_LOG_FILE: &str = "toast.log";
 #[cfg(windows)]
 const TOAST_LOG_MAX_BYTES: u64 = 64 * 1024;
 
-/// needsInput OS 토스트 (백로그 2026-08-11, v0.3.7 재작성) — WinRT 토스트를 **직접**
-/// 띄운다.
+/// needsInput OS 토스트 — WinRT 토스트를 **직접** 띄우고 `Toast::show()` 의 결과를
+/// 그대로 돌려준다. `tauri-plugin-notification` 2.3.3 은 발송 오류를 삼켜서
+/// (`desktop.rs:216`) 토스트가 안 뜰 때 원인을 좁힐 수 없었다.
 ///
-/// v0.3.6 까지는 `tauri-plugin-notification` 을 거쳤는데, 그 플러그인이 발송을
-/// `tauri::async_runtime::spawn(async move { let _ = notification.show(); })`
-/// (2.3.3 `desktop.rs:216`) 로 던져 **오류를 통째로 삼켰다** — 실기에서 토스트가 안
-/// 뜨는데 앱은 성공만 보고하는 상태라 원인 구간을 좁힐 수 없었다. 그래서 층을
-/// 걷어내고 `Toast::show()` 의 결과를 그대로 들고 온다.
-///
-/// 발신 AUMID 는 [`crate::app_identity::APP_USER_MODEL_ID`] — 셸에 **등록하는 값과
-/// 같은 상수 하나**다 (v0.3.6 의 "플러그인이 무엇을 싣는가" 추론 사슬이 사라졌다).
+/// 발신 AUMID 는 셸에 등록하는 값과 같은 [`crate::app_identity::APP_USER_MODEL_ID`] 다.
 ///
 /// **언제 부를지는 전적으로 프론트 계약이다**: `app/main.ts` 의 `notifyNeedsInput` 이
-/// 탭 단위 needsInput 상승 전이(`features/notifications/chime.ts::detectNeedsInputOnset`
-/// 의 `onsets`) 중 `features/notifications/chime.ts::needsInputToastTargets` 가 남긴
+/// 탭 단위 needsInput 상승 전이(`features/notifications/needs-input.ts::detectNeedsInputOnset`
+/// 의 `onsets`) 중 `features/notifications/needs-input.ts::needsInputToastTargets` 가 남긴
 /// 것마다 한 번씩 부른다 — 창이 포커스이고 그 워크스페이스가 활성일 때(=이미 화면에
 /// 보인다)만 조용하고, 비포커스거나 다른 워크스페이스면 띄운다. 여기서 포커스를 다시
 /// 판정하지 않는 이유는 판정을 두 곳에 두면 두 사실이 어긋나기 때문이다 — 프론트가
@@ -947,8 +940,8 @@ pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
         .ok_or_else(|| format!("selected path is not valid UTF-8: {}", picked.display()))?;
     let (distro, linux_path) = wslpath::from_windows_path(path)?;
     // Windows 드라이브 픽(UNC 가 아닌 경로 → distro None → /mnt/<d>/...)은 워크
-    // 스페이스 루트가 될 수 없다 (사용자 결정 2026-08-11 — 코어 CreateWorkspace
-    // 도 /mnt 를 거부하지만, 여기서 잡아야 문구가 픽커 상황에 맞는다). 드라이브
+    // 스페이스 루트가 될 수 없다 (코어 CreateWorkspace 도 /mnt 를 거부하지만, 여기서
+    // 잡아야 문구가 픽커 상황에 맞는다). 드라이브
     // 데이터는 뷰어(폴더 브라우저)로 접근한다.
     if distro.is_none() {
         return Err(format!(
@@ -974,8 +967,7 @@ pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
 
 /// 리눅스 경로의 마지막 세그먼트 (빈 세그먼트는 건너뛴다) — 코어의 탭 제목
 /// 규칙(`command.rs::path_title`)과 같은 계산이되, distro 루트("/") 픽의 퇴화만
-/// 보정한다 (리뷰 finding): `"/"` 대신 distro 이름이 워크스페이스 이름으로
-/// 자연스럽다. (드라이브 루트 보정은 드라이브 픽 자체가 거부되면서 제거됐다.)
+/// 보정한다: `"/"` 대신 distro 이름이 워크스페이스 이름으로 자연스럽다.
 #[cfg(any(windows, target_os = "macos"))]
 fn folder_name(linux_path: &str, distro: Option<&str>) -> String {
     if linux_path == "/" {
@@ -1011,22 +1003,20 @@ pub fn get_stats(state: State<'_, AppState>) -> Vec<SessionStatsDto> {
 }
 
 // ---------------------------------------------------------------------------
-// 뷰어 파일 접근 (21단계 계획 glue 계약)
+// 뷰어 파일 접근
 //
 // folderBrowser·textViewer 가 쓰는 읽기 전용 커맨드 3종. Windows 에서는
 // `\\wsl.localhost\<distro>\...` UNC 로 접근한다 — Windows→WSL 방향이라 interop 을
-// 잠근 배포판에서도 동작한다 (계획 v2 5장). 경로 형태 검증·UNC 조립은 순수 함수
+// 잠근 배포판에서도 동작한다. 경로 형태 검증·UNC 조립은 순수 함수
 // (`mast_core::wslpath`)에 있고 테스트도 거기 있다 — 게이트가 `-p mast-core` 만
 // 돌기 때문이다.
 //
-// **이 3종의 실동작 검증은 UNC·9P 가 필요해 Linux 게이트로는 불가능하다 —
-// 체크포인트 2 사용자 체크리스트로 이월하는 것이 계획 명문이다** (21단계 계획
-// "완료 기준" 3·6·9·12번 항목).
+// 이 3종의 실동작은 UNC·9P 가 필요해 Windows 수동 검증(WINDOWS-BUILD)으로 확인한다.
 // ---------------------------------------------------------------------------
 
 /// `fs_list_dir` 한 번이 돌려주는 최대 항목 수. 9P 는 대형 디렉터리에서 느리고
 /// 프론트도 이 이상을 한 번에 그리지 않는다 — 넘치면 잘라내고 `truncated` 로
-/// 알린다 (계획 리스크 [med] 완화).
+/// 알린다.
 const MAX_DIR_ENTRIES: usize = 5_000;
 
 /// `fs_read_chunk` 한 번의 최대 길이 (4 MiB). textViewer 의 윈도우는 512KiB 라
@@ -1035,7 +1025,7 @@ const MAX_DIR_ENTRIES: usize = 5_000;
 const MAX_READ_LEN: u32 = 4 * 1024 * 1024;
 
 /// `fs_list_dir` 응답. **정렬하지 않는다** — dirs-first·name asc 정렬은 프론트
-/// 순수 함수(vitest 대상)의 몫이다 (계획 프론트 계약).
+/// 순수 함수(vitest 대상)의 몫이다.
 #[derive(serde::Serialize)]
 pub struct DirListing {
     pub entries: Vec<DirEntryDto>,
@@ -1043,10 +1033,8 @@ pub struct DirListing {
     pub truncated: bool,
 }
 
-/// 디렉터리 항목 하나. 필드명은 serde 기본(snake_case) 그대로 나간다 — 글루 DTO
-/// 는 `SessionStatsDto` 전례를 따르고 계획의 glue 계약도 이 이름으로 적혀 있다
-/// (코어 모델의 camelCase 는 코어 타입 쪽 rename 계약이라 별개다). 타입 이름만
-/// `std::fs::DirEntry` 와 겹치지 않게 `Dto` 접미사를 붙였다.
+/// 디렉터리 항목 하나. 필드명은 글루 DTO 관례대로 serde 기본(snake_case)이다
+/// (코어 모델의 camelCase 는 코어 타입 쪽 rename 계약이라 별개다).
 #[derive(serde::Serialize)]
 pub struct DirEntryDto {
     pub name: String,
@@ -1076,7 +1064,7 @@ pub async fn fs_list_dir(distro: Option<String>, path: String) -> Result<DirList
     .map_err(|err| format!("fs_list_dir task join failed: {err}"))?
 }
 
-/// 파일 크기·수정시각 조회 (textViewer 윈도우 계산, 청크 D 의 mtime 폴링).
+/// 파일 크기·수정시각 조회 (textViewer 윈도우 계산).
 #[tauri::command]
 pub async fn fs_stat(distro: Option<String>, path: String) -> Result<FileStat, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -1108,7 +1096,7 @@ pub async fn fs_stat(distro: Option<String>, path: String) -> Result<FileStat, S
 
 /// 파일의 바이트 윈도우 읽기 (textViewer). 응답은 **raw 바이트** —
 /// `attach_terminal` 과 같은 `tauri::ipc::Response` 경로라 base64 왕복이 없다.
-/// UTF-8 파단·부분행 절삭은 프론트 몫이다 (계획 프론트 계약).
+/// UTF-8 파단·부분행 절삭은 프론트 몫이다.
 ///
 /// `len` 상한 초과는 조용히 줄이지 않고 **거부**한다 — 요청한 크기와 다른 윈도우가
 /// 돌아가면 프론트의 오프셋 계산이 어긋난다. EOF 를 넘는 `offset` 은 빈 응답이며
@@ -1234,7 +1222,7 @@ pub(crate) fn host_path(_distro: Option<String>, path: &str) -> Result<PathBuf, 
     Ok(PathBuf::from(path))
 }
 
-/// distro 해석 (계획 21단계 핵심 결정): 인자(workspace.distro) → env `MAST_DISTRO`
+/// distro 해석: 인자(workspace.distro) → env `MAST_DISTRO`
 /// → `wsl.exe -l -q` 기본 배포판 lazy 질의. **셋 다 실패해야** 에러다 — 터미널
 /// 스폰(`host.rs`: distro 없으면 wsl.exe 기본값)과 정합을 맞춘 것으로, 둘 다
 /// 미설정인 가장 흔한 구성에서 뷰어만 죽는 비대칭을 만들지 않는다. 빈 문자열은
@@ -1264,8 +1252,7 @@ pub(crate) fn default_distro() -> Result<String, String> {
     Ok(DEFAULT_DISTRO.get_or_init(|| distro).clone())
 }
 
-/// `wsl.exe -l -q` 질의. 출력은 **UTF-16LE** 이고(파이프로 리다이렉트해도 그렇다 —
-/// 실검증은 체크포인트 2 항목 12), `-l` 은 기본 배포판을 맨 앞에 내므로 디코드 후
+/// `wsl.exe -l -q` 질의. 출력은 파이프로 리다이렉트해도 **UTF-16LE** 이고, `-l` 은 기본 배포판을 맨 앞에 내므로 디코드 후
 /// 첫 비어있지 않은 줄이 답이다. 실패 메시지에는 사용자가 취할 조치를 함께 적는다.
 #[cfg(windows)]
 fn query_default_distro() -> Result<String, String> {

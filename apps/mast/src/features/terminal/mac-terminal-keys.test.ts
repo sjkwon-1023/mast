@@ -33,14 +33,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { TerminalView } from "./view";
 import { applyTerminalSettings } from "./settings";
 import { shouldOpenLink } from "./interaction";
+import { attachBody, termOf } from "../../test-helpers";
 
 restoreProcessTitle();
-
-function attachBody(): ArrayBuffer {
-  const out = new Uint8Array(9);
-  out[8] = 1; // firstAttach — replayDone 이 즉시 선다.
-  return out.buffer;
-}
 
 const KEY_CODES: Record<string, number> = {
   ArrowUp: 38,
@@ -76,10 +71,6 @@ function imeInput(textarea: HTMLTextAreaElement, inputType: string, data: string
   textarea.value = value;
   textarea.selectionStart = textarea.selectionEnd = value.length;
   textarea.dispatchEvent(new InputEvent("input", init));
-}
-
-function termOf(view: TerminalView): Terminal {
-  return (view as unknown as { term: Terminal }).term;
 }
 
 const views: TerminalView[] = [];

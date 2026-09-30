@@ -1,11 +1,11 @@
-//! Tauri managed state — 잠금 배치의 핵심 (10단계 계획 0-3).
+//! Tauri managed state — 잠금 배치의 핵심.
 //!
 //! # 잠금 규율
 //!
 //! - `Mutex<Dispatcher>` 는 **구조 변이 전용**이다: `dispatch`(커맨드 실행)와
 //!   `apply_event`(세션 exit 반영)만 이 lock 을 잡는다. dispatch 안의 셸 스폰
 //!   (수십 ms 블로킹)까지 lock 아래에서 일어나지만, 핫패스와 무간섭이므로
-//!   수용한다 (계획 0-3).
+//!   수용한다.
 //! - `SessionManager` 와 sink 레지스트리는 **Dispatcher Mutex 밖** 자체 동기화다.
 //!   핫패스(write/ack/resize/attach/출력 전달)는 Dispatcher lock 을 절대 타지
 //!   않는다 — 구조 변이가 느려도 터미널 IO 는 멈추지 않는다.
@@ -79,19 +79,19 @@ pub struct AppState {
     pub sessions: Arc<SessionManager>,
     /// 세션별 출력 sink — 핫패스 전용, Dispatcher lock 밖.
     pub sinks: Arc<SinkRegistry>,
-    /// debounce 저장기 (계획 15단계 B) — [`publish_state`] 가 emit 후 최신 상태를
+    /// debounce 저장기 — [`publish_state`] 가 emit 후 최신 상태를
     /// schedule 한다. `Arc` 는 setup(생성 시점)과 관리 상태가 공유하기 위함.
     pub saver: Arc<Saver>,
-    /// 자동 UI 리셋 supervisor (계획 16단계 C-2) — 커맨드의 활동 신호와 창
+    /// 자동 UI 리셋 supervisor — 커맨드의 활동 신호와 창
     /// 이벤트(Focused)가 여기로 모인다. 내부가 Arc 공유라 별도 Arc 불필요.
     pub reset: ResetSupervisor,
-    /// OSC 배치 라우터 (계획 18단계 glue) — sink 와 `Arc` 로 공유하며, 종료 시
+    /// OSC 배치 라우터 — sink 와 `Arc` 로 공유하며, 종료 시
     /// `RunEvent::Exit` 가 여기서 `flush_now` 를 부른다.
     pub router: Arc<OscRouter>,
     /// 끝난 탭의 마지막 화면 기록 (ADR-0018) — 디렉터리 경로만 드는 값이라 자체
     /// lock 이 없다. `TauriHost` 도 같은 `Arc` 를 들어 탭 닫기 경로에서 지운다.
     pub records: Arc<RecordStore>,
-    /// WSL 준비 상태 진단기 (2026-09-22) — 부팅에 한 번 비동기로 돌고 명시적
+    /// WSL 준비 상태 진단기 — 부팅에 한 번 비동기로 돌고 명시적
     /// 재검사로만 갱신된다. `TauriHost` 의 스폰 게이트와 프로비저닝, 안내 커맨드가
     /// 이 하나를 공유한다.
     pub wsl: Arc<WslHealth>,
@@ -145,13 +145,13 @@ impl Drop for ExitInFlight<'_> {
 }
 
 /// 현재 스냅샷을 `state-changed` 이벤트로 emit 하고 저장을 예약한다 (emit +
-/// `saver.schedule` — 계획 B-2 저장 훅). 호출자가 Dispatcher lock 을 쥔 채
+/// `saver.schedule`). 호출자가 Dispatcher lock 을 쥔 채
 /// 부른다 — lock 안에서 직렬화까지 마쳐 revision 과 상태가 일관된 스냅샷만
 /// 나간다. emit 실패는 삼키지 않고 stderr 에 남긴다 (프론트는 get_state
 /// 재동기화 경로가 있어 치명적이지 않다).
 ///
 /// 저장 훅이 여기 한 곳인 근거: 상태 변이의 두 경로(dispatch 성공·sink on_exit)
-/// 모두 이 함수를 유일하게 경유한다 (계획 B-2 검증). state clone 은 lock 안에서
+/// 모두 이 함수를 유일하게 경유한다. state clone 은 lock 안에서
 /// 일어나지만 코어 AppState 는 구조 메타(워크스페이스·pane·탭)뿐인 작은 값이라
 /// 수용한다 — 실제 디스크 IO 는 Saver worker 스레드가 lock 밖에서 한다.
 pub fn publish_state(app: &AppHandle, dispatcher: &Dispatcher) {

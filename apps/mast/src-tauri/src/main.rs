@@ -7,7 +7,7 @@
 //! OS와 외부 환경 연동, `audit`·`diagnostics`·`logfile`은 진단을 담당하고,
 //! `wsl_health`는 WSL 준비 상태 진단과 그 프론트 계약을 맡는다.
 //!
-//! # 부팅 순서 (계획 15단계 B-2 · 0장 manage-first)
+//! # 부팅 순서
 //!
 //! load(state.json) → Restored 면 `Dispatcher::adopt`(스폰 없음) / Fresh 면 빈
 //! dispatcher → 기록 sweep(ADR-0018 — **첫 스폰 전**이어야 keep 집합이 낡지 않는다)
@@ -15,7 +15,7 @@
 //! respawn(회당 lock·publish, `boot` 모듈이 **별도 스레드**에서 예열 뒤 간격을 두고
 //! 돈다). **모든 스폰이 manage 뒤다** — 스폰이
 //! 먼저면 그 창에서 즉사한 셸의 on_exit 이 관리 상태를 못 찾아 소실된다
-//! (restore·Fresh 공통의 manage-first 불변식, 14~15 리뷰 finding). respawn 전 스냅샷의 pty_session
+//! (restore·Fresh 공통의 manage-first 불변식). respawn 전 스냅샷의 pty_session
 //! null 인 Running 탭은 무해하다 — view-reconcile 은 세션 없는 탭을 attach 하지
 //! 않고, publish 도착마다 점진 attach 된다 (ADR-0016 결정 8).
 
@@ -65,7 +65,7 @@ use mast_core::session::SessionManager;
 use tauri::{Emitter, Manager};
 
 /// Saver debounce 창 — 연속 변이를 1회 기록으로 합친다. 크래시 시 마지막 기록
-/// 이후 ≤500ms 의 변이 유실은 MVP 수용 (계획 B-1).
+/// 이후 ≤500ms 의 변이 유실은 MVP 수용.
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 
 /// 창 최소화 신호 이벤트 이름 — 프론트 `infrastructure/window-visibility.ts` 의
@@ -75,7 +75,7 @@ const WINDOW_HIDDEN_EVENT: &str = "window-hidden";
 /// 창 포커스 신호 이벤트 이름 — 프론트 `app/main.ts` 의 `WINDOW_FOCUS_EVENT` 와 짝이다
 /// (payload: bool, true = 포커스 획득). needsInput 토스트의 억제 판정 근거다:
 /// WebView2 의 `document.hasFocus()` 는 창이 비포커스여도 true 로 남는 경우가 있어
-/// (v0.3.6 필드 진단의 용의자 중 하나) 프론트가 자기 힘으로 포커스를 알 수 없다.
+/// 프론트가 자기 힘으로 포커스를 알 수 없다.
 const WINDOW_FOCUS_EVENT: &str = "window-focus";
 
 /// 기록 sweep 의 keep 집합 — 로드된 상태의 **모든 터미널 탭** id.
@@ -114,14 +114,12 @@ fn restrict_browser_ipc(handler: impl Fn(tauri::ipc::Invoke) -> bool + Send + Sy
 
 fn main() {
     // **웹뷰 초기화보다 먼저다.** Windows 셸에 AUMID 를 선언하고 시작 메뉴 바로가기를
-    // 맞춰야 needsInput 토스트가 mast 발신자로 뜬다 — 미등록 발신자의 토스트를
-    // WinRT 가 조용히 버리는 게 v0.3.5 의 "토스트가 아예 안 뜬다" 원인이었다
-    // (근거는 `app_identity` 모듈 doc). 등록 AUMID 는 `commands::notify_toast` 가
-    // 발신에 쓰는 상수와 같은 하나다. 실패해도 부팅은 계속한다.
+    // 맞춰야 needsInput 토스트가 mast 발신자로 뜬다 (`app_identity` 모듈 doc).
+    // 실패해도 부팅은 계속한다.
     #[cfg(windows)]
     app_identity::register();
 
-    // 최소화 판정의 중복 emit 억제 플래그 (체크포인트 2 실기 결함 후속) — 전이
+    // 최소화 판정의 중복 emit 억제 플래그 — 전이
     // (false↔true)에서만 프론트에 알린다. Resized 는 드래그 리사이즈 중 연속으로
     // 오므로 매번 emit 하면 IPC 잡음이 된다. on_window_event 핸들러는
     // `Fn + Send + Sync + 'static` 이라 내부 가변성(AtomicBool)으로 든다.
@@ -146,7 +144,7 @@ fn main() {
             let sessions = Arc::new(SessionManager::new());
             let sinks = Arc::new(state::SinkRegistry::default());
             // OSC 라우터는 sink 생성보다 먼저 — sink factory(TauriHost)가 핸들을
-            // 물려 받아야 한다 (18단계 glue 계약).
+            // 물려 받아야 한다.
             let router = Arc::new(router::OscRouter::spawn(handle.clone()));
             // 앱 데이터 디렉터리에 state.json 과 기록 디렉터리가 나란히 앉는다. 경로
             // 해석 실패는 부팅 불능이므로 setup 에러로 그대로 올린다 (가짜 진행 금지).
@@ -193,10 +191,8 @@ fn main() {
                             backup_label(backup)
                         ),
                     }
-                    // dogfood dispatch(스폰 포함)는 manage **뒤**에서 — 아래 참조
-                    // (14~15 리뷰 finding: 스폰이 manage 앞이면 즉사 셸의 on_exit
-                    // 이 소실되는 창이 생긴다. restore 와 동일한 manage-first
-                    // 불변식을 Fresh 경로에도 적용).
+                    // dogfood dispatch(스폰 포함)는 manage **뒤**에서 한다 — 모듈 doc 의
+                    // manage-first 불변식.
                     (Dispatcher::new(Box::new(tauri_host)), true)
                 }
             };
@@ -233,7 +229,7 @@ fn main() {
                 winlog!("wsl: {err}");
             }
             let saver = Arc::new(Saver::spawn(state_path, SAVE_DEBOUNCE));
-            // 자동 UI 리셋 supervisor (계획 16단계 C-2) — env 설정 파싱 + worker
+            // 자동 UI 리셋 supervisor — env 설정 파싱 + worker
             // 스레드 기동. 활동·창 이벤트 신호는 commands / on_window_event 가
             // managed state 경유로 넣는다.
             let reset = reset_supervisor::ResetSupervisor::spawn(handle.clone());
@@ -276,8 +272,7 @@ fn main() {
 
             // 초기 탭 생성·재스폰·프로비저닝은 **첫 WSL 진단 뒤**에 시작한다 —
             // 진단이 준비되지 않았으면 아무것도 실행하지 않고, 명시적 재검사가
-            // 밀린 작업을 다시 적용한다 (`boot` 모듈 doc). 웨이브의 예열·간격은
-            // 실기 사고 2026-08-20 의 페이싱 그대로다.
+            // 밀린 작업을 다시 적용한다 (`boot` 모듈 doc).
             boot_work.start(
                 handle.clone(),
                 Arc::clone(&dispatcher),
@@ -309,8 +304,8 @@ fn main() {
         // 크기 전이는 프론트 폴링 게이팅 신호다 (아래 각 분기 참조. 서로 독립이고
         // 섞이지 않는다).
         //
-        // 창 포커스 전이 → ① 리셋 정책의 hidden 판정 신호 (계획 C-2), ② 프론트의
-        // needsInput 토스트 억제 판정 신호 (v0.3.7). 설정창은 setup 완료 후
+        // 창 포커스 전이 → ① 리셋 정책의 hidden 판정 신호, ② 프론트의
+        // needsInput 토스트 억제 판정 신호. 설정창은 setup 완료 후
         // 생성되므로 이 시점엔 항상 manage 되어 있다 — 아니라면 신호가 새고 있는
         // 프로그램 결함이라 숨기지 않는다 (publish_state 와 같은 규율).
         .on_window_event(move |window, event| match event {
@@ -341,9 +336,8 @@ fn main() {
                     winlog!("window-focus emit failed (focused={focused}): {err}");
                 }
             }
-            // 최소화 → 프론트 폴링 정지 신호 (체크포인트 2 실기 결함: WebView2
-            // 실환경에서 최소화·Alt+Tab 어느 쪽도 visibilitychange 도
-            // document.hidden 도 주지 않아 마크다운 뷰어의 fs_stat 이 계속 나갔다).
+            // 최소화 → 프론트 폴링 정지 신호. WebView2 는 최소화·Alt+Tab 어느 쪽에도
+            // visibilitychange 도 document.hidden 도 주지 않는다.
             // Windows 에서 tao 는 최소화를 **클라이언트 영역 0x0 의 Resized** 로
             // 보고하므로 그것을 최소화 판정으로 쓴다. 비포커스-가시 상태는 숨김이
             // **아니다** — 다른 창에서 .md 를 편집하며 미리보기를 보는 것이 핵심
@@ -386,7 +380,7 @@ fn main() {
             commands::reset_ui,
             // settings.json 의 UI 설정 (터미널 폰트) — 부팅당 1회, 설정 UI 는 없다.
             commands::get_ui_settings,
-            // WSL 준비 상태 안내 (2026-09-22) — 조회는 부팅·이벤트마다, 재검사는
+            // WSL 준비 상태 안내 — 조회는 부팅·이벤트마다, 재검사는
             // 사용자가 누를 때만, 설정 파일 열기는 버튼을 누를 때만.
             commands::get_wsl_status,
             commands::recheck_wsl,
@@ -400,9 +394,9 @@ fn main() {
             commands::open_url,
             // needsInput OS 토스트 — 탭의 상승 전이 하나에 한 번, 그 탭의 워크스페이스가
             // 지금 화면에 보이지 않을 때만 프론트가 부른다 (판정은
-            // features/notifications/chime.ts, 계약은 커맨드 rustdoc).
+            // features/notifications/needs-input.ts, 계약은 커맨드 rustdoc).
             commands::notify_toast,
-            // 뷰어 파일 접근 (21단계) — 읽기 전용 콘텐츠 플레인.
+            // 뷰어 파일 접근 — 읽기 전용 콘텐츠 플레인.
             commands::fs_list_dir,
             commands::fs_stat,
             commands::fs_read_chunk,
@@ -425,7 +419,7 @@ fn main() {
             // 대화상자를 열 때, 적용은 사용자가 누를 때만 — 둘 다 자동으로 돌지 않는다.
             remote::remote_firewall_status,
             remote::remote_firewall_allow,
-            // Secure Remote(WebTransport) 수명과 UDP 7331 방화벽 (계획 청크 2).
+            // Secure Remote(WebTransport) 수명과 UDP 7331 방화벽.
             secure_remote::secure_remote_start,
             secure_remote::secure_remote_cancel,
             secure_remote::secure_remote_status,
@@ -446,12 +440,12 @@ fn main() {
                     managed.shutdown();
                 }
                 // 종료 직전 대기분 flush — debounce 창(≤500ms) 안의 마지막 변이가
-                // 정상 종료에서 유실되지 않게 한다 (크래시 유실은 계획상 수용).
+                // 정상 종료에서 유실되지 않게 한다 (크래시 유실은 수용한다).
                 match app.try_state::<state::AppState>() {
                     Some(managed) => {
                         // 순서가 계약이다: OSC 라우터를 **먼저** 비워 flush 창
                         // (기본 100ms) 안의 cwd·상태 변경이 상태에 반영되게 한 뒤,
-                        // 그 결과까지 담아 Saver 를 flush 한다 (18단계 glue 계약).
+                        // 그 결과까지 담아 Saver 를 flush 한다.
                         managed.router.flush_now();
                         #[cfg(target_os = "macos")]
                         managed.sessions.shutdown();

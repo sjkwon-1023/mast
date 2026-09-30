@@ -21,6 +21,7 @@ import {
   openPairingDialog,
 } from "./dialog";
 import type { PairingBackend } from "./dialog";
+import { deferred } from "../../test-helpers";
 
 const PAIRING_ID = "pairing-macos-test";
 const LOCAL_URL = "http://192.168.0.5:7331/#t=local-token";
@@ -90,19 +91,6 @@ function backButton(dialog: HTMLDialogElement): HTMLButtonElement {
 
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-interface Deferred<T> {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
 }
 
 afterEach(() => {

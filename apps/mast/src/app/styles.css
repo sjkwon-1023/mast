@@ -11,7 +11,6 @@
   --accent: #007acc;
   --error: #f48771;
   --warn: #d7a55b;
-  --send: #c586c0; /* send-mode 대상 하이라이트 (17단계) — accent·error 와 구분 */
 }
 
 /* 뷰어 글꼴 — `--viewer-font-family` / `--viewer-font-size` 는 여기에 **선언하지
@@ -89,7 +88,7 @@ body {
   overflow: hidden;
 }
 
-/* 상단 상태 라인 — 일시 표시다: send-mode 프롬프트·one-shot 에러가 있을 때만
+/* 상단 상태 라인 — 일시 표시다: one-shot 에러·안내가 있을 때만
    main.ts 가 펼치고, 없으면 hidden 으로 접혀 본문이 그 자리를 가져간다.
    display 를 지정하지 않아 hidden 속성만으로 감춰진다 */
 #status-line {
@@ -1559,22 +1558,6 @@ body {
     border-top: 0;
     border-left: 1px solid var(--border);
   }
-}
-
-/* ── send-mode 대상 선택 (17단계) ──────────────────────────────────────
-   workspace-view 가 #view 에 .send-mode 를 토글한다. pane 전체가 "클릭 = 대상
-   확정"임을 커서(crosshair)와 hover 테두리로 최소 표시한다. 셀렉터에 #view id
-   가 들어가 xterm.css 의 cursor(text 등)보다 특이도가 높다 — !important 불요.
-   현재는 .send-mode 를 켜는 arm 진입점이 UI 에 없어 이 규칙들이 실제로 매치되지
-   않는다 (휴면 — pane-view.ts 상단 주석). 차기 agent-facing 채널이 재배선한다. */
-
-#view.send-mode .pane,
-#view.send-mode .pane * {
-  cursor: crosshair;
-}
-
-#view.send-mode .pane:hover {
-  border-color: var(--send);
 }
 
 /* pane 집계 배지 (18단계) — 이 pane 의 어느 탭이든 미확인 알림이나 응답 대기가 있으면

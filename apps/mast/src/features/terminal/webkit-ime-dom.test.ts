@@ -36,15 +36,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { TerminalView } from "./view";
+import { attachBody, termOf } from "../../test-helpers";
 
 restoreProcessTitle();
-
-/** attach 응답 `[u64 LE end_offset][u8 first_attach][replay bytes]` — 빈 재생. */
-function attachBody(): ArrayBuffer {
-  const out = new Uint8Array(9);
-  out[8] = 1;
-  return out.buffer;
-}
 
 type Change =
   | { kind: "insert"; data: string }
@@ -124,10 +118,6 @@ const SENTENCE: Array<Change[] | string> = [
   [rep("테"), ins("스")], [rep("슽")],
   [ins("트"), rep("스", 2)],
 ];
-
-function termOf(view: TerminalView): Terminal {
-  return (view as unknown as { term: Terminal }).term;
-}
 
 async function attachedView(): Promise<{ view: TerminalView; textarea: HTMLTextAreaElement }> {
   const host = document.createElement("div");

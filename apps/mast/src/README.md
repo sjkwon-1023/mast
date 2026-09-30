@@ -12,7 +12,7 @@ state; the frontend receives revisioned snapshots and renders disposable views.
 | `features/changes/` | Git change selection and diff presentation. |
 | `features/pairing/` | Desktop phone-pairing dialog and firewall feedback. |
 | `features/wsl/` | WSL readiness notice: pure state→copy model, banner DOM and the clipboard helper. |
-| `features/notifications/` | Needs-input notification decisions and the existing dormant chime implementation. |
+| `features/notifications/` | Needs-input notification decisions. |
 | `infrastructure/` | Tauri command/event wrappers, native window visibility, runtime logging and the confirmation dialog (`confirm.ts` — native sheet on macOS). |
 | `shared/` | Serialized Rust contracts, shared keyboard decisions/selectors, command error formatting and font bounds. |
 | `remote/` | Phone browser entry point, HTTP protocol, polling and views. Built separately through `remote/index.html`. `transport.ts` is the network seam the two phone surfaces share; `app.ts` is the shared shell. |

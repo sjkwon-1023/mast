@@ -1,7 +1,7 @@
-// keep-alive 뷰 수명 리컨실 계획 계산 (DOM-free — vitest 대상, 12단계 청크 C).
+// keep-alive 뷰 수명 리컨실 계획 계산 (DOM-free — vitest 대상).
 //
 // 스냅샷마다 workspace-view 가 호출해 "지금 살아 있는 뷰 집합(alive)"을 스냅샷과
-// 대조하고 세 가지를 판정한다 (계획 D3·D4-b):
+// 대조하고 세 가지를 판정한다:
 //
 // - visible: 활성 워크스페이스 각 pane 의 active 탭 중 terminal + pty_session 이
 //   있는 것 — 이번 렌더에서 화면에 배치(없으면 lazy attach)할 뷰.
@@ -18,7 +18,7 @@
 //   (alive 인데 dispose 로 떨어진 탭의 세션은 여기 넣지 않는다 — dispose 쪽이
 //   detach 를 수행하므로 중복이고, detach 는 어차피 멱등이다.)
 
-// 뷰어 탭(21단계)의 수명은 정반대 시맨틱이라 같은 함수에 얹지 않고 별도 순수
+// 뷰어 탭의 수명은 정반대 시맨틱이라 같은 함수에 얹지 않고 별도 순수
 // 함수 planViewerSync 로 둔다 — 파일 하단 참조. planViewSync 는 무변경이다.
 
 import type { TerminalRecordKind, ViewerKind } from "../viewers/viewer-view";
@@ -109,9 +109,9 @@ export function existingTabIds(snapshot: StateSnapshot): Set<TabId> {
   return existing;
 }
 
-// ── 뷰어 탭 수명 (21단계 청크 C1) ────────────────────────────────────────
+// ── 뷰어 탭 수명 ────────────────────────────────────────
 //
-// 터미널의 keep-alive 와 반대다 (계획 v2 "탭 타입별 동작"): 뷰어 뷰는 활성
+// 터미널의 keep-alive 와 반대다: 뷰어 뷰는 활성
 // 워크스페이스 각 pane 의 **active 탭일 때만** 살아 있고, 배경 탭이 되는 순간
 // DOM 을 내린다. 그래서 planViewSync 를 확장하지 않고 반대 판정의 순수 함수를
 // 하나 더 둔다 — 두 레지스트리(views / viewerViews)는 서로 겹치지 않는다.

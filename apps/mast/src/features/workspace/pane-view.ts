@@ -1,45 +1,32 @@
 import { IS_MAC } from "../../shared/platform";
-// pane 1개의 뷰 — 헤더(탭바 + 탭 생성·분할 아이콘) + keep-alive 콘텐츠 영역
-// (12단계 청크 C).
+// pane 1개의 뷰 — 헤더(탭바 + 탭 생성·분할 아이콘) + keep-alive 콘텐츠 영역.
 //
-// 콘텐츠는 keep-alive 다 (계획 D3): 탭별 TerminalView 는 앱 수준 레지스트리
+// 콘텐츠는 keep-alive 다: 탭별 TerminalView 는 앱 수준 레지스트리
 // (workspace-view 소유 Map<TabId, TerminalView>)가 소유하고, 여기서는 ViewRegistry
 // 를 통해 얻어 setVisible(display 토글)로 전환만 한다 — 탭 전환에 dispose/재생성·
 // replay 왕복이 없다. 어떤 탭이 보일지는 view-reconcile(planViewSync)의 visible
 // 판정을 workspace-view 가 pane 별로 내려준다 (판정 로직 단일화). 뷰 생성(lazy
 // attach)은 첫 가시화 때 ensure 로 일어난다.
 //
-// fit 은 pane 당 ResizeObserver 1개(콘텐츠 영역 관찰 — 계획 D7)가 표시 중인 뷰의
+// fit 은 pane 당 ResizeObserver 1개(콘텐츠 영역 관찰)가 표시 중인 뷰의
 // scheduleFit 만 부른다. 뷰당 observer 는 없다 (terminal-view 참조).
 //
-// 클릭 포커스(계획 1-B): 컨테이너 mousedown 을 capture 단계에서 받아 비활성
+// 클릭 포커스: 컨테이너 mousedown 을 capture 단계에서 받아 비활성
 // pane 이면 FocusPane 을 dispatch 한다. preventDefault 는 하지 않는다 — xterm 의
 // 포커스·선택 처리를 강탈하면 안 되기 때문이다. DOM 포커스는 그대로 흘러가고
 // 모델의 active_pane 만 따라온다.
-//
-// send-mode(17단계): 같은 mousedown capture 가 전달 대상 선택 모드 활성 중에는
-// FocusPane 대신 대상 확정(resolve) 경로로 분기한다 — 이때만 예외적으로
-// preventDefault + stopPropagation 한다 (제스처가 순수한 대상 지정이므로 xterm
-// 포커스·선택 개입을 막는다). 소스 캡처는 armSend 가 담당한다.
-//
-// **send-mode 는 현재 휴면이다**: 소스 캡처를 걸던 헤더의 ⤷/⤷⏎ 버튼 2개를 뺐고
-// 다른 arm 진입점을 아직 두지 않아, isActive() 가 언제나 false 라 위 분기도
-// armSend 도 실제로는 타지 않는다. 상태 머신(features/workspace/send-mode.ts)·전달 실행
-// (workspace-view.resolveSend)·터미널 표면(terminal-view)까지 경로 전체를 그대로
-// 남겨 둔 것은 의도다 — 차기 agent-facing 채널이 이 경로에 재배선될 예정이라
-// 지우고 다시 짜지 않는다. 그때 붙일 것은 arm 진입점 하나뿐이다.
 //
 // 헤더 아이콘은 인라인 SVG 다 (폴더·분할 2종) — 유니코드 기호(▤/◫/⊟)는 폰트마다
 // 모양이 갈리고 "무엇을 하는 버튼인지"가 자명하지 않아 그림으로 바꿨다. 마크업은
 // 아래 상수 3개가 전량이고, 전부 이 파일에 박힌 신뢰 소스다 (파일·모델·네트워크
 // 발 문자열이 innerHTML 로 들어오는 경로는 없다 — SVG_* 주석 참조).
 //
-// 탭바 렌더(18단계 B-7): tabStripPlan 판정대로 skip(DOM 무접촉) / patch(탭 버튼
+// 탭바 렌더: tabStripPlan 판정대로 skip(DOM 무접촉) / patch(탭 버튼
 // 노드를 유지한 채 제목·dot·클래스만 갱신) / rebuild(멤버십·순서 변화 → 재조립)
 // 셋으로 갈린다 — renderTabStrip 주석 참조. 헤더에는 pane 층 집계 배지(●)가
-// 붙는다 (계획 v2 9장: 탭 → pane → 워크스페이스 3층).
+// 붙는다.
 //
-// 뷰어 탭(21단계): 콘텐츠 영역에는 터미널 뷰(keep-alive)와 뷰어 뷰(활성 탭만
+// 뷰어 탭: 콘텐츠 영역에는 터미널 뷰(keep-alive)와 뷰어 뷰(활성 탭만
 // 마운트)가 공존한다. 어느 쪽이 이번 렌더의 표시 대상인지는 workspace-view 가
 // planViewSync(visible)·planViewerSync(mount) 판정으로 내려주고, 여기서는 그
 // 둘 중 하나를 shown 으로 삼는다 — **shownTab = 표시 중인 탭**(터미널이든 뷰어든)
@@ -82,7 +69,7 @@ export interface ViewRegistry {
   ): TerminalView;
 }
 
-/** 뷰어 뷰 레지스트리 접근 계약 (21단계) — 소유자는 workspace-view 다.
+/** 뷰어 뷰 레지스트리 접근 계약 — 소유자는 workspace-view 다.
  *  터미널과 별도 레지스트리인 이유는 수명 시맨틱이 반대이기 때문이다
  *  (features/viewers/viewer-view.ts 참조). ensure 는 없으면 생성해 parent 에 마운트한다. 뷰어
  *  네 종류가 모두 착지한 지금 null 은 나오지 않지만, 반환 타입에는 남겨 pane 이
@@ -90,23 +77,6 @@ export interface ViewRegistry {
 export interface ViewerRegistry {
   get(tab: TabId): ViewerView | undefined;
   ensure(target: VisibleViewer, parent: HTMLElement): ViewerView | null;
-}
-
-/** send-mode 접근 계약 (17단계) — 소유자는 workspace-view 다. pane-view 는
- *  소스 캡처(arm)·대상 확정(resolve)·활성 판정(isActive)·캡처 실패 표면화
- *  (flashError)만 부른다. 상태 머신 자체는 features/workspace/send-mode.ts (순수).
- *
- *  arm 진입점이 UI 에서 빠져 계약 전체가 휴면이다 (파일 상단 주석) — 구현은
- *  살아 있고 부르는 쪽만 없다. */
-export interface SendController {
-  /** 대상 선택 모드 활성 여부 — mousedown 분기 판정. */
-  isActive(): boolean;
-  /** 소스 캡처 성공 후 모드 진입 — 프롬프트·Esc 배선은 소유자가 처리한다. */
-  arm(source: PaneId, text: string, submit: boolean): void;
-  /** 대상 확정 (자기 자신 = 취소 판정 포함) — 전달 실행도 소유자 몫이다. */
-  resolve(target: PaneId): void;
-  /** 캡처 실패(무선택·터미널 없음) one-shot 에러 — 조용한 no-op 금지. */
-  flashError(message: string): void;
 }
 
 /** 탭 버튼 1개의 DOM 노드 묶음 — in-place 패치 대상. model 은 이 버튼이 지금
@@ -167,14 +137,11 @@ function placeholderText(tab: Tab | null): string {
       // Running 탭(세션이 아직 없다 — 부팅 웨이브가 닿기 전)과 NotStarted 탭이다.
       return "(terminal tab without pty session)";
     case "folderBrowser":
-      // 21단계 C1 이후로 folderBrowser 는 항상 마운트된다 — 이 문구는 뷰
-      // 생성이 없었던 경우에만 남는 안전망이다.
+      // 뷰어는 항상 마운트되므로 아래 문구들은 뷰 생성이 실패했을 때의 안전망이다.
       return `folderBrowser: ${kind.path} (no viewer mounted)`;
     case "textViewer":
-      // 21단계 C2 이후로 textViewer 도 항상 마운트된다 (위와 같은 안전망).
       return `textViewer: ${kind.path} (no viewer mounted)`;
     case "markdownViewer":
-      // 21단계 D 이후로 markdownViewer 도 항상 마운트된다 (위와 같은 안전망).
       return `markdownViewer: ${kind.path} (no viewer mounted)`;
     case "changesViewer":
       return `changesViewer: ${kind.path} (no viewer mounted)`;
@@ -245,13 +212,10 @@ export class PaneView {
     private readonly dispatch: DispatchFn,
     private readonly views: ViewRegistry,
     private readonly viewers: ViewerRegistry,
-    /** send-mode 접근 계약 — 현재 arm 진입점이 없어 휴면이다 (파일 상단 주석).
-     *  계약은 유지한다: 차기 agent-facing 채널이 여기에 재배선된다. */
-    private readonly send: SendController,
   ) {
     this.root = document.createElement("div");
     this.root.className = "pane";
-    // 진단 (체크포인트 1 버그 3): DOM 상 어느 슬롯에 어느 pane 의 뷰가 앉았는지
+    // 진단: DOM 상 어느 슬롯에 어느 pane 의 뷰가 앉았는지
     // devtools·rebuild 로그에서 즉시 판별할 수 있게 id 를 데이터 속성으로 남긴다.
     this.root.dataset.paneId = String(paneId);
 
@@ -265,7 +229,7 @@ export class PaneView {
     this.tabStripEl = document.createElement("div");
     this.tabStripEl.className = "pane-tabs";
 
-    // pane 층 집계 배지 (18단계 B-7) — 값에 따라 있다 없다 하지만 노드는 상주
+    // pane 층 집계 배지 — 값에 따라 있다 없다 하지만 노드는 상주
     // 시키고 hidden 만 토글한다 (헤더 자식이 들락날락하지 않게).
     this.unreadEl = document.createElement("span");
     this.unreadEl.className = "pane-dot";
@@ -282,17 +246,6 @@ export class PaneView {
         // 탭 클릭도 이 경로가 FocusPane 을 담당한다 (onTabClick 주석 참조).
         // 주 버튼만 — 우/중클릭은 컨텍스트 메뉴·붙여넣기 등 다른 의미를 갖는다.
         if (ev.button !== 0) return;
-        // send-mode 대상 확정 (17단계 D2) — FocusPane 대신 resolve 경로. 이
-        // 제스처는 순수한 대상 지정이므로 예외적으로 기본 동작·전파를 끊는다
-        // (파일 상단 주석). 자기 자신 클릭 = 취소 판정은 send-mode 상태 머신 몫.
-        // 현재는 arm 진입점이 없어 isActive() 가 항상 false 라 이 분기는 죽어
-        // 있다 — 재배선 시 그대로 살아난다 (파일 상단 휴면 주석).
-        if (this.send.isActive()) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          this.send.resolve(this.paneId);
-          return;
-        }
         if (!this.isActive) void this.dispatch({ type: "focusPane", pane: this.paneId });
       },
       { capture: true },
@@ -306,9 +259,7 @@ export class PaneView {
   }
 
   /** 현재 표시 중인 탭 — 터미널 뷰든 뷰어 뷰든 지금 콘텐츠 영역을 차지한 탭이다
-   *  (파일 상단 shown 시맨틱). workspace-view 의 focus 보상·send-mode 대상 판정이
-   *  조회한다 — 뷰어 탭이 shown 이면 TerminalView 레지스트리에서 미스가 나
-   *  "대상에 터미널이 없다" 에러로 떨어진다 (resolveSend). */
+   *  (파일 상단 shown 시맨틱). workspace-view 의 focus 보상이 조회한다. */
   get shownTab(): TabId | null {
     return this.shown;
   }
@@ -395,7 +346,7 @@ export class PaneView {
         pane: this.paneId,
         tab: { type: "terminal", cwd: paneTerminalCwd(this.pane) },
       }), shortcutBadge("newTerminalTab")),
-      // 폴더 탐색 탭 (21단계) — path null 이면 워크스페이스 rootPath, 그것도
+      // 폴더 탐색 탭 — path null 이면 워크스페이스 rootPath, 그것도
       // 없으면 "/" 로 코어가 해석한다 (terminal 의 cwd 와 대칭).
       this.svgButton(SVG_FOLDER, withShortcut("New folder browser tab", "newFolderTab"), () => ({
         type: "createTab",
@@ -413,14 +364,8 @@ export class PaneView {
         type: "createTab", pane: this.paneId, tab: {type: "browser", url: ""},
       })),
 
-      // 전달 아이콘 2개(⤷ = 전달, ⤷⏎ = 전달 후 실행)도 여기 있었다 — 수동
-      // 마우스 제스처가 실사용 워크플로가 아니라 **버튼만** 뺐다. 뒤에 있던
-      // send-mode 경로(armSend → SendController → workspace-view.resolveSend)는
-      // 전부 그대로다 (파일 상단 휴면 주석) — 차기 agent-facing 채널이 arm 을
-      // 다시 부를 때 버튼 없이 살아난다.
-
       // 분할은 원자 SplitPane — 새 pane 에 terminal 탭까지 한 번에 생성한다
-      // (계획 D5: 컴포지션 금지, 중간 스냅샷 1프레임 렌더 방지).
+      // (중간 스냅샷이 1프레임 렌더되지 않게).
       this.svgButton(
         SVG_SPLIT_LEFT_RIGHT,
         "Split left/right",
@@ -443,29 +388,6 @@ export class PaneView {
       ),
     );
     return header;
-  }
-
-  /** 전달 소스 캡처 (17단계 D2) — 이 pane 의 표시 중 터미널에서 선택 텍스트를
-   *  캡처해 대상 선택 모드로 arm 한다. 캡처 불가(빈 pane·뷰어 탭·무선택)는 상태
-   *  라인 one-shot 에러로 표면화한다 — 조용한 no-op 금지.
-   *
-   *  **호출자가 없다 (휴면)**: 이걸 부르던 헤더의 ⤷/⤷⏎ 버튼을 뺐고 다른 진입점을
-   *  아직 두지 않았다. 차기 agent-facing 채널이 붙일 지점이 정확히 여기라 구현을
-   *  남겨 둔다 (파일 상단 주석). 재배선은 이 메서드를 부르는 것으로 끝난다 —
-   *  아래 계층(SendController → features/workspace/send-mode.ts → workspace-view.resolveSend →
-   *  terminal-view.paste/submit)은 전부 온전하다. */
-  private armSend(submit: boolean): void {
-    const view = this.shown === null ? undefined : this.views.get(this.shown);
-    if (view === undefined) {
-      this.send.flashError("cannot send: no terminal shown in this pane");
-      return;
-    }
-    const text = view.getSelection();
-    if (text.length === 0) {
-      this.send.flashError("no selection to send");
-      return;
-    }
-    this.send.arm(this.paneId, text, submit);
   }
 
   /** 아이콘 SVG 버튼 — 라벨이 텍스트가 아니라 마크업이라는 점만 iconButton 과
@@ -544,14 +466,12 @@ export class PaneView {
   /** 현재 스트립에 붙어 있는 탭 버튼 노드 — tab id 키잉, patch 판정의 대상. */
   private readonly tabNodes = new Map<TabId, TabNodes>();
 
-  /** 탭바 갱신 (18단계 B-7) — tabStripPlan 판정대로 skip/patch/rebuild.
+  /** 탭바 갱신 — tabStripPlan 판정대로 skip/patch/rebuild.
    *
    *  클릭 진행 중(mousedown~click 사이)에 렌더가 눌린 탭 엘리먼트를 갈아치우면
    *  브라우저가 click 을 발화하지 않아 "비활성 pane 탭은 두 번 클릭해야 먹는"
-   *  버그가 된다 (ADR-0003 결정 7). 12단계의 "모델 직렬화 키가 같으면 스킵" 가드로
-   *  그 창을 닫아 뒀지만, 18단계에서 제목(OSC 0/2)과 unread 가 동적 필드가 되면서
-   *  무관한 알림 하나로도 키가 달라져 가드가 상시로 뚫린다 — 그래서 스킵은 skip
-   *  판정으로만 남기고, 값이 변한 경우의 기본 경로를 in-place 패치로 바꾼다. */
+   *  버그가 된다 (ADR-0003 결정 7). 제목(OSC 0/2)과 unread 는 알림마다 바뀌므로 값이
+   *  변한 경우의 기본 경로는 노드를 유지하는 in-place 패치다. */
   private renderTabStrip(pane: Pane): void {
     const model = tabStripModel(pane);
     const prev = this.lastStrip;
@@ -672,13 +592,13 @@ export class PaneView {
   private onTabClick(model: TabButtonModel): void {
     if (!model.active) {
       // ActivateTab 성공 시의 뷰 focus 는 main.dispatchUI 의 보상 경로가
-      // requestFocus 로 처리한다 (계획 D7).
+      // requestFocus 로 처리한다.
       void this.dispatch({ type: "activateTab", tab: model.tab });
       return;
     }
     // 이미 active 탭: dispatch 없이(no-op 스킵) 뷰 focus 만. pane 이 비활성인
     // 경우는 mousedown 의 FocusPane 성공 보상이 focus 를 처리한다. 뷰어 탭도
-    // focus() 를 갖는다 (21단계 — 두 레지스트리는 키가 겹치지 않는다).
+    // focus() 를 갖는다.
     if (this.isActive) (this.views.get(model.tab) ?? this.viewers.get(model.tab))?.focus();
   }
 
@@ -693,7 +613,7 @@ export class PaneView {
 
   /** pane 뷰 해제 — observer·DOM 만 정리한다. 터미널 뷰는 레지스트리 소유라
    *  여기서 dispose 하지 않는다 — pane 이 닫히면 그 탭들이 스냅샷에서 사라져
-   *  view-reconcile 의 dispose 목록으로 정리된다 (계획 D3). */
+   *  view-reconcile 의 dispose 목록으로 정리된다. */
   dispose(): void {
     this.resizeObserver.disconnect();
     this.root.remove();

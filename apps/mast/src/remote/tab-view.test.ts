@@ -16,6 +16,7 @@ import { TabView } from "./tab-view";
 import { RemoteError, TransportClosedError } from "./transport";
 import type { RemoteTransport, ScreenReply } from "./transport";
 import type { TabId } from "../shared/types";
+import { deferred } from "../test-helpers";
 
 // 브래킷 붙여넣기를 켜는 시퀀스가 앞에 있어야 Send 가 텍스트를 감싼다.
 const PROMPT = "kwon1@pc:~$ ls\r\napps  crates  docs\r\nkwon1@pc:~$ ";
@@ -160,21 +161,6 @@ async function mountWith(impl: FetchImpl): Promise<TabView> {
   mounted.start();
   await until(() => !textarea.disabled, "input to become enabled");
   return mounted;
-}
-
-/** resolve/reject 를 밖에서 쥐는 promise — "요청 진행 중 이탈" 을 만들 때 쓴다. */
-function deferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason?: unknown) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 describe("TabView first frame", () => {

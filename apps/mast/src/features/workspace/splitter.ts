@@ -1,4 +1,4 @@
-// split 컨테이너 사이 4px 드래그 핸들 (계획 D2).
+// split 컨테이너 사이 4px 드래그 핸들.
 //
 // 드래그 중에는 dispatch 없이 양쪽 자식의 flex-grow 만 로컬 갱신(프리뷰)하고,
 // 드래그 활성 가드(guard.begin)를 등록해 그 사이 도착하는 스냅샷(SessionExited
@@ -10,7 +10,7 @@
 import { flexPair, ratioFromPointer } from "./split-layout";
 import type { Command, CommandOutput, SplitDirection, SplitId } from "../../shared/types";
 
-/** 드래그 클램프의 pane 최소 픽셀 (계획 D2 픽셀 클램프). */
+/** 드래그 클램프의 pane 최소 픽셀. */
 export const MIN_PANE_PX = 80;
 
 /** 드래그 시작값과 이 폭 미만 차이면 dispatch 를 생략한다 — 제자리 드래그가

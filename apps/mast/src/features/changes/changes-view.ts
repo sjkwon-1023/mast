@@ -46,10 +46,6 @@ export function gitChangeLabel(change: GitChange): string {
   return change.path;
 }
 
-function describeError(error: unknown): string {
-  return typeof error === "string" ? error : String(error);
-}
-
 export class ChangesView implements ViewerView {
   readonly root: HTMLDivElement;
   private readonly rootPathEl: HTMLSpanElement;
@@ -245,9 +241,9 @@ export class ChangesView implements ViewerView {
         if (this.disposed || request !== this.statusRequest) return;
         this.statusLoading = false;
         this.status = null;
-        this.statusError = describeError(error);
+        this.statusError = String(error);
         this.clearSelection();
-        this.setStatusNotice(`cannot read git status: ${describeError(error)}`, true);
+        this.setStatusNotice(`cannot read git status: ${error}`, true);
         this.updateControls();
         this.renderList();
       },
@@ -408,7 +404,7 @@ export class ChangesView implements ViewerView {
         this.diffEmptyEl.hidden = true;
         this.diffNoticeEl.hidden = false;
         this.diffNoticeEl.classList.add("error");
-        this.diffNoticeEl.textContent = `cannot read diff: ${describeError(error)}`;
+        this.diffNoticeEl.textContent = `cannot read diff: ${error}`;
       },
     );
   }

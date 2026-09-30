@@ -130,7 +130,7 @@ impl SecureRemoteCommandError {
     }
 }
 
-/// 서버 생성에 쓰는 고정 값. 프로덕션 기본값이 계약이고(포트 7331·계획의 타임아웃),
+/// 서버 생성에 쓰는 고정 값. 프로덕션 기본값이 계약이고(포트 7331·ADR-0028 의 타임아웃),
 /// 테스트는 포트 0(OS 배정)과 짧은 대기 창으로 **같은 경로**를 돈다 — 판정 코드에
 /// 테스트 전용 분기를 만들지 않기 위한 이음매다.
 #[derive(Clone)]
@@ -331,14 +331,14 @@ impl SecureRemoteManager {
     }
 
     /// 취소. 같은 ID 의 살아 있는 서버에만 정지를 지시하고, 인증이 먼저 승인된
-    /// 세션이면 코어가 `false` 를 돌려주므로 그대로 둔다 (계획 계약).
+    /// 세션이면 코어가 `false` 를 돌려주므로 그대로 둔다.
     fn cancel(&self, pairing_id: &str) -> SecureRemoteStatus {
         {
             let mut shared = self.lock();
             shared.remember_cancelled(pairing_id);
             if let Some(active) = shared.active.as_mut() {
                 // 인증이 먼저 승인된 세션이면 `cancel()` 이 false 를 돌려준다 — 그때는
-                // 살아 있는 연결의 수명에 맡긴다 (계획 계약).
+                // 살아 있는 연결의 수명에 맡긴다.
                 if active.pairing_id == pairing_id
                     && !active.server.is_finished()
                     && active.server.cancel()

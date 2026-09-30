@@ -2,14 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { UpdateInfo } from "../infrastructure/backend";
 import { initUpdateNotice } from "./update-notice";
-
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "../test-helpers";
 
 const cachedInfo: UpdateInfo = {
   currentVersion: "0.3.31",

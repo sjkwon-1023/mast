@@ -17,23 +17,21 @@ import { markdownDraft, keepMarkdownDraft, discardMarkdownDraft, markdownSaved, 
 //    렌더·편집을 거부하고 "open as text" 안내만 준다.
 //    마크다운 렌더는 파일 전체를 문자열로 올려야 해서 textViewer 의 윈도우 전략
 //    (메모리 상주 = 창 1개)이 성립하지 않기 때문이다.
-// 3. **폴링 수명 = 뷰 수명** (계획 21단계). 뷰어 뷰는 활성 탭일 때만 마운트되므로
+// 3. **폴링 수명 = 뷰 수명**. 뷰어 뷰는 활성 탭일 때만 마운트되므로
 //    (features/viewers/viewer-view.ts) 폴링 자체가 활성 탭 한정이고, 별도 게이팅이 필요 없다.
 //    대신 dispose 에서 타이머·리스너·구독을 반드시 정리해야 하며(누수 금지),
 //    창이 숨은 동안은 아예 무장하지 않는다 (숨은 창의 9P 왕복 0). 숨김 판정은
-//    `document.hidden` **또는** 창 최소화(infrastructure/window-visibility.ts)다 — 체크포인트 2
-//    실기에서 WebView2 가 최소화·Alt+Tab 에 visibilitychange 도 document.hidden 도
-//    주지 않아 fs_stat 이 계속 나갔기 때문이다. 최소화만 숨김으로 치고 비포커스-
+//    `document.hidden` **또는** 창 최소화(infrastructure/window-visibility.ts)다 — WebView2 는
+//    최소화·Alt+Tab 에 visibilitychange 도 document.hidden 도 주지 않는다. 최소화만 숨김으로 치고 비포커스-
 //    가시 상태는 폴링을 유지한다 (다른 창에서 .md 를 편집하며 미리보기를 보는 것이
 //    핵심 사용례 — 근거는 infrastructure/window-visibility.ts). 상태기계는 DOM 무의존 클래스
-//    MtimePoller 로 분리해 주입 타이머로 테스트한다 (ack-batcher 전례 — 이 레포에
-//    setInterval 은 없다).
+//    MtimePoller 로 분리해 주입 타이머로 테스트한다.
 //
 // 스크롤 왕복은 textViewer 의 인프라(ScrollSettle·shouldAdoptScroll)를 그대로
 // 재사용한다. 단위만 다르다: textViewer 는 전역 byte offset, markdownViewer 는
 // 렌더 컨테이너의 **px** 다 (모델 TabKind rustdoc 이 정본).
 //
-// 그 px 좌표가 **줌**(v0.3.8)과 정면으로 부딪힌다: 글자 크기가 바뀌면 산문이
+// 그 px 좌표가 **줌**과 정면으로 부딪힌다: 글자 크기가 바뀌면 산문이
 // 리플로우돼 문서 전체 높이가 달라지므로 같은 px 가 다른 자리를 가리킨다. 그래서
 // 이 뷰는 viewer-font 의 레지스트리에 등록해 크기가 바뀔 때 상대 위치 앵커로
 // 화면을 되돌린다 (beforeViewerFontSize / setViewerFontSize).
@@ -48,6 +46,7 @@ import { registerViewerFontTarget, unregisterViewerFontTarget } from "../viewer-
 import type { ViewerFontTarget } from "../viewer-font";
 import { isWindowHidden, onWindowHiddenChange } from "../../../infrastructure/window-visibility";
 import type { ViewerKind, ViewerView } from "../viewer-view";
+import { setBanner } from "../viewer-view";
 import type { Command, CommandOutput, PaneId, TabId } from "../../../shared/types";
 
 /** UI 발 dispatch — main.ts dispatchUI 래퍼 (실패는 상태 라인에 표면화되고 null). */
@@ -204,12 +203,6 @@ export class MtimePoller {
   }
 }
 
-/** 로드 실패 payload 의 표시 문자열 — 글루는 `Result<_, String>` 이라 문자열이
- *  오지만, IPC 레벨 실패 등 계약 밖 값도 삼키지 않는다. */
-function describeError(err: unknown): string {
-  return typeof err === "string" ? err : String(err);
-}
-
 /** 순수 — 로케일에 기대지 않는다. */
 function formatMiB(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
@@ -322,8 +315,8 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
 
     this.bodyEl = document.createElement("div");
     this.bodyEl.className = "markdown-body";
-    // 링크는 href 가 없어 이미 무동작이지만, 클릭 자체도 기본 동작을 끊는다
-    // (계획 21단계 — 뷰어에서 문서 밖으로 나가는 경로를 만들지 않는다).
+    // 링크는 href 가 없어 이미 무동작이지만, 뷰어에서 문서 밖으로 나가는 경로를 만들지
+    // 않도록 클릭 자체도 기본 동작을 끊는다.
     this.bodyEl.addEventListener("click", this.onBodyClick);
     this.scrollEl.append(this.bodyEl);
 
@@ -386,7 +379,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
         this.beginEdit(draft.text, false);
       } else this.load(false);
     } catch (error) {
-      this.setBanner(`Cannot restore draft: ${describeError(error)}`, true);
+      setBanner(this.bannerEl, `Cannot restore draft: ${error}`, true);
     }
   }
 
@@ -400,7 +393,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     this.scrollEl.hidden = true;
     this.editButton.hidden = true;
     this.saveButton.hidden = this.cancelButton.hidden = false;
-    this.setBanner(`Editing — ${IS_MAC ? "⌘S" : "Ctrl+S"} to save. Unsaved edits survive tab switches and WebView reloads.`, false);
+    setBanner(this.bannerEl, `Editing — ${IS_MAC ? "⌘S" : "Ctrl+S"} to save. Unsaved edits survive tab switches and WebView reloads.`, false);
     if (focus) this.editor.focus();
   }
 
@@ -413,7 +406,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
       else keepMarkdownDraft(this.tab, { path: this.path, distro: this.distro, base, text: this.editor.value });
     } catch (error) {
       this.editor.value = previous?.text ?? this.source;
-      this.setBanner(`This change was not accepted because draft backup failed. Save existing edits before continuing: ${describeError(error)}`, true);
+      setBanner(this.bannerEl, `This change was not accepted because draft backup failed. Save existing edits before continuing: ${error}`, true);
     }
   }
 
@@ -436,7 +429,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
       this.endEdit();
       this.load(true);
     } catch (error) {
-      if (!this.disposed) this.setBanner(`${written ? "File saved, but draft cleanup failed" : "Could not save"}: ${describeError(error)}`, true);
+      if (!this.disposed) setBanner(this.bannerEl, `${written ? "File saved, but draft cleanup failed" : "Could not save"}: ${error}`, true);
     } finally {
       this.saving = false;
       this.editor.disabled = this.saveButton.disabled = this.cancelButton.disabled = false;
@@ -450,7 +443,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
       try {
         ok = await confirmAction("Discard unsaved Markdown edits?");
       } catch (error) {
-        if (!this.disposed) this.setBanner(`Could not confirm discarding edits: ${describeError(error)}`, true);
+        if (!this.disposed) setBanner(this.bannerEl, `Could not confirm discarding edits: ${error}`, true);
         return;
       }
       // 확인을 기다리는 사이 탭이 닫혔거나 저장이 시작됐거나 편집이 끝났으면 손대지 않는다.
@@ -583,10 +576,10 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
   private load(live: boolean): void {
     if (this.editing) return;
     const token = ++this.loadToken;
-    if (!live) this.setBanner("loading…", false);
+    if (!live) setBanner(this.bannerEl, "loading…", false);
     this.loadDocument(token).catch((err: unknown) => {
       if (this.disposed || token !== this.loadToken) return;
-      this.renderError(describeError(err));
+      this.renderError(String(err));
       // 실패는 폴링을 재시도 모드로 돌린다: baseline 을 실존 불가능한 값으로
       // 고정하면 다음 성공 stat 의 mtime 이 반드시 달라 자동 재로드가 걸린다 —
       // 9P 과도 실패는 다음 주기에 스스로 낫고, 첫 로드부터 실패한 탭(없는
@@ -617,7 +610,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
     this.source = source;
     this.editButton.disabled = false;
 
-    this.setBanner(null, false);
+    setBanner(this.bannerEl, null, false);
     this.showHtml(renderMarkdown(source));
   }
 
@@ -642,7 +635,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
   private renderTooLarge(size: number): void {
     this.source = null;
     this.editButton.disabled = true;
-    this.setBanner(
+    setBanner(this.bannerEl, 
       `not rendered: ${formatMiB(size)} exceeds the ${formatMiB(MARKDOWN_MAX_BYTES)} markdown limit`,
       true,
     );
@@ -674,12 +667,7 @@ export class MarkdownView implements ViewerView, ViewerFontTarget {
    *  배너 아래에 그대로 유지한다. 첫 로드 실패면 본문이 원래 비어 있어 배너만
    *  남는 기존 표시와 같다. */
   private renderError(message: string): void {
-    this.setBanner(`cannot read ${this.path}: ${message}`, true);
+    setBanner(this.bannerEl, `cannot read ${this.path}: ${message}`, true);
   }
 
-  private setBanner(text: string | null, error: boolean): void {
-    this.bannerEl.textContent = text ?? "";
-    this.bannerEl.hidden = text === null;
-    this.bannerEl.classList.toggle("error", error);
-  }
 }

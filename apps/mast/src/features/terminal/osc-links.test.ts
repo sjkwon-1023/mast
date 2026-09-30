@@ -25,17 +25,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { TerminalView } from "./view";
-
-/** attach 응답 `[u64 LE end_offset][u8 first_attach][replay bytes]` — 빈 재생. */
-function attachBody(): ArrayBuffer {
-  const out = new Uint8Array(9);
-  out[8] = 1; // firstAttach — replayDone 이 즉시 선다.
-  return out.buffer;
-}
-
-function termOf(view: TerminalView): Terminal {
-  return (view as unknown as { term: Terminal }).term;
-}
+import { attachBody, termOf } from "../../test-helpers";
 
 async function linksOf(term: Terminal, providerIndex: number): Promise<ILink[]> {
   // 실제 브라우저 번들의 OSC 8 제공자와 일반 URL 제공자를 각각 실행한다.
