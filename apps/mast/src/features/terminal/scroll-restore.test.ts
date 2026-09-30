@@ -41,28 +41,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { TerminalView } from "./view";
-
-function u64le(n: number): Uint8Array {
-  const out = new Uint8Array(8);
-  new DataView(out.buffer).setBigUint64(0, BigInt(n), true);
-  return out;
-}
-
-/** attach 응답 `[u64 LE end_offset][u8 first_attach][replay bytes]`. */
-function attachBody(replay: string, firstAttach: boolean): ArrayBuffer {
-  const bytes = new TextEncoder().encode(replay);
-  const out = new Uint8Array(9 + bytes.byteLength);
-  out.set(u64le(0), 0);
-  out[8] = firstAttach ? 1 : 0;
-  out.set(bytes, 9);
-  return out.buffer;
-}
+import { attachBody, termOf } from "../../test-helpers";
 
 /** 채널 프레임 `[u64 LE offset][bytes]`. */
 function frame(offset: number, text: string): ArrayBuffer {
   const bytes = new TextEncoder().encode(text);
   const out = new Uint8Array(8 + bytes.byteLength);
-  out.set(u64le(offset), 0);
+  new DataView(out.buffer).setBigUint64(0, BigInt(offset), true);
   out.set(bytes, 8);
   return out.buffer;
 }
@@ -80,13 +65,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** 사용자 스크롤을 흉내내는 우회로 — xterm 의 휠·PageUp 경로는 happy-dom 에
- *  레이아웃이 없어 버퍼에 닿지 않는다 (viewport 의 offsetParent 부재로 스크롤
- *  이벤트가 버려진다). 취소 신호처럼 DOM 이벤트로 재현되는 것은 실제 이벤트로
- *  보내고(아래 wheel), 스크롤 자체만 여기서 만든다. */
-function termOf(view: TerminalView): Terminal {
-  return (view as unknown as { term: Terminal }).term;
-}
+// 사용자 스크롤은 termOf(view).scrollLines 로 흉내낸다 — xterm 의 휠·PageUp 경로는
+// happy-dom 에 레이아웃이 없어 버퍼에 닿지 않는다. 취소 신호처럼 DOM 이벤트로 재현되는
+// 것은 실제 이벤트(wheel)로 보낸다.
 
 function viewportOf(view: TerminalView): { baseY: number; viewportY: number } {
   const buffer = termOf(view).buffer.active;

@@ -21,6 +21,20 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { assembleSetupScript, embeddedFiles, setupVersion } from "./setup-script";
+import {
+  AGY_MAST,
+  claudeGroup,
+  fileText,
+  fingerprint,
+  FRESH_CLAUDE,
+  FRESH_CODEX,
+  idle,
+  needsInput,
+  NOTIFY_CMD,
+  readJson,
+  running,
+  shellQuote,
+} from "./provision-fixtures";
 
 // 설치 스크립트 전체를 WSL 에서처럼 bash -s 로 흘려 넣는다. Windows 러너에는 bash·/proc 가 없어
 // 건너뛰고, Linux 에서 도구가 없으면 skip 이 아니라 실패로 드러낸다.
@@ -82,61 +96,8 @@ const INSTALLED_FROM_REPO: [name: string, executable: boolean][] = [
   ["mast-opencode-plugin.js", false],
 ];
 
-const NOTIFY_CMD = '"$HOME/.mast/bin/mast-notify.sh"';
-const CLAUDE_HOOK_CMD = '"$HOME/.mast/bin/mast-claude-hook.sh"';
-const CODEX_HOOK_CMD = '"$HOME/.mast/bin/mast-codex-hook.sh"';
-const AGY_HOOK_CMD = '"$HOME/.mast/bin/mast-agy-hook.sh"';
-const NEEDS_INPUT_MATCHER = [
-  "permission_prompt",
-  "elicitation_dialog",
-  "elicitation_url_dialog",
-  "agent_needs_input",
-  "quota_auto_resume_stale",
-  "worker_permission_prompt",
-].join("|");
-
-const claudeGroup = (command: string, matcher = "") => ({ matcher, hooks: [{ type: "command", command }] });
-const running = claudeGroup(`${NOTIFY_CMD} mast:running`);
-const needsInput = claudeGroup(`${NOTIFY_CMD} mast:needsInput 'needs input'`, NEEDS_INPUT_MATCHER);
-const idle = claudeGroup(`${NOTIFY_CMD} mast:idle done`);
-const dispatcher = claudeGroup(CLAUDE_HOOK_CMD);
-
 const CLAUDE_STATUS_ONLY = { hooks: { UserPromptSubmit: [running], Notification: [needsInput], Stop: [idle] } };
-const CLAUDE_WITH_DISPATCHER = {
-  hooks: {
-    SessionStart: [dispatcher],
-    UserPromptSubmit: [running, dispatcher],
-    PermissionRequest: [dispatcher],
-    PostToolUse: [dispatcher],
-    PostToolUseFailure: [dispatcher],
-    PostToolBatch: [dispatcher],
-    SubagentStop: [dispatcher],
-    Notification: [needsInput],
-    Stop: [idle, dispatcher],
-  },
-};
-
-const codexGroup = (timeout: number, async = false) => ({
-  hooks: [{ type: "command", command: CODEX_HOOK_CMD, timeout, ...(async ? { async: true } : {}) }],
-});
-const CODEX_HOOKS = {
-  hooks: {
-    UserPromptSubmit: [codexGroup(5)],
-    PreToolUse: [codexGroup(5)],
-    PermissionRequest: [codexGroup(10, true)],
-    PostToolUse: [codexGroup(5)],
-    SubagentStop: [codexGroup(5)],
-    Stop: [codexGroup(5)],
-    Interrupt: [codexGroup(3)],
-  },
-};
-
-const AGY_HOOKS = {
-  mast: {
-    PreInvocation: [{ type: "command", command: `${AGY_HOOK_CMD} running`, timeout: 5 }],
-    Stop: [{ type: "command", command: `${AGY_HOOK_CMD} idle`, timeout: 5 }],
-  },
-};
+const AGY_HOOKS = { mast: AGY_MAST };
 
 // setup v13 이 실제로 쓴 settings.json 은 이 객체의 JSON.stringify(…, null, 2) + "\n" 과 바이트까지 같다
 // (provision-hooks.test.ts 가 88714ad 의 출력 원문을 고정해 둔 V13_FRESH 와 대조).
@@ -164,23 +125,6 @@ type Python =
   | { interpreter: string }
   // 설치 스크립트의 버전 검사 코드를 그대로 돌리되 sys.version_info 만 이 값으로 바꾼다.
   | { reports: [number, number, number] };
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function fileText(value: unknown): string {
-  return `${JSON.stringify(value, null, 2)}\n`;
-}
-
-function readJson(path: string): unknown {
-  return JSON.parse(readFileSync(path, "utf8"));
-}
-
-function fingerprint(path: string): { text: string; ino: number; mtimeMs: number } {
-  const stats = statSync(path);
-  return { text: readFileSync(path, "utf8"), ino: stats.ino, mtimeMs: stats.mtimeMs };
-}
 
 class Distro {
   readonly root = mkdtempSync(join(ROOT, "case-"));
@@ -441,8 +385,8 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     for (const name of EXECUTABLES) expect(statSync(distro.path(".mast", "bin", name)).mode & 0o111).not.toBe(0);
     expect(readFileSync(distro.path(".mast", "bin", "mast-python"), "utf8")).toBe(`${join(distro.tools, "python3")}\n`);
 
-    expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_WITH_DISPATCHER);
-    expect(readJson(distro.codexHooks())).toEqual(CODEX_HOOKS);
+    expect(readJson(distro.claudeSettings())).toEqual(FRESH_CLAUDE);
+    expect(readJson(distro.codexHooks())).toEqual(FRESH_CODEX);
     expect(readJson(distro.agyHooks())).toEqual(AGY_HOOKS);
     expect(readFileSync(distro.path(".codex", "config.toml"), "utf8")).toContain("mast-codex-notify.sh");
 
@@ -647,8 +591,8 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(run.status).toBe(0);
     expect(run.stderr).toEqual([distro.trustNotice()]);
     expect(distro.marker()).toBe(true);
-    expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_WITH_DISPATCHER);
-    expect(readJson(distro.codexHooks())).toEqual(CODEX_HOOKS);
+    expect(readJson(distro.claudeSettings())).toEqual(FRESH_CLAUDE);
+    expect(readJson(distro.codexHooks())).toEqual(FRESH_CODEX);
     expect(readJson(distro.agyHooks())).toEqual(AGY_HOOKS);
     expect(readFileSync(distro.path(".codex", "config.toml"), "utf8")).toBe(V13_CODEX_CONFIG);
     expect(readFileSync(distro.path(".mast", "bin", "mast-codex-notify.sh"), "utf8")).toContain("codex-notify");
@@ -681,7 +625,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(run.stderr).toEqual([]);
     expect(existsSync(distro.path(".mast", ".setup-v14"))).toBe(true);
     expect(distro.marker()).toBe(true);
-    expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_WITH_DISPATCHER);
+    expect(readJson(distro.claudeSettings())).toEqual(FRESH_CLAUDE);
     expect(existsSync(distro.codexHooks())).toBe(false);
     expect(existsSync(distro.agyHooks())).toBe(false);
     const log = distro.log();
@@ -709,7 +653,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(readFileSync(distro.path(".mast", "bin", "mast-config.py"), "utf8")).toBe(
       readFileSync(join(WSL_SCRIPTS, "mast-config.py"), "utf8"),
     );
-    expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_WITH_DISPATCHER);
+    expect(readJson(distro.claudeSettings())).toEqual(FRESH_CLAUDE);
     const log = distro.log();
     expect(log).toContain(FULL_RUN_LOG);
     expect(log).not.toContain(AGENT_ONLY_LOG);
@@ -728,7 +672,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(distro.agentMarker("agy")).toBe(true);
     expect(existsSync(distro.codexHooks())).toBe(false);
     expect(existsSync(distro.agyHooks())).toBe(false);
-    expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_WITH_DISPATCHER);
+    expect(readJson(distro.claudeSettings())).toEqual(FRESH_CLAUDE);
     expect(distro.calls()).toEqual(["claude --version /dev/null"]);
     expect(distro.log()).toContain("codex hooks: ~/.mast/no-codex-hooks exists; skipped");
     expect(distro.log()).toContain("agy hooks: ~/.mast/no-agy-hooks exists; skipped");
@@ -749,7 +693,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(distro.agentMarker("agy")).toBe(false);
     expect(existsSync(distro.path(".codex"))).toBe(false);
     expect(existsSync(distro.path(".gemini"))).toBe(false);
-    expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_WITH_DISPATCHER);
+    expect(readJson(distro.claudeSettings())).toEqual(FRESH_CLAUDE);
     const log = distro.log();
     expect(log).toContain("claude: no installation found; hook events not limited by version");
     expect(log).toContain("codex hooks: no ~/.codex; skipped (Codex not installed here)");
@@ -757,7 +701,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
   });
 
   it.each([
-    { name: "Codex", install: (distro: Distro) => distro.withCodex(), file: (distro: Distro) => distro.codexHooks(), hooks: CODEX_HOOKS, agent: "codex" as const },
+    { name: "Codex", install: (distro: Distro) => distro.withCodex(), file: (distro: Distro) => distro.codexHooks(), hooks: FRESH_CODEX, agent: "codex" as const },
     { name: "Antigravity CLI", install: (distro: Distro) => distro.withAgy(), file: (distro: Distro) => distro.agyHooks(), hooks: AGY_HOOKS, agent: "agy" as const },
   ])("wires $name installed after this setup version on the next launch with only its own step, once", ({ install, file, hooks, agent }) => {
     const distro = new Distro();
@@ -844,7 +788,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     distro.write(config, 'model = "gpt-5"\n');
     distro.write(agentsFile, "# my own notes\n");
     distro.write(distro.claudeSettings(), fileText({ hooks: { Stop: [idle] } }));
-    const { Stop: _removed, ...codexWithoutStop } = CODEX_HOOKS.hooks;
+    const { Stop: _removed, ...codexWithoutStop } = FRESH_CODEX.hooks;
     distro.write(distro.codexHooks(), fileText({ hooks: codexWithoutStop }));
     const optedOut = [config, agentsFile, distro.claudeSettings(), distro.codexHooks()];
     const kept = optedOut.map(fingerprint);
@@ -913,7 +857,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
     expect(rerun).toEqual({ status: 0, stdout: "", stderr: [distro.trustNotice()] });
     expect(readFileSync(mastPython, "utf8")).toBe(`${join(distro.tools, "python3")}\n`);
-    expect(readJson(distro.codexHooks())).toEqual(CODEX_HOOKS);
+    expect(readJson(distro.codexHooks())).toEqual(FRESH_CODEX);
     expect(distro.agentMarker("codex")).toBe(true);
     expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_STATUS_ONLY);
     expect(readFileSync(distro.path(".codex", "config.toml"), "utf8")).toBe('model = "gpt-5"\n');
@@ -979,7 +923,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     rmSync(blocker, { recursive: true });
     expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [distro.trustNotice()] });
     expect(readFileSync(mastPython, "utf8")).toBe(`${join(distro.tools, "python3")}\n`);
-    expect(readJson(distro.codexHooks())).toEqual(CODEX_HOOKS);
+    expect(readJson(distro.codexHooks())).toEqual(FRESH_CODEX);
     expect(distro.agentMarker("codex")).toBe(true);
     expect(readFileSync(distro.path(".codex", "config.toml"), "utf8")).toBe('model = "gpt-5"\n');
 
@@ -1017,7 +961,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
   );
 
   const LATER_AGENTS = {
-    codex: { install: (distro: Distro) => distro.withCodex(), file: (distro: Distro) => distro.codexHooks(), hooks: CODEX_HOOKS },
+    codex: { install: (distro: Distro) => distro.withCodex(), file: (distro: Distro) => distro.codexHooks(), hooks: FRESH_CODEX },
     agy: { install: (distro: Distro) => distro.withAgy(), file: (distro: Distro) => distro.agyHooks(), hooks: AGY_HOOKS },
   };
   const LATER_AGENT_SETS: { agents: (keyof typeof LATER_AGENTS)[] }[] = [{ agents: ["codex"] }, { agents: ["agy"] }, { agents: ["codex", "agy"] }];
@@ -1140,8 +1084,8 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(run.stderr).toEqual([distro.trustNotice()]);
     expect(readFileSync(distro.path(".mast", "bin", "mast-python"), "utf8")).toBe(`${join(distro.tools, "python3")}\n`);
     expect(distro.log()).toMatch(version);
-    expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_WITH_DISPATCHER);
-    expect(readJson(distro.codexHooks())).toEqual(CODEX_HOOKS);
+    expect(readJson(distro.claudeSettings())).toEqual(FRESH_CLAUDE);
+    expect(readJson(distro.codexHooks())).toEqual(FRESH_CODEX);
     expect(distro.marker()).toBe(true);
   });
 
@@ -1160,7 +1104,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
     expect(run.status).toBe(0);
     expect(run.stderr).toEqual(notice ? [CLAUDE_NOTICES[notice](version, claude)] : []);
-    expect(readJson(distro.claudeSettings())).toEqual(notice ? CLAUDE_STATUS_ONLY : CLAUDE_WITH_DISPATCHER);
+    expect(readJson(distro.claudeSettings())).toEqual(notice ? CLAUDE_STATUS_ONLY : FRESH_CLAUDE);
     expect(distro.log()).toContain(`claude: ${claude} --version reports ${version}`);
     expect(distro.calls()).toEqual(["claude --version /dev/null"]);
     expect(distro.marker()).toBe(true);
@@ -1216,7 +1160,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     const run = distro.run();
 
     expect(run).toEqual({ status: 0, stdout: "", stderr: [] });
-    expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_WITH_DISPATCHER);
+    expect(readJson(distro.claudeSettings())).toEqual(FRESH_CLAUDE);
     expect(distro.callers()).toEqual([join(distro.stubs, "claude")]);
   });
 
@@ -1255,7 +1199,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     const run = distro.run();
 
     expect(run).toEqual({ status: 0, stdout: "", stderr: [] });
-    expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_WITH_DISPATCHER);
+    expect(readJson(distro.claudeSettings())).toEqual(FRESH_CLAUDE);
     expect(distro.log()).toContain(`claude: ${windows} is a Windows install; not checked`);
     expect(distro.callers()).toEqual([distro.path(".local", "bin", "claude")]);
   });
@@ -1291,7 +1235,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     // timeout 10 초 + KILL 1 초. 어느 한쪽이라도 30 초짜리 sleep 을 기다리면 넘는다.
     expect(elapsed).toBeLessThan(25_000);
     expect(run).toEqual({ status: 0, stdout: "", stderr: [codexNotice("0.149.9", codex, ["interrupt"]), distro.trustNotice()] });
-    expect(readJson(distro.claudeSettings())).toEqual(CLAUDE_WITH_DISPATCHER);
+    expect(readJson(distro.claudeSettings())).toEqual(FRESH_CLAUDE);
     expect(readdirSync(distro.path(".mast")).filter((name) => name.startsWith(".agent-version"))).toEqual([]);
   });
 
@@ -1314,7 +1258,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
       stdout: "",
       stderr: [codexNotice("0.128.9", codex, ["untrusted", "subagentStop", "async", "interrupt"]), agyNotice("1.1.9", agy)],
     });
-    expect(readJson(distro.codexHooks())).toEqual(CODEX_HOOKS);
+    expect(readJson(distro.codexHooks())).toEqual(FRESH_CODEX);
     expect(readJson(distro.agyHooks())).toEqual(AGY_HOOKS);
     expect(distro.callers()).not.toContain(distro.path(".claude", "local", "codex"));
     expect(distro.log()).toContain(`codex: ${distro.path(".local", "bin", "codex")} --version is unreadable`);
@@ -1352,7 +1296,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
       refusedContent: "[1]\n",
       refusal: (distro: Distro) =>
         `[mast] setup: ${distro.agyHooks()} is not a JSON object; left untouched. Antigravity CLI hooks are not installed.`,
-      other: (distro: Distro) => expect(readJson(distro.codexHooks())).toEqual(CODEX_HOOKS),
+      other: (distro: Distro) => expect(readJson(distro.codexHooks())).toEqual(FRESH_CODEX),
     },
   ];
 
@@ -1435,7 +1379,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
 
       rmSync(file(distro), { recursive: true });
       expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: installed(distro) });
-      expect(readJson(file(distro))).toEqual(agent === "codex" ? CODEX_HOOKS : AGY_HOOKS);
+      expect(readJson(file(distro))).toEqual(agent === "codex" ? FRESH_CODEX : AGY_HOOKS);
       expect(distro.agentMarker(agent)).toBe(true);
       expect(optedOut.map(fingerprint)).toEqual(kept);
 
@@ -1512,7 +1456,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
       ...(limits.length ? [codexNotice(version, codex, limits)] : []),
       ...(trust ? [distro.trustNotice(trust)] : []),
     ]);
-    expect(readJson(distro.codexHooks())).toEqual(CODEX_HOOKS);
+    expect(readJson(distro.codexHooks())).toEqual(FRESH_CODEX);
     expect(distro.marker()).toBe(true);
   });
 

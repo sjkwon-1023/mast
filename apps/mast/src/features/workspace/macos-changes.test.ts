@@ -22,6 +22,7 @@ import type { GitChange, GitDiff, GitStatus } from "../../infrastructure/backend
 import type { Command, Pane, StateSnapshot, Tab, Workspace } from "../../shared/types";
 import { SwitchTracer } from "./switch-trace";
 import { WorkspaceView } from "./workspace-view";
+import { deferred } from "../../test-helpers";
 
 const SAVED_PATH = "/Users/세진/project:a\\b";
 const REPO_ROOT = "/Users/세진/project:a\\b/repo";
@@ -104,14 +105,6 @@ function mount(dispatch: (command: Command) => Promise<null> = async () => null)
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 afterEach(() => {

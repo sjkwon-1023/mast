@@ -38,24 +38,10 @@ import { SwitchTracer } from "./switch-trace";
 import { WorkspaceView } from "./workspace-view";
 import type { TerminalView } from "../terminal/view";
 import type { Pane, StateSnapshot, Tab, TabId, Workspace } from "../../shared/types";
+import { attachBody, termOf } from "../../test-helpers";
 
 const TAB = 7;
 const SESSION = 42;
-
-function u64le(n: number): Uint8Array {
-  const out = new Uint8Array(8);
-  new DataView(out.buffer).setBigUint64(0, BigInt(n), true);
-  return out;
-}
-
-function attachBody(replay: string): ArrayBuffer {
-  const bytes = new TextEncoder().encode(replay);
-  const out = new Uint8Array(9 + bytes.byteLength);
-  out.set(u64le(0), 0);
-  out[8] = 0; // first_attach=false — 리로드 attach 의 모양
-  out.set(bytes, 9);
-  return out.buffer;
-}
 
 function lines(count: number): string {
   return Array.from({ length: count }, (_, i) => `replay ${i}\r\n`).join("");
@@ -101,10 +87,6 @@ function liveView(view: WorkspaceView, tab: TabId): TerminalView {
   return found;
 }
 
-function termOf(view: TerminalView): Terminal {
-  return (view as unknown as { term: Terminal }).term;
-}
-
 function newWorkspaceView(): WorkspaceView {
   const root = document.createElement("div");
   document.body.appendChild(root);
@@ -118,7 +100,7 @@ function newWorkspaceView(): WorkspaceView {
 describe("리로드를 넘는 스크롤 기억", () => {
   it("pagehide 가 활성 뷰의 위치를 저장하고, 리로드 뒤 뷰가 그 자리로 돌아온다", async () => {
     window.sessionStorage.clear();
-    h.attach = () => Promise.resolve(attachBody(lines(200)));
+    h.attach = () => Promise.resolve(attachBody(lines(200), false));
 
     // 리로드 전 페이지 — 사용자가 20줄 위로 올려 둔 상태.
     const before = newWorkspaceView();
@@ -145,7 +127,7 @@ describe("리로드를 넘는 스크롤 기억", () => {
 
   it("기억이 없으면 뷰는 하단에서 시작한다", async () => {
     window.sessionStorage.clear();
-    h.attach = () => Promise.resolve(attachBody(lines(200)));
+    h.attach = () => Promise.resolve(attachBody(lines(200), false));
 
     const view = newWorkspaceView();
     view.render(snapshot());

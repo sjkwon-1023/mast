@@ -31,6 +31,7 @@ import {
   secureRemoteErrorText,
 } from "./dialog";
 import type { PairingBackend } from "./dialog";
+import { deferred } from "../../test-helpers";
 
 describe("pairingMessage", () => {
   it("shows the URL when the surface is on", () => {
@@ -308,22 +309,6 @@ function fakeBackend(overrides: Partial<PairingBackend> = {}): PairingBackend {
     secureRemoteFirewallAllow: async () => outcome({}),
     ...overrides,
   };
-}
-
-interface Deferred<T> {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason?: unknown) => void;
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 /** 타이머 0 + 마이크로태스크를 전부 비운다 — 이벤트 루프 한 바퀴. */
