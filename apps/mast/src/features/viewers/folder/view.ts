@@ -25,6 +25,7 @@ import type { DirEntry, DirListing } from "../../../infrastructure/backend";
 import type { KeySpec } from "../../../shared/keys";
 import { IS_MAC } from "../../../shared/platform";
 import type { ViewerKind, ViewerView } from "../viewer-view";
+import { setBanner } from "../viewer-view";
 import type { Command, CommandOutput, NewTab, PaneId, TabId } from "../../../shared/types";
 
 /** UI 발 dispatch — main.ts dispatchUI 래퍼 (실패는 상태 라인에 표면화되고 null). */
@@ -192,12 +193,6 @@ export function folderKeyAction(spec: KeySpec, mac = IS_MAC): FolderKeyAction | 
   return null;
 }
 
-/** 로드 실패 payload 의 표시 문자열 — 글루는 `Result<_, String>` 이라 문자열이
- *  오지만, IPC 레벨 실패 등 계약 밖 값도 삼키지 않는다. */
-function describeError(err: unknown): string {
-  return typeof err === "string" ? err : String(err);
-}
-
 export class FolderView implements ViewerView {
   readonly root: HTMLDivElement;
   private readonly bannerEl: HTMLDivElement;
@@ -280,7 +275,7 @@ export class FolderView implements ViewerView {
 
   private load(): void {
     const token = ++this.loadToken;
-    this.setBanner("loading…", false);
+    setBanner(this.bannerEl, "loading…", false);
     // 로드 중에도 이전 목록을 그대로 둔다 — 깜빡임 없이 배너만 바뀐다.
     fsListDir(this.distro, this.path).then(
       (listing) => {
@@ -295,7 +290,7 @@ export class FolderView implements ViewerView {
   }
 
   private renderListing(listing: DirListing): void {
-    this.setBanner(
+    setBanner(this.bannerEl, 
       listing.truncated
         ? `showing the first ${listing.entries.length} entries — this directory was truncated`
         : null,
@@ -308,14 +303,8 @@ export class FolderView implements ViewerView {
    *  모델에 남아 재시도·수정이 가능해야 한다). 막다른 길이 되지 않게 `..` 행은
    *  남긴다. */
   private renderError(err: unknown): void {
-    this.setBanner(`cannot list ${this.path}: ${describeError(err)}`, true);
+    setBanner(this.bannerEl, `cannot list ${this.path}: ${err}`, true);
     this.renderRows(folderRows(this.path, []));
-  }
-
-  private setBanner(text: string | null, error: boolean): void {
-    this.bannerEl.textContent = text ?? "";
-    this.bannerEl.hidden = text === null;
-    this.bannerEl.classList.toggle("error", error);
   }
 
   /** 목록 교체 — 선택은 **항상 첫 행으로 리셋**한다. 목록이 갈리면(탐색·재로드)

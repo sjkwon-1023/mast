@@ -10,19 +10,23 @@
 
 import type { CommandError } from "./types";
 
+// Record 키가 CommandError 의 type 과 정확히 일치해야 컴파일되므로 variant 가 늘면
+// 여기서 빠뜨릴 수 없다.
+const COMMAND_ERROR_TYPES: Record<CommandError["type"], true> = {
+  unknownTarget: true,
+  lastPane: true,
+  spawnFailed: true,
+  invalidRatio: true,
+  kindMismatch: true,
+  invalidPath: true,
+  invalidScroll: true,
+  invalidName: true,
+};
+
 function isCommandError(e: unknown): e is CommandError {
   if (typeof e !== "object" || e === null) return false;
   const t = (e as { type?: unknown }).type;
-  return (
-    t === "unknownTarget" ||
-    t === "lastPane" ||
-    t === "spawnFailed" ||
-    t === "invalidRatio" ||
-    t === "kindMismatch" ||
-    t === "invalidPath" ||
-    t === "invalidScroll" ||
-    t === "invalidName"
-  );
+  return typeof t === "string" && Object.hasOwn(COMMAND_ERROR_TYPES, t);
 }
 
 /** JSON.stringify 는 undefined·symbol 에서 undefined 를 주고 순환 참조에서

@@ -2,6 +2,7 @@ import { highlightLanguages } from "./settings";
 import type { Command, CommandOutput, TabId } from "../../../shared/types";
 import type { TimerHost } from "../../terminal/ack-batcher";
 import type { ViewerView, ViewerKind } from "../viewer-view";
+import { setBanner } from "../viewer-view";
 import type { ViewerFontTarget } from "../viewer-font";
 import type { WindowAction, TextWindow } from "./window";
 import {
@@ -40,10 +41,6 @@ import {
 import { fsStat, fsReadChunk } from "../../../infrastructure/backend";
 
 type DispatchFn = (cmd: Command) => Promise<CommandOutput | null>;
-
-function describeError(err: unknown): string {
-  return typeof err === "string" ? err : String(err);
-}
 
 export interface TextViewOptions {
   timers?: TimerHost;
@@ -270,10 +267,10 @@ export class TextView implements ViewerView, ViewerFontTarget {
 
   private load(target: number, restore: boolean): void {
     const token = ++this.loadToken;
-    this.setBanner("loading…", false);
+    setBanner(this.bannerEl, "loading…", false);
     this.loadWindow(target, restore, token).catch((err: unknown) => {
       if (this.disposed || token !== this.loadToken) return;
-      this.renderError(describeError(err));
+      this.renderError(String(err));
     });
   }
 
@@ -300,7 +297,7 @@ export class TextView implements ViewerView, ViewerFontTarget {
     const bytes = new Uint8Array(buffer);
     const atEof = bytes.length < readLen || readOffset + bytes.length >= stat.size;
 
-    this.setBanner(null, false);
+    setBanner(this.bannerEl, null, false);
     this.showWindow(decodeWindow(bytes, readOffset, atEof), stat.size);
 
     // 플레인 렌더를 먼저 끝낸 후 색을 덧입힌다.
@@ -353,7 +350,7 @@ export class TextView implements ViewerView, ViewerFontTarget {
   }
 
   private renderError(message: string): void {
-    this.setBanner(`cannot read ${this.path}: ${message}`, true);
+    setBanner(this.bannerEl, `cannot read ${this.path}: ${message}`, true);
     this.showWindow({ start: 0, end: 0, lines: [], lineStarts: [] }, 0);
   }
 
@@ -386,9 +383,4 @@ export class TextView implements ViewerView, ViewerFontTarget {
     this.linesEl.replaceChildren(...nodes);
   }
 
-  private setBanner(text: string | null, error: boolean): void {
-    this.bannerEl.textContent = text ?? "";
-    this.bannerEl.hidden = text === null;
-    this.bannerEl.classList.toggle("error", error);
-  }
 }

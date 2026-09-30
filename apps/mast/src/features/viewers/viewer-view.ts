@@ -41,3 +41,9 @@ export interface ViewerView {
   focus(): void;
   dispose(): void;
 }
+
+export function setBanner(el: HTMLElement, text: string | null, error: boolean): void {
+  el.textContent = text ?? "";
+  el.hidden = text === null;
+  el.classList.toggle("error", error);
+}
