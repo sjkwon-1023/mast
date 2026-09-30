@@ -93,6 +93,17 @@ describe("sidebarModel", () => {
     expect(m?.path).toBeNull();
   });
 
+  it("shows the active pane's terminal cwd, falling back to rootPath for a viewer", () => {
+    const moved = terminalTab(10);
+    if (moved.kind.type === "terminal") moved.kind.cwd = "/home/u/code/mast/apps";
+    const following = ws(1, { rootPath: "/home/u/code/other", panes: { "1": pane(1, [moved]) } });
+    const viewing = ws(2, { rootPath: "/home/u/code/other", panes: { "1": pane(1, [viewerTab(20)]) } });
+    expect(sidebarModel([following, viewing], 1).map((m) => m.path)).toEqual([
+      "~/…/mast/apps",
+      "~/code/other",
+    ]);
+  });
+
   it("cuts lastAgentMessage to its first line and nulls blank messages", () => {
     const models = sidebarModel(
       [
@@ -149,6 +160,12 @@ describe("abbreviatePath", () => {
     expect(abbreviatePath("/home/kwon1")).toBe("~");
     expect(abbreviatePath("/home/kwon1/code")).toBe("~/code");
     expect(abbreviatePath("/home/kwon1/code/mast")).toBe("~/code/mast");
+  });
+
+  it("replaces the macOS /Users/<user> prefix with ~", () => {
+    expect(abbreviatePath("/Users/kwon")).toBe("~");
+    expect(abbreviatePath("/Users/kwon/personal-project/mast/main")).toBe("~/…/mast/main");
+    expect(abbreviatePath("/Users")).toBe("/Users");
   });
 
   it("collapses the middle keeping the last 2 segments", () => {

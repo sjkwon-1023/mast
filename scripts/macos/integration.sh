@@ -71,11 +71,16 @@ _mast_cwd() {
   _mast_p=${_mast_p//$'\xc2\x9f'/%C2%9F}
   printf '\033]7;file://%s\007' "$_mast_p"
 }
+# 에이전트 hook 은 셸이 살아 있는 동안에도 힌트를 다시 쓴다. 시작 때뿐 아니라 프롬프트마다
+# (명령, 기록 시각)이 바뀌었는지 보고, 바뀐 힌트만 한 번 히스토리에 넣는다.
+_mast_resume_seen=''
 _mast_resume() {
-  local cmd='' token=''
+  local cmd='' stamp='' token=''
   [[ $MAST_TAB != *[!0-9]* && -n $MAST_TAB ]] || return 0
   [[ -r "$HOME/.mast/resume/tab-$MAST_TAB" ]] || return 0
-  IFS= read -r cmd < "$HOME/.mast/resume/tab-$MAST_TAB" || true
+  { IFS= read -r cmd; IFS= read -r stamp; } < "$HOME/.mast/resume/tab-$MAST_TAB" || true
+  [[ "$cmd"$'\n'"$stamp" != "$_mast_resume_seen" ]] || return 0
+  _mast_resume_seen="$cmd"$'\n'"$stamp"
   case "$cmd" in
     'claude --resume '*) token=${cmd#'claude --resume '} ;;
     'codex resume '*) token=${cmd#'codex resume '} ;;
@@ -85,5 +90,6 @@ _mast_resume() {
   case "$token" in ''|*[!A-Za-z0-9_-]*) return 0 ;; esac
   # 힌트일 뿐이다: 저장된 명령을 eval 하거나 실행하지 않는다.
   if [[ -n ${ZSH_VERSION:-} ]]; then print -s -- "$cmd"; else history -s "$cmd"; history -a; fi
-  printf '\033[2m[mast] resume previous agent: %s\033[0m\n' "$cmd"
+  # 프롬프트 훅(quiet)에서는 에이전트가 방금 자기 resume 안내를 출력했으므로 한 줄을 더하지 않는다.
+  [[ ${1-} == quiet ]] || printf '\033[2m[mast] resume previous agent: %s\033[0m\n' "$cmd"
 }

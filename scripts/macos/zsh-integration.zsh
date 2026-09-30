@@ -6,7 +6,9 @@ if [[ -n $MAST_TAB && $MAST_TAB != *[!0-9]* ]]; then
   unsetopt SHARE_HISTORY
   setopt APPEND_HISTORY INC_APPEND_HISTORY
   _mast_resume
+  _mast_resume_prompt() { _mast_resume quiet; }
 fi
 autoload -Uz add-zsh-hook
 add-zsh-hook precmd _mast_cwd
+(( $+functions[_mast_resume_prompt] )) && add-zsh-hook precmd _mast_resume_prompt
 _mast_cwd

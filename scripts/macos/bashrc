@@ -16,7 +16,7 @@ if [[ -n $MAST_TAB && $MAST_TAB != *[!0-9]* ]]; then
   [[ -r $HISTFILE ]] && history -r "$HISTFILE"
   _mast_resume
 fi
-_mast_prompt() { history -a; _mast_cwd; }
+_mast_prompt() { history -a; _mast_resume quiet; _mast_cwd; }
 # 사용자의 프롬프트 테마를 포함해 문자열 프롬프트 훅과 (새 bash 의) 배열 프롬프트 훅을 보존한다.
 if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a '* ]]; then
   PROMPT_COMMAND+=(_mast_prompt)
