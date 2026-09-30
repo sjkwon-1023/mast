@@ -162,10 +162,6 @@ export class TerminalView {
     this.term.focus();
   }
 
-  getSelection(): string {
-    return this.term.getSelection();
-  }
-
   // bracketed paste 추적은 xterm이 맡는다. raw escape를 직접 조립하지 않는다.
   paste(text: string): void {
     if (!this.replayDone) {
@@ -177,19 +173,6 @@ export class TerminalView {
     // 조합 중 글자가 붙여넣은 텍스트보다 먼저 가야 한다. xterm 의 paste 는 입력창도 비운다.
     this.ime?.flush();
     this.term.paste(text);
-  }
-
-  submit(): void {
-    this.ime?.flush();
-    this.enqueueWrite("\r");
-  }
-
-  canAcceptSend(): boolean {
-    return this.opened && !this.disposed && this.replayDone;
-  }
-
-  bracketedPaste(): boolean {
-    return this.term.modes.bracketedPasteMode;
   }
 
   rememberedScrollOffset(): number | null {

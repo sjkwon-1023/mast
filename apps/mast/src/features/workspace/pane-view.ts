@@ -17,18 +17,6 @@ import { IS_MAC } from "../../shared/platform";
 // 포커스·선택 처리를 강탈하면 안 되기 때문이다. DOM 포커스는 그대로 흘러가고
 // 모델의 active_pane 만 따라온다.
 //
-// send-mode(17단계): 같은 mousedown capture 가 전달 대상 선택 모드 활성 중에는
-// FocusPane 대신 대상 확정(resolve) 경로로 분기한다 — 이때만 예외적으로
-// preventDefault + stopPropagation 한다 (제스처가 순수한 대상 지정이므로 xterm
-// 포커스·선택 개입을 막는다). 소스 캡처는 armSend 가 담당한다.
-//
-// **send-mode 는 현재 휴면이다**: 소스 캡처를 걸던 헤더의 ⤷/⤷⏎ 버튼 2개를 뺐고
-// 다른 arm 진입점을 아직 두지 않아, isActive() 가 언제나 false 라 위 분기도
-// armSend 도 실제로는 타지 않는다. 상태 머신(features/workspace/send-mode.ts)·전달 실행
-// (workspace-view.resolveSend)·터미널 표면(terminal-view)까지 경로 전체를 그대로
-// 남겨 둔 것은 의도다 — 차기 agent-facing 채널이 이 경로에 재배선될 예정이라
-// 지우고 다시 짜지 않는다. 그때 붙일 것은 arm 진입점 하나뿐이다.
-//
 // 헤더 아이콘은 인라인 SVG 다 (폴더·분할 2종) — 유니코드 기호(▤/◫/⊟)는 폰트마다
 // 모양이 갈리고 "무엇을 하는 버튼인지"가 자명하지 않아 그림으로 바꿨다. 마크업은
 // 아래 상수 3개가 전량이고, 전부 이 파일에 박힌 신뢰 소스다 (파일·모델·네트워크
@@ -90,23 +78,6 @@ export interface ViewRegistry {
 export interface ViewerRegistry {
   get(tab: TabId): ViewerView | undefined;
   ensure(target: VisibleViewer, parent: HTMLElement): ViewerView | null;
-}
-
-/** send-mode 접근 계약 (17단계) — 소유자는 workspace-view 다. pane-view 는
- *  소스 캡처(arm)·대상 확정(resolve)·활성 판정(isActive)·캡처 실패 표면화
- *  (flashError)만 부른다. 상태 머신 자체는 features/workspace/send-mode.ts (순수).
- *
- *  arm 진입점이 UI 에서 빠져 계약 전체가 휴면이다 (파일 상단 주석) — 구현은
- *  살아 있고 부르는 쪽만 없다. */
-export interface SendController {
-  /** 대상 선택 모드 활성 여부 — mousedown 분기 판정. */
-  isActive(): boolean;
-  /** 소스 캡처 성공 후 모드 진입 — 프롬프트·Esc 배선은 소유자가 처리한다. */
-  arm(source: PaneId, text: string, submit: boolean): void;
-  /** 대상 확정 (자기 자신 = 취소 판정 포함) — 전달 실행도 소유자 몫이다. */
-  resolve(target: PaneId): void;
-  /** 캡처 실패(무선택·터미널 없음) one-shot 에러 — 조용한 no-op 금지. */
-  flashError(message: string): void;
 }
 
 /** 탭 버튼 1개의 DOM 노드 묶음 — in-place 패치 대상. model 은 이 버튼이 지금
@@ -245,9 +216,6 @@ export class PaneView {
     private readonly dispatch: DispatchFn,
     private readonly views: ViewRegistry,
     private readonly viewers: ViewerRegistry,
-    /** send-mode 접근 계약 — 현재 arm 진입점이 없어 휴면이다 (파일 상단 주석).
-     *  계약은 유지한다: 차기 agent-facing 채널이 여기에 재배선된다. */
-    private readonly send: SendController,
   ) {
     this.root = document.createElement("div");
     this.root.className = "pane";
@@ -282,17 +250,6 @@ export class PaneView {
         // 탭 클릭도 이 경로가 FocusPane 을 담당한다 (onTabClick 주석 참조).
         // 주 버튼만 — 우/중클릭은 컨텍스트 메뉴·붙여넣기 등 다른 의미를 갖는다.
         if (ev.button !== 0) return;
-        // send-mode 대상 확정 (17단계 D2) — FocusPane 대신 resolve 경로. 이
-        // 제스처는 순수한 대상 지정이므로 예외적으로 기본 동작·전파를 끊는다
-        // (파일 상단 주석). 자기 자신 클릭 = 취소 판정은 send-mode 상태 머신 몫.
-        // 현재는 arm 진입점이 없어 isActive() 가 항상 false 라 이 분기는 죽어
-        // 있다 — 재배선 시 그대로 살아난다 (파일 상단 휴면 주석).
-        if (this.send.isActive()) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          this.send.resolve(this.paneId);
-          return;
-        }
         if (!this.isActive) void this.dispatch({ type: "focusPane", pane: this.paneId });
       },
       { capture: true },
@@ -306,9 +263,7 @@ export class PaneView {
   }
 
   /** 현재 표시 중인 탭 — 터미널 뷰든 뷰어 뷰든 지금 콘텐츠 영역을 차지한 탭이다
-   *  (파일 상단 shown 시맨틱). workspace-view 의 focus 보상·send-mode 대상 판정이
-   *  조회한다 — 뷰어 탭이 shown 이면 TerminalView 레지스트리에서 미스가 나
-   *  "대상에 터미널이 없다" 에러로 떨어진다 (resolveSend). */
+   *  (파일 상단 shown 시맨틱). workspace-view 의 focus 보상이 조회한다. */
   get shownTab(): TabId | null {
     return this.shown;
   }
@@ -413,12 +368,6 @@ export class PaneView {
         type: "createTab", pane: this.paneId, tab: {type: "browser", url: ""},
       })),
 
-      // 전달 아이콘 2개(⤷ = 전달, ⤷⏎ = 전달 후 실행)도 여기 있었다 — 수동
-      // 마우스 제스처가 실사용 워크플로가 아니라 **버튼만** 뺐다. 뒤에 있던
-      // send-mode 경로(armSend → SendController → workspace-view.resolveSend)는
-      // 전부 그대로다 (파일 상단 휴면 주석) — 차기 agent-facing 채널이 arm 을
-      // 다시 부를 때 버튼 없이 살아난다.
-
       // 분할은 원자 SplitPane — 새 pane 에 terminal 탭까지 한 번에 생성한다
       // (계획 D5: 컴포지션 금지, 중간 스냅샷 1프레임 렌더 방지).
       this.svgButton(
@@ -443,29 +392,6 @@ export class PaneView {
       ),
     );
     return header;
-  }
-
-  /** 전달 소스 캡처 (17단계 D2) — 이 pane 의 표시 중 터미널에서 선택 텍스트를
-   *  캡처해 대상 선택 모드로 arm 한다. 캡처 불가(빈 pane·뷰어 탭·무선택)는 상태
-   *  라인 one-shot 에러로 표면화한다 — 조용한 no-op 금지.
-   *
-   *  **호출자가 없다 (휴면)**: 이걸 부르던 헤더의 ⤷/⤷⏎ 버튼을 뺐고 다른 진입점을
-   *  아직 두지 않았다. 차기 agent-facing 채널이 붙일 지점이 정확히 여기라 구현을
-   *  남겨 둔다 (파일 상단 주석). 재배선은 이 메서드를 부르는 것으로 끝난다 —
-   *  아래 계층(SendController → features/workspace/send-mode.ts → workspace-view.resolveSend →
-   *  terminal-view.paste/submit)은 전부 온전하다. */
-  private armSend(submit: boolean): void {
-    const view = this.shown === null ? undefined : this.views.get(this.shown);
-    if (view === undefined) {
-      this.send.flashError("cannot send: no terminal shown in this pane");
-      return;
-    }
-    const text = view.getSelection();
-    if (text.length === 0) {
-      this.send.flashError("no selection to send");
-      return;
-    }
-    this.send.arm(this.paneId, text, submit);
   }
 
   /** 아이콘 SVG 버튼 — 라벨이 텍스트가 아니라 마크업이라는 점만 iconButton 과

@@ -85,7 +85,7 @@ Constraints the fix had to keep:
 
 ### 2. Needs-input onset is per tab, with one toast per tab
 
-- `features/notifications/chime.ts::detectNeedsInputOnset(prev, workspaces)` takes a
+- `features/notifications/needs-input.ts::detectNeedsInputOnset(prev, workspaces)` takes a
   `Map<TabId, AgentStatus>` and returns `{ onsets: TabOnset[]; next }` with
   `TabOnset = { workspaceId, tabId }`. The rules carry over unchanged, now per tab: `prev === null`
   (the first snapshot of a WebView lifetime) only sets the baseline, a repeated needs input is
@@ -657,7 +657,7 @@ Automated, on the Linux gates:
   one revision per batch, the legacy-file load (`legacy_state_without_tab_agent_fields_loads`),
   sanitize, and the fixture consistency check.
 - `apps/mast` vitest: per-tab onset, one toast per tab with the tab's own body and label, and badge
-  patching with node identity (`chime.test.ts`, `tab-strip-model.test.ts`, `pane-view.test.ts`);
+  patching with node identity (`needs-input.test.ts`, `tab-strip-model.test.ts`, `pane-view.test.ts`);
   `tests/agent-hooks.test.ts`, which runs the real dispatcher through a real pty in a temporary
   HOME with race order forced by lock holds and a full terminal buffer;
   `tests/provision-hooks.test.ts` for the merge helper in all three modes and `mast-agy-hook.sh`; Linux-only

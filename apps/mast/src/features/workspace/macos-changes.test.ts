@@ -98,7 +98,6 @@ function mount(dispatch: (command: Command) => Promise<null> = async () => null)
       root,
       dispatch,
       new SwitchTracer(() => undefined),
-      { setPrompt: () => undefined, flashError: () => undefined },
     ),
   };
 }

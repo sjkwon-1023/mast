@@ -46,7 +46,6 @@ import { IS_MAC } from "./platform";
 // | macOS `⌘K` (터미널 내, 일반 버퍼에서만) | 화면 + 스크롤백 지우기 (xterm `clear()`, PTY 에는 보내지 않음). alt 버퍼(vim 등)에서는 가로채지 않는다 | 같은 곳 |
 // | macOS `PgUp` / `PgDn` / `Home` / `End` = `Fn+↑/↓/←/→` (터미널 내, 수식 없이) | 일반 버퍼이고 마우스 추적이 꺼져 있을 때만 스크롤백 한 페이지 위/아래·맨 위/맨 아래. alt 버퍼·마우스 추적 중에는 가로채지 않는다(PTY 몫) | 같은 곳 |
 // | macOS `Shift+PgUp` / `Shift+PgDn` (터미널 내) | 스크롤하지 않고 `ESC[5~`/`ESC[6~` 를 PTY 로 (Terminal.app 관례 — xterm 기본은 이 조합을 스크롤에 쓴다) | 같은 곳 |
-// | `Esc` (send-mode 활성 중에만 — **현재 UI 진입점 없음: 휴면**) | 전달 대상 선택 취소 — 평시 Esc 는 PTY 소유 | features/workspace/workspace-view.ts (모드 활성 중에만 설치) |
 // | `Ctrl+PgUp` / `Ctrl+PgDn` (textViewer 포커스 중에만) | 이전/다음 512KiB 윈도우 | features/viewers/text/view.ts 뷰 내부 keydown |
 // | `Ctrl+Home` / `Ctrl+End` (textViewer 포커스 중에만; macOS 는 `⌘↑` / `⌘↓` 도) | 처음/마지막 윈도우 | features/viewers/text/view.ts 뷰 내부 keydown |
 // | `PgUp` / `PgDn` (textViewer 포커스 중에만) | 행높이 배수 페이지 스크롤 | features/viewers/text/view.ts 뷰 내부 keydown |

@@ -35,7 +35,7 @@ import {
   detectNeedsInputOnset,
   needsInputToasts,
   needsInputToastTargets,
-} from "../features/notifications/chime";
+} from "../features/notifications/needs-input";
 import { formatCommandError } from "../shared/command-error";
 import { activeTerminalCwd, activeWorkspace, pathBasename } from "../shared/keys";
 import { openPairingDialog } from "../features/pairing/dialog";
@@ -127,11 +127,6 @@ class App {
     this.viewEl,
     (cmd) => this.dispatchUI(cmd),
     this.tracer,
-
-    {
-      setPrompt: (text) => this.setPrompt(text),
-      flashError: (text) => this.showError(text),
-    },
   );
   private readonly sidebar = new Sidebar(
     requireElement("sidebar"),
@@ -183,8 +178,6 @@ class App {
   private infoTimer: ReturnType<typeof setTimeout> | null = null;
 
   private picking = false;
-
-  private promptText: string | null = null;
 
   async init(): Promise<void> {
     window.__mast = {
@@ -524,12 +517,6 @@ class App {
     this.renderStatusLine();
   }
 
-  private setPrompt(text: string | null): void {
-    if (this.promptText === text) return;
-    this.promptText = text;
-    this.renderStatusLine();
-  }
-
   private clearError(): void {
     if (this.errorTimer !== null) {
       clearTimeout(this.errorTimer);
@@ -572,7 +559,6 @@ class App {
 
   private renderStatusLine(): void {
     const parts: string[] = [];
-    if (this.promptText !== null) parts.push(this.promptText);
     if (this.errorText !== null) parts.push(`ERROR: ${this.errorText}`);
     if (this.infoText !== null) parts.push(this.infoText);
     this.statusEl.textContent = parts.join(" · ");

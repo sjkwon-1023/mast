@@ -1,19 +1,7 @@
-// WebAudio 는 node 환경에 없으므로 가짜 컨텍스트를 주입해 스케줄된 음의 개수·주파수·
-// 길이를 그대로 관찰한다.
-//
-// 차임 재생 경로는 v0.3.7 에서 배선이 빠진 휴면 코드의 테스트다 — 지우지 않고 남겨 되살릴 때
-// 검증을 다시 짜지 않게 한다 (features/notifications/chime.ts 모듈 머리 주석의 dormant 계약).
+import { describe, expect, it } from "vitest";
 
-import { describe, expect, it, vi } from "vitest";
-
-import {
-  Chime,
-  detectNeedsInputOnset,
-  installChimeUnlock,
-  needsInputToasts,
-  needsInputToastTargets,
-} from "./chime";
-import type { OnsetTab, OnsetWorkspace, TabOnset } from "./chime";
+import { detectNeedsInputOnset, needsInputToasts, needsInputToastTargets } from "./needs-input";
+import type { OnsetTab, OnsetWorkspace, TabOnset } from "./needs-input";
 import snapshotFixtureJson from "../../../../../fixtures/stage10-snapshot.json";
 import type { AgentStatus, StateSnapshot, TabId, WorkspaceId } from "../../shared/types";
 
@@ -151,11 +139,6 @@ describe("detectNeedsInputOnset", () => {
     expect(out.next.size).toBe(0);
   });
 
-  it("결과에는 onsets·next 만 있다 (v0.3.7 계약 변경 — chime 파생 필드 제거)", () => {
-    const out = detectNeedsInputOnset(statuses([[11, "idle"]]), [ws(1, [tab(11, "needsInput")])]);
-    expect(Object.keys(out).sort()).toEqual(["next", "onsets"]);
-  });
-
   it("실제 스냅샷 fixture 의 모든 pane·탭을 훑는다", () => {
     const snapshot = snapshotFixtureJson as unknown as StateSnapshot;
     const allIdle = new Map<TabId, AgentStatus>();
@@ -251,135 +234,5 @@ describe("needsInputToasts", () => {
   it("스냅샷에서 찾을 수 없는 대상은 건너뛴다", () => {
     const workspaces = [ws(1, [tab(11, "needsInput")])];
     expect(needsInputToasts([onset(1, 99), onset(9, 11)], workspaces)).toEqual([]);
-  });
-});
-
-function fakeContext(state: AudioContextState = "running") {
-  const tones: { freq: number; start: number; stop: number; peak: number }[] = [];
-  const resume = vi.fn(() => Promise.resolve());
-  const ctx = {
-    currentTime: 10,
-    state,
-    resume,
-    destination: {},
-    createOscillator: () => {
-      const tone = { freq: 0, start: 0, stop: 0, peak: 0 };
-      tones.push(tone);
-      return {
-        type: "",
-        frequency: {
-          setValueAtTime: (v: number) => {
-            tone.freq = v;
-          },
-        },
-        connect: () => undefined,
-        start: (t: number) => {
-          tone.start = t;
-        },
-        stop: (t: number) => {
-          tone.stop = t;
-        },
-      };
-    },
-    createGain: () => ({
-      gain: {
-        setValueAtTime: () => undefined,
-        exponentialRampToValueAtTime: (v: number) => {
-          const tone = tones[tones.length - 1];
-          if (tone !== undefined && v > tone.peak) tone.peak = v;
-        },
-      },
-      connect: () => undefined,
-    }),
-  };
-  return { ctx: ctx as unknown as AudioContext, tones, resume };
-}
-
-// 아래 두 describe 는 **휴면** 코드의 테스트다 (파일 머리 주석 참조) — 지금 이
-// 경로를 부르는 배선은 없지만, 되살릴 때를 위해 계약을 계속 잠가 둔다.
-describe("Chime (휴면)", () => {
-  it("play 는 컨텍스트를 lazy 하게 1회만 만들고 2음을 스케줄한다 (총 ~0.3s)", () => {
-    const fake = fakeContext();
-    const factory = vi.fn(() => fake.ctx);
-    const chime = new Chime(factory);
-    expect(factory).not.toHaveBeenCalled();
-
-    chime.play();
-    expect(factory).toHaveBeenCalledTimes(1);
-    expect(fake.tones).toHaveLength(2);
-    expect(fake.tones.map((t) => t.freq)).toEqual([880, 1320]);
-    expect(fake.tones[0].start).toBeCloseTo(10);
-    expect(fake.tones[1].stop - fake.tones[0].start).toBeCloseTo(0.3);
-    expect(Math.max(...fake.tones.map((t) => t.peak))).toBeCloseTo(0.1);
-
-    chime.play();
-    expect(factory).toHaveBeenCalledTimes(1);
-    expect(fake.tones).toHaveLength(4);
-  });
-
-  it("running 이면 resume 하지 않고, suspended 면 resume 을 시도한다", () => {
-    const running = fakeContext("running");
-    new Chime(() => running.ctx).play();
-    expect(running.resume).not.toHaveBeenCalled();
-
-    const suspended = fakeContext("suspended");
-    new Chime(() => suspended.ctx).play();
-    expect(suspended.resume).toHaveBeenCalledTimes(1);
-    // resume 완료를 기다리지 않고 그대로 스케줄한다 (풀리면 그때 소리가 난다).
-    expect(suspended.tones).toHaveLength(2);
-  });
-
-  it("컨텍스트 생성 실패는 조용히 무시하고 재시도하지 않는다", () => {
-    const factory = vi.fn(() => {
-      throw new Error("no WebAudio");
-    });
-    const chime = new Chime(factory);
-    expect(() => chime.play()).not.toThrow();
-    expect(() => chime.unlock()).not.toThrow();
-    expect(factory).toHaveBeenCalledTimes(1);
-  });
-
-  it("resume 거부(autoplay 정책)는 재생 경로를 깨지 않는다", async () => {
-    const fake = fakeContext("suspended");
-    (fake.resume as unknown as { mockImplementation: (f: () => Promise<void>) => void })
-      .mockImplementation(() => Promise.reject(new Error("blocked")));
-    const chime = new Chime(() => fake.ctx);
-    expect(() => chime.play()).not.toThrow();
-    // unhandled rejection 이 남지 않는지 — 마이크로태스크를 한 바퀴 돌린다.
-    await Promise.resolve();
-    expect(fake.tones).toHaveLength(2);
-  });
-
-  it("unlock 은 컨텍스트를 만들고 resume 한다 (소리는 내지 않는다)", () => {
-    const fake = fakeContext("suspended");
-    const chime = new Chime(() => fake.ctx);
-    chime.unlock();
-    expect(fake.resume).toHaveBeenCalledTimes(1);
-    expect(fake.tones).toHaveLength(0);
-  });
-});
-
-describe("installChimeUnlock (휴면)", () => {
-  it("첫 keydown 에서 1회 unlock 하고 리스너를 뗀다", () => {
-    const fake = fakeContext("suspended");
-    const chime = new Chime(() => fake.ctx);
-    const target = new EventTarget();
-    installChimeUnlock(chime, target);
-
-    target.dispatchEvent(new Event("keydown"));
-    expect(fake.resume).toHaveBeenCalledTimes(1);
-    target.dispatchEvent(new Event("keydown"));
-    target.dispatchEvent(new Event("mousedown"));
-    expect(fake.resume).toHaveBeenCalledTimes(1);
-  });
-
-  it("mousedown 도 unlock 진입점이다 (키보드 없이 시작하는 경우)", () => {
-    const fake = fakeContext("suspended");
-    const chime = new Chime(() => fake.ctx);
-    const target = new EventTarget();
-    installChimeUnlock(chime, target);
-
-    target.dispatchEvent(new Event("mousedown"));
-    expect(fake.resume).toHaveBeenCalledTimes(1);
   });
 });

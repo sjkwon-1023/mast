@@ -733,8 +733,8 @@ const TOAST_LOG_MAX_BYTES: u64 = 64 * 1024;
 /// 같은 상수 하나**다 (v0.3.6 의 "플러그인이 무엇을 싣는가" 추론 사슬이 사라졌다).
 ///
 /// **언제 부를지는 전적으로 프론트 계약이다**: `app/main.ts` 의 `notifyNeedsInput` 이
-/// 탭 단위 needsInput 상승 전이(`features/notifications/chime.ts::detectNeedsInputOnset`
-/// 의 `onsets`) 중 `features/notifications/chime.ts::needsInputToastTargets` 가 남긴
+/// 탭 단위 needsInput 상승 전이(`features/notifications/needs-input.ts::detectNeedsInputOnset`
+/// 의 `onsets`) 중 `features/notifications/needs-input.ts::needsInputToastTargets` 가 남긴
 /// 것마다 한 번씩 부른다 — 창이 포커스이고 그 워크스페이스가 활성일 때(=이미 화면에
 /// 보인다)만 조용하고, 비포커스거나 다른 워크스페이스면 띄운다. 여기서 포커스를 다시
 /// 판정하지 않는 이유는 판정을 두 곳에 두면 두 사실이 어긋나기 때문이다 — 프론트가

@@ -112,7 +112,6 @@ function newWorkspaceView(): WorkspaceView {
     root,
     async () => null,
     new SwitchTracer(() => undefined),
-    { setPrompt: () => undefined, flashError: () => undefined },
   );
 }
 

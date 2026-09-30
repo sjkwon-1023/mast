@@ -16,7 +16,7 @@ let view: WorkspaceView;
 afterEach(() => { if (view) { const empty = snapshot(true); empty.state.workspaces = []; empty.state.activeWorkspace = null; view.render(empty); } document.body.replaceChildren(); });
 function setup(): HTMLElement {
   const root = document.createElement('div'); document.body.append(root);
-  view = new WorkspaceView(root, async () => null, new SwitchTracer(() => undefined), { setPrompt: () => undefined, flashError: () => undefined });
+  view = new WorkspaceView(root, async () => null, new SwitchTracer(() => undefined));
   return root;
 }
 describe('tab close focus ordering', () => {

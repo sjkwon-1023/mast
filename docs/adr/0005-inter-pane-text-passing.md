@@ -1,7 +1,7 @@
-# ADR-0005: Stage 17 — inter-pane text passing (built; UI entry points removed)
+# ADR-0005: Stage 17 — inter-pane text passing (built; removed)
 
-- Status: accepted; the header buttons were removed 2026-08-10, the machinery stays
-  dormant for the v2 agent channel (see "UI entry removal")
+- Status: accepted; the header buttons were removed 2026-08-10 and the dormant machinery
+  was deleted 2026-09-30 (see "Machinery removal")
 - Date: 2026-08-10 (stage landed and verified 2026-08-09)
 
 ## Context
@@ -80,6 +80,17 @@ target-resolve/delivery path in `workspace-view` with all five delivery guards,
 `bracketedPaste`), and the status-line delegation contract (`SendStatus`). The v2
 agent-facing channel re-arms this exact machinery programmatically; nothing needs to be
 rebuilt, only re-entered.
+
+## Machinery removal (2026-09-30)
+
+**The dormant machinery is deleted** (user decision). The reason for keeping it was the v2
+agent channel, and that channel shipped on a different path: `mast send` writes to the
+target session's stdin in Rust and never re-entered the frontend send mode. `SendMode`,
+the delivery path and guards in `workspace-view`, the `PaneView` send contract, the
+delivery-only `TerminalView` methods (`getSelection` / `submit` / `canAcceptSend` /
+`bracketedPaste`), `SendStatus`, the status-line prompt slot and the `.send-mode` CSS are
+gone. `TerminalView.paste` stays because clipboard paste and file drop use it. A future
+manual send would start from this record, not from preserved code.
 
 ## Follow-ups
 
