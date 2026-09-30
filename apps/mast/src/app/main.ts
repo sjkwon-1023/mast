@@ -444,7 +444,9 @@ class App {
     try {
       const closingDrafts = closingMarkdownDrafts(cmd, this.store.snapshot);
       if (closingDrafts.length > 0 && !(await confirmAction("Close and discard unsaved Markdown edits?"))) return null;
-      if (cmd.type === "switchWorkspace") {
+      // 전환 계측은 개발 빌드(`npm run tauri dev`)에서만 켠다. begin 이 없으면 tracer 의
+      // 나머지 호출은 모두 no-op 이다.
+      if (import.meta.env.DEV && cmd.type === "switchWorkspace") {
         const active = this.store.snapshot?.state.activeWorkspace ?? null;
         if (active !== cmd.workspace) {
           traceToken = this.tracer.begin(cmd.workspace, performance.now());

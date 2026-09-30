@@ -453,7 +453,8 @@ button, 계획 v2 section 12).
 3. **Corrupt state recovers loudly** — corrupt `state.json` (e.g. truncate it) in the app
    data dir, restart → the app starts fresh, keeps the original as
    `state.json.corrupt-<epoch>`, and logs the reason to stderr.
-4. **Switch latency readout** — build a 4-pane workspace plus a second workspace, switch
+4. **Switch latency readout** — in a dev build (`npm run tauri dev`; release builds do not
+   trace since 2026-09-30), build a 4-pane workspace plus a second workspace, switch
    back and forth → read `window.__mast.lastSwitch` in the dev console: total should be
    in the ~100ms class, with per-tab replay timings populated.
 5. **Replay trim keeps lines whole** — flood 1MB+ of colored output (e.g.
