@@ -10,14 +10,22 @@ desk or from your phone.**
 
 Check terminal output and send input from your phone on the same trusted local network as your PC.
 
-## macOS (Apple Silicon, source builds)
+## macOS (Apple Silicon)
 
 The native macOS port shares the same workspace, pane, tab and terminal core as Windows.
-The source build includes the Git Changes viewer, a startup-only release notice, opt-in Local
-HTTP, on-demand Secure Remote pairing, and Antigravity CLI running/idle hooks. See
-[the macOS guide](docs/MACOS.md) for prerequisites, configuration, limits and the device
-verification checklist. Signed Mac distribution, packaging and automatic binary updates are
-not included.
+It includes the Git Changes viewer, a startup-only release notice, opt-in Local HTTP,
+on-demand Secure Remote pairing, and Antigravity CLI running/idle hooks.
+
+Install or update the latest release into `/Applications` (quit Mast first):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos/install.sh | bash
+```
+
+The app is **not signed or notarized**. Installing with `curl` keeps macOS from quarantining
+it; a `mast-macos-arm64.zip` downloaded with a browser is quarantined and Gatekeeper blocks it.
+See [the macOS guide](docs/MACOS.md) for building from source, configuration, limits and the
+device verification checklist. Automatic binary updates are not included.
 
 ## What it's for
 
@@ -45,7 +53,7 @@ notifies you when one starts waiting, and lets you answer from your phone even w
 - **Reload any time** — `Ctrl+Shift+R` rebuilds the window; the shells and agents keep running.
 
 Most agent multiplexers are built for macOS and Linux terminals. Mast began as an agent terminal
-for Windows + WSL2; an Apple Silicon native source build is also available.
+for Windows + WSL2; an Apple Silicon native build is also available.
 
 ## Features
 
@@ -61,7 +69,7 @@ for Windows + WSL2; an Apple Silicon native source build is also available.
   files inside WSL. The pane-header Changes button opens changed files and a selected unified
   diff, with Working / Staged / All scopes. It is read-only, refreshes when reopened or with
   Refresh, and limits each diff to 512 KiB. Git and GNU `timeout` must be installed in that WSL
-  distro. The macOS source build runs Git directly; see [the macOS guide](docs/MACOS.md).
+  distro. On macOS, mast runs Git directly; see [the macOS guide](docs/MACOS.md).
 - **Phone terminal control (opt-in)** — pair by QR, then read output, scroll a full-screen TUI,
   or send input to an agent CLI or a regular Bash shell. It is not limited to agent prompts.
   *Pair phone* always offers two working modes and a disabled `Tailscale — Planned` entry:

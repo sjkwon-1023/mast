@@ -12,6 +12,8 @@
 #   Windows 러너는 무료이고, 러너 이미지에 ARM64 도구와 Clang 이 들어 있다.
 # - windows-artifacts (windows, 수동/태그만): 릴리스 빌드(x64 + ARM64 아티팩트)와
 #   Release 첨부. 매 push 가 아니라 ARM64 실기 테스트(23단계)용 산출이 목적이다.
+# - macos-artifacts (macOS Apple Silicon, 수동/태그만): 서명하지 않은 `mast.app` 을 zip 으로
+#   묶어 Release 에 첨부한다. 설치는 curl 로 받는 `scripts/macos/install.sh` 경로다 (ADR-0033).
 
 name: CI
 
@@ -187,3 +189,50 @@ jobs:
         with:
           generate_release_notes: true
           files: target/${{ matrix.target }}/release/${{ matrix.asset_name }}
+
+  macos-artifacts:
+    # windows-artifacts 와 같은 트리거·권한. 서명·공증 없이 올리므로 브라우저로 받은 zip 은
+    # Gatekeeper 가 막는다 — 안내는 curl 설치 한 줄이다 (ADR-0033).
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: aarch64-apple-darwin
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/mast/package-lock.json
+
+      # tauri.conf.json 은 번들을 끈다(Windows 는 단일 exe) — 여기서만 .app 번들을 켠다.
+      - name: Build mast.app (release)
+        working-directory: apps/mast
+        run: |
+          npm ci
+          npm run tauri build -- --target aarch64-apple-darwin --bundles app --config '{"bundle":{"active":true}}'
+
+      - name: Zip mast.app
+        run: ditto -c -k --keepParent target/aarch64-apple-darwin/release/bundle/macos/mast.app mast-macos-arm64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mast-aarch64-apple-darwin
+          path: mast-macos-arm64.zip
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: mast-macos-arm64.zip

@@ -1,4 +1,4 @@
-# Mast on macOS — Apple Silicon source builds
+# Mast on macOS — Apple Silicon
 
 One Mast codebase, the same workspace/pane/tab model, and the same terminal,
 replay, OSC, agent-state and viewer pipelines. The macOS desktop target is
@@ -6,7 +6,7 @@ replay, OSC, agent-state and viewer pipelines. The macOS desktop target is
 
 ## Scope
 
-The native source build includes zsh/bash terminals, workspace/pane/split/tab
+The native build includes zsh/bash terminals, workspace/pane/split/tab
 navigation, state/layout restoration, terminal records, Claude Code / Codex /
 OpenCode integration, agent state and notifications, on-demand session resume,
 `mast ls`, `mast send`, folder/text/Markdown viewers, the Git Changes viewer,
@@ -16,12 +16,27 @@ CLI running/idle hooks, Mac keyboard bindings and the embedded browser tab with
 [ADR-0031](adr/0031-wsl-readiness-and-embedded-browser.md) for the decisions and the 2026-09-25
 field run).
 
-This is a development/source-build target, not a signed distributable product.
-The release notice only links to a release page; it does not download or install
-an update. Packages, permanent Mac release workflows, signing/notarization and
-expanded OS integrations remain separate work.
+## Install a release
 
-## Build and run
+Tagged releases attach an unsigned `mast-macos-arm64.zip`. Install or update it into
+`/Applications` with the install script (quit Mast first):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos/install.sh | bash
+```
+
+The app is ad-hoc signed by the linker only — **not signed with a Developer ID and not
+notarized** ([ADR-0033](adr/0033-unsigned-macos-release-via-curl.md)). Files fetched with
+`curl` carry no quarantine attribute, so Gatekeeper does not check the app. A zip downloaded
+with a browser is quarantined and blocked; install it with the script instead. Because each
+build has a different ad-hoc identity, macOS may ask again for permissions after an update.
+`MAST_DOWNLOAD_URL` (another release's zip) and `MAST_APP_DIR` (default `/Applications`)
+override the defaults.
+
+The release notice only links to a release page; it does not download or install an
+update. Signing/notarization and expanded OS integrations remain separate work.
+
+## Build from source
 
 Requirements: an Apple Silicon Mac, Xcode Command Line Tools, a current stable
 Rust toolchain, Node.js (the repository CI uses Node 24), and **Python 3.11+** for
@@ -402,7 +417,7 @@ treating these features as field-verified:
 Do not record any of these manual checks as complete until they have actually
 been run.
 
-Before treating a source build as daily-driver-ready, also run this device checklist:
+Before treating a build as daily-driver-ready, also run this device checklist:
 create several workspaces and split panes; run each installed agent; observe
 running/needs-input/idle transitions and notification permissions; exchange
 literal/submitted `mast send` messages and inspect `mast ls`; quit/reopen and
