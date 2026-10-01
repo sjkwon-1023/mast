@@ -10,14 +10,24 @@ desk or from your phone.**
 
 Check terminal output and send input from your phone on the same trusted local network as your PC.
 
-## macOS (Apple Silicon, source builds)
+## macOS (Apple Silicon)
 
 The native macOS port shares the same workspace, pane, tab and terminal core as Windows.
-The source build includes the Git Changes viewer, a startup-only release notice, opt-in Local
-HTTP, on-demand Secure Remote pairing, and Antigravity CLI running/idle hooks. See
-[the macOS guide](docs/MACOS.md) for prerequisites, configuration, limits and the device
-verification checklist. Signed Mac distribution, packaging and automatic binary updates are
-not included.
+It includes the Git Changes viewer, a startup-only release notice, opt-in Local HTTP,
+on-demand Secure Remote pairing, and Antigravity CLI running/idle hooks.
+
+Install the latest release into `/Applications`, or update to it, with one line. Mast may stay
+open — the new version applies the next time you reopen it, and an up-to-date install
+downloads nothing:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos/install.sh | bash
+```
+
+The app is **not signed or notarized**. Installing with `curl` keeps macOS from quarantining
+it; a `mast-macos-arm64.zip` downloaded with a browser is quarantined and Gatekeeper blocks it.
+See [the macOS guide](docs/MACOS.md) for building from source, configuration, limits and the
+device verification checklist. Automatic binary updates are not included.
 
 ## What it's for
 
@@ -45,7 +55,7 @@ notifies you when one starts waiting, and lets you answer from your phone even w
 - **Reload any time** — `Ctrl+Shift+R` rebuilds the window; the shells and agents keep running.
 
 Most agent multiplexers are built for macOS and Linux terminals. Mast began as an agent terminal
-for Windows + WSL2; an Apple Silicon native source build is also available.
+for Windows + WSL2; an Apple Silicon native build is also available.
 
 ## Features
 
@@ -61,7 +71,7 @@ for Windows + WSL2; an Apple Silicon native source build is also available.
   files inside WSL. The pane-header Changes button opens changed files and a selected unified
   diff, with Working / Staged / All scopes. It is read-only, refreshes when reopened or with
   Refresh, and limits each diff to 512 KiB. Git and GNU `timeout` must be installed in that WSL
-  distro. The macOS source build runs Git directly; see [the macOS guide](docs/MACOS.md).
+  distro. On macOS, mast runs Git directly; see [the macOS guide](docs/MACOS.md).
 - **Phone terminal control (opt-in)** — pair by QR, then read output, scroll a full-screen TUI,
   or send input to an agent CLI or a regular Bash shell. It is not limited to agent prompts.
   *Pair phone* always offers two working modes and a disabled `Tailscale — Planned` entry:
@@ -114,10 +124,20 @@ Ubuntu 같은 Linux 배포판이 설치된 WSL2가 필요하다. WSL이 준비�
    `sudo apt install python3 jq coreutils`; Claude Code approval tracking and every Codex hook
    need Python 3.8 or later.
    Agents are optional if you only want Bash terminals.
-3. **Download and run.** Get `mast-x64.exe` or `mast-arm64.exe` from the
-   [latest release](https://github.com/sjkwon-1023/mast/releases/latest) and run it — no installer.
-   If SmartScreen warns, verify the download came from this repository, then choose
-   **More info** → **Run anyway**.
+3. **Install and run.** In PowerShell, run
+
+   ```powershell
+   irm https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/win/install.ps1 | iex
+   ```
+
+   It downloads `mast-x64.exe` or `mast-arm64.exe` for your PC into
+   `%LOCALAPPDATA%\Programs\mast\mast.exe`; run that file once and mast appears in the Start
+   menu. The executable is unsigned, and downloading it this way keeps SmartScreen from
+   flagging it. You can still take the exe from the
+   [latest release](https://github.com/sjkwon-1023/mast/releases/latest) and run it from anywhere —
+   a browser download makes SmartScreen warn; verify it came from this repository, then choose
+   **More info** → **Run anyway**. With Smart App Control turned on, Windows blocks the unsigned
+   exe either way.
 
 mast opens your default WSL distribution and automatically sets up agent integration on first
 launch. Anything it could not set up, and what to do about it, is written to `~/.mast/setup.log`.
@@ -136,8 +156,9 @@ launch. Anything it could not set up, and what to do about it, is written to `~/
 [Integration details and manual setup](./scripts/wsl/claude-hook-example.md).
 
 The sidebar shows your installed version. Once per app launch, mast checks GitHub for a newer
-stable release in the background. **Update available** opens the release page; downloading,
-replacing the executable and restarting are up to you. Failed checks stay quiet.
+stable release in the background. **Update available** opens the release page; the install line
+above updates in place, even while mast is running — the new version applies the next time you
+start it. Failed checks stay quiet.
 
 ## Settings
 
