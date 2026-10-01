@@ -16,7 +16,8 @@ The native macOS port shares the same workspace, pane, tab and terminal core as 
 It includes the Git Changes viewer, a startup-only release notice, opt-in Local HTTP,
 on-demand Secure Remote pairing, and Antigravity CLI running/idle hooks.
 
-Install or update the latest release into `/Applications` (quit Mast first):
+Install the latest release into `/Applications`, or update to it, with one line (quit Mast
+first; an up-to-date install downloads nothing):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos/install.sh | bash

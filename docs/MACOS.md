@@ -30,8 +30,10 @@ notarized** ([ADR-0033](adr/0033-unsigned-macos-release-via-curl.md)). Files fet
 `curl` carry no quarantine attribute, so Gatekeeper does not check the app. A zip downloaded
 with a browser is quarantined and blocked; install it with the script instead. Because each
 build has a different ad-hoc identity, macOS may ask again for permissions after an update.
-`MAST_DOWNLOAD_URL` (another release's zip) and `MAST_APP_DIR` (default `/Applications`)
-override the defaults.
+Run the same line to update: it compares the installed version with the latest release and
+downloads nothing when they match. `MAST_DOWNLOAD_URL` installs a specific release's zip
+without that check, `MAST_REPO_URL` points at another repository (a fork), and `MAST_APP_DIR`
+(default `/Applications`) changes the install folder.
 
 The release notice only links to a release page; it does not download or install an
 update. Signing/notarization and expanded OS integrations remain separate work.

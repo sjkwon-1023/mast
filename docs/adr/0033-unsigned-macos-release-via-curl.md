@@ -24,9 +24,13 @@ binary must still carry a signature to run, and the Rust linker already ad-hoc s
 2. The supported install path is `scripts/macos/install.sh`, fetched and run with `curl … |
    bash`. It downloads the latest zip with `curl`, refuses to replace an app that is running
    from the target folder, unpacks to a temporary folder and replaces `/Applications/mast.app`
-   only after the download contains `mast.app`. `MAST_DOWNLOAD_URL` and `MAST_APP_DIR`
-   override the source and destination.
-3. No Developer ID signing or notarization for now.
+   only after the download contains `mast.app`. The same line updates: it reads the latest tag
+   from where `/releases/latest` redirects (no API call, no JSON parser) and downloads nothing
+   when the installed `CFBundleShortVersionString` matches. `MAST_DOWNLOAD_URL` (a pinned zip,
+   no version check), `MAST_REPO_URL` and `MAST_APP_DIR` override the source and destination.
+3. The app does not update itself; the release notice keeps only linking to the release page
+   (ADR-0024).
+4. No Developer ID signing or notarization for now.
 
 ## Consequences
 
