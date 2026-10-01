@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 INSTALL = Path(__file__).resolve().parents[1] / "install.sh"
@@ -120,6 +121,24 @@ class Install(unittest.TestCase):
         result = self.install(self.archive("mast.app", "v2"))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.installed(), "v2")
+        self.assertEqual(sorted(p.name for p in self.dest.iterdir()), ["mast.app"])
+
+    def test_a_running_app_is_replaced_and_keeps_running(self):
+        self.install(self.archive("mast.app", "v1"))
+        # 설치 폴더의 실행 파일 경로로 도는 프로세스 — 실행 중인 Mast 를 흉내 낸다. 시스템
+        # 바이너리는 다른 경로로 복사하면 실행 즉시 죽으므로 스크립트를 쓴다.
+        running = self.dest / "mast.app/Contents/MacOS/mast-app"
+        running.write_text("#!/bin/bash\nsleep 30\n")
+        running.chmod(0o755)
+        process = subprocess.Popen([str(running)])
+        time.sleep(0.2)
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
+        result = self.install(self.archive("mast.app", "v2"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.installed(), "v2")
+        self.assertIsNone(process.poll())
+        self.assertIn("still running the previous version", result.stdout)
         self.assertEqual(sorted(p.name for p in self.dest.iterdir()), ["mast.app"])
 
     def test_a_download_without_the_app_keeps_the_installed_one(self):

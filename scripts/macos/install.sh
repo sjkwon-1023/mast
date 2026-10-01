@@ -26,11 +26,6 @@ if [[ -z $url ]]; then
   fi
 fi
 
-if pgrep -f "$dest/mast.app/Contents/MacOS/" >/dev/null; then
-  echo "mast: quit Mast before installing" >&2
-  exit 1
-fi
-
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 echo "Downloading $url"
@@ -41,7 +36,16 @@ if [[ ! -d "$work/unpacked/mast.app" ]]; then
   exit 1
 fi
 
+# 실행 중인 Mast 가 있어도 교체한다. 새 앱을 옆에 다 복사한 뒤 옛 번들을 지우고 이름을 바꾸므로
+# 실행 중인 프로세스는 지워진 옛 파일을 계속 쓴다. 같은 파일 위에 덮어쓰면 macOS 가 코드 서명
+# 검사로 실행 중인 프로세스를 죽일 수 있으므로 그렇게 하지 않는다.
 mkdir -p "$dest"
+staged="$dest/.mast.app.installing"
+rm -rf "$staged"
+ditto "$work/unpacked/mast.app" "$staged"
 rm -rf "$dest/mast.app"
-ditto "$work/unpacked/mast.app" "$dest/mast.app"
+mv "$staged" "$dest/mast.app"
 echo "Installed $dest/mast.app"
+if pgrep -f "$dest/mast.app/Contents/MacOS/" >/dev/null; then
+  echo "Mast is still running the previous version. Quit and reopen it to use the new one."
+fi

@@ -19,7 +19,7 @@ field run).
 ## Install a release
 
 Tagged releases attach an unsigned `mast-macos-arm64.zip`. Install or update it into
-`/Applications` with the install script (quit Mast first):
+`/Applications` with the install script:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos/install.sh | bash
@@ -29,8 +29,10 @@ The app is ad-hoc signed by the linker only — **not signed with a Developer ID
 notarized** ([ADR-0033](adr/0033-unsigned-macos-release-via-curl.md)). Files fetched with
 `curl` carry no quarantine attribute, so Gatekeeper does not check the app. A zip downloaded
 with a browser is quarantined and blocked; install it with the script instead. Because each
-build has a different ad-hoc identity, macOS may ask again for permissions after an update.
-Run the same line to update: it compares the installed version with the latest release and
+build has a different ad-hoc identity, macOS may ask again for permissions after an update,
+including allowing Local HTTP or Secure Remote through the macOS Firewall again.
+Run the same line to update; Mast can stay open, and the new version applies when you quit
+and reopen it. The script compares the installed version with the latest release and
 downloads nothing when they match. `MAST_DOWNLOAD_URL` installs a specific release's zip
 without that check, `MAST_REPO_URL` points at another repository (a fork), and `MAST_APP_DIR`
 (default `/Applications`) changes the install folder.
