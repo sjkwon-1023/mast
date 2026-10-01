@@ -121,6 +121,35 @@ class ShellStartup(unittest.TestCase):
         self.assertIn(b"zsh-tab-42", self.output)
         self.assertFalse((self.home / ".zsh_history").exists())
 
+    def test_zsh_resume_is_the_newest_entry_over_saved_history(self):
+        # zsh 는 시작 파일 뒤에 HISTFILE 을 다시 읽는다 — 그 전에 넣은 resume 줄은 저장된
+        # 명령 뒤로 밀려 첫 Up 에 나오지 않았다.
+        self.zsh_profile(self.home)
+        history = self.home / ".mast/history"
+        history.mkdir(parents=True)
+        (history / "zsh-tab-42").write_text("echo older-command\n")
+        resume = self.home / ".mast/resume"
+        resume.mkdir()
+        (resume / "tab-42").write_text("claude --resume saved-id\n1\n")
+        self.start("/bin/zsh")
+        self.finish("fc -ln -1 | sed 's/^/LAST:/'")
+        self.assertIn(b"LAST:claude --resume saved-id", self.output)
+
+    def test_zsh_loads_saved_history_once_and_keeps_the_user_history_apart(self):
+        (self.home / ".zsh_history").write_text("echo global\n")
+        (self.home / ".zshrc").write_text(
+            "HISTFILE=$HOME/.zsh_history\nSAVEHIST=100\nHISTSIZE=100\nfc -R\nPROMPT='MAST_READY> '\n"
+        )
+        history = self.home / ".mast/history"
+        history.mkdir(parents=True)
+        (history / "zsh-tab-42").write_text("echo saved-a\necho saved-b\n")
+        self.start("/bin/zsh")
+        self.finish("fc -ln 1 | sed 's/^/HIST:/'")
+        self.assertEqual(self.output.count(b"HIST:echo saved-a"), 1)
+        self.assertEqual(self.output.count(b"HIST:echo saved-b"), 1)
+        self.assertNotIn(b"HIST:echo global", self.output)
+        self.assertEqual((self.home / ".zsh_history").read_text(), "echo global\n")
+
     def test_zsh_resume_saved_while_the_shell_runs_reaches_history_at_next_prompt(self):
         self.zsh_profile(self.home)
         self.start("/bin/zsh")
