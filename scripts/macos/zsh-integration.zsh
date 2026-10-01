@@ -1,12 +1,15 @@
 source "$HOME/.mast/shell/integration.sh"
 if [[ -n $MAST_TAB && $MAST_TAB != *[!0-9]* ]]; then
   mkdir -p "$HOME/.mast/history"
-  # 별도 history 컨텍스트를 push 한다. 사용자의 전역 history 를 가져오거나 거기에 덧붙이지 않는다.
-  fc -p "$HOME/.mast/history/zsh-tab-$MAST_TAB" 10000 10000
+  # 빈 history 컨텍스트를 push 해 사용자의 전역 history 를 가져오거나 거기에 덧붙이지 않는다.
+  # 파일은 zsh 가 시작 파일 뒤에 HISTFILE 을 읽을 때 한 번만 읽힌다 — `fc -p <파일>` 로 지금
+  # 읽으면 그 읽기와 겹쳐 저장된 명령이 두 번 들어간다.
+  fc -p
+  HISTFILE="$HOME/.mast/history/zsh-tab-$MAST_TAB" HISTSIZE=10000 SAVEHIST=10000
   unsetopt SHARE_HISTORY
   setopt APPEND_HISTORY INC_APPEND_HISTORY
-  # zsh 는 시작 파일을 다 읽은 뒤 HISTFILE 을 한 번 더 읽어 그 내용을 목록 끝에 붙인다.
-  # 여기서 바로 넣으면 resume 줄이 파일 내용 뒤에 묻혀 ↑ 로 나오지 않으므로 첫 프롬프트 직전에 넣는다.
+  # 같은 이유로 여기서 바로 넣으면 resume 줄이 파일 내용 앞에 놓여 ↑ 로 나오지 않으므로 첫
+  # 프롬프트 직전에 넣는다.
   _mast_resume_first=1
   _mast_resume_prompt() {
     if (( _mast_resume_first )); then

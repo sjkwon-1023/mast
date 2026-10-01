@@ -135,6 +135,21 @@ class ShellStartup(unittest.TestCase):
         self.finish("fc -ln -1 | sed 's/^/LAST:/'")
         self.assertIn(b"LAST:claude --resume saved-id", self.output)
 
+    def test_zsh_loads_saved_history_once_and_keeps_the_user_history_apart(self):
+        (self.home / ".zsh_history").write_text("echo global\n")
+        (self.home / ".zshrc").write_text(
+            "HISTFILE=$HOME/.zsh_history\nSAVEHIST=100\nHISTSIZE=100\nfc -R\nPROMPT='MAST_READY> '\n"
+        )
+        history = self.home / ".mast/history"
+        history.mkdir(parents=True)
+        (history / "zsh-tab-42").write_text("echo saved-a\necho saved-b\n")
+        self.start("/bin/zsh")
+        self.finish("fc -ln 1 | sed 's/^/HIST:/'")
+        self.assertEqual(self.output.count(b"HIST:echo saved-a"), 1)
+        self.assertEqual(self.output.count(b"HIST:echo saved-b"), 1)
+        self.assertNotIn(b"HIST:echo global", self.output)
+        self.assertEqual((self.home / ".zsh_history").read_text(), "echo global\n")
+
     def test_zsh_resume_saved_while_the_shell_runs_reaches_history_at_next_prompt(self):
         self.zsh_profile(self.home)
         self.start("/bin/zsh")
