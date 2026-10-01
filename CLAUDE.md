@@ -214,9 +214,11 @@ Windows process and rustc's incremental session lock cannot be created on the
 Windows-visible 9P path without it. ARM64 additionally needs `clang` for ring's build script and
 is **CI-only on this machine** — not a local green. `windows-artifacts` builds the x64 + ARM64
 release artifacts and attaches them to a GitHub Release on `workflow_dispatch` or a `v*` tag, and
-`macos-artifacts` does the same for an unsigned `mast-macos-arm64.zip` (ADR-0033);
-the trigger is narrow because a release build per push is not needed, not because of runner
-billing (standard Windows runners are free for public repositories).
+`macos-artifacts` does the same for an unsigned `mast-macos-arm64.zip`; the trigger is narrow
+because a release build per push is not needed, not because of runner billing (standard Windows
+runners are free for public repositories). Users install and update either with the
+`scripts/macos/install.sh` / `scripts/win/install.ps1` one-liners (ADR-0033); `windows-gates`
+also runs the Windows installer tests.
 
 - `src-tauri` cannot compile for the Linux host (no webkit2gtk) — the `windows-gates` job
   IS the compile gate for the glue.

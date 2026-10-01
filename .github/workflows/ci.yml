@@ -14,6 +14,7 @@
 #   Release 첨부. 매 push 가 아니라 ARM64 실기 테스트(23단계)용 산출이 목적이다.
 # - macos-artifacts (macOS Apple Silicon, 수동/태그만): 서명하지 않은 `mast.app` 을 zip 으로
 #   묶어 Release 에 첨부한다. 설치는 curl 로 받는 `scripts/macos/install.sh` 경로다 (ADR-0033).
+#   Windows 설치 스크립트(`scripts/win/install.ps1`) 테스트는 windows-gates 가 돌린다.
 
 name: CI
 
@@ -119,6 +120,9 @@ jobs:
 
       - name: Secure remote glue tests (x64 Windows, native)
         run: cargo test -p mast-app --target x86_64-pc-windows-msvc secure_remote
+
+      - name: Install script tests (Windows PowerShell 5.1)
+        run: python -m unittest discover -s scripts/win/tests -v
 
   windows-artifacts:
     # 릴리스 전용 러너 — 매 push 가 아니라 수동/태그에서만. ARM64 실기 테스트용

@@ -124,10 +124,20 @@ Ubuntu 같은 Linux 배포판이 설치된 WSL2가 필요하다. WSL이 준비�
    `sudo apt install python3 jq coreutils`; Claude Code approval tracking and every Codex hook
    need Python 3.8 or later.
    Agents are optional if you only want Bash terminals.
-3. **Download and run.** Get `mast-x64.exe` or `mast-arm64.exe` from the
-   [latest release](https://github.com/sjkwon-1023/mast/releases/latest) and run it — no installer.
-   If SmartScreen warns, verify the download came from this repository, then choose
-   **More info** → **Run anyway**.
+3. **Install and run.** In PowerShell, run
+
+   ```powershell
+   irm https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/win/install.ps1 | iex
+   ```
+
+   It downloads `mast-x64.exe` or `mast-arm64.exe` for your PC into
+   `%LOCALAPPDATA%\Programs\mast\mast.exe`; run that file once and mast appears in the Start
+   menu. The executable is unsigned, and downloading it this way keeps SmartScreen from
+   flagging it. You can still take the exe from the
+   [latest release](https://github.com/sjkwon-1023/mast/releases/latest) and run it from anywhere —
+   a browser download makes SmartScreen warn; verify it came from this repository, then choose
+   **More info** → **Run anyway**. With Smart App Control turned on, Windows blocks the unsigned
+   exe either way.
 
 mast opens your default WSL distribution and automatically sets up agent integration on first
 launch. Anything it could not set up, and what to do about it, is written to `~/.mast/setup.log`.
@@ -146,8 +156,9 @@ launch. Anything it could not set up, and what to do about it, is written to `~/
 [Integration details and manual setup](./scripts/wsl/claude-hook-example.md).
 
 The sidebar shows your installed version. Once per app launch, mast checks GitHub for a newer
-stable release in the background. **Update available** opens the release page; downloading,
-replacing the executable and restarting are up to you. Failed checks stay quiet.
+stable release in the background. **Update available** opens the release page; the install line
+above updates in place, even while mast is running — the new version applies the next time you
+start it. Failed checks stay quiet.
 
 ## Settings
 

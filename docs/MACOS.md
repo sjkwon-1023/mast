@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos
 ```
 
 The app is ad-hoc signed by the linker only — **not signed with a Developer ID and not
-notarized** ([ADR-0033](adr/0033-unsigned-macos-release-via-curl.md)). Files fetched with
+notarized** ([ADR-0033](adr/0033-unsigned-releases-installed-by-script.md)). Files fetched with
 `curl` carry no quarantine attribute, so Gatekeeper does not check the app. A zip downloaded
 with a browser is quarantined and blocked; install it with the script instead. Because each
 build has a different ad-hoc identity, macOS may ask again for permissions after an update,
