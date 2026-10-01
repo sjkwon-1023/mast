@@ -4,6 +4,8 @@ import {
   paneNeedsInput,
   paneUnread,
   sameTabButton,
+  tabDropBefore,
+  tabMoveChangesOrder,
   tabStripModel,
   tabStripPlan,
 } from "./tab-strip-model";
@@ -242,5 +244,40 @@ describe("paneNeedsInput", () => {
     expect(paneNeedsInput([button(10, { active: true }), button(11, { needsInput: true })])).toBe(
       true,
     );
+  });
+});
+
+describe("tabDropBefore", () => {
+  // 탭 너비 100, 가운데는 50/150/250.
+  const boxes = [
+    { tab: 10, left: 0, width: 100 },
+    { tab: 11, left: 100, width: 100 },
+    { tab: 12, left: 200, width: 100 },
+  ];
+
+  it("탭 가운데 앞이면 그 탭 앞이다", () => {
+    expect(tabDropBefore(boxes, 10)).toBe(10);
+    expect(tabDropBefore(boxes, 149)).toBe(11);
+  });
+
+  it("마지막 탭 가운데를 넘으면 맨 뒤(null)다", () => {
+    expect(tabDropBefore(boxes, 260)).toBeNull();
+    expect(tabDropBefore([], 0)).toBeNull();
+  });
+});
+
+describe("tabMoveChangesOrder", () => {
+  const tabs = [10, 11, 12];
+
+  it("자기 앞·바로 뒤 탭 앞은 제자리다", () => {
+    expect(tabMoveChangesOrder(tabs, 11, 11)).toBe(false);
+    expect(tabMoveChangesOrder(tabs, 11, 12)).toBe(false);
+    expect(tabMoveChangesOrder(tabs, 12, null)).toBe(false);
+  });
+
+  it("다른 자리는 순서를 바꾼다", () => {
+    expect(tabMoveChangesOrder(tabs, 12, 10)).toBe(true);
+    expect(tabMoveChangesOrder(tabs, 10, null)).toBe(true);
+    expect(tabMoveChangesOrder(tabs, 10, 12)).toBe(true);
   });
 });

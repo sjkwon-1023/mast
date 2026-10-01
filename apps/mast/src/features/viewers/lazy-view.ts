@@ -50,7 +50,8 @@ export class LazyViewerView implements ViewerView {
       // import는 취소할 수 없으므로 탭이 닫혔으면 생성자와 파일 읽기를 시작하지 않는다.
       if (this.disposed) return;
       const focused = document.activeElement === this.placeholder;
-      this.view = create(parent, this.kind);
+      // 로드 중에 탭이 다른 pane 으로 옮겨졌으면 placeholder 가 이미 그쪽에 있다.
+      this.view = create(this.placeholder.parentElement ?? parent, this.kind);
       this.placeholder.remove();
       if (focused) this.view.focus();
     } catch (err) {

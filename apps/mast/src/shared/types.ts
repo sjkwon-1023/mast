@@ -157,6 +157,8 @@ export type Command =
   | { type: "createTab"; pane: PaneId; tab: NewTab }
   | { type: "activateTab"; tab: TabId }
   | { type: "closeTab"; tab: TabId }
+  /** 같은 워크스페이스의 pane 안 before 앞으로 옮긴다. before null 은 맨 뒤다. */
+  | { type: "moveTab"; tab: TabId; pane: PaneId; before: TabId | null }
   /** folderBrowser 탭의 경로 변경 — 탐색도 dispatcher 를 경유한다.
    *  대상이 folderBrowser 가 아니면 kindMismatch, 경로 형태가 불량하면
    *  invalidPath. 성공 시 탭 제목도 basename 으로 갱신된다. */

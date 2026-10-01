@@ -91,3 +91,28 @@ export function paneUnread(models: TabButtonModel[]): boolean {
 export function paneNeedsInput(models: TabButtonModel[]): boolean {
   return models.some((m) => m.needsInput);
 }
+
+/** 드롭 판정용 탭 버튼의 가로 위치 — 화면 순서 그대로다. */
+export interface TabBox {
+  tab: TabId;
+  left: number;
+  width: number;
+}
+
+/** 포인터 x 가 가리키는 놓을 자리 — 그 앞에 놓일 탭, 맨 뒤면 null (`moveTab` 의 before 계약).
+ *  탭 가운데를 넘기 전까지는 그 탭 앞이다. */
+export function tabDropBefore(boxes: readonly TabBox[], x: number): TabId | null {
+  for (const box of boxes) {
+    if (x < box.left + box.width / 2) return box.tab;
+  }
+  return null;
+}
+
+/** 같은 pane 안의 이동이 순서를 실제로 바꾸는가 — 제자리에 놓으면 커맨드를 보내지 않는다.
+ *  코어도 no-op 으로 받지만 revision 이 올라 저장이 예약된다. */
+export function tabMoveChangesOrder(tabs: readonly TabId[], tab: TabId, before: TabId | null): boolean {
+  const from = tabs.indexOf(tab);
+  if (from < 0 || before === tab) return false;
+  const to = before === null ? tabs.length : tabs.indexOf(before);
+  return !(to === from || to === from + 1);
+}

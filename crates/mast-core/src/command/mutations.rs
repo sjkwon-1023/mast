@@ -309,6 +309,63 @@ impl Dispatcher {
                 Ok(CommandOutput::Done)
             }
 
+            Command::MoveTab { tab, pane, before } => {
+                if before == Some(tab) {
+                    return Ok(CommandOutput::Done);
+                }
+                // 검증을 전부 마친 뒤에 옮긴다 ("실패 시 상태 불변" 계약, 모듈 doc).
+                let (wi, from, ti) = self.locate_tab(tab)?;
+                let visible = self.state.active_workspace == Some(self.state.workspaces[wi].id);
+                let ws = &mut self.state.workspaces[wi];
+                let target = ws.panes.get(&pane).ok_or_else(|| unknown("pane", pane.0))?;
+                if let Some(b) = before {
+                    if !target.tabs.iter().any(|t| t.id == b) {
+                        return Err(unknown("tab", b.0));
+                    }
+                }
+
+                let source = ws.panes.get_mut(&from).expect("locate_tab 이 존재를 보장");
+                let mut moved = source.tabs.remove(ti);
+                if from != pane && source.active_tab == Some(tab) {
+                    source.active_tab = source.tabs.get(ti.saturating_sub(1)).map(|t| t.id);
+                    if visible {
+                        if let Some(promoted) = source.active_tab {
+                            if let Some(t) = source.tabs.iter_mut().find(|t| t.id == promoted) {
+                                t.notification = NotificationState::None;
+                            }
+                        }
+                    }
+                }
+                let source_empty = source.tabs.is_empty();
+
+                if from != pane {
+                    if visible {
+                        moved.notification = NotificationState::None;
+                    }
+                    ws.active_pane = pane;
+                }
+                let target = ws.panes.get_mut(&pane).expect("위에서 존재를 확인했다");
+                // 삽입 위치는 **뺀 뒤의** 목록에서 다시 찾는다 (MoveWorkspace 와 같은 이유).
+                let at = match before {
+                    None => target.tabs.len(),
+                    Some(b) => target
+                        .tabs
+                        .iter()
+                        .position(|t| t.id == b)
+                        .expect("위에서 존재를 확인했고 그 뒤로 목록은 remove 뿐이다"),
+                };
+                target.tabs.insert(at, moved);
+                if from != pane {
+                    target.active_tab = Some(tab);
+                    // 대상 pane 이 같은 워크스페이스에 있으므로 원래 pane 은 마지막 pane 이 아니다.
+                    if source_empty {
+                        let collapsed = collapse_pane(ws, from);
+                        debug_assert!(collapsed.tabs.is_empty(), "빈 pane 만 collapse 대상");
+                    }
+                }
+                Ok(CommandOutput::Done)
+            }
+
             Command::NavigateFolder { tab, path } => {
                 // 값 검증을 대상 탐색보다 먼저 (ResizeSplit 과 같은 순서).
                 validate_viewer_path(&path)?;
