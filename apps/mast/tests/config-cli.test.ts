@@ -134,6 +134,57 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
     expect(invoke(["set", "browser.enabled", "yes"], path).stdout).toContain("EXC:");
   });
 
+  it("defaults agentEval to true and adds enabled when setting it on its own", () => {
+    const path = fixture();
+    expect(invoke(["get", "browser.agentEval"], path).stdout).toContain('"default": true');
+    expectSuccess(invoke(["set", "browser.agentEval", "false"], path));
+    expect(readSettings(path)).toEqual({browser: {enabled: true, agentEval: false}});
+    expect(invoke(["get", "browser.agentEval"], path).stdout).toContain('"saved": false');
+  });
+
+  it("resets nested browser fields independently and rejects invalid agentEval", () => {
+    const path = fixture();
+    writeSettings(path, {
+      remote: {port: 7441},
+      browser: {enabled: false, agentEval: false, future: {keep: true}},
+    });
+
+    expectSuccess(invoke(["reset", "browser.enabled"], path));
+    expect(readSettings(path)).toEqual({
+      remote: {port: 7441},
+      browser: {enabled: true, agentEval: false, future: {keep: true}},
+    });
+    expectSuccess(invoke(["reset", "browser.agentEval"], path));
+    expect(readSettings(path)).toEqual({
+      remote: {port: 7441},
+      browser: {enabled: true, future: {keep: true}},
+    });
+
+    writeSettings(path, {browser: {enabled: true, agentEval: "no"}});
+    const original = readFileSync(path, "utf8");
+    expectFailure(invoke(["get", "browser.agentEval"], path));
+    expect(readFileSync(path, "utf8")).toBe(original);
+
+    writeSettings(path, {remote: {port: 7441}, browser: {enabled: false, agentEval: false}});
+    expectSuccess(invoke(["reset", "browser"], path));
+    expect(readSettings(path)).toEqual({remote: {port: 7441}});
+  });
+
+  it("removes browser.enabled overrides without creating an empty browser setting", () => {
+    const path = fixture();
+    writeSettings(path, {remote: {port: 7441}});
+    expectSuccess(invoke(["reset", "browser.enabled"], path));
+    expect(readSettings(path)).toEqual({remote: {port: 7441}});
+
+    writeSettings(path, {browser: {enabled: false}});
+    expectSuccess(invoke(["reset", "browser.enabled"], path));
+    expect(readSettings(path)).toEqual({});
+
+    writeSettings(path, {browser: {enabled: false, agentEval: false, future: {keep: true}}});
+    expectSuccess(invoke(["reset", "browser.enabled"], path));
+    expect(readSettings(path)).toEqual({browser: {enabled: true, agentEval: false, future: {keep: true}}});
+  });
+
   it("exposes help without resolving a Windows path", () => {
     const result = help();
     const exported = moduleHelp();
@@ -141,6 +192,8 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("mast config set remote");
     expect(result.stdout).toContain("mast config set showTabIds");
+    expect(result.stdout).toContain("mast config set browser.agentEval");
+    expect(result.stdout).toContain("enabled and agentEval default to true");
     expect(result.stdout).toContain("reset <key>");
     expect(result.stdout).not.toMatch(/\x1b/);
     expect(exported.status).toBe(0);

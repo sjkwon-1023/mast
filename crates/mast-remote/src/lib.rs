@@ -29,7 +29,7 @@ mod wt;
 pub use server::{
     serve, AssetFn, LogFn, RemoteConfig, RemoteDeps, RemoteServer, StaticAsset, MOBILE_SIZE_LEASE,
 };
-pub use token::{generate_secure_token, load_or_create_token, TokenError};
+pub use token::{generate_secure_token, load_or_create_token, token_matches, TokenError};
 pub use wt::{
     InputWriter, SecureRemote, SecureRemoteConfig, SecureRemoteDeps, SecureRemoteState,
     SecureRemoteTimeouts, StartError,

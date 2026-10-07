@@ -27,6 +27,8 @@ use tauri::{AppHandle, Emitter, Manager, Webview};
 use super::{activate_pane, error, event, native, unsupported_key, Result};
 use crate::winlog;
 
+const NATIVE_WAIT: Duration = Duration::from_secs(10);
+
 /// `NSURLErrorCancelled` — 멈춤·새 탐색으로 앞선 탐색이 취소됐다.
 const URL_ERROR_CANCELLED: isize = -999;
 /// `WebKitErrorFrameLoadInterruptedByPolicyChange` — `on_navigation` 거부나 다운로드 전환이
@@ -64,6 +66,7 @@ pub(super) fn data_store_id(workspace: u64) -> [u8; 16] {
 fn on_main<T: Send + 'static>(
     view: &Webview,
     what: &'static str,
+    timeout: Duration,
     run: impl FnOnce(&WKWebView, SyncSender<Result<T>>) + Send + 'static,
 ) -> Result<T> {
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -73,14 +76,14 @@ fn on_main<T: Send + 'static>(
         run(webview, tx);
     })
     .map_err(native)?;
-    rx.recv_timeout(Duration::from_secs(10))
+    rx.recv_timeout(timeout)
         .map_err(|_| error("timeout", format!("WebKit did not respond to {what}")))?
 }
 
 /// WebKit 은 델리게이트를 붙이는 순간 응답하는 메서드를 캐시한다. 그래서 탐색 실패
 /// 메서드는 첫 브라우저 웹뷰를 만들기 **전에**, 같은 델리게이트 클래스를 쓰는 메인
 /// 웹뷰에서 추가한다.
-pub(super) fn prepare(app: &AppHandle) -> Result<()> {
+pub(super) fn prepare(app: &AppHandle, timeout: Duration) -> Result<()> {
     let _ = APP.set(app.clone());
     if HOOKS.is_completed() {
         return Ok(());
@@ -88,7 +91,7 @@ pub(super) fn prepare(app: &AppHandle) -> Result<()> {
     let main = app
         .get_webview("main")
         .ok_or_else(|| error("not_found", "Main window is unavailable"))?;
-    on_main(&main, "the browser setup", |webview, done| {
+    on_main(&main, "the browser setup", timeout, |webview, done| {
         HOOKS.call_once(|| install_hooks(webview));
         let _ = done.try_send(Ok(()));
     })
@@ -98,11 +101,11 @@ pub(super) fn prepare(app: &AppHandle) -> Result<()> {
 /// 좌표로 옮기는 보정값. macOS 26 은 메인 웹뷰가 타이틀바 밑까지 창 전체를 덮고, WebKit 이
 /// 가려지는 높이를 `obscuredContentInsets` 로 잡아 페이지를 그만큼 내려 그린다. 이를 빼면
 /// 페이지가 타이틀바 높이만큼 위로 올라가 툴바를 덮는다.
-pub(super) fn ui_origin(app: &AppHandle) -> Result<(f64, f64)> {
+pub(super) fn ui_origin(app: &AppHandle, timeout: Duration) -> Result<(f64, f64)> {
     let main = app
         .get_webview("main")
         .ok_or_else(|| error("not_found", "Main window is unavailable"))?;
-    on_main(&main, "the layout query", |webview, done| {
+    on_main(&main, "the layout query", timeout, |webview, done| {
         let frame = webview.frame();
         // SAFETY: 메인 스레드에서 뷰 계층을 읽는다.
         let origin = match unsafe { webview.superview() } {
@@ -124,8 +127,13 @@ pub(super) fn ui_origin(app: &AppHandle) -> Result<(f64, f64)> {
     })
 }
 
-pub(super) fn configure(_app: &AppHandle, tab: u64, view: &Webview) -> Result<()> {
-    on_main(view, "the browser setup", move |webview, done| {
+pub(super) fn configure(
+    _app: &AppHandle,
+    tab: u64,
+    view: &Webview,
+    timeout: Duration,
+) -> Result<()> {
+    on_main(view, "the browser setup", timeout, move |webview, done| {
         views().insert(webview as *const WKWebView as usize, tab);
         let _ = done.try_send(Ok(()));
     })
@@ -143,9 +151,48 @@ pub(super) fn suspend(_view: &Webview, _visible: bool) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn evaluate(view: &Webview, expression: &str) -> Result<Value> {
+pub(super) fn set_surface_bounds(
+    app: &AppHandle,
+    view: &Webview,
+    bounds: super::Bounds,
+    timeout: Duration,
+) -> Result<()> {
+    let origin = ui_origin(app, timeout)?;
+    // 위치와 크기를 한 번에 준다 — macOS 는 아래 모서리가 원점이라 위치와 크기를 나누면 프레임 계산이 흔들린다.
+    view.set_bounds(tauri::Rect {
+        position: tauri::LogicalPosition::new(bounds.x + origin.0, bounds.y + origin.1).into(),
+        size: tauri::LogicalSize::new(bounds.width, bounds.height).into(),
+    })
+    .map_err(native)
+}
+
+pub(super) fn capture_resize(
+    app: &AppHandle,
+    view: &Webview,
+    width: u32,
+    height: u32,
+    timeout: Duration,
+) -> Result<()> {
+    set_surface_bounds(
+        app,
+        view,
+        super::Bounds {
+            x: -20000.0,
+            y: -20000.0,
+            width: f64::from(width),
+            height: f64::from(height),
+        },
+        timeout,
+    )
+}
+
+pub(super) fn clear_capture_size(_view: &Webview, _timeout: Duration) -> Result<()> {
+    Ok(())
+}
+
+pub(super) fn evaluate(view: &Webview, expression: &str, timeout: Duration) -> Result<Value> {
     let script = format!("JSON.stringify({expression})");
-    let text = on_main(view, "a page script", move |webview, done| {
+    let text = on_main(view, "a page script", timeout, move |webview, done| {
         let handler = RcBlock::new(move |result: *mut AnyObject, failure: *mut NSError| {
             // SAFETY: WebKit 이 완료 블록 동안 살아 있는 결과·오류를 넘긴다.
             let outcome = match unsafe { (result.as_ref(), failure.as_ref()) } {
@@ -172,8 +219,99 @@ pub(super) fn evaluate(view: &Webview, expression: &str) -> Result<Value> {
     }
 }
 
+pub(super) fn evaluate_agent(
+    view: &Webview,
+    expression: &str,
+    timeout: Duration,
+    may_submit: impl Fn() -> bool + Send + 'static,
+    completed: impl FnOnce() + Send + 'static,
+) -> Result<Value> {
+    use objc2_web_kit::WKContentWorld;
+
+    let text = include_str!("../browser-eval.js")
+        .replace("__MAST_EVAL_EXPRESSION__", &format!("\n{expression}\n"));
+    let completed = std::sync::Arc::new(Mutex::new(Some(
+        Box::new(completed) as Box<dyn FnOnce() + Send>
+    )));
+    on_main(
+        view,
+        "an agent page script",
+        timeout,
+        move |webview, done| {
+            let finish_without_submission = || {
+                let completed = completed.lock().unwrap().take();
+                if let Some(completed) = completed {
+                    completed();
+                }
+            };
+            let selector =
+                sel!(callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:);
+            if !webview.respondsToSelector(selector) {
+                finish_without_submission();
+                let _ = done.try_send(Err(error(
+                    "not_supported",
+                    "JavaScript evaluation is unavailable on this macOS version",
+                )));
+                return;
+            }
+            let Some(mtm) = MainThreadMarker::new() else {
+                finish_without_submission();
+                let _ = done.try_send(Err(error(
+                    "not_supported",
+                    "JavaScript evaluation requires the main thread",
+                )));
+                return;
+            };
+            let callback_completed = completed.clone();
+            let callback_done = done.clone();
+            let handler = RcBlock::new(move |result: *mut AnyObject, failure: *mut NSError| {
+                let completed = callback_completed.lock().unwrap().take();
+                if let Some(completed) = completed {
+                    completed();
+                }
+                // SAFETY: WebKit 이 완료 블록 동안 살아 있는 결과·오류를 넘긴다.
+                let outcome = match unsafe { (result.as_ref(), failure.as_ref()) } {
+                    (_, Some(failure)) => {
+                        let key = NSString::from_str("WKJavaScriptExceptionMessage");
+                        let message = failure
+                            .userInfo()
+                            .objectForKey(&key)
+                            .and_then(|value| {
+                                value.downcast_ref::<NSString>().map(NSString::to_string)
+                            })
+                            .unwrap_or_else(|| failure.localizedDescription().to_string());
+                        Err(error("script_error", message))
+                    }
+                    (Some(result), None) => result
+                        .downcast_ref::<NSString>()
+                        .map(|text| super::parse_eval_envelope(&text.to_string()))
+                        .unwrap_or_else(|| Err(native("WebKit returned no eval result"))),
+                    (None, None) => Err(native("WebKit returned no eval result")),
+                };
+                let _ = callback_done.try_send(outcome);
+            });
+            let content_world = unsafe { WKContentWorld::pageWorld(mtm) };
+            if !may_submit() {
+                finish_without_submission();
+                let _ = done.try_send(Err(error("timeout", "Browser eval deadline expired")));
+                return;
+            }
+            // SAFETY: 메인 스레드이고 pageWorld 에서 최상위 문서의 함수 본문을 실행한다.
+            unsafe {
+                webview.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
+                    &NSString::from_str(&text),
+                    None,
+                    None,
+                    &content_world,
+                    Some(&handler),
+                );
+            }
+        },
+    )
+}
+
 pub(super) fn stop(view: &Webview) -> Result<Value> {
-    on_main(view, "stop", |webview, done| {
+    on_main(view, "stop", NATIVE_WAIT, |webview, done| {
         // SAFETY: 메인 스레드에서의 WKWebView 호출이다.
         unsafe { webview.stopLoading() };
         let _ = done.try_send(Ok(json!({})));
@@ -181,24 +319,33 @@ pub(super) fn stop(view: &Webview) -> Result<Value> {
 }
 
 pub(super) fn history(view: &Webview, back: bool) -> Result<Value> {
-    on_main(view, "history navigation", move |webview, done| {
-        // SAFETY: 메인 스레드에서의 WKWebView 호출이다.
-        let moved = unsafe {
-            if back {
-                webview.canGoBack().then(|| webview.goBack())
-            } else {
-                webview.canGoForward().then(|| webview.goForward())
-            }
-        };
-        let _ = done.try_send(match moved {
-            Some(_) => Ok(json!({})),
-            None => Err(error("not_found", "No history entry")),
-        });
-    })
+    on_main(
+        view,
+        "history navigation",
+        NATIVE_WAIT,
+        move |webview, done| {
+            // SAFETY: 메인 스레드에서의 WKWebView 호출이다.
+            let moved = unsafe {
+                if back {
+                    webview.canGoBack().then(|| webview.goBack())
+                } else {
+                    webview.canGoForward().then(|| webview.goForward())
+                }
+            };
+            let _ = done.try_send(match moved {
+                Some(_) => Ok(json!({})),
+                None => Err(error("not_found", "No history entry")),
+            });
+        },
+    )
 }
 
 pub(super) fn screenshot(view: &Webview) -> Result<Value> {
-    on_main(view, "the screenshot", |webview, done| {
+    screenshot_with_timeout(view, NATIVE_WAIT)
+}
+
+pub(super) fn screenshot_with_timeout(view: &Webview, timeout: Duration) -> Result<Value> {
+    on_main(view, "the screenshot", timeout, |webview, done| {
         let handler = RcBlock::new(move |image: *mut NSImage, failure: *mut NSError| {
             // SAFETY: WebKit 이 완료 블록 동안 살아 있는 이미지·오류를 넘긴다.
             let _ = done.try_send(unsafe { png(image.as_ref(), failure.as_ref()) });
@@ -240,7 +387,7 @@ pub(super) fn press(view: &Webview, key: &str) -> Result<Value> {
         "ArrowDown" => (125, "\u{f701}"),
         _ => return Err(unsupported_key()),
     };
-    on_main(view, "the key press", move |webview, done| {
+    on_main(view, "the key press", NATIVE_WAIT, move |webview, done| {
         let window = webview.window().map_or(0, |window| window.windowNumber());
         let text = NSString::from_str(text);
         let key_event = |kind| {

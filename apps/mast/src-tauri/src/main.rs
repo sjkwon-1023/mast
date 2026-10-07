@@ -140,7 +140,14 @@ fn main() {
             #[cfg(target_os = "macos")]
             platform::macos::initialize(&handle)?;
             let ui = commands::read_ui_settings(&handle).map_err(std::io::Error::other)?;
-            app.manage(browser::BrowserState::new(ui.browser.is_none_or(|b| b.enabled)));
+            let browser_settings = ui.browser.unwrap_or(commands::BrowserSettings {
+                enabled: true,
+                agent_eval: true,
+            });
+            app.manage(browser::BrowserState::new(
+                browser_settings.enabled,
+                browser_settings.agent_eval,
+            ));
             let sessions = Arc::new(SessionManager::new());
             let sinks = Arc::new(state::SinkRegistry::default());
             // OSC 라우터는 sink 생성보다 먼저 — sink factory(TauriHost)가 핸들을

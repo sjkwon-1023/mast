@@ -18,7 +18,33 @@ describe("browser CLI", () => {
   it("validates bounded waits before transmitting", () => {
     run(`args=b.parser().parse_args(['wait','42','--timeout-ms','999999'])\ntry: b.make_request(args)\nexcept ValueError: pass\nelse: raise AssertionError('unbounded wait')`);
   });
+  it("parses eval expressions, stdin, --, and bounded timeouts", () => {
+    const output = run(`args=b.parser().parse_args(['eval','#42','document.title'])\nassert b.make_request(args)=={'action':'eval','tab':42,'args':{'expression':'document.title','timeoutMs':5000}}\nargs=b.parser().parse_args(['eval','42','--timeout-ms','10000','--','-window.name'])\nassert b.make_request(args)['args']=={'expression':'-window.name','timeoutMs':10000}\nargs=b.parser().parse_args(['eval','42','-'])\nb.sys.stdin=__import__('io').StringIO('document.URL')\nassert b.make_request(args)['args']['expression']=='document.URL'\nprint('ok')`);
+    expect(output).toBe("ok\n");
+  });
+  it("rejects empty eval expressions and timeouts outside 1..10000", () => {
+    run(`for argv in (['eval','42',''], ['eval','42','1','--timeout-ms','0'], ['eval','42','1','--timeout-ms','10001']):\n args=b.parser().parse_args(argv)\n try: b.make_request(args)\n except ValueError: pass\n else: raise AssertionError('accepted invalid eval arguments')`);
+  });
+  it("uses separate deadlines for the eval token and request round trips", () => {
+    const output = run(`calls=[]\ntimes=iter([100.0,105.0])\noriginal_monotonic=b.time.monotonic\nb.time.monotonic=lambda: next(times)\ndef query_once(request, deadline):\n calls.append((request,deadline))\n return 'A'*43 if request['action']=='eval-token' else {'value':42}\nb._query_once=query_once\ntry:\n result=b.query({'action':'eval','tab':42,'args':{'expression':'21*2','timeoutMs':5000}})\nfinally: b.time.monotonic=original_monotonic\nassert calls[0][0]=={'action':'eval-token','args':{}}\nassert calls[1][0]=={'action':'eval','tab':42,'args':{'expression':'21*2','timeoutMs':5000,'token':'A'*43}}\nassert calls[0][1]==110.0 and calls[1][1]==165.0\nassert result=={'value':42}\nprint('ok')`);
+    expect(output).toBe("ok\n");
+  });
+  it("does not write a browser request after its deadline expires", () => {
+    run(`b.os.environ['MAST']='1'\nwrites=[]\nclass Tty:\n def __enter__(self): return self\n def __exit__(self,*args): pass\n def write(self,payload): writes.append(payload)\nb.open=lambda *args,**kwargs: Tty()\noriginal_monotonic=b.time.monotonic\nb.time.monotonic=lambda: 10.0\ntry:\n try: b._query_once({'action':'list','args':{}},10.0)\n except TimeoutError: pass\n else: raise AssertionError('expired request was accepted')\nfinally: b.time.monotonic=original_monotonic\nassert writes==[]`);
+  });
+  it("documents a one-line heredoc invocation in eval help", () => {
+    const output = run(`args=b.parser().parse_args(['eval','--help'])`);
+    expect(output).toContain("mast browser eval T - <<'JS' ... JS");
+  });
   it("writes a screenshot locally and never overwrites an existing file", () => {
     run(`with tempfile.TemporaryDirectory() as directory:\n p=pathlib.Path(directory)/'capture.png'\n result={'data':'iVBORw0KGgo='}\n assert b.save_screenshot(result,p)['path']==str(p.resolve())\n try: b.save_screenshot(result,p)\n except FileExistsError: pass\n else: raise AssertionError('overwrote existing screenshot')`);
+  });
+  it("parses fixed screenshot dimensions and omits the default height", () => {
+    const output = run(`args=b.parse_args(['screenshot','42'])\nassert b.make_request(args)=={'action':'screenshot','tab':42,'args':{}}\nargs=b.parse_args(['screenshot','#42','--width','1280'])\nassert b.make_request(args)=={'action':'screenshot','tab':42,'args':{'width':1280}}\nargs=b.parse_args(['screenshot','42','--width','1280','--height','720'])\nassert b.make_request(args)=={'action':'screenshot','tab':42,'args':{'width':1280,'height':720}}\nwith tempfile.TemporaryDirectory() as directory:\n result=b.save_screenshot({'data':'iVBORw0KGgo=','width':1280,'height':800},pathlib.Path(directory)/'capture.png')\n assert result['width']==1280 and result['height']==800`);
+    expect(output).toBe("");
+  });
+  it("rejects out-of-range screenshot dimensions and height without width", () => {
+    const output = run(`for argv in (['screenshot','42','--width','319'], ['screenshot','42','--width','3841'], ['screenshot','42','--height','720']):\n try: b.parse_args(argv)\n except SystemExit as error: assert error.code==2\n else: raise AssertionError('accepted invalid screenshot dimensions')`);
+    expect(output).toBe("");
   });
 });

@@ -15,6 +15,7 @@ export class BrowserView implements ViewerView {
   private readonly owner = `${Date.now()}-${++nextOwner}`;
   private disposed = false;
   private frame = 0;
+  private surfaceRevision = 0;
   private chain: Promise<unknown> = Promise.resolve();
   private observer: ResizeObserver | null = null;
   private dialogs: MutationObserver | null = null;
@@ -101,12 +102,29 @@ export class BrowserView implements ViewerView {
     const signature = JSON.stringify(bounds);
     if (signature === this.lastBounds) return;
     this.lastBounds = signature;
+    const revision = ++this.surfaceRevision;
+    if (!visible) {
+      this.attached = false;
+      void invoke<Page | null>("browser_surface", {tab: this.tab, owner: this.owner, bounds: null})
+        .catch(e => {
+          if (revision !== this.surfaceRevision) return;
+          // 숨김이 적용됐는지 모르므로 다음 sync 가 숨김이든 같은 크기의 재표시든 다시 보내게 한다.
+          this.attached = true;
+          this.lastBounds = null;
+          this.showError(e);
+        });
+      return;
+    }
     this.chain = this.chain.then(async () => {
-      if (this.disposed) return;
+      if (this.disposed || revision !== this.surfaceRevision) return;
       const page = await invoke<Page | null>("browser_surface", {tab: this.tab, owner: this.owner, bounds});
-      this.attached = visible;
+      if (revision === this.surfaceRevision) this.attached = visible;
       if (page && !this.disposed) this.showPage(page);
-    }).catch(e => { this.lastBounds = null; this.showError(e); });
+    }).catch(e => {
+      if (revision !== this.surfaceRevision) return;
+      this.lastBounds = null;
+      this.showError(e);
+    });
   }
   update(kind: ViewerKind): void {
     if (kind.type === "browser" && document.activeElement !== this.address) this.address.value = kind.url;
@@ -116,11 +134,12 @@ export class BrowserView implements ViewerView {
   focus(): void { this.address.focus(); }
   dispose(): void {
     this.disposed = true;
+    this.surfaceRevision++;
     cancelAnimationFrame(this.frame);
     this.observer?.disconnect(); this.dialogs?.disconnect(); this.unlisten?.(); this.unlistenFocus?.(); this.unwatchWindow?.();
     document.removeEventListener("visibilitychange", this.schedule);
     window.removeEventListener("resize", this.schedule);
-    if (browserEnabled()) void this.chain.then(() => invoke("browser_surface", {tab: this.tab, owner: this.owner, bounds: null})).catch(e => console.error("browser hide failed", e));
+    if (browserEnabled()) void invoke("browser_surface", {tab: this.tab, owner: this.owner, bounds: null}).catch(e => console.error("browser hide failed", e));
     this.root.remove();
   }
 }

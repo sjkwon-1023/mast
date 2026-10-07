@@ -48,6 +48,69 @@ mast browser snapshot '#42'
 - 저장소 표시 버튼을 같은 워크스페이스의 두 탭에서 누르면 동일 표식, 다른 워크스페이스에서는
   다른 표식이어야 한다. 외부 페이지의 Mast 명령 호출과 앱 이벤트 구독이 거부돼야 한다.
 
+### Agent eval and fixed-size screenshot (field checks)
+
+Run the platform-specific checks on Windows/WebView2 and macOS/WKWebView. Record the OS and
+WebView version, build hash, `browser.enabled` / `browser.agentEval` settings, and the observed
+result for each case. Automated tests do not count as a field pass.
+
+- **Eval and serialization.** In a test profile, run `mast browser eval '#42' 'document.title'`
+  and an expression returning `Promise.resolve(document.title)`. Check a thrown or rejected
+  `Error`, top-level `undefined` (`null` result), a circular object and `1n` (`serialization_error`),
+  and a result larger than 1 MiB (`too_large`). Confirm the CLI's error JSON contains the inner
+  error JSON as a string.
+- **Token boundary.** In the caller's Mast terminal, replace `42` with the test tab's numeric ID
+  and emit an eval query without a token:
+  ```sh
+  reply="/tmp/mast-browser-unauthorized-$$.json"
+  payload='{"action":"eval","tab":42,"args":{"expression":"window.__mastEvalInjected = true"}}'
+  payload_b64="$(printf '%s' "$payload" | base64 | tr -d '\n')"
+  reply_b64="$(printf '%s' "$reply" | base64 | tr -d '\n')"
+  printf '\033]777;mast-query;browser:%s;%s\a' "$payload_b64" "$reply_b64"
+  ```
+  Missing, malformed, or mismatched tokens must all return `unauthorized`. After Mast writes the
+  reply file, confirm that the injected expression did not run, then verify a normal eval.
+- **Workspace and reply path with eval disabled.** Set `browser.agentEval` off and confirm
+  `eval-token` returns `disabled` and an eval request is rejected as `disabled`.
+- **Workspace and reply path with eval enabled.** Set `browser.agentEval` on and obtain a valid
+  token. Confirm eval of a tab in another workspace returns `not_found`. UI-path eval can only be
+  sent from a debug build, because release builds do not enable the webview developer tools: in
+  the main window's devtools run
+  `window.__TAURI_INTERNALS__.invoke("browser_request", {request: {action: "eval", tab: 42, args: {expression: "1"}}})`
+  and confirm it returns `unauthorized`; on a release build record this case as code-verified
+  only. Also send an `eval-token` request using a publicly readable
+  reply path and record that the token response can be written there; this is the documented
+  local-path risk.
+- **Setting.** Set `browser.agentEval` false, fully quit and relaunch Mast, and confirm eval is
+  disabled. Set it true and restart again before continuing. Separately confirm `browser.enabled`
+  false disables the whole browser. A tab closed with `mast browser close` is the immediate block.
+- **Timeout and recovery.** Let an eval exceed its response limit with a pending Promise, then
+  confirm the same tab's JavaScript-based actions fail while it is pending. Resolve it later and
+  confirm the gate clears; also try a permanently pending Promise and recover with `reload` or
+  `close`. While the eval gate is active, reload the same URL and confirm that it clears. Confirm
+  that the gate remains after a failed or cancelled navigation and after changing only the URL
+  fragment within the same document. Check a synchronous loop separately. On macOS, close the tab if
+  reload does not recover it.
+- **User gesture.** From a secure localhost page, call `window.open` and
+  `navigator.clipboard.writeText` through eval. Confirm the popup becomes a browser tab in the
+  same pane and clipboard text can be pasted. Repeat on both platforms.
+- **Fixed viewport.** In a pane no wider than 500 CSS px, serve the fixture with
+  `python3 -m http.server 8765 --bind 127.0.0.1 --directory apps/mast/tests/fixtures`, open
+  `browser-smoke.html`, then run `mast browser screenshot '#42' --width 1280`. Confirm the response
+  reports 1280×800, the PNG viewport marker shows 1280×800, its physical width is 1280×DPR, and
+  the desktop media query is active. Immediately take a regular screenshot and confirm the original
+  layout returned. Also check that the scroll position of the same document is kept after the capture.
+  During capture, Windows may show the desktop layout clipped in the narrow pane;
+  macOS may show a temporarily blank pane.
+- **Hidden tabs and races.** Repeat fixed-size capture on a hidden tab. During separate captures,
+  hide the tab, close it, reload the UI, and navigate the page. A navigation during capture must
+  fail; a closed webview must not be recreated. Check that the prior viewport returns, record page
+  DOM changes caused by `resize`, and confirm scroll is restored only while the same document
+  remains. A failed restore must return `view was not restored` and retry on the next request.
+  Record the duration of hidden-tab captures and whether Windows briefly shows the tab offscreen.
+  After causing a viewport restore mismatch or failure, confirm that the viewport is measured again
+  before the next browser request proceeds.
+
 ### OFF와 자원 측정
 
 각 시나리오를 완전 재시작하고 동일한 안정화 시간 후 측정한다.

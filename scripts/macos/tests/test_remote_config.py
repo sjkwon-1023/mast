@@ -74,6 +74,69 @@ class NativeRemoteConfig(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.saved(self.settings), {"fontSize": 15, "showTabIds": False})
 
+    def test_browser_agent_eval_defaults_and_resets_independently(self):
+        result = self.config("get", "browser.agentEval")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('"default": true', result.stdout)
+        self.assertFalse(self.settings.exists())
+
+        result = self.config("set", "browser.agentEval", "false")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.saved(self.settings),
+            {"browser": {"enabled": True, "agentEval": False}},
+        )
+
+        result = self.config("set", "browser.enabled", "false")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.saved(self.settings),
+            {"browser": {"enabled": False, "agentEval": False}},
+        )
+        result = self.config("reset", "browser.enabled")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.saved(self.settings),
+            {"browser": {"enabled": True, "agentEval": False}},
+        )
+
+        result = self.config("reset", "browser.agentEval")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.saved(self.settings), {"browser": {"enabled": True}})
+        result = self.config("reset", "browser")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("browser", self.saved(self.settings))
+
+        self.settings.write_text(json.dumps({"remote": {"port": 7441}}) + "\n", encoding="utf-8")
+        result = self.config("reset", "browser.enabled")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.saved(self.settings), {"remote": {"port": 7441}})
+
+        self.settings.write_text(json.dumps({"browser": {"enabled": False}}) + "\n", encoding="utf-8")
+        result = self.config("reset", "browser.enabled")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("browser", self.saved(self.settings))
+
+        self.settings.write_text(
+            json.dumps({"browser": {"enabled": False, "agentEval": False, "future": {"keep": True}}}) + "\n",
+            encoding="utf-8",
+        )
+        result = self.config("reset", "browser.enabled")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.saved(self.settings),
+            {"browser": {"enabled": True, "agentEval": False, "future": {"keep": True}}},
+        )
+
+        self.settings.write_text(
+            json.dumps({"browser": {"enabled": True, "agentEval": "no"}}) + "\n",
+            encoding="utf-8",
+        )
+        original = self.settings.read_bytes()
+        result = self.config("get", "browser.agentEval")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.settings.read_bytes(), original)
+
     def test_darwin_remote_rejects_invalid_ports_without_writing(self):
         self.settings.write_bytes(b'{ "showTabIds": false }\n')
         original = self.settings.read_bytes()

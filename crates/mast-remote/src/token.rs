@@ -1,7 +1,8 @@
 //! 페어링 토큰 — 생성·파일 로딩·상수 시간 비교.
 //!
 //! 토큰 파일은 `state.json` 옆(`<app_data_dir>/remote-token`)에 살고, 원격이 꺼져 있으면
-//! 아무도 이 모듈을 부르지 않아 파일도 생기지 않는다(ADR-0016 결정 1).
+//! 파일 경로는 불리지 않아 파일도 생기지 않는다(ADR-0016 결정 1). 난수 생성과 비교 함수는
+//! 브라우저 에이전트 eval 토큰도 메모리 안에서만 쓴다.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -116,7 +117,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 /// 상수 시간 비교. **길이가 같은 경우에 대해서만** 상수 시간이다 — 길이가 다르면 즉시
 /// false 이고, 토큰 길이(43)는 공개된 값이라 그것으로 새어 나갈 정보가 없다.
-pub(crate) fn token_matches(expected: &str, given: &str) -> bool {
+pub fn token_matches(expected: &str, given: &str) -> bool {
     let (expected, given) = (expected.as_bytes(), given.as_bytes());
     if expected.len() != given.len() {
         return false;

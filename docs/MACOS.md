@@ -411,6 +411,9 @@ treating these features as field-verified:
 - Inspect the current macOS Firewall state; where the host state permits, test
   allow and decline. Confirm block-all is reported if already enabled; do not
   change global firewall settings for this check.
+- Run the macOS eval and fixed-size capture field checks in the
+  [browser checklist](WINDOWS-BUILD.md#agent-eval-and-fixed-size-screenshot-field-checks), including
+  WKWebView version and pane restoration observations.
 - Install agy, observe running/idle, check the below-1.1.10 warning path, test
   `no-agy-hooks`, and verify repair plus marker removal retries a refused merge.
 - Exit Claude Code in a tab and press Up at the next prompt: it offers that

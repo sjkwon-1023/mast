@@ -546,7 +546,15 @@ pub struct UiSettings {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct BrowserSettings { pub enabled: bool }
+pub struct BrowserSettings {
+    pub enabled: bool,
+    #[serde(rename = "agentEval", default = "default_agent_eval", skip_serializing)]
+    pub agent_eval: bool,
+}
+
+fn default_agent_eval() -> bool {
+    true
+}
 
 /// `settings.json` 의 `remote` 객체.
 ///
@@ -594,7 +602,10 @@ const HIGHLIGHT_LANGUAGES: [&str; 8] = [
 #[tauri::command]
 pub fn get_ui_settings(app: AppHandle) -> Result<UiSettings, String> {
     let mut settings = read_ui_settings(&app)?;
-    settings.browser = Some(BrowserSettings { enabled: crate::browser::enabled(&app) });
+    settings.browser = Some(BrowserSettings {
+        enabled: crate::browser::enabled(&app),
+        agent_eval: crate::browser::agent_eval(&app),
+    });
     Ok(settings)
 }
 
@@ -1360,6 +1371,45 @@ mod tests {
         assert_eq!(future.show_tab_ids, None);
         assert!(parse_ui_settings(r#"{"fontSize": 200}"#, path()).is_err());
         assert!(parse_ui_settings(r#"{"remote": {"port": 80}}"#, path()).is_err());
+    }
+
+    #[test]
+    fn browser_agent_eval_defaults_true_and_reads_saved_values() {
+        let absent = parse_ui_settings(r#"{"browser": {"enabled": true}}"#, path()).unwrap();
+        assert!(absent.browser.unwrap().agent_eval);
+
+        let disabled = parse_ui_settings(
+            r#"{"browser": {"enabled": false, "agentEval": false}}"#,
+            path(),
+        )
+        .unwrap();
+        let browser = disabled.browser.unwrap();
+        assert!(!browser.enabled);
+        assert!(!browser.agent_eval);
+    }
+
+    #[test]
+    fn browser_agent_eval_rejects_non_boolean_values_and_missing_enabled() {
+        for text in [
+            r#"{"browser": {"enabled": true, "agentEval": "no"}}"#,
+            r#"{"browser": {"enabled": true, "agentEval": 1}}"#,
+            r#"{"browser": {"enabled": true, "agentEval": null}}"#,
+            r#"{"browser": {"agentEval": false}}"#,
+        ] {
+            assert!(parse_ui_settings(text, path()).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn browser_agent_eval_is_not_serialized_to_ui_settings() {
+        let settings = parse_ui_settings(
+            r#"{"browser": {"enabled": true, "agentEval": false}}"#,
+            path(),
+        )
+        .unwrap();
+        let serialized = serde_json::to_value(settings).unwrap();
+        assert_eq!(serialized["browser"]["enabled"], true);
+        assert!(serialized["browser"].get("agentEval").is_none());
     }
 }
 
