@@ -1161,6 +1161,23 @@ body {
   tab-size: 8;
 }
 
+/* 행 번호 — 의사 요소라 선택·복사에 섞이지 않고, 가로 스크롤해도 왼쪽에 붙어 있다.
+   시작 행을 모르는 창에서는 .numbered 가 빠져 숨는다 (text/view.ts) */
+.text-lines.numbered .text-line::before {
+  content: attr(data-line);
+  position: sticky;
+  left: 0;
+  display: inline-block;
+  width: calc(var(--text-gutter-digits, 1) * 1ch + 1ch);
+  margin-right: 1ch;
+  padding-right: 1ch;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  text-align: right;
+  user-select: none;
+}
+
 /* ── 뷰어 탭 — markdownViewer (21단계 청크 D) ─────────────────────────
    folderBrowser·textViewer 와 같은 세로 스택(배너 + 본문). 본문은 pane 폭을
    사용하고 줄간격을 조금 넓힌다 — 그 이상의 타이포그래피는 두지 않는다
