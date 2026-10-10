@@ -30,7 +30,11 @@ describe("browser CLI", () => {
     expect(output).toBe("ok\n");
   });
   it("does not write a browser request after its deadline expires", () => {
-    run(`b.os.environ['MAST']='1'\nwrites=[]\nclass Tty:\n def __enter__(self): return self\n def __exit__(self,*args): pass\n def write(self,payload): writes.append(payload)\nb.open=lambda *args,**kwargs: Tty()\noriginal_monotonic=b.time.monotonic\nb.time.monotonic=lambda: 10.0\ntry:\n try: b._query_once({'action':'list','args':{}},10.0)\n except TimeoutError: pass\n else: raise AssertionError('expired request was accepted')\nfinally: b.time.monotonic=original_monotonic\nassert writes==[]`);
+    run(`b.os.environ['MAST']='1'\nwrites=[]\nb._write_terminal=writes.append\noriginal_monotonic=b.time.monotonic\nb.time.monotonic=lambda: 10.0\ntry:\n try: b._query_once({'action':'list','args':{}},10.0)\n except TimeoutError: pass\n else: raise AssertionError('expired request was accepted')\nfinally: b.time.monotonic=original_monotonic\nassert writes==[]`);
+  });
+  it.runIf(process.platform === "darwin")("reaches MAST_TTY when the shell has no controlling tty", () => {
+    const output = run(`import os\nos.setsid()\nmaster, slave = os.openpty()\nb.os.environ.update(MAST='1', MAST_TTY=os.ttyname(slave))\nb._write_terminal(b'\\x1b]777;probe\\x07')\nprint(os.read(master, 64))`);
+    expect(output).toContain("777;probe");
   });
   it("documents a one-line heredoc invocation in eval help", () => {
     const output = run(`args=b.parser().parse_args(['eval','--help'])`);
