@@ -79,6 +79,12 @@ export class TextView implements ViewerView, ViewerFontTarget {
 
   private highlighted: string[] | null = null;
 
+  // 창 앞의 행 수는 파일을 처음부터 세야 알 수 있다. 첫 창과, 번호를 아는 창의 바로 다음 창만
+  // 번호를 매기고 나머지는 틀린 번호 대신 번호를 숨긴다. 키는 행 시작 바이트 offset 이다.
+  private firstLineNumbers = new Map<number, number>();
+
+  private firstLineNumber: number | null = null;
+
   constructor(
     parent: HTMLElement,
     private readonly tab: TabId,
@@ -196,6 +202,7 @@ export class TextView implements ViewerView, ViewerFontTarget {
     if (!shouldAdoptScroll(this.adopted, kind.path)) return;
     this.adopted = { path: kind.path };
     this.path = kind.path;
+    this.firstLineNumbers.clear();
     this.language = languageForPath(this.path, highlightLanguages);
     this.pendingOffset = kind.scrollTop;
     this.settle.markSynced(null);
@@ -324,8 +331,20 @@ export class TextView implements ViewerView, ViewerFontTarget {
   }
 
   private showWindow(win: TextWindow, size: number): void {
+    // 크기가 바뀐 파일은 기억한 행 번호가 맞지 않을 수 있다.
+    if (size !== this.size) this.firstLineNumbers.clear();
     this.win = win;
     this.size = size;
+    this.firstLineNumber = win.start === 0 ? 1 : (this.firstLineNumbers.get(win.start) ?? null);
+    if (this.firstLineNumber !== null && win.end < size) {
+      this.firstLineNumbers.set(win.end, this.firstLineNumber + win.lines.length);
+    }
+    const numbered = this.firstLineNumber !== null && win.lines.length > 0;
+    this.linesEl.classList.toggle("numbered", numbered);
+    if (numbered) {
+      const lastLine = this.firstLineNumber! + win.lines.length - 1;
+      this.linesEl.style.setProperty("--text-gutter-digits", String(String(lastLine).length));
+    }
     this.spacerEl.style.height = `${win.lines.length * this.lineHeight}px`;
     this.slice = null;
 
@@ -374,6 +393,7 @@ export class TextView implements ViewerView, ViewerFontTarget {
     for (let i = range.first; i < range.last; i += 1) {
       const el = document.createElement("div");
       el.className = "text-line";
+      if (this.firstLineNumber !== null) el.dataset.line = String(this.firstLineNumber + i);
 
       const html = this.highlighted?.[i];
       if (html === undefined) el.textContent = this.win.lines[i];

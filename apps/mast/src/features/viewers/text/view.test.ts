@@ -1141,3 +1141,63 @@ describe("TextView 행 격자와 설정 글꼴", () => {
     expect(spacerHeight(view)).toBe(`${2 * LINE_HEIGHT_PX}px`);
   });
 });
+
+describe("TextView 행 번호", () => {
+  function mount(text: string): TextView {
+    file.bytes = encoder.encode(text);
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    return new TextView(
+      parent,
+      1,
+      null,
+      { type: "textViewer", path: "/w/big.log", scrollTop: 0 },
+      () => Promise.resolve(null),
+    );
+  }
+
+  function numbers(view: TextView): (string | undefined)[] {
+    return [...view.root.querySelectorAll<HTMLElement>(".text-line")].map((el) => el.dataset.line);
+  }
+
+  function numbered(view: TextView): boolean {
+    return view.root.querySelector(".text-lines")!.classList.contains("numbered");
+  }
+
+  function click(view: TextView, title: string): void {
+    view.root.querySelector<HTMLButtonElement>(`.text-window-button[title="${title}"]`)!.click();
+  }
+
+  beforeEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("작은 파일은 1부터 번호를 매기고 번호는 행 텍스트에 섞이지 않는다", async () => {
+    const view = mount("one\ntwo\nthree\n");
+    await vi.waitFor(() => expect(numbers(view)).toEqual(["1", "2", "3"]));
+    expect(numbered(view)).toBe(true);
+    expect(view.root.querySelector<HTMLElement>(".text-lines")!.style.getPropertyValue("--text-gutter-digits")).toBe("1");
+    expect(view.root.querySelector(".text-line")!.textContent).toBe("one");
+    view.dispose();
+  });
+
+  it("다음 창은 앞 창의 행 수를 이어받고, 시작 행을 모르는 창은 번호를 숨긴다", async () => {
+    // 창(512KiB)보다 커서 세 창 이상으로 나뉘는 파일.
+    const lines = Array.from({ length: 140_000 }, (_, i) => `line ${String(i + 1).padStart(6, "0")}`);
+    const view = mount(`${lines.join("\n")}\n`);
+    await vi.waitFor(() => expect(numbers(view)[0]).toBe("1"));
+
+    click(view, "Next window");
+    await vi.waitFor(() => {
+      const first = view.root.querySelector<HTMLElement>(".text-line")!;
+      expect(first.textContent).not.toBe("line 000001");
+      expect(first.dataset.line).toBe(String(Number(first.textContent!.slice(5))));
+    });
+    expect(numbered(view)).toBe(true);
+
+    click(view, "Last window");
+    await vi.waitFor(() => expect(numbered(view)).toBe(false));
+    expect(numbers(view).every((line) => line === undefined)).toBe(true);
+    view.dispose();
+  });
+});
