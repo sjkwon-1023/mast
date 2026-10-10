@@ -2,10 +2,12 @@
 """Mast의 현재 워크스페이스 브라우저 탭을 기존 OSC 질의 채널로 제어한다."""
 import argparse
 import base64
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
+import signal
 import sys
 import tempfile
 import time
@@ -87,6 +89,29 @@ def make_request(args):
     return request
 
 
+def _open_terminal():
+    # 제어 터미널이 없는 에이전트 셸(Claude Code 의 Bash 도구 등)에서는 /dev/tty 를 열 수 없다.
+    # 같은 디렉터리에 설치되는 훅의 tty 해석(macOS 는 검증한 MAST_TTY, WSL 은 조상 pts)을 그대로 쓴다.
+    spec = importlib.util.spec_from_file_location("mast_hook", Path(__file__).resolve().parent / "mast-agent-hook.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    fd = module.open_terminal()
+    if fd is None: raise ValueError("cannot reach the Mast terminal: no controlling tty and no usable MAST_TTY")
+    return fd
+
+
+def _write_terminal(sequence):
+    # 포그라운드가 아닌 프로세스 그룹에서 tty 에 써도 멈추지 않게 한다.
+    signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+    fd = _open_terminal()
+    try:
+        view = memoryview(sequence)
+        while view:
+            view = view[os.write(fd, view):]
+    finally:
+        os.close(fd)
+
+
 def _query_once(request, deadline):
     if not os.environ.get("MAST"): raise ValueError("run inside a Mast terminal")
     payload = json.dumps(request, ensure_ascii=False).encode()
@@ -94,9 +119,8 @@ def _query_once(request, deadline):
     with tempfile.TemporaryDirectory(prefix="mast-browser-", dir="/tmp") as directory:
         reply = Path(directory) / "reply.json"
         sequence = b"\x1b]777;mast-query;browser:" + base64.b64encode(payload) + b";" + base64.b64encode(str(reply).encode()) + b"\x07"
-        with open("/dev/tty", "wb", buffering=0) as tty:
-            if deadline <= time.monotonic(): raise TimeoutError("Mast did not reply before the request deadline")
-            tty.write(sequence)
+        if deadline <= time.monotonic(): raise TimeoutError("Mast did not reply before the request deadline")
+        _write_terminal(sequence)
         while not reply.exists():
             remaining = deadline - time.monotonic()
             if remaining <= 0: raise TimeoutError("Mast did not reply before the request deadline")
