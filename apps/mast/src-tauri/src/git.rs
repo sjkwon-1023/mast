@@ -10,7 +10,7 @@ struct GitSlot;
 impl GitSlot {
     fn acquire() -> Result<Self, String> {
         IN_FLIGHT
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < MAX_IN_FLIGHT).then_some(n + 1)
             })
             .map(|_| Self)
