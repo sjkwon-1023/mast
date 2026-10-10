@@ -2,7 +2,8 @@
 <html lang="ko">
 <meta charset="utf-8">
 <title>Mast 브라우저 검증</title>
-<style>body { font: 18px system-ui; padding: 24px; } label, button, p { display: block; margin: 12px 0; } input { font: inherit; }</style>
+<style>body { font: 18px system-ui; padding: 24px; } label, button, p { display: block; margin: 12px 0; } input { font: inherit; } #viewport { position: fixed; top: 8px; right: 8px; padding: 8px; color: white; background: #333; } @media (min-width: 900px) { body { background: #e9f8ed; } h1::after { content: " — desktop layout"; } }</style>
+<output id="viewport" aria-label="Viewport size"></output>
 <h1>Mast 동일 페이지 검증</h1>
 <form>
   <label>이름 <input name="name" aria-label="이름" autocomplete="off"></label>
@@ -15,6 +16,10 @@
 <a href="?popup=1" target="_blank">팝업 탭</a>
 <a href="browser-smoke.html" download>다운로드 거부 확인</a>
 <script>
+const viewport = document.querySelector('#viewport');
+const updateViewport = () => { viewport.textContent = `${innerWidth}×${innerHeight}`; };
+window.addEventListener('resize', updateViewport);
+updateViewport();
 document.querySelector('form').addEventListener('submit', event => {
   event.preventDefault();
   const name = document.querySelector('input').value;

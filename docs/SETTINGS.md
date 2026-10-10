@@ -161,8 +161,38 @@ UI 리로드로 바뀌지 않는다. `remote` 설정과는 독립이다.
 
 CLI는 `mast config set browser.enabled false`, `mast config set browser.enabled true`,
 `mast config reset browser.enabled`를 지원한다. `set browser false`도 같은 OFF 설정을
-저장한다. reset은 브라우저 설정을 지워 기본값 true로 되돌린다.
+저장한다. `reset browser.enabled`는 enabled override를 제거한다. 브라우저 객체에
+`agentEval`이나 다른 키가 남으면 enabled를 기본값 true로 저장하고, enabled만 있거나
+객체가 없으면 빈 브라우저 객체를 만들지 않는다.
 [사용법과 에이전트 명령](BROWSER.md)을 참고한다.
+
+## `browser.agentEval`
+
+에이전트가 `mast browser eval`로 현재 탭의 JavaScript를 실행할 수 있는지 정한다.
+생략하면 **true**이며 다음 명령으로 바꿀 수 있다.
+
+```sh
+mast config set browser.agentEval false
+mast config get browser.agentEval
+mast config reset browser.agentEval
+```
+
+`settings.json`을 직접 작성할 때는 `browser.enabled`도 함께 지정해야 한다. 생략하면 설정
+파싱에 실패한다. `mast config set browser.agentEval false`는 `browser.enabled`를 자동으로 채운다.
+
+```json
+"browser": { "enabled": true, "agentEval": false }
+```
+
+설정은 앱을 완전히 재시작해야 적용된다. `browser.enabled`가 false이면 브라우저와
+eval이 모두 비활성화된다. 이 설정은 셸을 가진 에이전트에 대한 강제 경계가 아니다.
+에이전트가 `mast config set browser.agentEval true`로 값을 저장하면 다음 재시작 후
+eval이 다시 켜진다. 바로 차단하려면 해당 브라우저 탭을 `mast browser close`로 닫는다.
+`browser.agentEval`이 false이면 eval 토큰을 발급하지 않고 eval 요청을 거부한다. 별도의
+eval 작업·타이머·리스너를 시작하지 않아 eval에 대한 상시 비용이 없다.
+
+`mast config reset browser.enabled`는 저장된 `agentEval`과 다른 형제 키를 보존한다.
+`mast config reset browser`는 브라우저 객체를 지워 두 설정을 모두 기본값으로 돌린다.
 
 ## `macOptionIsMeta` (macOS only)
 

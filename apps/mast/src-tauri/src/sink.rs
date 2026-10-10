@@ -448,6 +448,7 @@ struct QueryReply<'a> {
 /// 화면과 replay 버퍼를 오염시키는 쪽이 더 나쁘다). 회신 파일이 나타나지 않는
 /// 것이 요청자가 보는 유일한 신호다.
 fn deliver_query(app: &AppHandle, requester: SessionId, kind: &str, reply_b64: &str) {
+    let request_received = std::time::Instant::now();
     let Some(guard) = acquire_in_flight() else {
         winlog!(
             "query: dropped from session {requester}: too many deliveries in flight \
@@ -479,7 +480,7 @@ fn deliver_query(app: &AppHandle, requester: SessionId, kind: &str, reply_b64: &
             let result = match workspace {
                 Some(workspace) => decode_send_text(payload).map_err(|e| e.to_string())
                     .and_then(|bytes| serde_json::from_slice::<crate::browser::Request>(&bytes).map_err(|e| e.to_string()))
-                    .map(|request| crate::browser::execute(&app, request, Some(workspace))),
+                    .map(|request| crate::browser::execute(&app, request, Some(workspace), request_received)),
                 None => Err("requester terminal no longer exists".into()),
             };
             let response = match result {

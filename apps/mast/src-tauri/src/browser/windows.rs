@@ -5,16 +5,18 @@ use tauri::{AppHandle, Emitter, Manager, Webview};
 
 use super::{activate_pane, error, event, native, unsupported_key, Result};
 
-pub(super) fn prepare(_app: &AppHandle) -> Result<()> {
+const NATIVE_WAIT: Duration = Duration::from_secs(10);
+
+pub(super) fn prepare(_app: &AppHandle, _timeout: Duration) -> Result<()> {
     Ok(())
 }
 
-/// WebView2 의 자식 웹뷰는 메인 웹뷰와 같은 창 클라이언트 좌표를 쓴다.
-pub(super) fn ui_origin(_app: &AppHandle) -> Result<(f64, f64)> {
-    Ok((0.0, 0.0))
-}
-
-pub(super) fn configure(app: &AppHandle, tab: u64, view: &Webview) -> Result<()> {
+pub(super) fn configure(
+    app: &AppHandle,
+    tab: u64,
+    view: &Webview,
+    timeout: Duration,
+) -> Result<()> {
     use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PERMISSION_STATE_DENY;
     use webview2_com::{
         AcceleratorKeyPressedEventHandler, FocusChangedEventHandler,
@@ -88,7 +90,7 @@ pub(super) fn configure(app: &AppHandle, tab: u64, view: &Webview) -> Result<()>
         })();
         let _ = tx.try_send(result.map_err(|e| e.to_string()));
     }).map_err(native)?;
-    rx.recv_timeout(Duration::from_secs(10))
+    rx.recv_timeout(timeout)
         .map_err(|_| error("timeout", "Browser permission setup timed out"))?
         .map_err(native)
 }
@@ -117,11 +119,12 @@ pub(super) fn suspend(view: &Webview, visible: bool) -> Result<()> {
     .map_err(native)
 }
 
-pub(super) fn evaluate(view: &Webview, expression: &str) -> Result<Value> {
+pub(super) fn evaluate(view: &Webview, expression: &str, timeout: Duration) -> Result<Value> {
     let result = cdp(
         view,
         "Runtime.evaluate",
         json!({"expression": expression, "returnByValue": true}),
+        timeout,
     )?;
     if !result["exceptionDetails"].is_null() {
         return Err(error(
@@ -132,12 +135,55 @@ pub(super) fn evaluate(view: &Webview, expression: &str) -> Result<Value> {
     Ok(result["result"]["value"].clone())
 }
 
+pub(super) fn evaluate_agent(
+    view: &Webview,
+    expression: &str,
+    timeout: Duration,
+    may_submit: impl Fn() -> bool + Send + 'static,
+    completed: impl FnOnce() + Send + 'static,
+) -> Result<Value> {
+    let body = include_str!("../browser-eval.js")
+        .replace("__MAST_EVAL_EXPRESSION__", &format!("\n{expression}\n"));
+    let script = format!("(async function() {{\n{body}\n}})()");
+    let result = cdp_with_submit(
+        view,
+        "Runtime.evaluate",
+        json!({
+            "expression": script,
+            "userGesture": true,
+            "awaitPromise": true,
+            "returnByValue": true,
+            "timeout": timeout.as_millis(),
+        }),
+        timeout,
+        Some(Box::new(completed)),
+        Some(Box::new(may_submit)),
+    )?;
+    if !result["exceptionDetails"].is_null() {
+        return Err(error(
+            "script_error",
+            result["exceptionDetails"]["exception"]["description"]
+                .as_str()
+                .unwrap_or("Page script failed"),
+        ));
+    }
+    let text = result["result"]["value"]
+        .as_str()
+        .ok_or_else(|| error("script_error", "Page script returned no eval result"))?;
+    super::parse_eval_envelope(text)
+}
+
 pub(super) fn stop(view: &Webview) -> Result<Value> {
-    cdp(view, "Page.stopLoading", json!({}))
+    cdp(view, "Page.stopLoading", json!({}), NATIVE_WAIT)
 }
 
 pub(super) fn history(view: &Webview, back: bool) -> Result<Value> {
-    let history = cdp(view, "Page.getNavigationHistory", json!({}))?;
+    let history = cdp(
+        view,
+        "Page.getNavigationHistory",
+        json!({}),
+        NATIVE_WAIT,
+    )?;
     let current = history["currentIndex"].as_i64().unwrap_or(0);
     let index = current + if back { -1 } else { 1 };
     let entry = history["entries"]
@@ -148,15 +194,73 @@ pub(super) fn history(view: &Webview, back: bool) -> Result<Value> {
         view,
         "Page.navigateToHistoryEntry",
         json!({"entryId": entry["id"]}),
+        NATIVE_WAIT,
     )
 }
 
 pub(super) fn screenshot(view: &Webview) -> Result<Value> {
+    screenshot_with_timeout(view, NATIVE_WAIT)
+}
+
+pub(super) fn screenshot_with_timeout(view: &Webview, timeout: Duration) -> Result<Value> {
     cdp(
         view,
         "Page.captureScreenshot",
         json!({"format": "png", "captureBeyondViewport": false}),
+        timeout,
     )
+}
+
+pub(super) fn set_surface_bounds(
+    _app: &AppHandle,
+    view: &Webview,
+    bounds: super::Bounds,
+    _timeout: Duration,
+) -> Result<()> {
+    view.set_bounds(tauri::Rect {
+        position: tauri::LogicalPosition::new(bounds.x, bounds.y).into(),
+        size: tauri::LogicalSize::new(bounds.width, bounds.height).into(),
+    })
+    .map_err(native)
+}
+
+pub(super) fn capture_resize(
+    _app: &AppHandle,
+    view: &Webview,
+    width: u32,
+    height: u32,
+    timeout: Duration,
+) -> Result<()> {
+    cdp(
+        view,
+        "Emulation.setDeviceMetricsOverride",
+        json!({"width": width, "height": height, "deviceScaleFactor": 0, "mobile": false}),
+        timeout,
+    )?;
+    Ok(())
+}
+
+pub(super) fn clear_capture_size(view: &Webview, timeout: Duration) -> Result<()> {
+    cdp(
+        view,
+        "Emulation.clearDeviceMetricsOverride",
+        json!({}),
+        timeout,
+    )?;
+    Ok(())
+}
+
+pub(super) fn show_hidden_view_offscreen_for_capture(
+    view: &Webview,
+    width: u32,
+    height: u32,
+) -> Result<()> {
+    view.set_bounds(tauri::Rect {
+        position: tauri::LogicalPosition::new(-20000.0, -20000.0).into(),
+        size: tauri::LogicalSize::new(f64::from(width), f64::from(height)).into(),
+    })
+    .map_err(native)?;
+    view.show().map_err(native)
 }
 
 pub(super) fn press(view: &Webview, key: &str) -> Result<Value> {
@@ -175,46 +279,86 @@ pub(super) fn press(view: &Webview, key: &str) -> Result<Value> {
         view,
         "Input.dispatchKeyEvent",
         json!({"type": "keyDown", "key": key, "windowsVirtualKeyCode": code}),
+        NATIVE_WAIT,
     )?;
     cdp(
         view,
         "Input.dispatchKeyEvent",
         json!({"type": "keyUp", "key": key, "windowsVirtualKeyCode": code}),
+        NATIVE_WAIT,
     )
 }
 
-fn cdp(view: &Webview, method: &str, params: Value) -> Result<Value> {
+fn cdp(
+    view: &Webview,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<Value> {
+    cdp_with_submit(view, method, params, timeout, None, None)
+}
+
+fn cdp_with_submit(
+    view: &Webview,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+    completed: Option<Box<dyn FnOnce() + Send>>,
+    may_submit: Option<Box<dyn Fn() -> bool + Send>>,
+) -> Result<Value> {
     use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
     use windows::core::HSTRING;
     let method = method.to_owned();
     let params = params.to_string();
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let completed = std::sync::Arc::new(std::sync::Mutex::new(completed));
+    let callback_completed = completed.clone();
     view.with_webview(move |v| unsafe {
+        let finish_without_submission = || {
+            let completed = completed.lock().unwrap().take();
+            if let Some(completed) = completed {
+                completed();
+            }
+        };
         let done = tx.clone();
         let callback =
             CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |status, result| {
-                let value = status.map_err(|e| e.to_string()).and_then(|_| {
-                    serde_json::from_str::<Value>(&result).map_err(|e| e.to_string())
-                });
+                let completed = callback_completed.lock().unwrap().take();
+                if let Some(completed) = completed {
+                    completed();
+                }
+                let value = status
+                    .map_err(native)
+                    .and_then(|_| serde_json::from_str::<Value>(&result).map_err(native));
                 let _ = done.try_send(value);
                 Ok(())
             }));
-        let result = v.controller().CoreWebView2().and_then(|core| {
-            core.CallDevToolsProtocolMethod(
-                &HSTRING::from(method),
-                &HSTRING::from(params),
-                &callback,
-            )
-        });
-        if let Err(err) = result {
-            let _ = tx.try_send(Err(err.to_string()));
+        let core = match v.controller().CoreWebView2() {
+            Ok(core) => core,
+            Err(err) => {
+                finish_without_submission();
+                let _ = tx.try_send(Err(native(err)));
+                return;
+            }
+        };
+        if may_submit.as_ref().is_some_and(|check| !check()) {
+            finish_without_submission();
+            let _ = tx.try_send(Err(error("timeout", "Browser eval deadline expired")));
+            return;
+        }
+        if let Err(err) = core.CallDevToolsProtocolMethod(
+            &HSTRING::from(method),
+            &HSTRING::from(params),
+            &callback,
+        ) {
+            finish_without_submission();
+            let _ = tx.try_send(Err(native(err)));
         }
     })
     .map_err(native)?;
     let result = rx
-        .recv_timeout(Duration::from_secs(10))
-        .map_err(|_| error("timeout", "WebView2 did not respond"))?
-        .map_err(native)?;
+        .recv_timeout(timeout)
+        .map_err(|_| error("timeout", "WebView2 did not respond"))??;
     if !result["error"].is_null() {
         return Err(native(&result["error"]));
     }
