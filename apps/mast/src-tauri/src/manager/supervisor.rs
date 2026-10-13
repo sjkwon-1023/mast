@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use mast_core::command::Dispatcher;
 use mast_core::manager::{
-    AppToHarness, HarnessAction, HarnessState, HarnessToApp, NotifyReason,
+    AppToHarness, HarnessState, HarnessToApp, NotifyReason,
 };
 use serde::Serialize;
 
@@ -51,9 +51,6 @@ const SPAWN_SETUP_HINT: &str = "Python 3.11+ for mast is not set up; restart mas
 /// WSL 프로비저닝은 Python 3.8+ 를 요구한다.
 #[cfg(not(target_os = "macos"))]
 const SPAWN_SETUP_HINT: &str = "Python 3.8+ for mast is not set up; run mast setup";
-
-/// `manager_action` 이 하네스 부재 시 돌려주는 문장.
-pub(crate) const HARNESS_NOT_RUNNING: &str = "manager harness is not running";
 
 /// 글루가 정하는 status 상태. 하네스의 [`HarnessState`] 와 이름이 겹치는
 /// 다섯은 그대로 반영되고, `disabled`·`restarting` 은 글루만 만든다.
@@ -216,26 +213,6 @@ pub(crate) fn notification_payload(message: &HarnessToApp) -> Option<serde_json:
             "body": body,
         })),
         _ => None,
-    }
-}
-
-/// `manager_action` 키 형식 — `k` + 소문자 hex 20자리.
-pub(crate) fn valid_manager_key(key: &str) -> bool {
-    let Some(hex) = key.strip_prefix('k') else {
-        return false;
-    };
-    hex.len() == 20
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-/// 프론트가 보낸 action 문자열 → 코어 action.
-pub(crate) fn parse_action(action: &str) -> Result<HarnessAction, String> {
-    match action {
-        "resume" => Ok(HarnessAction::Resume),
-        "fresh" => Ok(HarnessAction::Fresh),
-        other => Err(format!("unknown manager action: {other:?}")),
     }
 }
 
@@ -408,22 +385,6 @@ impl ManagerShared {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
-    }
-
-    /// `manager_action` — 실행 중 하네스에 action 을 넣는다.
-    pub(crate) fn send_action(&self, action: HarnessAction, key: String) -> Result<(), String> {
-        let process = self
-            .process
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        match process {
-            Some(process) => {
-                process.send_action(action, key);
-                Ok(())
-            }
-            None => Err(HARNESS_NOT_RUNNING.to_owned()),
-        }
     }
 
     /// 감독을 한 번만 시작하게 하는 CAS — 재검사 재진입이 중복 시작하지 않게 한다.
@@ -769,32 +730,6 @@ mod tests {
     }
 
     #[test]
-    fn manager_keys_are_k_plus_twenty_lowercase_hex_digits() {
-        assert!(valid_manager_key("k0123456789abcdef0123"));
-        for bad in [
-            "k0123456789abcdef012",   // 19자리
-            "k0123456789abcdef01234", // 21자리
-            "K0123456789abcdef0123",  // 대문자 접두사
-            "0123456789abcdef0123",   // 접두사 없음
-            "k0123456789ABCDEF0123",  // 대문자 hex
-            "k0123456789abcdef012g",  // hex 아님
-            "",
-            "k",
-        ] {
-            assert!(!valid_manager_key(bad), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn actions_parse_only_resume_and_fresh() {
-        assert_eq!(parse_action("resume").unwrap(), HarnessAction::Resume);
-        assert_eq!(parse_action("fresh").unwrap(), HarnessAction::Fresh);
-        for bad in ["", "Resume", "restart"] {
-            assert!(parse_action(bad).is_err(), "{bad:?}");
-        }
-    }
-
-    #[test]
     fn harness_status_is_reflected_and_the_board_survives_exit() {
         let shared = ManagerShared::new(settings());
         assert_eq!(shared.status().state, GlueState::Starting);
@@ -863,15 +798,6 @@ mod tests {
             entries: Vec::new(),
         })
         .is_none());
-    }
-
-    #[test]
-    fn manager_action_without_a_harness_is_an_error() {
-        let shared = ManagerShared::new(settings());
-        assert_eq!(
-            shared.send_action(HarnessAction::Resume, "k0123456789abcdef0123".to_owned()),
-            Err(HARNESS_NOT_RUNNING.to_owned())
-        );
     }
 
     #[test]

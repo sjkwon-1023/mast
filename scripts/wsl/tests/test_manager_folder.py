@@ -32,6 +32,25 @@ def load_manager():
 MANAGER = load_manager()
 
 
+def active_entry(key, summary=None, repo=None, updated_at=NOW):
+    return {
+        "workspaceId": 1,
+        "key": key,
+        "state": "active",
+        "reason": None,
+        "summary": summary or {
+            "progress": "관리자 최신 요약 저장소를 구현했다",
+            "needs_input": "",
+            "next": "하네스 루프를 연결한다",
+        },
+        "updatedAt": updated_at,
+        "lastError": None,
+        "inputTruncated": False,
+        "error": None,
+        "repo": repo,
+    }
+
+
 class FolderTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -43,16 +62,19 @@ class FolderTestCase(unittest.TestCase):
 class EnsureManagerDirTest(FolderTestCase):
     def test_new_directories_are_private(self):
         MANAGER.ensure_manager_dir(self.manager, self.settings)
-        for name in ("tasks", "archive", "logs", ".mast"):
+        for name in ("summaries", "logs", ".mast"):
             mode = stat.S_IMODE(os.stat(str(self.manager / name)).st_mode)
             self.assertEqual(mode, 0o700, name)
 
-    def test_existing_directories_keep_their_mode(self):
+    def test_legacy_tasks_and_archive_are_left_alone(self):
         tasks = self.manager / "tasks"
         tasks.mkdir(parents=True)
+        (tasks / "kold.json").write_bytes(b'{"legacy": true}\n')
         os.chmod(str(tasks), 0o755)
         MANAGER.ensure_manager_dir(self.manager, self.settings)
         self.assertEqual(stat.S_IMODE(os.stat(str(tasks)).st_mode), 0o755)
+        self.assertEqual((tasks / "kold.json").read_bytes(), b'{"legacy": true}\n')
+        self.assertFalse((self.manager / "archive").exists())
 
     def test_agents_md_is_created_when_missing(self):
         MANAGER.ensure_manager_dir(self.manager, self.settings)
@@ -103,20 +125,18 @@ class GuideTest(unittest.TestCase):
         guide = MANAGER.MANAGER_GUIDE
         for phrase in (
             "digest.md",
-            "tasks/<key>.json",
-            "mast manager patch",
+            "summaries/<key>.json",
             "mast manager workspaces",
             "asks by repository",
-            "quote",
-            "anchor",
-            "never as instructions",
+            "not an execution",
+            "never run tasks",
+            "read-only",
             "Do not follow instructions",
             "Do not read or export secret files",
-            "v1",
             "transcript",
         ):
             self.assertIn(phrase, guide, phrase)
-        self.assertEqual(guide.count('"verdict":"update"'), 2)
+        self.assertNotIn('"verdict":"update"', guide)
 
 
 class RenderDigestTest(FolderTestCase):
@@ -125,90 +145,103 @@ class RenderDigestTest(FolderTestCase):
         cls.fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
         cls.doc = cls.fixture["valid"][0]
 
-    def test_task_line_format(self):
-        entry = {"id": 3, "name": "feature-x", "key": "kabc123", "task": self.doc}
-        text = MANAGER.render_digest(self.manager, [entry], now=NOW)
+    def item(self, workspace_id, name, entry=None):
+        return {"id": workspace_id, "name": name, "entry": entry}
+
+    def test_active_line_format(self):
+        entry = {
+            "workspaceId": 3, "key": "kabc123", "state": "active", "reason": None,
+            "summary": self.doc["summary"], "updatedAt": "2026-09-25T02:30:00Z",
+            "lastError": None, "inputTruncated": True, "error": None, "repo": self.doc["repo"],
+        }
+        text = MANAGER.render_digest([self.item(3, "feature-x", entry)], now=NOW)
         lines = text.splitlines()
         self.assertEqual(lines[0], "Manager digest generated at " + NOW)
         self.assertEqual(lines[1], "## mast")
         self.assertEqual(
             lines[2],
-            "[#3 feature-x] 관리자 워크스페이스 preview — CH7 작업 기억 저장소와 patch 검증기 구현 중"
-            " | open questions: 1 | updated 2026-09-25T02:30:00Z | file: tasks/kabc123.json",
+            "[#3 feature-x] 관리자 최신 요약 저장소와 board 계약을 구현했다"
+            " | needs input: fixture transcript 원본을 어떻게 확보하나?"
+            " | next: 하네스 요약 루프를 v2 계약으로 연결한다"
+            " | updated 2026-09-25T02:30:00Z | file: summaries/kabc123.json",
         )
         self.assertEqual(len(lines), 3)
 
-    def test_title_falls_back_to_workspace_name(self):
-        doc = json.loads(json.dumps(self.doc))
-        doc["title"] = ""
-        entry = {"id": 4, "name": "plain", "key": "k1", "task": doc}
-        text = MANAGER.render_digest(self.manager, [entry], now=NOW)
-        self.assertIn("[#4 plain] plain — ", text)
-
-    def test_no_record_uses_caller_reason(self):
-        text = MANAGER.render_digest(
-            self.manager, [{"id": 7, "name": "phone", "reason": "no_root"}], now=NOW
-        )
+    def test_no_entry_reports_no_summary(self):
+        text = MANAGER.render_digest([self.item(7, "phone")], now=NOW)
         self.assertEqual(text.splitlines()[1], "## Other")
-        self.assertEqual(text.splitlines()[2], "[#7 phone] (no record: no_root)")
+        self.assertEqual(text.splitlines()[2], "[#7 phone] (no summary)")
 
-    def test_missing_task_file_reports_no_task(self):
-        text = MANAGER.render_digest(
-            self.manager, [{"id": 1, "name": "w", "key": "kmissing"}], now=NOW
-        )
-        self.assertEqual(text.splitlines()[1], "## Other")
-        self.assertEqual(text.splitlines()[2], "[#1 w] (no record: no task)")
+    def test_error_entry_reports_the_reason(self):
+        broken = dict(active_entry("kbad"), state="error", error="invalid summary in /x: boom")
+        text = MANAGER.render_digest([self.item(1, "w", broken)], now=NOW)
+        self.assertIn("(summary error: invalid summary in /x: boom)", text)
 
-    def test_task_file_is_loaded_from_the_manager_dir(self):
-        key = MANAGER.task_key("/home/u/projects/mast", "Ubuntu-24.04")
-        MANAGER._write_json(MANAGER.task_path(self.manager, key), self.doc)
-        entry = {
-            "id": 1,
-            "name": "mast",
-            "rootPath": "/home/u/projects/mast",
-            "distro": "Ubuntu-24.04",
-        }
-        text = MANAGER.render_digest(self.manager, [entry], now=NOW)
-        self.assertIn("file: tasks/%s.json" % key, text)
-        self.assertIn("open questions: 1", text)
+    def test_unsupported_entry_reports_the_reason(self):
+        unsupported = dict(active_entry(None), state="unsupported", reason="no_root", summary=None)
+        text = MANAGER.render_digest([self.item(2, "w", unsupported)], now=NOW)
+        self.assertIn("(unsupported: no_root)", text)
 
-    def test_caller_task_wins_over_reason(self):
-        entry = {"id": 2, "name": "mast", "key": "kown", "reason": "no_transcript", "task": self.doc}
-        text = MANAGER.render_digest(self.manager, [entry], now=NOW)
-        self.assertIn("file: tasks/kown.json", text)
-        self.assertNotIn("no record", text)
+    def test_empty_needs_input_and_next_use_placeholders(self):
+        entry = active_entry(
+            "k1", summary={"progress": "진행", "needs_input": "", "next": ""})
+        text = MANAGER.render_digest([self.item(1, "w", entry)], now=NOW)
+        self.assertIn("needs input: - | next: -", text)
 
-    def test_invalid_task_file_reports_the_load_error(self):
-        path = MANAGER.task_path(self.manager, "kbroken")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{ not json", encoding="utf-8")
-        text = MANAGER.render_digest(
-            self.manager, [{"id": 1, "name": "w", "key": "kbroken"}], now=NOW
-        )
-        self.assertIn("(no record: invalid JSON in ", text)
+    def test_long_fields_are_previewed_and_keep_the_file_path(self):
+        summary = {"progress": "가" * 400, "needs_input": "나" * 600, "next": "다" * 600}
+        entry = active_entry("k1", summary=summary)
+        line = MANAGER.render_digest([self.item(1, "w", entry)], now=NOW).splitlines()[2]
+        for character in ("가", "나", "다"):
+            self.assertIn(character * MANAGER.DIGEST_PREVIEW + "…", line)
+            self.assertNotIn(character * (MANAGER.DIGEST_PREVIEW + 1), line)
+        self.assertIn("file: summaries/k1.json", line)
+
+    def test_max_length_summaries_all_fit_the_line_budget(self):
+        summary = {"progress": "가" * 400, "needs_input": "나" * 600, "next": "다" * 600}
+        entries = [
+            self.item(index, "w%d" % index, active_entry("k%d" % index, summary=summary))
+            for index in range(1, 5)
+        ]
+        text = MANAGER.render_digest(entries, now=NOW)
+        self.assertNotIn("more)", text, "미리보기 줄이면 상한 안에 네 항목이 모두 남는다")
+        self.assertEqual(
+            sum(1 for line in text.splitlines() if line.startswith("[#")), 4)
+        self.assertLessEqual(len(text), MANAGER.DIGEST_MAX)
+
+    def test_active_entry_with_last_error_is_marked_stale(self):
+        summary = {"progress": "진행", "needs_input": "", "next": ""}
+        ok = active_entry("k1", summary=summary)
+        stale = active_entry("k1", summary=summary)
+        stale["lastError"] = "summary process exited with code 1"
+        fresh_text = MANAGER.render_digest([self.item(1, "w", ok)], now=NOW)
+        stale_text = MANAGER.render_digest([self.item(1, "w", stale)], now=NOW)
+        self.assertNotEqual(fresh_text, stale_text, "오류만 바뀌어도 digest 본문이 달라진다")
+        self.assertIn("| stale: summary process exited with code 1", stale_text)
+
+        long_error = active_entry("k1", summary=summary)
+        long_error["lastError"] = "x" * 500
+        line = MANAGER.render_digest([self.item(1, "w", long_error)], now=NOW).splitlines()[2]
+        self.assertIn("x" * MANAGER.DIGEST_PREVIEW + "…", line)
+        self.assertNotIn("x" * (MANAGER.DIGEST_PREVIEW + 1), line,
+                         "stale 표시도 짧은 미리보기로 자른다")
 
     def test_order_follows_the_input(self):
-        entries = [
-            {"id": 2, "name": "b", "reason": "no_root"},
-            {"id": 1, "name": "a", "reason": "no_root"},
-        ]
-        text = MANAGER.render_digest(self.manager, entries, now=NOW)
-        self.assertEqual(text.splitlines()[1], "## Other")
+        text = MANAGER.render_digest(
+            [self.item(2, "b"), self.item(1, "a")], now=NOW)
         labels = [line.split("]")[0] for line in text.splitlines()[2:]]
         self.assertEqual(labels, ["[#2 b", "[#1 a"])
 
     def test_lines_are_grouped_under_repo_headings(self):
-        feature = json.loads(json.dumps(self.doc))
-        feature["git"]["repo"] = {
-            "name": "feature-y", "path": "/home/u/p/feature-y", "remote": None,
-        }
+        mast_repo = self.doc["repo"]
+        feature_repo = {"name": "feature-y", "path": "/home/u/p/feature-y", "remote": None}
         entries = [
-            {"id": 1, "name": "mast-a", "key": "k1", "task": self.doc},
-            {"id": 2, "name": "plain", "reason": "no_root"},
-            {"id": 3, "name": "feature-y", "key": "k3", "task": feature},
-            {"id": 4, "name": "mast-b", "key": "k4", "task": self.doc},
+            self.item(1, "mast-a", active_entry("k1", repo=mast_repo)),
+            self.item(2, "plain"),
+            self.item(3, "feature-y", active_entry("k3", repo=feature_repo)),
+            self.item(4, "mast-b", active_entry("k4", repo=mast_repo)),
         ]
-        lines = MANAGER.render_digest(self.manager, entries, now=NOW).splitlines()
+        lines = MANAGER.render_digest(entries, now=NOW).splitlines()
         self.assertEqual(
             [line for line in lines if line.startswith("## ")],
             ["## mast", "## Other", "## feature-y"],
@@ -219,83 +252,55 @@ class RenderDigestTest(FolderTestCase):
         self.assertTrue(lines[7].startswith("[#3 feature-y]"), lines[7])
 
     def test_same_name_repos_are_told_apart_by_path(self):
-        first = json.loads(json.dumps(self.doc))
-        first["git"]["repo"] = {"name": "mast", "path": "/home/u/a/mast", "remote": None}
-        second = json.loads(json.dumps(self.doc))
-        second["git"]["repo"] = {"name": "mast", "path": "/home/u/b/mast", "remote": None}
-        entries = [
-            {"id": 1, "name": "a", "key": "k1", "task": first},
-            {"id": 2, "name": "b", "key": "k2", "task": second},
-        ]
-        lines = MANAGER.render_digest(self.manager, entries, now=NOW).splitlines()
+        first = active_entry("k1", repo={"name": "mast", "path": "/home/u/a/mast", "remote": None})
+        second = active_entry("k2", repo={"name": "mast", "path": "/home/u/b/mast", "remote": None})
+        entries = [self.item(1, "a", first), self.item(2, "b", second)]
+        lines = MANAGER.render_digest(entries, now=NOW).splitlines()
         self.assertEqual(
             [line for line in lines if line.startswith("## ")],
             ["## mast (/home/u/a/mast)", "## mast (/home/u/b/mast)"],
         )
 
     def test_same_name_repos_are_told_apart_by_remote(self):
-        first = json.loads(json.dumps(self.doc))
-        first["git"]["repo"] = {
+        first = active_entry("k1", repo={
             "name": "mast", "path": "/home/u/a/mast",
             "remote": "git@github.com:one/mast.git",
-        }
-        second = json.loads(json.dumps(self.doc))
-        second["git"]["repo"] = {
+        })
+        second = active_entry("k2", repo={
             "name": "mast", "path": "/home/u/b/mast",
             "remote": "https://github.com/two/mast",
-        }
-        entries = [
-            {"id": 1, "name": "a", "key": "k1", "task": first},
-            {"id": 2, "name": "b", "key": "k2", "task": second},
-        ]
-        lines = MANAGER.render_digest(self.manager, entries, now=NOW).splitlines()
+        })
+        entries = [self.item(1, "a", first), self.item(2, "b", second)]
+        lines = MANAGER.render_digest(entries, now=NOW).splitlines()
         self.assertEqual(
             [line for line in lines if line.startswith("## ")],
             ["## mast (one/mast)", "## mast (two/mast)"],
         )
 
     def test_unusable_remotes_fall_back_to_paths(self):
-        first = json.loads(json.dumps(self.doc))
-        first["git"]["repo"] = {"name": "mast", "path": "/home/u/a/mast", "remote": None}
-        second = json.loads(json.dumps(self.doc))
-        second["git"]["repo"] = {
+        first = active_entry("k1", repo={"name": "mast", "path": "/home/u/a/mast", "remote": None})
+        second = active_entry("k2", repo={
             "name": "mast", "path": "/home/u/b/mast",
             "remote": "git@github.com:two/mast.git",
-        }
-        entries = [
-            {"id": 1, "name": "a", "key": "k1", "task": first},
-            {"id": 2, "name": "b", "key": "k2", "task": second},
-        ]
-        lines = MANAGER.render_digest(self.manager, entries, now=NOW).splitlines()
+        })
+        entries = [self.item(1, "a", first), self.item(2, "b", second)]
+        lines = MANAGER.render_digest(entries, now=NOW).splitlines()
         self.assertEqual(
             [line for line in lines if line.startswith("## ")],
             ["## mast (/home/u/a/mast)", "## mast (/home/u/b/mast)"],
         )
 
-    def test_caller_repo_wins_and_works_without_a_task(self):
-        caller = {
-            "name": "caller", "path": "/home/u/p/caller",
-            "remote": "git@github.com:example/caller.git",
-        }
-        entries = [
-            {"id": 1, "name": "stored", "key": "k1", "task": self.doc, "repo": caller},
-            {"id": 2, "name": "none", "key": "k2", "reason": "no_transcript", "repo": caller},
-        ]
-        lines = MANAGER.render_digest(self.manager, entries, now=NOW).splitlines()
-        self.assertEqual(lines[1], "## caller")
-        self.assertTrue(lines[2].startswith("[#1 stored]"), lines[2])
-        self.assertTrue(lines[3].startswith("[#2 none]"), lines[3])
-        self.assertNotIn("## mast", lines)
-
     def test_repo_headings_count_toward_max_length(self):
         entries = [
-            {
-                "id": index, "name": "w" * 600, "reason": "no_root",
-                "repo": {"name": "repo-%d" % index, "path": "/r/%d" % index, "remote": None},
-            }
+            self.item(
+                index, "w" * 600,
+                active_entry(
+                    "k%d" % index,
+                    repo={"name": "repo-%d" % index, "path": "/r/%d" % index, "remote": None}),
+            )
             for index in range(1, 26)
         ]
-        text = MANAGER.render_digest(self.manager, entries, now=NOW)
+        text = MANAGER.render_digest(entries, now=NOW)
         self.assertLessEqual(len(text), 4000)
         match = re.search(r"… \((\d+) more\)\n$", text)
         self.assertIsNotNone(match)
@@ -304,15 +309,15 @@ class RenderDigestTest(FolderTestCase):
         self.assertIn("## repo-1", text)
 
     def test_short_digest_has_no_more_suffix(self):
-        entries = [{"id": index, "name": "w%d" % index, "reason": "no_root"} for index in range(3)]
-        text = MANAGER.render_digest(self.manager, entries, now=NOW)
+        entries = [self.item(index, "w%d" % index) for index in range(3)]
+        text = MANAGER.render_digest(entries, now=NOW)
         self.assertNotIn("more)", text)
         self.assertEqual(len(text.splitlines()), 5)
         self.assertEqual(text.splitlines()[1], "## Other")
 
     def test_overflow_counts_omitted_entries(self):
-        entries = [{"id": index, "name": "w" * 600, "reason": "no_root"} for index in range(1, 31)]
-        text = MANAGER.render_digest(self.manager, entries, now=NOW)
+        entries = [self.item(index, "w" * 600) for index in range(1, 31)]
+        text = MANAGER.render_digest(entries, now=NOW)
         self.assertLessEqual(len(text), 4000)
         match = re.search(r"… \((\d+) more\)\n$", text)
         self.assertIsNotNone(match)
@@ -321,14 +326,12 @@ class RenderDigestTest(FolderTestCase):
         kept = sum(1 for line in text.splitlines() if line.startswith("[#"))
         self.assertEqual(kept, 30 - omitted)
 
-    def test_write_digest_writes_the_same_text_atomically(self):
-        entries = [{"id": 1, "name": "a", "reason": "no_root"}]
-        path = MANAGER.write_digest(self.manager, entries, now=NOW)
+    def test_write_digest_writes_the_given_text_atomically(self):
+        entries = [self.item(1, "a")]
+        text = MANAGER.render_digest(entries, now=NOW)
+        path = MANAGER.write_digest(self.manager, text)
         self.assertEqual(path, self.manager / "digest.md")
-        self.assertEqual(
-            path.read_text(encoding="utf-8"),
-            MANAGER.render_digest(self.manager, entries, now=NOW),
-        )
+        self.assertEqual(path.read_text(encoding="utf-8"), text)
         self.assertEqual([item.name for item in self.manager.rglob("*.tmp")], [])
 
 

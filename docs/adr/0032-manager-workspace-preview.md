@@ -2,13 +2,74 @@
 
 - Status: accepted (preview)
 - Date: 2026-09-25
+- Amended: 2026-09-29 (summary v2 — see the amendment below; §5–§14 and the Verification section
+  keep the v1 record)
 - Verification: automated gates on macOS only so far (`cargo test -p mast-core`, `cargo check` /
   `cargo test -p mast-app` against the recorded warning and failure baselines, the
   `scripts/wsl/tests` and `scripts/macos/tests` Python suites, frontend build and vitest against
   the known node-26 `localStorage` failures); CI (`gates`, `windows-gates`) is the first
   Windows/Linux compile and is checked on the merge request, not here. The manual field checks
   M1–M10 (lists in `docs/MACOS.md` and `docs/WINDOWS-BUILD.md`) are **not run** — nothing below is
-  a field-verification claim, and Windows behavior is unverified.
+  a field-verification claim, and Windows behavior is unverified. This bullet describes the v1
+  (2026-09-25) checkpoints; the v2 contract's automated gates are recorded in the 2026-09-29
+  amendment, never in the v1 field runs.
+
+## 2026-09-29 amendment — 최신 요약 v2 (이 절이 아래 v1 서술보다 우선)
+
+사용자 승인으로 작업 원장·patch·quote/anchor·archive/resume 선택을 없애고, 워크스페이스별
+**최신 요약 하나**를 원자적으로 교체하는 계약으로 바꿨다. 아래 §5–§14와 Verification의 v1
+서술(2026-09-25)은 역사 기록이며, 충돌하는 서술은 이 절이 대체한다. §14의 root 편집 명령과
+picker 설명처럼 이번 축소와 충돌하지 않는 부분은 그대로 유효하다.
+
+- **저장.** 경로는 `~/.mast/manager/summaries/<기존 key>.json`(key 규칙은 v1과 같다:
+  `k + sha256(distro + "\0" + root_path)[:20]`). 문서는 `meta{schema_version: 2,
+  workspace_key{root_path, distro}, updated_at, last_collected_at, last_error,
+  input_truncated, cursor}`, `summary{progress, needs_input, next}`, `repo`(null 또는
+  `{name, path, remote}`)다. `cursor`는 최대 32세션이고 항목은 `{agent, transcript_path,
+  offset, updated, tab}`만 가진다 — `line`·pending ID·본문은 저장하지 않는다. 상한은
+  progress 400, needs_input·next 각 600 Unicode 문자이며, 필드와 상한은 `mast-manager.py`에서
+  한 번만 정의해 LLM schema와 validator가 공유한다. 쓰기는 기존 `.mast/store.lock` flock과
+  같은 디렉터리 임시 파일·`os.replace`를 그대로 쓴다.
+- **LLM 출력.** `{summary:{progress, needs_input, next}, notify_reason: null|question|done|failed}`
+  하나다. 키·타입·enum 위반과 빈 progress는 실패이며 이전 summary·커서·`last_collected_at`을
+  보존하고 `last_error`만 갱신한다. 상한 초과 유효 문자열은 앞뒤 공백을 뗀 뒤 잘라 저장한다
+  (잘린 결과가 빈 progress가 되지 않는다). `question`인데 `needs_input`이 비면 알림만 null로
+  강등한다. 출력 파일은 64 KiB bounded read다.
+- **입력.** 이전 summary + 신규 발화만 쓴다. 첫 수집은 기존처럼 64 KiB tail, 델타 상한·거대 줄
+  건너뛰기·UTF-8/CRLF/partial·허용 경로/regular/uid 검사는 v1과 같다. 줄 번호·anchor·uN 참조는
+  만들지 않는다. Claude answers와 Codex 결과 단독 `question_id → answer` 텍스트는 유지하되
+  델타를 넘는 pending ID는 저장하지 않는다.
+- **lifecycle.** 닫아도 요약 파일은 제자리에 남고, 같은 key로 다시 열면 저장 요약을 즉시
+  표시하고 커서의 새 바이트·path 변경·파일 축소를 catch-up한다 — 앱 실행 중 재오픈
+  (`workspaceOpened` 이벤트)은 그 워크스페이스의 저장 커서만 확인하고, 재시작 뒤 snapshot은
+  전체 워크스페이스의 커서를 확인한다. 저장본이 없는 새 key는 열려도 즉시 요약을 예약하지
+  않고 기존 needsInput/idle/tabGone 트리거를 기다린다. root가 바뀌면 새 key로 이동하고 이전
+  파일은 그대로 남는다. root 변경·닫힘 직전의 마지막 수집은 시작 당시 key에 저장하고, 옛
+  root로 돌아오면 그 key의 최신 저장본을 자동으로 쓴다(선택 화면 없음). archive/resume/fresh
+  선택과 `mast manager patch` CLI는 제거했다(수동 교정 CLI를 새로 만들지 않는다).
+  start/workspaces/events는 유지한다.
+- **이전 데이터.** v1 `tasks/`·`archive/`와 사용자 `AGENTS.md`는 읽어서 변환하지 않고,
+  rename/delete/trim/overwrite도 하지 않는다. v2 파일이 없으면 보드는 `none`(아직 요약 없음)을
+  보여 주고 첫 트리거에서 최신 대화로 처음 요약한다. v1 요약은 자동 승계되지 않는다 —
+  필요한 이력은 `git diff`와 원본 transcript로 확인한다.
+- **wire/UI.** 프로토콜은 2, 설치 버전은 21이다. board entry는
+  `{workspaceId, key, state, reason, summary, updatedAt, lastError, inputTruncated, error, repo}`
+  이고 Rust는 기존 봉투 상한만, TS는 표시에 필요한 타입·enum만 검증한다. UI에서 quote·결정
+  목록·verified/reported 배지·Open plan을 없애고 세 필드만 보여 준다(레포 그룹·root picker·
+  접기·Go to·Open log는 유지). Go to는 needsInput 탭 우선, 없으면 워크스페이스 전환이다.
+- **런타임(C4).** 순수 status 이벤트는 저장 파일 읽기·git·보드/digest 재생성을 하지 않고
+  live 상태만 갱신한다. 보드는 이미 읽은 summary로 digest를 한 번만 렌더하고, TS 보드는
+  payload마다 로컬 카운터로 서명을 만들며 같은 snapshot 재렌더에서 재파싱하지 않는다.
+  이미 있는 같은 key의 `workspaceOpened`(repoRoot 그룹 변경)는 재오픈이 아니므로 catch-up을
+  예약하지 않는다.
+- **digest/guide.** `digest.md`는 레포별 한 줄에 세 필드를 각 100자 미리보기(넘으면 `…`)로
+  싣고 `file: summaries/<key>.json`으로 상세 파일을 가리킨다. active 줄에 `lastError`가
+  있으면 `stale:` 짧은 미리보기를 덧붙인다(이미 읽은 entry만 쓰고 추가 읽기는 없다).
+  4,000자 예산 안의 줄만 담으므로 큰 보드에서는 일부 워크스페이스가 빠질 수 있고, 관리자
+  guide는 live 상태를 `mast manager workspaces`에서, 누락된 요약 파일은 `summaries/`의
+  `meta.workspace_key`(root_path·distro)로 찾도록 안내한다.
+- **알림/권한.** 알림은 바뀐 유효 요약에 `notify_reason`이 있을 때만 후보이며 live needsInput과
+  현재 focus 억제를 유지한다. 요약은 실행 권한이나 완료 검증이 아니다.
 
 ## Context
 
@@ -342,12 +403,11 @@ stays read-only on the board.)
   workspace is `ManagerPinned`. An unchanged value records no events.
 - A root change is **a fresh start for task memory** (user decision): the core records
   `workspaceClosed` with the old root, `workspaceOpened` with the new root, then one `session`
-  event per tab that still has an agent session. The harness archives the old key through the
-  normal close path and the new key starts collecting from those live sessions (first read is the
-  64 KiB tail, §6). The final pass for the old key is skipped — `pending_workspace` resolves the
-  reservation to the live, already re-rooted workspace — so the last uncollected delta of the old
-  root is not summarized (accepted). Moving back to the old root later shows the usual
-  Resume/Start fresh choice.
+  event per tab that still has an agent session. The harness writes the old key's final pass
+  against the reservation's root and the new key starts collecting from those live sessions
+  (first read is the 64 KiB tail, §6). Moving back to the old root later shows that key's latest
+  summary automatically (v2 amendment — the v1 archive/Resume choice and the skipped old-key
+  final pass no longer apply).
 - `Workspace.repo_root` (`#[serde(default)]`, always serialized, TS `repoRoot: string | null`)
   overrides §13's detection. `Command::SetWorkspaceRepoRoot { workspace, repo_root }` sets it
   (`None` returns to detection) under the same path rules and records one refreshing
@@ -405,38 +465,37 @@ stays read-only on the board.)
 - **The global `~/.codex/AGENTS.md` loads on every summary call** (~2.2k tokens in the spike), even
   with `--ignore-user-config`. Accepted for v1; the isolated-`CODEX_HOME` alternative was rejected
   above.
-- **Summary quality is unmeasured.** `gpt-6-luna` low produced correct patches in the one manual
-  codex run (add decision, set progress/title/headline), but there is no field measurement across
-  real sessions. Both model and effort are settings, so the answer is configuration, not code.
-- **`mast manager patch` is not a security boundary.** Its checks (manager-tab query authority,
-  schema validation, quote verification) prevent mistakes; a manager workspace's agent can already
-  write its own task files. The board never gains authority over other workspaces' panes.
+- **Summary quality is unmeasured.** `gpt-6-luna` low produced a correct v1 patch in the one
+  manual codex run, but there is no field measurement across real sessions. Both model and effort
+  are settings, so the answer is configuration, not code.
+- **`mast manager patch` (v1, removed in v2) was not a security boundary.** Its checks
+  (manager-tab query authority, schema validation, quote verification) prevented mistakes; a
+  manager workspace's agent can already write its own summary files. The board never gains
+  authority over other workspaces' panes.
 - **Downgrade then upgrade can duplicate the manager workspace.** An older build ignores the
   unknown `manager` field and drops it when it saves; the next launch then creates a second
   manager workspace while a normal workspace remains at the same path. `ensure_workspace` logs one
   line when it sees that normal workspace, but does not repair it.
-- **Two workspaces with the same `root_path` and distro share one task** — a consequence of
-  treating the path as identity (and of the archive/resume key). The UI does not merge them; the
-  board shows the same record for both.
+- **Two workspaces with the same `root_path` and distro share one summary** — a consequence of
+  treating the path as identity. The UI does not merge them; the board shows the same record for
+  both.
 - **Every terminal tab in the manager workspace carries manager authority**, not just the first
   one; the flag is the workspace's, not a tab's.
-- **Clearing a repo root on a folder git does not recognize keeps the old group** while the task
-  record exists: the stored `git.repo` still holds the override, and §13's "a null detection does
-  not erase `git.repo`" rule keeps it. Setting another repo root, or a root git recognizes, moves
-  the card.
-- **The manager workspace's authority is query-only in v1**: list workspaces/status, read events,
-  read task records. Cross-workspace send, workspace creation/rename and pane input stay out.
+- **Clearing a repo root on a folder git does not recognize keeps the old group** while the
+  summary record exists: its stored top-level `repo` still holds the override, and §13's rule that
+  a null detection does not erase the recorded `repo` keeps it. Setting another repo root, or a
+  root git recognizes, moves the card.
+- **The manager workspace's authority is query-only** (v1 and v2): list workspaces/status, read
+  events, read summaries. Cross-workspace send, workspace creation/rename and pane input stay out.
 - **The event ring is process-local and bounded** (1024). After a restart a manager query reports
   `gap` and the harness rebuilds its view from a snapshot; events older than the ring are gone.
 - **The `mast-agent` OSC is written outside the hook lock** (`write_agent_meta` runs before
   `tab.transact` in `mast-agent-hook.py`). A very long transcript path can push the payload past
   the pty write unit, so in theory it can interleave with a status token written by a concurrent
   hook; normal path lengths (~300 B) do not reach this.
-- **The board line is not guaranteed to fit the 4 MiB line cap.** Every task is bounded, but the
-  board carries each whole task document for up to 64 workspaces; at the caps' worst case (long
-  Korean text in every field) a board line can exceed 4 MiB, and the glue drops such a line with
-  a log entry. Realistic tasks are far smaller (~100 KB); sending only card fields is the fix if
-  this is ever reached.
+- **보드 줄 크기(v2).** 보드 항목은 저장 문서 전체(`cursor`·`meta`·원문)가 아니라 카드 필드만
+  보내고, 요약 문자열은 `progress` 400·`needs_input`/`next` 각 600 Unicode 문자, 항목은 최대
+  64개다. 전송 계층의 한 줄 4 MiB 상한과 초과 줄을 버리고 로그를 남기는 동작은 그대로다.
 
 ## Related fix
 
@@ -458,11 +517,11 @@ child and its temporary directory can be left behind (accepted limit).
 
 ## Verification
 
-- **Automated, macOS local** (per-chunk logs are in the harness run directories; CH21 re-ran the
-  core test, app check, Python suites and frontend suite on the final tree): `cargo test -p
-  mast-core --locked`; `cargo check -p mast-app --locked` against the same 8 pre-existing
-  warnings; `cargo test -p mast-app --locked`; `python3 -m unittest discover -s scripts/wsl/tests`
-  (manager store, extract, summarize, harness, folder, CLI);
+- **Automated, macOS local (v1, 2026-09-25 — history)** (per-chunk logs are in the harness run
+  directories; CH21 re-ran the core test, app check, Python suites and frontend suite on the v1
+  tree): `cargo test -p mast-core --locked`; `cargo check -p mast-app --locked` against the same
+  8 pre-existing warnings; `cargo test -p mast-app --locked`; `python3 -m unittest discover -s
+  scripts/wsl/tests` (manager store, extract, summarize, harness, folder, CLI);
   `python3 -m unittest discover -s scripts/macos/tests`; frontend `npm run build` + `npx vitest
   run` compared with the recorded node-26 `localStorage` failure baseline. Document tests
   (`hook-example`, provision, agent hooks, config CLI) pass.
@@ -471,10 +530,20 @@ child and its temporary directory can be left behind (accepted limit).
   `toolUseResult` (B2); project hooks did not fire under `codex exec` (B1, fallback chosen); the
   global AGENTS.md overhead was measured (B6); the real summary path produced valid patches once
   (~11 s, 0 rejected ops).
-- **§14 (2026-09-29), macOS local**: `cargo test -p mast-core` (new command, event and fixture
-  tests), `cargo test -p mast-app --locked`, both Python suites (harness root-change archive and
-  repo override tests), frontend build + vitest against the same node-26 baseline (board path
-  controls, sidebar cwd path, command fixture).
+- **§14 (2026-09-29, v1-era — history)**: `cargo test -p mast-core` (new command, event and
+  fixture tests), `cargo test -p mast-app --locked`, both Python suites (then-current harness
+  root-change archive and repo override tests), frontend build + vitest against the same node-26
+  baseline (board path controls, sidebar cwd path, command fixture).
+- **v2 자동 검증 (2026-09-29, 현행).** 로컬 게이트를 `TERM=dumb`과 상속 `ENV`·`BASH_ENV`·
+  `MAST`·`MAST_TAB` 제거 환경에서 실행했다. `cargo test -p mast-core --locked`, `cargo check`/
+  `cargo test -p mast-app --locked`, `scripts/wsl/tests`, `scripts/macos/tests`, `apps/spike`·
+  `apps/mast` build, `npm run audit:secure-remote`·`npm run audit:secure-remote:self-test`,
+  vitest(Node 26, `NODE_OPTIONS=--no-experimental-webstorage`; 1272 passed, 245 skipped, 실패
+  0)는 통과했다. `cargo test -p mast-remote --locked`는 exit 101이 남아 있다 — frame-limit·PTY
+  경로는 위 환경 정리 뒤 통과했지만, 127.0.0.2~4 루프백 별칭이 없는 이 머신에서는 8건이
+  `AddrNotAvailable`(`Errno 49`)로 실패한다. 이 실패를 통과나 승인된 예외로 계산하지 않으며,
+  루프백 별칭 설정이나 Linux CI에서 다시 확인해야 한다. 실제 UI 시연과 Windows 실기는
+  미검증이다.
 - **CI** (`gates` on Linux, `windows-gates` on Windows) runs on the merge request; it is the only
   Windows/Linux compile gate for this feature.
 - **Not run**: the M1–M10 field checks. `docs/MACOS.md` and `docs/WINDOWS-BUILD.md` list them; no

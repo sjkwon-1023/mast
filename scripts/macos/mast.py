@@ -20,7 +20,7 @@ HELP = """usage:
   mast id                           print this tab's stable ID
   mast config [get|set|reset ...]     inspect or change saved settings
   mast browser --help               inspect and control browser tabs
-  mast manager --help               manager workspace commands: start, workspaces, events, patch
+  mast manager --help               manager workspace commands: start, workspaces, events
   mast skill-load                   reinstall the bundled agent skills
 
 Quote numeric addresses: mast send '#176' 'cargo test'. Sends stay in this

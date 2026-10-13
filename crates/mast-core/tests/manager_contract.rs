@@ -4,7 +4,7 @@
 
 use mast_core::manager::{
     manager_reply_json, parse_harness_line, parse_manager_request, AgentEvent, AgentEventKind,
-    AppToHarness, EventWorkspace, EventsSince, HarnessAction, HarnessLine, HarnessSettings,
+    AppToHarness, EventWorkspace, EventsSince, HarnessLine, HarnessSettings,
     HarnessState, HarnessToApp, ManagerOverview, ManagerQueryError, ManagerRequest, NotifyReason,
     OverviewTab, OverviewWorkspace, HARNESS_PROTOCOL, MAX_BOARD_ENTRIES, MAX_HARNESS_LINE_BYTES,
 };
@@ -115,42 +115,6 @@ fn events_since() -> EventsSince {
     }
 }
 
-/// fixture 키가 늘면 소비되지 않은 키를 이 테스트가 알아챈다.
-#[test]
-fn fixture_keys_and_lengths_are_locked() {
-    let fixture = fixture();
-    let mut keys: Vec<&str> = fixture
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect();
-    keys.sort_unstable();
-    assert_eq!(
-        keys,
-        [
-            "appToHarness",
-            "errors",
-            "eventsSince",
-            "harnessToApp",
-            "overview",
-            "requests"
-        ]
-    );
-    assert_eq!(fixture["appToHarness"].as_array().unwrap().len(), 4);
-    assert_eq!(fixture["harnessToApp"].as_array().unwrap().len(), 3);
-    assert_eq!(fixture["requests"].as_array().unwrap().len(), 2);
-    assert_eq!(fixture["errors"].as_array().unwrap().len(), 3);
-    assert_eq!(
-        fixture["appToHarness"][1]["overview"], fixture["overview"],
-        "snapshot 은 overview 와 같은 개요를 싣는다"
-    );
-    assert_eq!(
-        fixture["appToHarness"][2]["events"], fixture["eventsSince"]["events"],
-        "events 메시지는 eventsSince 와 같은 이벤트를 싣는다"
-    );
-}
-
 #[test]
 fn overview_serializes_to_the_fixture_shape() {
     let fixture = fixture();
@@ -184,7 +148,7 @@ fn events_since_serializes_to_the_fixture_shape() {
 }
 
 #[test]
-fn hello_and_action_serialize_to_the_fixture_shape() {
+fn hello_serializes_to_the_fixture_shape() {
     let fixture = fixture();
     let hello = AppToHarness::Hello {
         protocol: HARNESS_PROTOCOL,
@@ -203,14 +167,6 @@ fn hello_and_action_serialize_to_the_fixture_shape() {
     assert_eq!(
         serde_json::to_value(&hello).unwrap(),
         fixture["appToHarness"][0]
-    );
-    assert_eq!(
-        serde_json::to_value(AppToHarness::Action {
-            action: HarnessAction::Resume,
-            key: "k3f9c1a2b4d5e6f70819b".into(),
-        })
-        .unwrap(),
-        fixture["appToHarness"][3]
     );
 }
 
@@ -286,9 +242,10 @@ fn fixture_harness_messages_parse_as_known_messages() {
                 .iter()
                 .map(|entry| entry["state"].as_str().unwrap())
                 .collect();
-            assert_eq!(states, ["none", "unsupported", "choice"]);
+            assert_eq!(states, ["unsupported", "unsupported", "none"]);
             for entry in &entries {
-                assert_eq!(entry["task"], Value::Null, "task 는 null 예시다");
+                assert_eq!(entry["summary"], Value::Null, "summary 는 null 예시다");
+                assert_eq!(entry["inputTruncated"], Value::Bool(false));
             }
             assert_eq!(entries[1]["reason"], "other_distro");
         }
@@ -304,11 +261,8 @@ fn fixture_harness_messages_parse_as_known_messages() {
         }) => {
             assert_eq!(workspace_id, 3);
             assert_eq!(reason, NotifyReason::Question);
-            assert_eq!(title, "manager needs a choice");
-            assert_eq!(
-                body,
-                "Resume the stored task or start fresh for workspace feature-x."
-            );
+            assert_eq!(title, "manager needs an answer");
+            assert_eq!(body, "Workspace feature-x is waiting for your answer.");
         }
         other => panic!("notify fixture: {other:?}"),
     }

@@ -78,14 +78,17 @@ OFF와 ON 미사용은 같은 터미널 수·같은 측정 조건으로 비교�
 [ADR-0031](adr/0031-wsl-readiness-and-embedded-browser.md)에 있다. 프로세스별 CPU·메모리 수치는
 저장소에 기록하지 않았다.
 
-## 관리자 워크스페이스 preview 검증 (setup v20)
+## 관리자 워크스페이스 preview 검증 (setup v21)
 
 관리자 워크스페이스 preview의 Windows 실기 인수 절차다. 자동 테스트와 Windows 타깃
 컴파일만으로 아래 항목을 통과 처리하지 않는다. **아직 실행하지 않았다.** preview는 기본으로
 꺼져 있으므로 `mast config set manager.enabled true` 뒤 완전 재시작해 확인한다. codex CLI가
 설치된 배포판이 필요하고, 기록에는 Windows 빌드, 배포판, codex·Claude Code 버전,
-`~/.mast/setup.log`의 setup v20 줄, `~/.mast/manager/logs/harness.log`와 `mast.log`의 관련 줄을
-남긴다. 결정과 한계는 [ADR-0032](adr/0032-manager-workspace-preview.md)에 있다.
+`~/.mast/setup.log`의 setup v21 줄, `~/.mast/manager/logs/harness.log`와 `mast.log`의 관련 줄을
+남긴다. 결정과 한계는 [ADR-0032](adr/0032-manager-workspace-preview.md)에 있다. 현행 계약은
+요약 v2다 — `~/.mast/manager/summaries/<key>.json`에 `progress`·`needs_input`·`next` 세
+문자열을 원자적으로 교체하고, 기존 `tasks/`·`archive/` 파일은 읽지도 고치지도 않으며,
+`mast manager patch`는 없고 요약은 실행 권한이 아니다.
 
 1. **토글과 고정(M1).** codex가 없는 배포판에서 `mast config set manager.enabled true`가
    exit 1과 안내를 내고 `settings.json`을 바꾸지 않는다. codex가 있으면 성공하고 재시작 뒤
@@ -96,20 +99,21 @@ OFF와 ON 미사용은 같은 터미널 수·같은 측정 조건으로 비교�
    `kill -9`했을 때 restarting 표시 뒤 백오프로 복구되는지, codex 이름을 임시로 바꾸면
    failed와 마지막 요약 stale 유지 뒤 복원 시 따라잡는지 본다(M6).
 3. **수집·보드·알림(M3·M4).** 워크스페이스 둘에서 Claude(AskUserQuestion, ExitPlanMode,
-   평문 질문으로 끝난 턴)와 Codex(request_user_input)를 써 보고, 유휴 뒤 카드의 질문·결정
-   (user/ai)·quote와 Go to 이동을 확인한다. needsInput 카드가 맨 위이고 코어 토스트가 1회만
-   나와야 하며, 평문 질문 턴 종료에는 관리자 토스트가 1회 나온다.
+   평문 질문으로 끝난 턴)와 Codex(request_user_input)를 써 보고, 유휴 뒤 카드의
+   `progress`·`needs_input`·`next` 세 필드와 Go to 이동을 확인한다. needsInput 카드가 맨
+   위이고 코어 토스트가 1회만 나와야 하며, 평문 질문 턴 종료에는 관리자 토스트가 1회 나오고
+   같은 요약이 다시 와도 반복되지 않는다.
 4. **다른 배포판.** 관리자와 다른 배포판의 워크스페이스가 실시간 상태만 보이고
    `other_distro` 사유를 표시하며 transcript가 수집되지 않는지 확인한다. agy·OpenCode 탭은
    `no_transcript`로 표시된다(M10).
 5. **`mast manager`와 샌드박스(M5·M7~M9).** 관리자 탭에서 `mast manager start` → codex hook
-   신뢰(있으면) → 다이제스트 주입 또는 fallback 읽기를 확인하고, "A 어디까지 했지?"에 quote
-   근거로 답하는지 본다. `mast manager workspaces`·`events`·`patch`가 동작하고 patch가 약
-   5초 안에 보드에 반영되어야 한다. `-s workspace-write` 샌드박스의 `/dev/tty`와 landlock에서
-   `mast` 호출이 성공하는지 확인하고(실패하면 `MAST_TTY`·writable root 조정 필요 여부를
-   기록한다), 워크스페이스 닫기→보관과 같은 경로 재오픈의 Resume/Start fresh, 계획 카드와
-   `removed` 링크 비활성, preview 끄기→관리자 워크스페이스 제거·`~/.mast/manager` 보존까지
-   확인한다.
+   신뢰(있으면) → digest fallback 읽기를 확인하고, "A 어디까지 했지?"에 세 필드 근거로
+   답하는지 본다. `mast manager workspaces`·`events`가 동작하고 `mast manager patch`는 없어야
+   한다. `-s workspace-write` 샌드박스의 `/dev/tty`와 landlock에서 `mast` 호출이 성공하는지
+   확인하고(실패하면 `MAST_TTY`·writable root 조정 필요 여부를 기록한다), 워크스페이스
+   닫기→같은 경로 재오픈(앱 실행 중) 시 최신 요약이 선택 없이 자동 표시되고 새 대화가 있으면
+   따라잡는지, 앱 재시작 뒤 snapshot 경로에서도 같은지, 기존 `tasks/`·`archive/` 파일이
+   그대로인지, preview 끄기→관리자 워크스페이스 제거·`~/.mast/manager` 보존까지 확인한다.
 
 How to set up a Windows machine to build and run mast, and how to run the Windows-side
 verification. Two apps share this guide:

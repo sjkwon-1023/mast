@@ -2,7 +2,7 @@
 """mast-manager-harness.py의 하네스 루프(프로토콜·보드·시작 점검) 테스트 (macOS·Linux 공용).
 
 `apps/mast/tests/manager-python.test.ts`의 CI 래퍼가 이 스위트를 돌린다.
-하네스를 서브프로세스로 띄워 stdin에 hello/snapshot/events/action 줄을 쓰고
+하네스를 서브프로세스로 띄워 stdin에 hello/snapshot/events 줄을 쓰고
 stdout의 status/board 줄을 `fixtures/manager-protocol.json`의 `harnessToApp` 키
 집합과 함께 검사한다. 로그인 셸과 codex는 테스트가 임시 디렉터리에 만든 대역을
 쓴다(레포에 실행 파일 fixture를 두지 않는다).
@@ -33,7 +33,7 @@ TRANSCRIPT_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "manager" / 
 
 FAKE_CODEX_VERSION = "codex-cli 9.9.9-test"
 
-# CH9의 대역처럼 argv·stdin·호출 횟수를 기록하고 준비한 patch를 -o 경로로 복사한다.
+# CH9의 대역처럼 argv·stdin·호출 횟수를 기록하고 준비한 요약 출력을 -o 경로로 복사한다.
 # 설정은 매 호출 `FAKE_CODEX_CONFIG` JSON에서 다시 읽어 테스트가 도중에 바꿀 수 있다.
 FAKE_CODEX_SCRIPT = '''import json
 import os
@@ -81,32 +81,25 @@ def main():
 sys.exit(main())
 '''
 
-NO_CHANGE_PATCH = {"verdict": "no_change", "notify": "none", "notify_reason": None, "ops": []}
+NO_CHANGE_OUTPUT = {
+    "summary": {"progress": "요약을 적용했다", "needs_input": "", "next": ""},
+    "notify_reason": None,
+}
 
 
-def make_op(name, **fields):
-    op = {
-        "op": name,
-        "kind": None,
-        "id": None,
-        "text": None,
-        "by": None,
-        "anchor_ref": None,
-        "quote": None,
-        "reported_done": None,
-        "verified_done": None,
-        "path": None,
-        "goal": None,
-        "steps": None,
+def summary_output(progress="요약을 적용했다", needs_input="", next_step="", reason=None):
+    return {
+        "summary": {"progress": progress, "needs_input": needs_input, "next": next_step},
+        "notify_reason": reason,
     }
-    op.update(fields)
-    return op
+
+
 ACTIVE_ROOT = "/home/u/p/x"
 OTHER_ROOT = "/home/u/p/y"
 PLAIN_ROOT = "/home/u/p/z"
 SILENT_ROOT = "/home/u/p/w"
 BROKEN_ROOT = "/home/u/p/broken"
-ARCHIVE_ROOT = "/home/u/p/arch"
+EMPTY_ROOT = "/home/u/p/arch"
 MANAGER_ROOT = "/home/u/m"
 
 
@@ -183,6 +176,20 @@ def git_run(root, *args):
 def real_path(path):
     """git이 돌려주는 절대 경로에 맞춘 realpath (macOS `/var` 심볼릭 링크)."""
     return os.path.realpath(str(path))
+
+
+def make_harness(manager_dir):
+    """단위 테스트용 하네스 — hello/settings/log만 준비하고 overview는 각 테스트가 채운다."""
+    hello = {
+        "managerDir": str(manager_dir),
+        "managerDistro": "Ubuntu",
+        "defaultDistro": "Ubuntu",
+        "settings": {"idleSeconds": 1},
+    }
+    settings = HARNESS._hello_settings(hello)
+    log = HARNESS.HarnessLog(
+        Path(manager_dir) / "logs" / "harness.log", error_stream=io.StringIO())
+    return HARNESS.Harness(hello, settings, log, None, HARNESS._parse_args([]))
 
 
 def make_bare_worktree(base, name="mast"):
@@ -334,7 +341,8 @@ class HarnessTestCase(unittest.TestCase):
         self.codex_path.write_text("#!" + sys.executable + "\n" + script, encoding="utf-8")
         self.codex_path.chmod(0o755)
 
-    def write_login_shell(self, codex_path=None, codex_home=None, noise=False, stdin_record=None):
+    def write_login_shell(self, codex_path=None, codex_home=None, noise=False,
+                          stdin_record=None, path_value=None):
         # `-lc` 인자는 무시하고 표식 줄로 PATH·CODEX_HOME을 출력한다. codex 경로는
         # 하네스가 얻은 PATH의 /bin/sh 탐색으로 찾으므로 없으면 실행 파일을 지운다.
         if codex_path is None:
@@ -347,7 +355,8 @@ class HarnessTestCase(unittest.TestCase):
             lines.append("cat > " + sh_quote(stdin_record))
         if noise:
             lines.append("printf '%s\\n' 'profile noise line'")
-        lines.append("printf '__MAST_PATH__%s\\n' " + sh_quote(self.login_path))
+        lines.append("printf '__MAST_PATH__%s\\n' " + sh_quote(
+            self.login_path if path_value is None else path_value))
         lines.append("printf '__MAST_CODEX__%s\\n' " + sh_quote(codex_path or ""))
         lines.append("printf '__MAST_CODEX_HOME__%s\\n' " + sh_quote(codex_home or ""))
         self.shell_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -361,7 +370,7 @@ class HarnessTestCase(unittest.TestCase):
         self.addCleanup(run.stop)
         return run
 
-    def hello(self, protocol=1):
+    def hello(self, protocol=2):
         return {
             "type": "hello",
             "protocol": protocol,
@@ -388,26 +397,15 @@ class HarnessTestCase(unittest.TestCase):
                 workspace(4, "plain", PLAIN_ROOT, None, tabs=[terminal_tab(4, claude_session())]),
                 workspace(5, "silent", SILENT_ROOT, None, tabs=[terminal_tab(5)]),
                 workspace(6, "broken", BROKEN_ROOT, None),
-                workspace(7, "arch", ARCHIVE_ROOT, None),
+                workspace(7, "arch", EMPTY_ROOT, None),
                 workspace(8, "manager", MANAGER_ROOT, "Ubuntu", manager=True),
             ],
         }
 
-    def seed_task(self, root_path, distro=None, doc=None):
+    def seed_summary(self, root_path, distro=None, doc=None):
         if doc is None:
             doc = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
-        path = self.manager / "tasks" / (STORE.task_key(root_path, distro) + ".json")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
-        return path
-
-    def seed_archive(self, root_path, distro=None, doc=None):
-        if doc is None:
-            doc = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
-        doc["meta"]["status"] = "archived"
-        doc["meta"]["updated_at"] = "2026-09-25T03:00:00Z"
-        key = STORE.task_key(root_path, distro)
-        path = self.manager / "archive" / (key + "--20260925T030000Z.json")
+        path = self.manager / "summaries" / (STORE.task_key(root_path, distro) + ".json")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
         return path
@@ -459,10 +457,10 @@ class StartupTest(HarnessTestCase):
         self.assertEqual(run.wait(), 0)
 
     def test_ok_reports_the_latest_collected_at(self):
-        self.seed_task("/home/u/p/first", None)
+        self.seed_summary("/home/u/p/first", None)
         newest = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
         newest["meta"]["last_collected_at"] = "2026-09-25T05:00:00Z"
-        self.seed_task("/home/u/p/second", None, doc=newest)
+        self.seed_summary("/home/u/p/second", None, doc=newest)
         run = self.start_harness()
         run.send(self.hello())
         self.expect_status(run, "starting")
@@ -471,7 +469,7 @@ class StartupTest(HarnessTestCase):
 
     def test_protocol_mismatch_is_unsupported_and_exits_3(self):
         run = self.start_harness()
-        run.send(self.hello(protocol=2))
+        run.send(self.hello(protocol=1))
         message = self.next_message(run)
         self.assertEqual(message["type"], "status")
         self.assertEqual(message["state"], "unsupported")
@@ -508,6 +506,29 @@ class StartupTest(HarnessTestCase):
         self.assertEqual(record.read_text(encoding="utf-8"), "",
                          "자식 셸은 stdin을 읽지 않아야 한다(DEVNULL)")
 
+    def test_login_shell_noise_only_output_is_an_error(self):
+        self.shell_path.write_text("#!/bin/sh\nprintf '%s\\n' 'noise'\n", encoding="utf-8")
+        self.shell_path.chmod(0o755)
+        run = self.start_harness()
+        run.send(self.hello())
+        self.expect_status(run, "starting")
+        message = self.expect_status(run, "unsupported")
+        self.assertEqual(message["message"], "the login shell printed no PATH")
+        self.assertEqual(run.wait(), 3)
+
+    def test_fish_style_space_joined_path_is_normalized(self):
+        other = self.base / "other-bin"
+        other.mkdir()
+        self.write_login_shell(
+            str(self.codex_path),
+            path_value=str(self.bin) + " " + str(other))
+        run = self.start_harness()
+        run.send(self.hello())
+        self.expect_status(run, "starting")
+        ready = self.expect_status(run, "ok")
+        self.assertEqual(ready["codexVersion"], FAKE_CODEX_VERSION,
+                         "공백 결합 PATH를 콜론으로 정규화해 codex를 찾는다")
+
     def test_second_instance_exits_5(self):
         first = self.start_ok()
         second = self.start_harness()
@@ -522,11 +543,10 @@ class StartupTest(HarnessTestCase):
 
 class BoardTest(HarnessTestCase):
     def test_board_entries_follow_the_contract(self):
-        self.seed_task(ACTIVE_ROOT, None)
-        broken = self.manager / "tasks" / (STORE.task_key(BROKEN_ROOT, None) + ".json")
+        self.seed_summary(ACTIVE_ROOT, None)
+        broken = self.manager / "summaries" / (STORE.task_key(BROKEN_ROOT, None) + ".json")
         broken.parent.mkdir(parents=True, exist_ok=True)
         broken.write_text("{ not json", encoding="utf-8")
-        self.seed_archive(ARCHIVE_ROOT, None)
 
         run = self.start_ok()
         run.send({"type": "snapshot", "overview": self.overview()})
@@ -540,7 +560,10 @@ class BoardTest(HarnessTestCase):
 
         self.assertEqual(by_id[1]["state"], "active")
         self.assertEqual(by_id[1]["key"], STORE.task_key(ACTIVE_ROOT, None))
-        self.assertEqual(by_id[1]["task"]["title"], TASK_FIXTURE["valid"][0]["title"])
+        self.assertEqual(by_id[1]["summary"], TASK_FIXTURE["valid"][0]["summary"])
+        self.assertEqual(by_id[1]["updatedAt"], TASK_FIXTURE["valid"][0]["meta"]["updated_at"])
+        self.assertIsNone(by_id[1]["lastError"])
+        self.assertTrue(by_id[1]["inputTruncated"])
         self.assertIsNone(by_id[1]["reason"])
 
         self.assertEqual(by_id[2]["state"], "unsupported")
@@ -560,11 +583,100 @@ class BoardTest(HarnessTestCase):
         self.assertEqual(by_id[6]["state"], "error")
         self.assertIn("invalid JSON", by_id[6]["error"])
 
-        self.assertEqual(by_id[7]["state"], "choice")
-        self.assertEqual(
-            by_id[7]["archive"],
-            {"count": 1, "latestClosedAt": "2026-09-25T03:00:00Z"},
-        )
+        self.assertEqual(by_id[7]["state"], "none")
+
+    def test_initial_empty_failure_document_is_not_an_active_card(self):
+        doc = STORE.new_summary(ACTIVE_ROOT, None, "2026-09-25T00:00:00Z")
+        doc["meta"]["last_error"] = "boom"
+        self.seed_summary(ACTIVE_ROOT, None, doc)
+        run = self.start_ok()
+        run.send({"type": "snapshot", "overview": self.overview()})
+        board = self.read_until(run, "board")
+        entry = next(item for item in board["entries"] if item["workspaceId"] == 1)
+        self.assertEqual(entry["state"], "error")
+        self.assertEqual(entry["error"], "boom")
+        self.assertIsNone(entry["summary"])
+        self.assertEqual(entry["updatedAt"], "2026-09-25T00:00:00Z")
+
+    def test_empty_summary_documents_are_not_active_cards(self):
+        # metadata-only 빠른 경로: 수집 시각만 있고 내용이 없다 → none.
+        empty = STORE.new_summary(ACTIVE_ROOT, None, "2026-09-25T00:00:00Z")
+        empty["meta"]["last_collected_at"] = "2026-09-25T01:00:00Z"
+        self.seed_summary(ACTIVE_ROOT, None, empty)
+        # 최초 실패 뒤 빠른 경로: last_collected_at이 채워져도 오류 카드다.
+        failed = STORE.new_summary(SILENT_ROOT, None, "2026-09-25T00:00:00Z")
+        failed["meta"]["last_collected_at"] = "2026-09-25T01:00:00Z"
+        failed["meta"]["last_error"] = "boom"
+        self.seed_summary(SILENT_ROOT, None, failed)
+
+        run = self.start_ok()
+        run.send({"type": "snapshot", "overview": {
+            "nextSeq": 1,
+            "workspaces": [
+                workspace(1, "feature-x", ACTIVE_ROOT, None),
+                workspace(5, "silent", SILENT_ROOT, None),
+            ],
+        }})
+        board = self.read_until(run, "board")
+        by_id = {entry["workspaceId"]: entry for entry in board["entries"]}
+        self.assertEqual(by_id[1]["state"], "none")
+        self.assertIsNone(by_id[1]["summary"])
+        self.assertEqual(by_id[5]["state"], "error")
+        self.assertEqual(by_id[5]["error"], "boom")
+
+    def test_missing_required_keys_are_error_cards_without_stopping_the_board(self):
+        self.seed_summary(ACTIVE_ROOT, None)
+        damaged = {}
+        for index, mutate in enumerate((
+                lambda doc: doc.pop("repo"),
+                lambda doc: doc["meta"].pop("last_collected_at"),
+                lambda doc: doc["meta"].pop("last_error")), start=1):
+            root = "/home/u/p/damaged-%d" % index
+            doc = STORE.new_summary(root, None, "2026-09-25T00:00:00Z")
+            doc["summary"] = {"progress": "이전 진행", "needs_input": "", "next": ""}
+            mutate(doc)
+            damaged[root] = self.seed_summary(root, None, doc).read_bytes()
+        # 시작 scan과 board가 잘못된 UTF-8 저장본 한 건에서 멈추지 않고 error 카드로 격리한다.
+        utf8_root = "/home/u/p/damaged-utf8"
+        utf8_path = self.manager / "summaries" / (STORE.task_key(utf8_root, None) + ".json")
+        utf8_path.parent.mkdir(parents=True, exist_ok=True)
+        utf8_path.write_bytes(b"\xff\xfe\x00")
+        damaged[utf8_root] = utf8_path.read_bytes()
+
+        run = self.start_ok()
+        run.send({"type": "snapshot", "overview": {
+            "nextSeq": 1,
+            "workspaces": [workspace(1, "feature-x", ACTIVE_ROOT, None)] + [
+                workspace(2 + offset, "damaged-%d" % (offset + 1), root, None)
+                for offset, root in enumerate(list(damaged)[:3])
+            ] + [workspace(5, "damaged-utf8", utf8_root, None)],
+        }})
+        board = self.read_until(run, "board")
+        by_id = {entry["workspaceId"]: entry for entry in board["entries"]}
+        self.assertEqual(by_id[1]["state"], "active", "정상 카드는 계속 표시된다")
+        for workspace_id in (2, 3, 4):
+            entry = by_id[workspace_id]
+            self.assertEqual(entry["state"], "error")
+            self.assertIn("missing", entry["error"])
+        self.assertEqual(by_id[5]["state"], "error")
+        self.assertIn("invalid UTF-8", by_id[5]["error"])
+        for root, before in damaged.items():
+            path = self.manager / "summaries" / (STORE.task_key(root, None) + ".json")
+            self.assertEqual(path.read_bytes(), before, "손상 원본은 바뀌지 않는다")
+
+    def test_failed_but_collected_document_stays_active_with_last_error(self):
+        doc = STORE.new_summary(ACTIVE_ROOT, None, "2026-09-25T00:00:00Z")
+        doc["meta"]["last_collected_at"] = "2026-09-25T01:00:00Z"
+        doc["summary"] = {"progress": "이전 진행", "needs_input": "", "next": ""}
+        doc["meta"]["last_error"] = "later failure"
+        self.seed_summary(ACTIVE_ROOT, None, doc)
+        run = self.start_ok()
+        run.send({"type": "snapshot", "overview": self.overview()})
+        board = self.read_until(run, "board")
+        entry = next(item for item in board["entries"] if item["workspaceId"] == 1)
+        self.assertEqual(entry["state"], "active")
+        self.assertEqual(entry["lastError"], "later failure")
+        self.assertEqual(entry["summary"]["progress"], "이전 진행")
 
     def test_board_reports_the_bare_worktree_repo(self):
         repo, _, worktree = make_bare_worktree(self.base)
@@ -607,7 +719,7 @@ class BoardTest(HarnessTestCase):
         entry = second["entries"][0]
         self.assertEqual(entry["state"], "none")
         self.assertIsNone(entry["reason"], "새 탭의 세션을 overview가 알아야 한다")
-        self.assertEqual(entry["task"], None)
+        self.assertIsNone(entry["summary"])
 
     def test_workspace_opened_event_adds_a_board_entry(self):
         run = self.start_ok()
@@ -625,7 +737,7 @@ class BoardTest(HarnessTestCase):
         self.assertEqual(second["entries"][0]["reason"], "no_transcript")
 
     def test_digest_body_is_not_rewritten_when_unchanged(self):
-        self.seed_task(ACTIVE_ROOT, None)
+        self.seed_summary(ACTIVE_ROOT, None)
         run = self.start_ok()
         run.send({"type": "snapshot", "overview": self.overview()})
         self.read_until(run, "board")
@@ -650,13 +762,13 @@ class BoardTest(HarnessTestCase):
         self.assertNotEqual(digest.read_text(encoding="utf-8"), first_text)
 
     def test_digest_is_written_with_the_board(self):
-        self.seed_task(ACTIVE_ROOT, None)
+        self.seed_summary(ACTIVE_ROOT, None)
         run = self.start_ok()
         run.send({"type": "snapshot", "overview": self.overview()})
         self.read_until(run, "board")
         digest = (self.manager / "digest.md").read_text(encoding="utf-8")
         self.assertIn("[#1 feature-x]", digest)
-        self.assertIn(TASK_FIXTURE["valid"][0]["title"], digest)
+        self.assertIn(TASK_FIXTURE["valid"][0]["summary"]["progress"], digest)
         self.assertNotIn("[#8 manager]", digest)
 
     def test_invalid_lines_do_not_stop_the_loop(self):
@@ -664,7 +776,6 @@ class BoardTest(HarnessTestCase):
         run.send_raw(b"this is not json\n")
         run.send({"type": "mystery", "noise": 1})
         run.send_raw(b"x" * (HARNESS.MAX_INPUT_LINE_BYTES + 17) + b"\n")
-        run.send({"type": "action", "action": "resume", "key": "k1"})
         run.send({"type": "snapshot", "overview": self.overview()})
         board = self.read_until(run, "board")
         self.assertEqual([entry["workspaceId"] for entry in board["entries"]],
@@ -703,22 +814,6 @@ class BoardTest(HarnessTestCase):
         second = self.read_until(run, "board")
         self.assertEqual(second["entries"][0]["state"], "none")
         self.assertIsNone(second["entries"][0]["reason"])
-
-    def test_task_change_resends_the_board(self):
-        task = self.seed_task(ACTIVE_ROOT, None)
-        run = self.start_ok(["--tick-seconds", "0.05", "--board-poll-seconds", "0.2"])
-        run.send({"type": "snapshot", "overview": self.overview()})
-        first = self.read_until(run, "board")
-        by_id = {entry["workspaceId"]: entry for entry in first["entries"]}
-        self.assertEqual(by_id[1]["task"]["title"], TASK_FIXTURE["valid"][0]["title"])
-
-        doc = json.loads(task.read_text(encoding="utf-8"))
-        doc["title"] = "changed title"
-        task.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
-
-        second = self.read_until(run, "board", timeout=6.0)
-        by_id = {entry["workspaceId"]: entry for entry in second["entries"]}
-        self.assertEqual(by_id[1]["task"]["title"], "changed title")
 
     def test_log_rotation_keeps_one_previous_file(self):
         run = self.start_ok(["--log-max-bytes", "200", "--tick-seconds", "0.05"])
@@ -875,19 +970,108 @@ class EventApplyTest(unittest.TestCase):
         self.assertEqual(tabs[1]["agentStatus"], "idle")
         self.assertEqual(overview["workspaces"][0]["agentStatus"], "needsInput",
                          "탭 B의 idle이 탭 A의 needsInput을 덮지 않는다")
-        # 이 집계 위에서 report 알림은 생략된다.
-        patch = {
-            "verdict": "update", "notify": "report", "notify_reason": "question",
-            "ops": [make_op("add", kind="question", text="배포는 언제 하나?")],
-        }
-        self.assertIsNone(
-            HARNESS.decide_notify(patch, overview["workspaces"][0]["agentStatus"]))
+        # 이 집계 위에서 question 알림은 생략된다.
+        self.assertIsNone(HARNESS.decide_notify(
+            "question", {"progress": "p", "needs_input": "배포는 언제 하나?", "next": ""},
+            overview["workspaces"][0]["agentStatus"]))
 
         HARNESS._apply_event(overview, {
             "kind": "status", "workspace": event_workspace, "tab": 4,
             "status": "idle", "message": "cleared", "agentSession": None,
         })
         self.assertEqual(overview["workspaces"][0]["agentStatus"], "idle")
+
+
+class ReservationIdentityTest(unittest.TestCase):
+    """root가 바뀌어도 예약은 예약 당시의 root로 남는다(실제 core 순서: closed → opened → session)."""
+
+    def make(self):
+        harness = HARNESS.Harness.__new__(HARNESS.Harness)
+        harness.manager_distro = None
+        harness.default_distro = None
+        harness.pending = []
+        harness.pending_refs = {}
+        harness.pending_immediate = {}
+        harness.pending_successors = set()
+        harness.idle_timers = {}
+        harness.waiting_since = {}
+        harness.event_sessions = {}
+        harness.idle_seconds = 45
+        harness.overview = {"nextSeq": 0, "workspaces": [
+            {"id": 1, "name": "w", "rootPath": "/old", "distro": None, "tabs": []}]}
+        return harness
+
+    def apply(self, harness, kind, root):
+        event = {"kind": kind, "workspace": {
+            "id": 1, "name": "w", "rootPath": root, "distro": None}, "tab": None}
+        harness.note_event(event)
+        HARNESS._apply_event(harness.overview, event)
+
+    def test_reserved_old_root_is_not_replaced_by_the_new_live_root(self):
+        harness = self.make()
+        harness.reserve(harness.overview["workspaces"][0])
+        self.apply(harness, "workspaceClosed", "/old")
+        self.apply(harness, "workspaceOpened", "/new")
+
+        self.assertEqual(harness.pending_refs[1]["rootPath"], "/old")
+        self.assertEqual(harness.pending_workspace(1)["rootPath"], "/old")
+        self.assertIn(1, harness.pending_successors)
+
+    def test_new_root_requests_survive_the_old_reservation_being_consumed(self):
+        harness = self.make()
+        self.apply(harness, "workspaceClosed", "/old")
+        self.apply(harness, "workspaceOpened", "/new")
+        live = harness.overview["workspaces"][0]
+        harness.reserve(live, immediate=True)
+        self.assertEqual(harness.pending_workspace(1)["rootPath"], "/old")
+
+        harness.drop_reservation(1)
+        harness.reserve(live, immediate=True)
+        self.assertEqual(harness.pending_workspace(1)["rootPath"], "/new")
+
+    def test_same_root_reservation_follows_the_live_state(self):
+        harness = self.make()
+        harness.reserve(harness.overview["workspaces"][0])
+        harness.overview["workspaces"][0]["agentStatus"] = "running"
+        self.assertEqual(harness.pending_workspace(1)["agentStatus"], "running")
+
+    def test_repeated_root_changes_keep_the_original_reservation(self):
+        harness = self.make()
+        harness.reserve(harness.overview["workspaces"][0])
+        for kind, root in (("workspaceClosed", "/old"), ("workspaceOpened", "/new"),
+                           ("workspaceClosed", "/new"), ("workspaceOpened", "/third")):
+            self.apply(harness, kind, root)
+        self.assertEqual(harness.pending_workspace(1)["rootPath"], "/old")
+
+    def test_uncollectible_old_root_does_not_drop_the_new_request(self):
+        harness = self.make()
+        self.apply(harness, "workspaceClosed", "/old")
+        self.apply(harness, "workspaceOpened", "/new")
+        harness.log = io.StringIO()
+        harness.workspace_key = lambda workspace: (
+            None if workspace["rootPath"] == "/old" else "k")
+        harness.start_collection(1)
+        self.assertEqual(harness.pending_workspace(1)["rootPath"], "/new")
+        self.assertEqual(harness.pending, [1])
+
+    def test_collection_failure_is_reported_against_its_original_root(self):
+        harness = self.make()
+        harness.reserve(harness.overview["workspaces"][0], immediate=True)
+        harness.summary_job = None
+        failures = []
+
+        def fail_collection(workspace_id):
+            harness.drop_reservation(workspace_id)
+            harness.overview["workspaces"][0] = {
+                "id": 1, "rootPath": "/new", "distro": None, "tabs": []}
+            harness.reserve(harness.overview["workspaces"][0], immediate=True)
+            raise OSError("collection failed")
+
+        harness.start_collection = fail_collection
+        harness.report_exception = lambda action, error, **fields: failures.append(fields)
+        harness.poll_summary_step(0)
+        self.assertEqual(failures[0]["workspace"]["rootPath"], "/old")
+        self.assertEqual(harness.pending_workspace(1)["rootPath"], "/new")
 
 
 class RepoRootEventTest(unittest.TestCase):
@@ -908,42 +1092,23 @@ class RepoRootEventTest(unittest.TestCase):
 
 
 class CollectibleTest(unittest.TestCase):
-    """대상 판정: build_board와 같은 제외 규칙."""
+    """대상 판정: workspace_key가 관리자·root 없음·다른 배포판을 제외한다(보드 읽기와 분리)."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name)
         self.manager = self.base / "manager"
-        hello = {
-            "managerDir": str(self.manager),
-            "managerDistro": "Ubuntu",
-            "defaultDistro": "Ubuntu",
-            "settings": {"idleSeconds": 1},
-        }
-        settings = HARNESS._hello_settings(hello)
-        log = HARNESS.HarnessLog(
-            self.manager / "logs" / "harness.log", error_stream=io.StringIO())
-        args = HARNESS._parse_args([])
-        self.harness = HARNESS.Harness(hello, settings, log, None, args)
+        self.harness = make_harness(self.manager)
 
-    def test_excluded_workspaces_are_not_collectible(self):
-        archive = self.manager / "archive" / (
-            STORE.task_key("/w/4", None) + "--20260925T000000Z.json")
-        archive.parent.mkdir(parents=True, exist_ok=True)
-        archive.write_text(
-            json.dumps({"meta": {"updated_at": "2026-09-25T00:00:00Z"}}), encoding="utf-8")
-
-        self.assertIsNone(self.harness.collectible(
+    def test_excluded_workspaces_have_no_key(self):
+        self.assertIsNone(self.harness.workspace_key(
             workspace(1, "manager", "/w/1", None, manager=True)))
-        self.assertIsNone(self.harness.collectible(workspace(2, "no-root", None, None)))
-        self.assertIsNone(self.harness.collectible(workspace(3, "other", "/w/3", "Debian")))
-        self.assertIsNone(self.harness.collectible(workspace(4, "choice", "/w/4", None)))
+        self.assertIsNone(self.harness.workspace_key(workspace(2, "no-root", None, None)))
+        self.assertIsNone(self.harness.workspace_key(workspace(3, "other", "/w/3", "Debian")))
 
         plain = workspace(5, "plain", "/w/5", None, tabs=[terminal_tab(5, claude_session())])
-        entry = self.harness.collectible(plain)
-        self.assertIsNotNone(entry)
-        self.assertEqual(entry["state"], "none")
+        self.assertIsNotNone(self.harness.workspace_key(plain))
 
     def test_workspace_running_sees_a_tab_added_by_events(self):
         plain = workspace(5, "plain", "/w/5", None, tabs=[terminal_tab(5)])
@@ -1259,9 +1424,9 @@ class RepoDetectionTest(unittest.TestCase):
             (True, "r" * 1100 + "\n", ""),
         ]):
             repo = HARNESS.detect_repo(str(root))
-        self.assertEqual(len(repo["name"]), HARNESS.MAX_REPO_NAME)
-        self.assertEqual(len(repo["path"]), HARNESS.MAX_REPO_PATH)
-        self.assertEqual(len(repo["remote"]), HARNESS.MAX_REPO_REMOTE)
+        self.assertEqual(len(repo["name"]), STORE.MAX_REPO_NAME)
+        self.assertEqual(len(repo["path"]), STORE.MAX_REPO_PATH)
+        self.assertEqual(len(repo["remote"]), STORE.MAX_REPO_REMOTE)
 
 
 class RepoCacheTest(unittest.TestCase):
@@ -1272,17 +1437,7 @@ class RepoCacheTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name)
         self.manager = self.base / "manager"
-        hello = {
-            "managerDir": str(self.manager),
-            "managerDistro": "Ubuntu",
-            "defaultDistro": "Ubuntu",
-            "settings": {"idleSeconds": 1},
-        }
-        settings = HARNESS._hello_settings(hello)
-        log = HARNESS.HarnessLog(
-            self.manager / "logs" / "harness.log", error_stream=io.StringIO())
-        args = HARNESS._parse_args([])
-        self.harness = HARNESS.Harness(hello, settings, log, None, args)
+        self.harness = make_harness(self.manager)
         self.calls = []
         self.root = self.base / "root"
         self.root.mkdir()
@@ -1368,24 +1523,34 @@ class RepoCacheTest(unittest.TestCase):
     def test_events_do_not_retry_a_failing_root_within_the_window(self):
         root = str(self.root)
         self.harness.overview = self.overview([workspace(1, "w", root, None)])
+        event = {
+            "kind": "session",
+            "workspace": {"id": 1, "name": "w", "rootPath": root, "distro": None},
+            "tab": 4, "status": None, "message": None, "agentSession": None,
+        }
         with mock.patch.object(HARNESS, "_git", side_effect=self.timeout_git) as fake, \
                 mock.patch.object(HARNESS, "_emit"):
             for _ in range(4):
-                self.harness.on_events([])
-        self.assertEqual(fake.call_count, 1, "events 배치마다 다시 판별하지 않는다")
+                self.harness.on_events([event])
+        self.assertEqual(fake.call_count, 1, "실패한 root는 창 안에서 다시 판별하지 않는다")
         self.assertNotIn(root, self.harness.repos)
 
     def test_events_retry_a_failing_root_in_the_next_window(self):
         root = str(self.root)
         self.harness.repo_retry_seconds = 0.05
         self.harness.overview = self.overview([workspace(1, "w", root, None)])
+        event = {
+            "kind": "session",
+            "workspace": {"id": 1, "name": "w", "rootPath": root, "distro": None},
+            "tab": 4, "status": None, "message": None, "agentSession": None,
+        }
         with mock.patch.object(HARNESS, "_git", side_effect=self.timeout_git) as fake, \
                 mock.patch.object(HARNESS, "_emit"):
-            self.harness.on_events([])
-            self.harness.on_events([])
+            self.harness.on_events([event])
+            self.harness.on_events([event])
             self.assertEqual(fake.call_count, 1)
             time.sleep(0.06)
-            self.harness.on_events([])
+            self.harness.on_events([event])
             self.assertEqual(fake.call_count, 2, "다음 창에서는 다시 시도한다")
 
     def test_manager_workspace_roots_are_not_prewarmed(self):
@@ -1405,11 +1570,9 @@ class RepoCacheTest(unittest.TestCase):
             detected = len(self.calls)
             entries = HARNESS.build_board(
                 self.harness.overview, self.manager, "Ubuntu", "Ubuntu", self.harness.repos)
-            entry = self.harness.collectible(plain)
             self.assertEqual(len(self.calls), detected)
         self.assertIn("repo", entries[0])
         self.assertIsNone(entries[0]["repo"])
-        self.assertIn("repo", entry)
 
     def test_other_distro_workspaces_keep_repo_null_and_skip_git(self):
         root = str(self.root)
@@ -1428,6 +1591,153 @@ class RepoCacheTest(unittest.TestCase):
         self.assertEqual(by_id[1]["repo"], detected)
         self.assertIsNone(by_id[2]["repo"], "다른 배포판 워크스페이스에는 캐시를 붙이지 않는다")
         self.assertEqual(by_id[2]["reason"], "other_distro")
+
+
+class WarmedEventReuseTest(unittest.TestCase):
+    """warmed 하네스의 순수 status 이벤트는 저장 파일·git·보드/digest를 다시 만지지 않는다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.manager = self.base / "manager"
+        self.root = self.base / "root"
+        self.root.mkdir()
+        self.harness = make_harness(self.manager)
+        self.workspace = workspace(
+            1, "w", str(self.root), None,
+            tabs=[terminal_tab(4, claude_session("sess-one"))])
+        self.harness.overview = {"nextSeq": 0, "workspaces": [self.workspace]}
+
+    def status_event(self, status):
+        return {
+            "kind": "status",
+            "workspace": {"id": 1, "name": "w", "rootPath": str(self.root), "distro": None},
+            "tab": 4, "status": status, "message": None, "agentSession": None,
+        }
+
+    def session_event(self, session_id):
+        return {
+            "kind": "session",
+            "workspace": {"id": 1, "name": "w", "rootPath": str(self.root), "distro": None},
+            "tab": 4, "status": None, "message": None,
+            "agentSession": claude_session(session_id),
+        }
+
+    def repo_event(self, repo_root):
+        return {
+            "kind": "workspaceOpened",
+            "workspace": {"id": 1, "name": "w", "rootPath": str(self.root),
+                          "repoRoot": repo_root, "distro": None},
+            "tab": None, "status": None, "message": None, "agentSession": None,
+        }
+
+    def test_pure_status_events_reuse_the_warmed_state(self):
+        emitted = []
+        with mock.patch.object(
+                HARNESS.MANAGER, "load_summary",
+                wraps=HARNESS.MANAGER.load_summary) as load, \
+                mock.patch.object(HARNESS, "_git") as git, \
+                mock.patch.object(HARNESS, "_emit", side_effect=emitted.append):
+            self.harness.on_events([self.status_event("needsInput")])
+        self.assertEqual(load.call_count, 0, "순수 status 이벤트는 요약 파일을 다시 읽지 않는다")
+        self.assertEqual(git.call_count, 0, "순수 status 이벤트는 git을 부르지 않는다")
+        self.assertEqual(emitted, [], "순수 status 이벤트는 보드/digest를 다시 만들지 않는다")
+        self.assertEqual(self.harness.pending, [1], "needsInput은 요약을 예약한다")
+        self.assertTrue(self.harness.pending_immediate[1])
+        self.assertEqual(self.workspace["agentStatus"], "needsInput", "live 상태는 갱신된다")
+
+    def test_repo_root_update_does_not_reserve_a_catch_up(self):
+        transcript = self.base / "session.jsonl"
+        transcript.write_text("x\n", encoding="utf-8")
+        key = self.harness.workspace_key(self.workspace)
+        doc = HARNESS.MANAGER.new_summary(str(self.root), None, "2026-09-25T00:00:00Z")
+        doc["meta"]["cursor"] = {"sess-one": {
+            "agent": "claude", "transcript_path": str(transcript), "offset": 0, "tab": 4}}
+        HARNESS.MANAGER.update_summary(
+            self.manager, key, lambda current: doc,
+            create=lambda: HARNESS.MANAGER.new_summary(
+                str(self.root), None, "2026-09-25T00:00:00Z"))
+
+        with mock.patch.object(
+                HARNESS, "_git", return_value=(False, "", "not a repository")), \
+                mock.patch.object(HARNESS, "_emit"):
+            self.harness.on_events([self.repo_event(str(self.base / "group"))])
+        self.assertEqual(
+            self.harness.pending, [],
+            "이미 있는 같은 key의 repoRoot 갱신은 catch-up을 예약하지 않는다")
+
+        # 대조군: 같은 저장 커서를 가진 대상이 실제로 다시 열리면 따라잡기를 예약한다.
+        self.harness.overview["workspaces"] = []
+        with mock.patch.object(
+                HARNESS, "_git", return_value=(False, "", "not a repository")), \
+                mock.patch.object(HARNESS, "_emit"):
+            self.harness.on_events([self.repo_event(str(self.base / "group"))])
+        self.assertEqual(
+            self.harness.pending, [1],
+            "없던 대상의 workspaceOpened는 기존 cursor 증가분을 예약한다")
+
+    def test_session_change_refreshes_the_board(self):
+        self.harness.overview = {"nextSeq": 0, "workspaces": [
+            workspace(1, "w", str(self.root), None, tabs=[terminal_tab(4)])]}
+        entries = HARNESS.build_board(
+            self.harness.overview, self.manager, "Ubuntu", "Ubuntu", self.harness.repos)
+        self.assertEqual(entries[0]["reason"], "no_transcript")
+
+        emitted = []
+        with mock.patch.object(
+                HARNESS, "_git", return_value=(False, "", "not a repository")), \
+                mock.patch.object(HARNESS, "_emit", side_effect=emitted.append):
+            self.harness.on_events([self.session_event("sess-two")])
+        boards = [message for message in emitted if message.get("type") == "board"]
+        self.assertEqual(len(boards), 1, "세션 변화는 보드를 한 번 갱신한다")
+        entry = boards[0]["entries"][0]
+        self.assertEqual(entry["state"], "none")
+        self.assertIsNone(entry["reason"], "세션을 알면 no_transcript가 아니다")
+
+    def test_a_saved_summary_refreshes_the_board_and_the_scalar(self):
+        key = self.harness.workspace_key(self.workspace)
+        doc = HARNESS.MANAGER.new_summary(str(self.root), None, "2026-09-25T00:00:00Z")
+        doc["meta"]["last_collected_at"] = "2026-09-25T01:00:00Z"
+        doc["summary"] = {"progress": "저장된 진행", "needs_input": "", "next": ""}
+        HARNESS.MANAGER.update_summary(
+            self.manager, key, lambda current: doc,
+            create=lambda: HARNESS.MANAGER.new_summary(
+                str(self.root), None, "2026-09-25T00:00:00Z"))
+
+        emitted = []
+        with mock.patch.object(HARNESS, "_emit", side_effect=emitted.append):
+            self.harness.after_summary(1, {
+                "pruned_sessions": [], "notify": None, "error": None, "doc": doc})
+        boards = [message for message in emitted if message.get("type") == "board"]
+        self.assertEqual(len(boards), 1, "저장 결과는 보드에 반영한다")
+        entry = next(item for item in boards[0]["entries"] if item["workspaceId"] == 1)
+        self.assertEqual(entry["state"], "active")
+        self.assertEqual(entry["summary"]["progress"], "저장된 진행")
+        digest = (self.manager / "digest.md").read_text(encoding="utf-8")
+        self.assertIn("저장된 진행", digest)
+        self.assertEqual(
+            self.harness.latest_collected_at(), "2026-09-25T01:00:00Z",
+            "성공 저장 결과의 lastCollectedAt scalar를 재사용한다")
+
+    def test_digest_renders_once_and_keeps_an_unchanged_file(self):
+        with mock.patch.object(
+                HARNESS.MANAGER, "render_digest",
+                wraps=HARNESS.MANAGER.render_digest) as render, \
+                mock.patch.object(
+                    HARNESS.MANAGER, "write_digest",
+                    wraps=HARNESS.MANAGER.write_digest) as write, \
+                mock.patch.object(HARNESS, "_emit"):
+            self.harness.send_board()
+            self.assertEqual(render.call_count, 1, "보드 한 번에 digest를 한 번만 렌더한다")
+            self.assertEqual(write.call_count, 1)
+            path = self.manager / "digest.md"
+            self.assertEqual(path.read_text(encoding="utf-8"), write.call_args.args[1])
+            mtime = path.stat().st_mtime_ns
+            self.harness.send_board()
+        self.assertEqual(render.call_count, 2, "내용이 같아도 비교를 위해 한 번만 렌더한다")
+        self.assertEqual(write.call_count, 1, "본문이 같으면 다시 쓰지 않는다")
+        self.assertEqual(path.stat().st_mtime_ns, mtime)
 
 
 class SummaryTestCase(HarnessTestCase):
@@ -1458,16 +1768,16 @@ class SummaryTestCase(HarnessTestCase):
         self.expect_status(run, "ok")
         return run
 
-    def configure_codex(self, patch=None, sleep=0.0, exit_code=0):
+    def configure_codex(self, output=None, sleep=0.0, exit_code=0):
         doc = {
             "record": str(self.record),
             "pidfile": str(self.pidfile),
             "sleep": sleep,
             "exit": exit_code,
         }
-        if patch is not None:
-            path = self.base / "patch.json"
-            path.write_text(json.dumps(patch, ensure_ascii=False), encoding="utf-8")
+        if output is not None:
+            path = self.base / "output.json"
+            path.write_text(json.dumps(output, ensure_ascii=False), encoding="utf-8")
             doc["out"] = str(path)
         self.fake_config.write_text(json.dumps(doc), encoding="utf-8")
 
@@ -1487,8 +1797,8 @@ class SummaryTestCase(HarnessTestCase):
             time.sleep(0.05)
         self.fail("timed out waiting for " + message)
 
-    def task_doc(self):
-        path = self.manager / "tasks" / (STORE.task_key(str(self.repo), None) + ".json")
+    def summary_doc(self):
+        path = self.manager / "summaries" / (STORE.task_key(str(self.repo), None) + ".json")
         if not path.exists():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
@@ -1526,8 +1836,11 @@ class SummaryTestCase(HarnessTestCase):
         return self.read_until(run, "board")
 
     def send_events(self, run, events, next_seq=2):
+        """이벤트 배치를 보낸다. 순수 status 배치는 보드를 만들지 않으므로 기다리지 않고,
+        구성·세션·root가 바뀌는 배치만 board를 기다려 처리 완료를 맞춘다."""
         run.send({"type": "events", "events": events, "nextSeq": next_seq})
-        return self.read_until(run, "board")
+        if any(event.get("kind") != "status" for event in events):
+            return self.read_until(run, "board")
 
     def collect_until(self, run, predicate, timeout=10.0):
         collected = []
@@ -1544,10 +1857,7 @@ class SummaryTestCase(HarnessTestCase):
 
 class SummaryTriggerTest(SummaryTestCase):
     def test_idle_event_summarizes_after_idle_seconds(self):
-        patch = {"verdict": "update", "notify": "board", "notify_reason": None, "ops": [
-            make_op("set_progress", text="CH11b 요약 루프를 연결했다", reported_done=False),
-        ]}
-        self.configure_codex(patch=patch)
+        self.configure_codex(output=summary_output(progress="CH11b 요약 루프를 연결했다"))
         run = self.start_ok()
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="idle")])
@@ -1555,19 +1865,20 @@ class SummaryTriggerTest(SummaryTestCase):
         ready = self.expect_status(run, "ok", timeout=10.0)
         board = self.read_until(run, "board")
 
-        doc = self.task_doc()
+        doc = self.summary_doc()
         self.assertIsNotNone(doc)
-        self.assertEqual(doc["progress"]["text"], "CH11b 요약 루프를 연결했다")
+        self.assertEqual(doc["summary"]["progress"], "CH11b 요약 루프를 연결했다")
         self.assertIsNone(doc["meta"]["last_error"])
-        self.assertEqual(doc["meta"]["model"], "gpt-6-luna")
-        self.assertEqual(doc["meta"]["effort"], "low")
+        self.assertIsNotNone(doc["meta"]["last_collected_at"])
+        self.assertNotIn("model", doc["meta"])
         self.assertIsNotNone(ready["lastCollectedAt"])
         self.assertEqual(len(self.codex_calls()), 1)
         entries = {entry["workspaceId"]: entry for entry in board["entries"]}
-        self.assertEqual(entries[1]["task"]["progress"]["text"], "CH11b 요약 루프를 연결했다")
+        self.assertEqual(entries[1]["summary"]["progress"], "CH11b 요약 루프를 연결했다")
+        self.assertEqual(entries[1]["state"], "active")
 
     def test_needs_input_summarizes_immediately(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok(idle_seconds=5)
         self.send_snapshot(run)
         started = time.monotonic()
@@ -1578,7 +1889,7 @@ class SummaryTriggerTest(SummaryTestCase):
             "needsInput은 idleSeconds를 기다리지 않아야 한다")
 
     def test_same_tab_running_cancels_the_idle_timer(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok()
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="idle")])
@@ -1586,10 +1897,10 @@ class SummaryTriggerTest(SummaryTestCase):
         time.sleep(1.6)
         self.send_snapshot(run)
         self.assertEqual(self.codex_calls(), [])
-        self.assertIsNone(self.task_doc())
+        self.assertIsNone(self.summary_doc())
 
     def test_other_tab_running_defers_until_the_max_delay(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok()
         tabs = [terminal_tab(4, self.session()), terminal_tab(5, None)]
         self.send_snapshot(run, overview=self.summary_overview(tabs=tabs))
@@ -1610,7 +1921,7 @@ class SummaryTriggerTest(SummaryTestCase):
             "워크스페이스별 최대 지연(idleSeconds × 4)보다 일찍 실행됐다")
 
     def test_repeated_events_summarize_once(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok()
         self.send_snapshot(run)
         events = [
@@ -1627,7 +1938,7 @@ class SummaryTriggerTest(SummaryTestCase):
         self.assertEqual(len(self.codex_calls()), 1)
 
     def test_tab_gone_summarizes_immediately(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok(idle_seconds=5)
         self.send_snapshot(run)
         started = time.monotonic()
@@ -1644,7 +1955,7 @@ class SummaryTriggerTest(SummaryTestCase):
         self.assertEqual(len(self.codex_calls()), 1)
 
     def test_workspace_closed_summarizes_immediately(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok(idle_seconds=5)
         self.send_snapshot(run)
         started = time.monotonic()
@@ -1661,29 +1972,27 @@ class SummaryTriggerTest(SummaryTestCase):
         self.assertEqual(len(self.codex_calls()), 1)
 
     def test_second_trigger_without_new_lines_uses_the_fast_path(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok()
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="idle")])
         self.expect_status(run, "busy", timeout=5.0)
         self.expect_status(run, "ok", timeout=10.0)
         self.read_until(run, "board")
-        first = self.task_doc()
+        first = self.summary_doc()
         self.assertEqual(len(self.codex_calls()), 1)
 
         self.send_events(run, [self.event("status", tab=4, status="idle")], next_seq=3)
         self.expect_status(run, "ok", timeout=5.0)
         self.read_until(run, "board")
-        second = self.task_doc()
+        second = self.summary_doc()
         self.assertEqual(len(self.codex_calls()), 1, "빠른 경로는 codex를 부르지 않는다")
+        self.assertEqual(second["summary"], first["summary"])
         self.assertGreaterEqual(
             second["meta"]["last_collected_at"], first["meta"]["last_collected_at"])
 
-    def test_schema_combo_patch_reports_failed_without_a_cursor_or_notify(self):
-        bad = {"verdict": "no_change", "notify": "none", "notify_reason": None, "ops": [
-            make_op("set_progress", text="반영되면 안 된다", reported_done=False),
-        ]}
-        self.configure_codex(patch=bad)
+    def test_blank_progress_reports_failed_without_a_cursor_or_notify(self):
+        self.configure_codex(output=summary_output(progress="   "))
         run = self.start_ok()
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="idle")])
@@ -1691,107 +2000,30 @@ class SummaryTriggerTest(SummaryTestCase):
         messages = self.collect_until(
             run, lambda m: m["type"] == "status" and m["state"] == "failed", timeout=10.0)
         self.assertNotIn("notify", [m["type"] for m in messages])
-        self.assertIn("patch schema", messages[-1]["message"])
+        self.assertIn("summary.progress must not be blank", messages[-1]["message"])
         self.read_until(run, "board")
 
-        doc = self.task_doc()
+        doc = self.summary_doc()
         self.assertEqual(doc["meta"]["cursor"], {})
         self.assertIsNone(doc["meta"]["last_collected_at"])
-        self.assertIn("patch schema", doc["meta"]["last_error"])
+        self.assertIn("must not be blank", doc["meta"]["last_error"])
 
-    def test_report_reason_missing_reports_failed(self):
-        bad = {"verdict": "update", "notify": "report", "notify_reason": None, "ops": [
-            make_op("set_progress", text="x", reported_done=False),
-        ]}
-        self.configure_codex(patch=bad)
+    def test_oversized_output_reports_failed(self):
+        big = summary_output(progress="x" * (HARNESS.SUMMARY_OUTPUT_MAX_BYTES + 10))
+        self.configure_codex(output=big)
         run = self.start_ok()
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="idle")])
         self.expect_status(run, "busy", timeout=5.0)
         messages = self.collect_until(
             run, lambda m: m["type"] == "status" and m["state"] == "failed", timeout=10.0)
-        self.assertNotIn("notify", [m["type"] for m in messages])
-        self.assertIn("notify_reason", messages[-1]["message"])
-        self.read_until(run, "board")
-
-        doc = self.task_doc()
-        self.assertEqual(doc["meta"]["cursor"], {})
+        self.assertIn("exceeds 64 KiB", messages[-1]["message"])
+        doc = self.summary_doc()
+        self.assertIn("exceeds 64 KiB", doc["meta"]["last_error"])
         self.assertIsNone(doc["meta"]["last_collected_at"])
-        self.assertIn("notify report requires notify_reason", doc["meta"]["last_error"])
-
-    def test_all_ops_rejected_reports_failed_but_advances_the_cursor(self):
-        bad = {"verdict": "update", "notify": "report", "notify_reason": "question", "ops": [
-            make_op("add", kind="decision", text="근거 없는 결정", by="user"),
-        ]}
-        self.configure_codex(patch=bad)
-        run = self.start_ok()
-        self.send_snapshot(run)
-        self.send_events(run, [self.event("status", tab=4, status="idle")])
-        self.expect_status(run, "busy", timeout=5.0)
-        messages = self.collect_until(
-            run, lambda m: m["type"] == "status" and m["state"] == "failed", timeout=10.0)
-        self.assertNotIn("notify", [m["type"] for m in messages])
-        self.assertIn("all ops rejected", messages[-1]["message"])
-        self.read_until(run, "board")
-
-        doc = self.task_doc()
-        # 결정적 거부의 무한 재시도를 막으려고 커서·수집 시각은 전진시킨다.
-        self.assertTrue(doc["meta"]["cursor"], "전부 거부돼도 커서는 전진한다")
-        self.assertIsNotNone(doc["meta"]["last_collected_at"])
-        self.assertIn("all ops rejected", doc["meta"]["last_error"])
-
-        log = (self.manager / "logs" / "harness.log").read_text(encoding="utf-8")
-        self.assertIn("rejected an op", log)
-        self.assertIn("anchor_ref", log)
-        self.assertNotIn("근거 없는 결정", log)
-
-    def test_partial_rejection_applies_and_logs_the_reason(self):
-        mixed = {"verdict": "update", "notify": "none", "notify_reason": None, "ops": [
-            make_op("set_progress", text="부분 적용", reported_done=False),
-            make_op("add", kind="decision", text="근거 없는 결정", by="user"),
-        ]}
-        self.configure_codex(patch=mixed)
-        run = self.start_ok()
-        self.send_snapshot(run)
-        self.send_events(run, [self.event("status", tab=4, status="idle")])
-        self.expect_status(run, "busy", timeout=5.0)
-        self.expect_status(run, "ok", timeout=10.0)
-        self.read_until(run, "board")
-
-        doc = self.task_doc()
-        self.assertEqual(doc["progress"]["text"], "부분 적용")
-        self.assertIsNone(doc["meta"]["last_error"])
-        self.assertTrue(doc["meta"]["cursor"])
-        log = (self.manager / "logs" / "harness.log").read_text(encoding="utf-8")
-        self.assertIn("rejected an op", log)
-        self.assertNotIn("근거 없는 결정", log)
-
-    def test_tab_aggregate_suppresses_report_notify(self):
-        patch = {"verdict": "update", "notify": "report", "notify_reason": "question", "ops": [
-            make_op(
-                "add", kind="question", text="fixture transcript는 어디에 쓰나?",
-                anchor_ref="u1", quote="throwaway session to record transcript fixtures"),
-        ]}
-        self.configure_codex(patch=patch)
-        tabs = [
-            terminal_tab(4, self.session()),
-            terminal_tab(5, self.session(session_id="sess-two")),
-        ]
-        tabs[0]["agentStatus"] = "needsInput"
-        tabs[0]["lastAgentMessage"] = "waiting"
-        run = self.start_ok()
-        self.send_snapshot(run, overview=self.summary_overview(tabs=tabs))
-        self.send_events(run, [self.event("status", tab=5, status="idle")])
-        self.expect_status(run, "busy", timeout=5.0)
-        messages = self.collect_until(
-            run, lambda m: m["type"] == "status" and m["state"] == "ok", timeout=10.0)
-        self.assertNotIn(
-            "notify", [m["type"] for m in messages],
-            "탭 B의 idle이 탭 A의 needsInput 집계를 덮으면 안 된다")
-        self.assertIsNotNone(self.task_doc())
 
     def test_delta_cap_is_resumed_without_a_new_trigger(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok(("--delta-max-bytes", "4096"))
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="idle")])
@@ -1804,7 +2036,7 @@ class SummaryTriggerTest(SummaryTestCase):
                 self.next_message(run, timeout=min(1.0, remaining))
             except queue.Empty:
                 pass
-            doc = self.task_doc()
+            doc = self.summary_doc()
             if doc is None:
                 continue
             cursor = doc["meta"]["cursor"].get("sess-one") or {}
@@ -1816,7 +2048,7 @@ class SummaryTriggerTest(SummaryTestCase):
             len(self.codex_calls()), 2, "상한 회차마다 이어서 읽어야 한다")
 
     def test_login_shell_codex_home_is_used(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         codex_home = self.base / "codex-home"
         sessions = codex_home / "sessions"
         sessions.mkdir(parents=True)
@@ -1841,10 +2073,7 @@ class SummaryTriggerTest(SummaryTestCase):
         self.assertEqual(calls[0]["codex_home"], str(codex_home))
 
     def test_failed_summary_reports_failed_and_keeps_the_cursor(self):
-        patch = {"verdict": "update", "notify": "board", "notify_reason": None, "ops": [
-            make_op("set_progress", text="실패 뒤 성공", reported_done=False),
-        ]}
-        self.configure_codex(patch=patch, exit_code=1)
+        self.configure_codex(output=NO_CHANGE_OUTPUT, exit_code=1)
         run = self.start_ok()
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="idle")])
@@ -1853,23 +2082,23 @@ class SummaryTriggerTest(SummaryTestCase):
         self.assertIn("exited with code 1", failed["message"])
         self.read_until(run, "board")
 
-        doc = self.task_doc()
+        doc = self.summary_doc()
         self.assertEqual(doc["meta"]["cursor"], {})
         self.assertIsNone(doc["meta"]["last_collected_at"])
         self.assertIn("exited with code 1", doc["meta"]["last_error"])
 
-        self.configure_codex(patch=patch, exit_code=0)
+        self.configure_codex(output=NO_CHANGE_OUTPUT, exit_code=0)
         self.send_events(run, [self.event("status", tab=4, status="idle")], next_seq=3)
         self.expect_status(run, "busy", timeout=5.0)
         self.expect_status(run, "ok", timeout=10.0)
         self.read_until(run, "board")
-        doc = self.task_doc()
+        doc = self.summary_doc()
         self.assertIsNone(doc["meta"]["last_error"])
         self.assertTrue(doc["meta"]["cursor"])
         self.assertEqual(len(self.codex_calls()), 2)
 
     def test_failed_summary_with_a_capped_delta_is_not_re_reserved(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH, exit_code=1)
+        self.configure_codex(output=NO_CHANGE_OUTPUT, exit_code=1)
         run = self.start_ok(("--delta-max-bytes", "4096"))
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="idle")])
@@ -1883,7 +2112,7 @@ class SummaryTriggerTest(SummaryTestCase):
             "실패한 요약은 more가 있어도 즉시 재예약하지 않는다")
 
     def test_event_session_tails_are_not_recollected_after_cursor_pruning(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok()
         sessions = {}
         for index in range(1, 43):
@@ -1932,12 +2161,8 @@ class SummaryTriggerTest(SummaryTestCase):
             "지워진 세션의 옛 꼬리가 다음 수집에 다시 들어가면 안 된다")
 
     def test_notify_question_is_emitted_when_live_status_is_idle(self):
-        patch = {"verdict": "update", "notify": "report", "notify_reason": "question", "ops": [
-            make_op(
-                "add", kind="question", text="fixture transcript는 어디에 쓰나?",
-                anchor_ref="u1", quote="throwaway session to record transcript fixtures"),
-        ]}
-        self.configure_codex(patch=patch)
+        self.configure_codex(output=summary_output(
+            needs_input="fixture transcript는 어디에 쓰나?", reason="question"))
         run = self.start_ok()
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="idle")])
@@ -1947,16 +2172,12 @@ class SummaryTriggerTest(SummaryTestCase):
         self.read_until(run, "board")
         self.assertEqual(notify["workspaceId"], 1)
         self.assertEqual(notify["reason"], "question")
-        self.assertEqual(notify["title"], "fixture transcript는 어디에 쓰나?")
-        self.assertTrue(notify["body"])
+        self.assertEqual(notify["title"], "Needs your input")
+        self.assertEqual(notify["body"], "fixture transcript는 어디에 쓰나?")
 
     def test_notify_is_suppressed_when_live_status_is_needs_input(self):
-        patch = {"verdict": "update", "notify": "report", "notify_reason": "question", "ops": [
-            make_op(
-                "add", kind="question", text="fixture transcript는 어디에 쓰나?",
-                anchor_ref="u1", quote="throwaway session to record transcript fixtures"),
-        ]}
-        self.configure_codex(patch=patch)
+        self.configure_codex(output=summary_output(
+            needs_input="fixture transcript는 어디에 쓰나?", reason="question"))
         run = self.start_ok()
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="needsInput")])
@@ -1966,16 +2187,34 @@ class SummaryTriggerTest(SummaryTestCase):
         self.assertNotIn("notify", [m["type"] for m in messages])
         self.assertEqual(len(self.codex_calls()), 1)
 
+    def test_notify_is_not_repeated_for_the_same_summary(self):
+        output = summary_output(needs_input="같은 질문", reason="question")
+        self.configure_codex(output=output)
+        run = self.start_ok()
+        self.send_snapshot(run)
+        self.send_events(run, [self.event("status", tab=4, status="idle")])
+        self.expect_status(run, "busy", timeout=5.0)
+        first = self.read_until(run, "notify", timeout=10.0)
+        self.assertEqual(first["reason"], "question")
+        self.expect_status(run, "ok", timeout=10.0)
+        self.read_until(run, "board")
+
+        self.send_events(run, [self.event("status", tab=4, status="needsInput")], next_seq=3)
+        messages = self.collect_until(
+            run, lambda m: m["type"] == "status" and m["state"] == "ok", timeout=10.0)
+        self.assertNotIn("notify", [m["type"] for m in messages],
+                         "같은 요약이면 알림을 다시 내지 않는다")
+
     def test_snapshot_catches_up_a_stale_cursor(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
-        doc = STORE.new_task(str(self.repo), None, "2026-09-25T00:00:00Z")
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
+        doc = STORE.new_summary(str(self.repo), None, "2026-09-25T00:00:00Z")
         doc["meta"]["cursor"]["sess-one"] = {
             "agent": "claude",
             "transcript_path": str(self.transcript),
             "offset": 0,
             "tab": 4,
         }
-        path = self.manager / "tasks" / (STORE.task_key(str(self.repo), None) + ".json")
+        path = self.manager / "summaries" / (STORE.task_key(str(self.repo), None) + ".json")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
 
@@ -1985,30 +2224,49 @@ class SummaryTriggerTest(SummaryTestCase):
         self.expect_status(run, "ok", timeout=10.0)
         self.read_until(run, "board")
         self.assertEqual(len(self.codex_calls()), 1)
-        doc = self.task_doc()
+        doc = self.summary_doc()
         size = self.transcript.stat().st_size
         offsets = [entry.get("offset") for entry in doc["meta"]["cursor"].values()]
         self.assertIn(size, offsets)
+
+    def test_snapshot_catches_up_a_shrunk_transcript(self):
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
+        doc = STORE.new_summary(str(self.repo), None, "2026-09-25T00:00:00Z")
+        doc["meta"]["cursor"]["sess-one"] = {
+            "agent": "claude",
+            "transcript_path": str(self.transcript),
+            "offset": self.transcript.stat().st_size + 10,
+            "tab": 4,
+        }
+        path = self.manager / "summaries" / (STORE.task_key(str(self.repo), None) + ".json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+        run = self.start_ok()
+        self.send_snapshot(run)
+        self.expect_status(run, "busy", timeout=5.0)
+        self.expect_status(run, "ok", timeout=10.0)
+        self.read_until(run, "board")
+        self.assertEqual(len(self.codex_calls()), 1)
 
     def test_transcript_outside_the_allowed_root_is_rejected(self):
         outside = self.base / "outside"
         outside.mkdir()
         path = outside / "claude-session.jsonl"
         shutil.copyfile(str(TRANSCRIPT_FIXTURE), str(path))
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok()
         self.send_snapshot(run, overview=self.summary_overview(session_path=path))
         self.send_events(run, [self.event("status", tab=4, status="idle")])
         time.sleep(1.6)
         self.assertEqual(self.codex_calls(), [])
-        self.assertIsNone(self.task_doc())
+        self.assertIsNone(self.summary_doc())
         log = (self.manager / "logs" / "harness.log").read_text(encoding="utf-8")
         self.assertIn("outside the allowed roots", log)
 
 
 class SummaryProcessTest(SummaryTestCase):
     def test_stdin_messages_are_processed_while_summarizing(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH, sleep=2.0)
+        self.configure_codex(output=NO_CHANGE_OUTPUT, sleep=2.0)
         run = self.start_ok()
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="needsInput")])
@@ -2020,30 +2278,28 @@ class SummaryProcessTest(SummaryTestCase):
             "board", [m["type"] for m in messages],
             "요약 중에도 snapshot이 처리되어 보드가 나와야 한다")
 
-    def test_task_write_failure_reports_failed_and_keeps_running(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH, sleep=1.5)
-        self.seed_task(str(self.repo), None)
+    def test_summary_write_failure_reports_failed_and_keeps_running(self):
+        self.configure_codex(output=NO_CHANGE_OUTPUT, sleep=1.5)
         run = self.start_ok()
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="needsInput")])
         self.expect_status(run, "busy", timeout=5.0)
+        self.wait_until(self.pidfile.exists, timeout=5.0, message="the fake codex pid file")
 
-        task_path = self.manager / "tasks" / (STORE.task_key(str(self.repo), None) + ".json")
-        self.assertTrue(task_path.is_file())
-        task_path.unlink()
-        task_path.mkdir()
-
-        failed = self.expect_status(run, "failed", timeout=10.0)
-        self.assertIn("summary failed", failed["message"])
-        log = (self.manager / "logs" / "harness.log").read_text(encoding="utf-8")
-        self.assertIn("cannot record the failure", log)
+        summaries = self.manager / "summaries"
+        summaries.mkdir(parents=True, exist_ok=True)
+        summaries.chmod(0o500)
+        self.addCleanup(summaries.chmod, 0o700)
+        messages = self.collect_until(
+            run, lambda m: m["type"] == "status" and m["state"] == "failed", timeout=10.0)
+        self.assertFalse((self.manager / "archive").exists())
 
         board = self.send_snapshot(run)
-        self.assertEqual(board["entries"][0]["state"], "error",
+        self.assertEqual(board["entries"][0]["state"], "none",
                          "실패 뒤에도 루프가 돌아 보드를 낸다")
 
     def test_stdin_eof_kills_the_running_summary(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH, sleep=30.0)
+        self.configure_codex(output=NO_CHANGE_OUTPUT, sleep=30.0)
         run = self.start_ok()
         self.send_snapshot(run)
         self.send_events(run, [self.event("status", tab=4, status="needsInput")])
@@ -2058,51 +2314,71 @@ class SummaryProcessTest(SummaryTestCase):
 
 
 class LifetimeTest(SummaryTestCase):
-    """닫기 보관·snapshot 조정·choice·resume/fresh 처리."""
+    """닫기 뒤 마지막 수집, 재오픈 자동 재사용, snapshot 조정, 공유 키, root 변경 identity."""
 
     def key(self):
         return STORE.task_key(str(self.repo), None)
 
-    def task_path(self):
-        return self.manager / "tasks" / (self.key() + ".json")
-
-    def archive_paths(self):
-        directory = self.manager / "archive"
-        if not directory.is_dir():
-            return []
-        return sorted(directory.glob(self.key() + "--*.json"))
+    def summary_path(self):
+        return self.manager / "summaries" / (self.key() + ".json")
 
     def board_by_id(self, board):
         return {entry["workspaceId"]: entry for entry in board["entries"]}
 
-    def test_workspace_closed_without_a_task_does_nothing(self):
+    def seed_cursor_summary(self):
+        doc = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
+        doc["meta"]["cursor"] = {"sess-one": {
+            "agent": "claude", "transcript_path": str(self.transcript), "offset": 0, "tab": 4,
+        }}
+        return self.seed_summary(str(self.repo), None, doc=doc)
+
+    NOTIFY_OUTPUT = {
+        "summary": {
+            "progress": "transcript를 수집했다",
+            "needs_input": "fixture transcript는 어디에 쓰나?",
+            "next": "",
+        },
+        "notify_reason": "question",
+    }
+
+    def root_change_events(self, next_root, with_session=True):
+        # 코어의 SetWorkspaceRoot 가 내는 순서: 옛 루트 closed → 새 루트 opened → session.
+        opened = self.event("workspaceOpened")
+        opened["workspace"]["rootPath"] = str(next_root)
+        events = [self.event("workspaceClosed"), opened]
+        if with_session:
+            session = self.event("session", tab=4, agent_session=self.session())
+            session["workspace"]["rootPath"] = str(next_root)
+            events.append(session)
+        return events
+
+    def test_workspace_closed_without_a_summary_does_nothing(self):
         run = self.start_ok(idle_seconds=5)
         self.send_snapshot(run, overview=self.summary_overview(tabs=[terminal_tab(4)]))
         self.send_events(run, [self.event("workspaceClosed", tab=4)])
         time.sleep(0.6)
 
-        self.assertFalse(self.task_path().exists())
-        self.assertEqual(self.archive_paths(), [])
+        self.assertFalse(self.summary_path().exists())
         self.assertEqual(self.codex_calls(), [])
 
-    def test_workspace_closed_without_a_collectible_session_still_archives(self):
+    def test_workspace_closed_without_a_collectible_session_keeps_the_file(self):
         doc = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
         doc["meta"]["cursor"] = {"sess-missing": {
             "agent": "claude", "transcript_path": str(self.base / "missing.jsonl"),
             "offset": 0, "tab": 4,
         }}
-        self.seed_task(str(self.repo), None, doc=doc)
+        summary = self.seed_summary(str(self.repo), None, doc=doc)
+        before = summary.read_bytes()
         run = self.start_ok(idle_seconds=5)
         self.send_snapshot(run, overview=self.summary_overview(tabs=[terminal_tab(4)]))
         self.send_events(run, [self.event("workspaceClosed", tab=4)])
+        time.sleep(0.6)
 
-        self.wait_until(
-            lambda: not self.task_path().exists(), message="the archive without a summary")
-        self.assertEqual(len(self.archive_paths()), 1)
+        self.assertEqual(summary.read_bytes(), before)
         self.assertEqual(self.codex_calls(), [], "수집할 세션이 없으면 요약하지 않는다")
 
-    def test_workspace_closed_archives_after_the_final_summary(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+    def test_workspace_closed_keeps_the_summary_after_the_final_summary(self):
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok(idle_seconds=5)
         self.send_snapshot(run)
         self.send_events(run, [
@@ -2113,40 +2389,126 @@ class LifetimeTest(SummaryTestCase):
         self.expect_status(run, "ok", timeout=10.0)
         self.read_until(run, "board")
 
-        self.wait_until(
-            lambda: not self.task_path().exists(), message="the archived task file")
-        archives = self.archive_paths()
-        self.assertEqual(len(archives), 1)
-        doc = json.loads(archives[0].read_text(encoding="utf-8"))
-        self.assertEqual(doc["meta"]["status"], "archived")
-        self.assertTrue(doc["meta"]["cursor"], "커서는 보관본 안에 그대로 남는다")
+        doc = self.summary_doc()
+        self.assertTrue(doc["meta"]["cursor"])
+        self.assertEqual(doc["summary"]["progress"], NO_CHANGE_OUTPUT["summary"]["progress"])
         self.assertEqual(len(self.codex_calls()), 1)
+        self.assertFalse((self.manager / "archive").exists())
 
-    def test_root_change_archives_the_old_task_and_starts_a_new_one(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
-        self.seed_task(str(self.repo), None)
+    def test_reopened_summary_is_shown_and_caught_up_without_an_action(self):
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
+        self.seed_cursor_summary()
+        run = self.start_ok()
+        board = self.send_snapshot(run)
+        entry = self.board_by_id(board)[1]
+        self.assertEqual(entry["state"], "active")
+        self.assertEqual(entry["summary"], TASK_FIXTURE["valid"][0]["summary"])
+
+        self.expect_status(run, "busy", timeout=5.0)
+        self.expect_status(run, "ok", timeout=10.0)
+        self.read_until(run, "board")
+        self.assertEqual(len(self.codex_calls()), 1, "재오픈은 커서 기반 따라잡기를 예약한다")
+
+    def test_workspace_opened_event_catches_up_an_existing_cursor(self):
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
+        self.seed_cursor_summary()
+        run = self.start_ok(idle_seconds=5)
+        self.send_snapshot(run, overview={"nextSeq": 1, "workspaces": []})
+
+        # 앱이 이미 실행 중인 상태에서 같은 key를 다시 연다 — status 이벤트 없이 opened만.
+        self.send_events(run, [self.event("workspaceOpened")])
+        self.expect_status(run, "busy", timeout=5.0)
+        self.expect_status(run, "ok", timeout=10.0)
+        self.read_until(run, "board")
+        self.assertEqual(len(self.codex_calls()), 1, "opened 이벤트가 커서 증가분을 수집한다")
+        self.assertIn("throwaway session to record transcript fixtures",
+                      self.codex_calls()[0]["stdin"])
+        doc = self.summary_doc()
+        self.assertEqual(doc["meta"]["cursor"]["sess-one"]["offset"],
+                         self.transcript.stat().st_size)
+
+        # 저장본 없는 신규 key는 열려도 즉시 예약하지 않는다.
+        fresh_root = self.base / "fresh"
+        fresh_root.mkdir()
+        opened = self.event("workspaceOpened")
+        opened["workspace"]["rootPath"] = str(fresh_root)
+        self.send_events(run, [opened], next_seq=3)
+        time.sleep(0.6)
+        self.assertEqual(len(self.codex_calls()), 1, "신규 key는 요약을 예약하지 않는다")
+        fresh_summary = self.manager / "summaries" / (
+            STORE.task_key(str(fresh_root), None) + ".json")
+        self.assertFalse(fresh_summary.exists())
+
+    def test_root_change_collects_the_old_summary_last_and_starts_a_new_one(self):
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
+        old_summary = self.seed_cursor_summary()
         run = self.start_ok(idle_seconds=5)
         self.send_snapshot(run)
         next_root = self.base / "repo-next"
         next_root.mkdir()
-        opened = self.event("workspaceOpened")
-        opened["workspace"]["rootPath"] = str(next_root)
-        session = self.event("session", tab=4, agent_session=self.session())
-        session["workspace"]["rootPath"] = str(next_root)
-        # 코어의 SetWorkspaceRoot 가 내는 순서: 옛 루트 closed → 새 루트 opened → session.
-        self.send_events(run, [self.event("workspaceClosed"), opened, session])
+        self.send_events(run, self.root_change_events(next_root))
 
-        next_task = self.manager / "tasks" / (STORE.task_key(str(next_root), None) + ".json")
-        self.wait_until(
-            lambda: not self.task_path().exists() and next_task.exists(),
-            message="the old task archived and the new root's task created")
-        self.assertEqual(len(self.archive_paths()), 1)
-        doc = json.loads(next_task.read_text(encoding="utf-8"))
+        next_summary = self.manager / "summaries" / (STORE.task_key(str(next_root), None) + ".json")
+        self.wait_until(lambda: next_summary.exists(), message="the new root's summary")
+        old_doc = json.loads(old_summary.read_text(encoding="utf-8"))
+        self.assertGreater(old_doc["meta"]["cursor"]["sess-one"]["offset"], 0,
+                           "옛 root의 마지막 수집은 옛 key의 파일에 남는다")
+        doc = json.loads(next_summary.read_text(encoding="utf-8"))
         self.assertEqual(doc["meta"]["workspace_key"]["root_path"], str(next_root))
-        self.assertIn("sess-one", doc["meta"]["cursor"], "살아 있는 세션을 새 작업이 이어 모은다")
+        self.assertIn("sess-one", doc["meta"]["cursor"], "살아 있는 세션을 새 요약이 이어 모은다")
+        self.assertEqual(len(self.codex_calls()), 2, "옛 root 한 번, 새 root 한 번")
+
+    def test_root_change_reservation_keeps_the_old_root_until_it_runs(self):
+        """예약 시점 root가 실행에 그대로 쓰인다: live가 새 root여도 옛 key에 쓴다."""
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
+        self.seed_cursor_summary()
+        run = self.start_ok(idle_seconds=5)
+        self.send_snapshot(run)
+        next_root = self.base / "repo-next"
+        next_root.mkdir()
+        self.send_events(run, self.root_change_events(next_root, with_session=False))
+        self.collect_until(
+            run, lambda message: message["type"] == "status" and message["state"] == "ok")
+        doc = self.summary_doc()
+        self.assertGreater(doc["meta"]["cursor"]["sess-one"]["offset"], 0)
+        next_summary = self.manager / "summaries" / (STORE.task_key(str(next_root), None) + ".json")
+        self.assertFalse(next_summary.exists(), "새 root 요청이 없으면 새 파일을 만들지 않는다")
+
+    def test_same_root_summary_may_notify(self):
+        self.configure_codex(output=self.NOTIFY_OUTPUT, sleep=0.5)
+        self.seed_cursor_summary()
+        run = self.start_ok()
+        self.send_snapshot(run)
+        self.expect_status(run, "busy", timeout=5.0)
+        messages = self.collect_until(
+            run, lambda message: message["type"] == "status" and message["state"] == "ok")
+        self.assertEqual([m["type"] for m in messages].count("notify"), 1,
+                         "root가 그대로면 이 요약은 알림을 낸다(아래 root 변경 테스트의 대조군)")
+
+    def test_root_change_during_a_summary_writes_only_the_old_key(self):
+        self.configure_codex(output=self.NOTIFY_OUTPUT, sleep=1.5)
+        self.seed_cursor_summary()
+        run = self.start_ok()
+        self.send_snapshot(run)
+        self.expect_status(run, "busy", timeout=5.0)
+
+        next_root = self.base / "repo-next"
+        next_root.mkdir()
+        self.send_events(run, self.root_change_events(next_root))
+        messages = self.collect_until(
+            run, lambda message: message["type"] == "status" and message["state"] == "ok")
+        self.read_until(run, "board")
+
+        self.assertEqual([m for m in messages if m["type"] == "notify"], [],
+                         "옛 root 요약의 알림은 새 root 작업으로 가지 않는다")
+        doc = self.summary_doc()
+        self.assertTrue(doc["meta"]["cursor"]["sess-one"]["offset"] > 0,
+                        "이전 root 입력의 결과는 이전 key의 파일에 저장된다")
+        next_summary = self.manager / "summaries" / (STORE.task_key(str(next_root), None) + ".json")
+        self.assertFalse(next_summary.exists(), "새 root의 파일은 만들지 않는다")
 
     def test_workspace_closed_collects_sessions_added_after_an_idle_reservation(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         second_path = self.transcripts / "session-b.jsonl"
         second_path.write_text(json.dumps({
             "type": "user",
@@ -2172,11 +2534,7 @@ class LifetimeTest(SummaryTestCase):
         self.expect_status(run, "ok", timeout=10.0)
         self.read_until(run, "board")
 
-        self.wait_until(
-            lambda: not self.task_path().exists(), message="the archived task file")
-        archives = self.archive_paths()
-        self.assertEqual(len(archives), 1)
-        doc = json.loads(archives[0].read_text(encoding="utf-8"))
+        doc = self.summary_doc()
         self.assertIn("sess-one", doc["meta"]["cursor"])
         self.assertIn("sess-b", doc["meta"]["cursor"],
                       "닫히기 전에 시작한 세션도 마지막 수집에 들어가야 한다")
@@ -2185,7 +2543,7 @@ class LifetimeTest(SummaryTestCase):
         self.assertIn("session B prompt", calls[0]["stdin"])
 
     def test_workspace_closed_collects_a_snapshot_session_without_a_reservation(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok(idle_seconds=5)
         self.send_snapshot(run)
         self.send_events(run, [
@@ -2197,11 +2555,7 @@ class LifetimeTest(SummaryTestCase):
         self.expect_status(run, "ok", timeout=10.0)
         self.read_until(run, "board")
 
-        self.wait_until(
-            lambda: not self.task_path().exists(), message="the archived task file")
-        archives = self.archive_paths()
-        self.assertEqual(len(archives), 1)
-        doc = json.loads(archives[0].read_text(encoding="utf-8"))
+        doc = self.summary_doc()
         self.assertIn("sess-one", doc["meta"]["cursor"],
                       "스냅샷으로만 알던 세션도 마지막 수집에 들어가야 한다")
         calls = self.codex_calls()
@@ -2209,7 +2563,7 @@ class LifetimeTest(SummaryTestCase):
         self.assertIn("throwaway session to record transcript fixtures", calls[0]["stdin"])
 
     def test_tab_gone_and_workspace_closed_in_separate_batches_keep_the_session(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok(idle_seconds=5)
         self.send_snapshot(run)
         self.send_events(run, [self.event("tabGone", tab=4), self.event("tabGone", tab=5)])
@@ -2219,17 +2573,15 @@ class LifetimeTest(SummaryTestCase):
 
         self.send_events(run, [self.event("workspaceClosed", tab=4)], next_seq=3)
         self.wait_until(
-            lambda: not self.task_path().exists(), message="the archived task file")
-        archives = self.archive_paths()
-        self.assertEqual(len(archives), 1)
-        doc = json.loads(archives[0].read_text(encoding="utf-8"))
+            lambda: len(self.codex_calls()) >= 1, message="the final collection")
+        doc = self.summary_doc()
         self.assertIn("sess-one", doc["meta"]["cursor"])
         calls = self.codex_calls()
         self.assertEqual(len(calls), 1)
         self.assertIn("throwaway session to record transcript fixtures", calls[0]["stdin"])
 
     def test_single_tab_gone_collects_the_snapshot_session_immediately(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok(idle_seconds=5)
         self.send_snapshot(run)
         self.send_events(run, [self.event("tabGone", tab=4)])
@@ -2237,15 +2589,15 @@ class LifetimeTest(SummaryTestCase):
         self.expect_status(run, "ok", timeout=10.0)
         self.read_until(run, "board")
 
-        doc = self.task_doc()
+        doc = self.summary_doc()
         self.assertIsNotNone(doc)
         self.assertIn("sess-one", doc["meta"]["cursor"])
         calls = self.codex_calls()
         self.assertEqual(len(calls), 1)
         self.assertIn("throwaway session to record transcript fixtures", calls[0]["stdin"])
 
-    def test_same_key_workspaces_archive_only_after_the_last_one_closes(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
+    def test_same_key_workspaces_share_one_summary_file(self):
+        self.configure_codex(output=NO_CHANGE_OUTPUT)
         run = self.start_ok(idle_seconds=5)
         overview = {
             "nextSeq": 1,
@@ -2259,29 +2611,22 @@ class LifetimeTest(SummaryTestCase):
         self.send_events(run, [self.event("workspaceClosed", tab=4)])
         self.expect_status(run, "busy", timeout=5.0)
         self.expect_status(run, "ok", timeout=10.0)
-        self.read_until(run, "board")
+        board = self.read_until(run, "board")
 
-        time.sleep(0.8)
-        self.assertTrue(
-            self.task_path().exists(),
-            "같은 키의 워크스페이스가 남아 있으면 보관하지 않는다")
-        self.assertEqual(self.archive_paths(), [])
+        entry = self.board_by_id(board)[2]
+        self.assertEqual(entry["state"], "active")
+        self.assertEqual(entry["key"], self.key())
+        self.assertTrue(self.summary_path().exists())
 
-        self.send_events(
-            run, [self.event("workspaceClosed", tab=5, workspace_id=2)], next_seq=3)
-        self.wait_until(
-            lambda: not self.task_path().exists(), message="the second close to archive")
-        archives = self.archive_paths()
-        self.assertEqual(len(archives), 1)
-        doc = json.loads(archives[0].read_text(encoding="utf-8"))
-        self.assertEqual(doc["meta"]["status"], "archived")
-
-    def test_snapshot_archives_tasks_with_no_open_workspace(self):
+    def test_snapshot_leaves_summaries_with_no_open_workspace_alone(self):
         stale_root = "/home/u/stale"
         other_root = "/home/u/other"
-        self.seed_task(stale_root, None)
-        self.seed_task(MANAGER_ROOT, "Ubuntu")
-        self.seed_task(other_root, "Debian")
+        paths = [
+            self.seed_summary(stale_root, None),
+            self.seed_summary(MANAGER_ROOT, "Ubuntu"),
+            self.seed_summary(other_root, "Debian"),
+        ]
+        before = [path.read_bytes() for path in paths]
         run = self.start_ok()
         overview = {
             "nextSeq": 1,
@@ -2293,41 +2638,11 @@ class LifetimeTest(SummaryTestCase):
         }
         self.send_snapshot(run, overview=overview)
 
-        for key, label in (
-            (STORE.task_key(stale_root, None), "snapshot에 없는 키"),
-            (STORE.task_key(other_root, "Debian"), "다른 배포판 워크스페이스의 키"),
-            (STORE.task_key(MANAGER_ROOT, "Ubuntu"), "관리자 워크스페이스의 키"),
-        ):
-            self.assertFalse(
-                (self.manager / "tasks" / (key + ".json")).exists(),
-                "%s의 active 작업은 보관한다(F4)" % label)
-            archives = sorted((self.manager / "archive").glob(key + "--*.json"))
-            self.assertEqual(len(archives), 1)
-            doc = json.loads(archives[0].read_text(encoding="utf-8"))
-            self.assertEqual(doc["meta"]["status"], "archived")
+        self.assertEqual([path.read_bytes() for path in paths], before)
+        self.assertFalse((self.manager / "archive").exists())
 
-    def test_snapshot_defers_archiving_while_a_summary_runs(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH, sleep=2.0)
-        doc = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
-        doc["meta"]["cursor"] = {"sess-one": {
-            "agent": "claude", "transcript_path": str(self.transcript), "offset": 0, "tab": 4,
-        }}
-        self.seed_task(str(self.repo), None, doc=doc)
-        run = self.start_ok()
-        self.send_snapshot(run)
-        self.expect_status(run, "busy", timeout=5.0)
-
-        run.send({"type": "snapshot", "overview": {"nextSeq": 2, "workspaces": []}})
-        self.read_until(run, "board")
-        self.assertTrue(
-            self.task_path().exists(), "요약이 도는 키는 끝난 뒤에 보관한다")
-
-        self.expect_status(run, "ok", timeout=10.0)
-        self.wait_until(lambda: not self.task_path().exists(), message="the deferred archive")
-        self.assertEqual(len(self.archive_paths()), 1)
-
-    def test_failed_final_summary_still_archives(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH, exit_code=1)
+    def test_failed_final_summary_keeps_the_summary_and_the_cursor(self):
+        self.configure_codex(output=NO_CHANGE_OUTPUT, exit_code=1)
         run = self.start_ok(idle_seconds=5)
         self.send_snapshot(run)
         self.send_events(run, [
@@ -2338,96 +2653,9 @@ class LifetimeTest(SummaryTestCase):
         self.expect_status(run, "failed", timeout=10.0)
         self.read_until(run, "board")
 
-        self.wait_until(
-            lambda: not self.task_path().exists(), message="the archive after a failure")
-        archives = self.archive_paths()
-        self.assertEqual(len(archives), 1)
-        doc = json.loads(archives[0].read_text(encoding="utf-8"))
-        self.assertEqual(doc["meta"]["status"], "archived")
+        doc = self.summary_doc()
         self.assertIn("exited with code 1", doc["meta"]["last_error"])
         self.assertEqual(doc["meta"]["cursor"], {}, "실패한 요약은 커서를 전진시키지 않는다")
-
-    def test_reopened_archive_shows_choice_and_blocks_collection(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
-        self.seed_archive(str(self.repo), None)
-        run = self.start_ok()
-        board = self.send_snapshot(run)
-        entry = self.board_by_id(board)[1]
-        self.assertEqual(entry["state"], "choice")
-        self.assertEqual(entry["archive"]["count"], 1)
-        self.assertIsNone(entry["task"])
-
-        self.send_events(run, [self.event("status", tab=4, status="idle")])
-        time.sleep(1.6)
-        self.assertEqual(self.codex_calls(), [], "choice 상태에서는 요약하지 않는다")
-        self.assertFalse(self.task_path().exists(), "choice 상태에서는 작업 파일을 만들지 않는다")
-
-    def test_resume_restores_the_archive_and_catches_up(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
-        doc = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
-        doc["meta"]["cursor"] = {"sess-one": {
-            "agent": "claude", "transcript_path": str(self.transcript), "offset": 0, "tab": 4,
-        }}
-        archive = self.seed_archive(str(self.repo), None, doc=doc)
-        run = self.start_ok()
-        board = self.send_snapshot(run)
-        self.assertEqual(self.board_by_id(board)[1]["state"], "choice")
-
-        run.send({"type": "action", "action": "resume", "key": self.key()})
-        board = self.read_until(run, "board")
-        self.assertEqual(self.board_by_id(board)[1]["state"], "active")
-        self.assertFalse(archive.exists(), "resume은 최신 보관본을 active로 되돌린다")
-        self.assertEqual(self.task_doc()["meta"]["status"], "active")
-
-        self.expect_status(run, "busy", timeout=5.0)
-        self.expect_status(run, "ok", timeout=10.0)
-        self.read_until(run, "board")
-        self.assertEqual(len(self.codex_calls()), 1, "resume은 커서 기반 따라잡기를 예약한다")
-
-    def test_fresh_keeps_the_archive_and_starts_an_empty_task(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
-        archive = self.seed_archive(str(self.repo), None)
-        run = self.start_ok()
-        board = self.send_snapshot(run)
-        self.assertEqual(self.board_by_id(board)[1]["state"], "choice")
-
-        run.send({"type": "action", "action": "fresh", "key": self.key()})
-        board = self.read_until(run, "board")
-        self.assertEqual(self.board_by_id(board)[1]["state"], "active")
-        self.assertTrue(archive.exists(), "fresh는 보관본을 그대로 둔다")
-        doc = self.task_doc()
-        self.assertEqual(doc["meta"]["status"], "active")
-        self.assertEqual(doc["meta"]["cursor"], {})
-        self.assertIsNone(doc["meta"]["last_collected_at"])
-        self.assertEqual(doc["title"], "")
-
-        self.send_events(run, [self.event("status", tab=4, status="idle")])
-        self.expect_status(run, "busy", timeout=5.0)
-        self.expect_status(run, "ok", timeout=10.0)
-        self.read_until(run, "board")
-        self.assertEqual(len(self.codex_calls()), 1, "fresh 뒤에는 일반 수집 대상이 된다")
-        self.assertTrue(self.task_doc()["meta"]["cursor"])
-
-    def test_actions_outside_choice_are_ignored(self):
-        self.configure_codex(patch=NO_CHANGE_PATCH)
-        task = self.seed_task(str(self.repo), None)
-        before = task.read_text(encoding="utf-8")
-        run = self.start_ok()
-        board = self.send_snapshot(run)
-        self.assertEqual(self.board_by_id(board)[1]["state"], "active")
-
-        key = self.key()
-        run.send({"type": "action", "action": "resume", "key": key})
-        run.send({"type": "action", "action": "fresh", "key": key})
-        run.send({"type": "action", "action": "explode", "key": key})
-        run.send({"type": "action", "action": "resume", "key": "k" + "0" * 20})
-        board = self.send_snapshot(run)
-
-        self.assertEqual(self.board_by_id(board)[1]["state"], "active")
-        self.assertEqual(task.read_text(encoding="utf-8"), before)
-        self.assertEqual(self.archive_paths(), [])
-        log = (self.manager / "logs" / "harness.log").read_text(encoding="utf-8")
-        self.assertEqual(log.count("ignoring action"), 4)
 
 
 class _FinishedProc:
@@ -2453,17 +2681,8 @@ class SummaryGuardTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name)
         self.manager = self.base / "manager"
-        hello = {
-            "managerDir": str(self.manager),
-            "managerDistro": "Ubuntu",
-            "defaultDistro": "Ubuntu",
-            "settings": {"idleSeconds": 1},
-        }
-        settings = HARNESS._hello_settings(hello)
-        self.log = HARNESS.HarnessLog(
-            self.manager / "logs" / "harness.log", error_stream=io.StringIO())
-        args = HARNESS._parse_args([])
-        self.harness = HARNESS.Harness(hello, settings, self.log, None, args)
+        self.harness = make_harness(self.manager)
+        self.log = self.harness.log
         self.harness.overview = {"nextSeq": 0, "workspaces": [
             workspace(1, "w", "/w/1", None, tabs=[terminal_tab(4)]),
         ]}
@@ -2480,8 +2699,6 @@ class SummaryGuardTest(unittest.TestCase):
             "workspace": {"rootPath": "/w/1", "distro": None, "agentStatus": "idle"},
             "utterances": {},
             "cursor_updates": {},
-            "plan_hashes": {},
-            "allowed_plan_paths": [],
             "truncated": False,
             "more": False,
         }
@@ -2557,23 +2774,23 @@ class BuildBoardTest(unittest.TestCase):
             self.assertIsNone(entries[0]["repo"])
             self.assertIsNone(entries[1]["repo"])
 
-    def test_active_entry_falls_back_to_the_task_repo(self):
+    def test_active_entry_falls_back_to_the_summary_repo(self):
         with tempfile.TemporaryDirectory() as tmp:
             manager = Path(tmp) / "manager"
             doc = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
-            path = manager / "tasks" / (STORE.task_key("/w/task", None) + ".json")
+            path = manager / "summaries" / (STORE.task_key("/w/task", None) + ".json")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(doc), encoding="utf-8")
             overview = {"workspaces": [workspace(1, "w", "/w/task", None)]}
             entries = HARNESS.build_board(overview, manager, None, None)
             self.assertEqual(entries[0]["state"], "active")
-            self.assertEqual(entries[0]["repo"], doc["git"]["repo"])
+            self.assertEqual(entries[0]["repo"], doc["repo"])
 
-    def test_cache_value_wins_over_the_task_repo(self):
+    def test_cache_value_wins_over_the_summary_repo(self):
         with tempfile.TemporaryDirectory() as tmp:
             manager = Path(tmp) / "manager"
             doc = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
-            path = manager / "tasks" / (STORE.task_key("/w/task", None) + ".json")
+            path = manager / "summaries" / (STORE.task_key("/w/task", None) + ".json")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(doc), encoding="utf-8")
             overview = {"workspaces": [workspace(1, "w", "/w/task", None)]}
@@ -2600,20 +2817,20 @@ class BuildBoardTest(unittest.TestCase):
             entries = HARNESS.build_board({"workspaces": [item]}, tmp, None, None, {})
             self.assertEqual(entries[0]["repo"], {"name": "group", "path": "/w/group", "remote": None})
 
-    def test_cached_null_falls_back_to_the_task_repo(self):
+    def test_cached_null_falls_back_to_the_summary_repo(self):
         with tempfile.TemporaryDirectory() as tmp:
             manager = Path(tmp) / "manager"
             doc = json.loads(json.dumps(TASK_FIXTURE["valid"][0]))
-            path = manager / "tasks" / (STORE.task_key("/w/task", None) + ".json")
+            path = manager / "summaries" / (STORE.task_key("/w/task", None) + ".json")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(doc), encoding="utf-8")
             overview = {"workspaces": [workspace(1, "w", "/w/task", None)]}
             entries = HARNESS.build_board(overview, manager, None, None, {"/w/task": None})
             self.assertEqual(entries[0]["state"], "active")
-            self.assertEqual(entries[0]["repo"], doc["git"]["repo"])
+            self.assertEqual(entries[0]["repo"], doc["repo"])
             item = dict(overview["workspaces"][0])
-            item.update({"repo": entries[0]["repo"], "task": doc, "key": entries[0]["key"]})
-            text = STORE.render_digest(manager, [item], now="2026-09-25T03:00:00Z")
+            item.update({"entry": entries[0]})
+            text = STORE.render_digest([item], now="2026-09-25T03:00:00Z")
             self.assertIn("## mast", text, "보드와 digest가 같은 레포로 묶인다")
             self.assertNotIn("## Other", text)
 

@@ -394,16 +394,18 @@ treating these features as field-verified:
   change global firewall settings for this check.
 - Install agy, observe running/idle, check the below-1.1.10 warning path, test
   `no-agy-hooks`, and verify repair plus marker removal retries a refused merge.
-- Run the manager workspace preview checks (M1–M9): enabling needs the codex CLI; the pinned
-  workspace and its order, the board header and log, transcript collection from two workspaces,
-  core-only needsInput toasts, `mast manager start` with the digest fallback and `mast manager
-  patch` board refresh, a killed harness recovering, archive → Resume/Start fresh, plan cards,
-  and preview-off removal with `~/.mast/manager` kept.
+- 관리자 워크스페이스 preview 검증(M1–M10, `docs/WINDOWS-BUILD.md`의 "관리자 워크스페이스
+  preview 검증" 절)을 실행한다: 켜려면 codex CLI가 필요하고, 고정 워크스페이스와 그 순서,
+  보드 헤더와 로그, 두 워크스페이스에서 세 요약 필드 수집, 코어 전용 needsInput 토스트,
+  digest fallback을 읽는 `mast manager start`, 종료된 하네스의 복구, 닫기→재오픈 시 최신 요약
+  표시(기존 `tasks/`·`archive/`는 불변), 그리고 preview를 끄면 관리자 워크스페이스를 제거하고
+  `~/.mast/manager`를 보존하는 것까지 확인한다.
 - Exit Claude Code in a tab and press Up at the next prompt: it offers that
   session's `claude --resume <id>`. `cd` in a terminal and check that the sidebar
   card path follows it (`~/…` abbreviated). On a manager board card, change Root
-  (the old record is archived and a new one starts) and set Repo, then Auto; the
-  card moves between repository groups. No yellow WSL notice band appears.
+  (the old summary stays under its old key and the new root starts fresh) and set
+  Repo, then Auto; the card moves between repository groups. No yellow WSL notice
+  band appears.
 
 Do not record any of these manual checks as complete until they have actually
 been run.

@@ -39,7 +39,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 20;
+const SETUP_VERSION: u32 = 21;
 
 /// 설치 스크립트 heredoc 에 통째로 들어가는 레포 파일들: (자리표시자, heredoc 종결 줄, 내용).
 ///
@@ -1152,7 +1152,7 @@ usage() {
   cat <<'MAST_USAGE_EOF'
 usage:
   mast browser --help                inspect and control browser tabs
-  mast manager --help                manager workspace commands: start, workspaces, events, patch
+  mast manager --help                manager workspace commands: start, workspaces, events
   mast ls                            list tabs in this workspace: TAB, TITLE, WORKSPACE, STATUS, COMMAND
   mast send [-l] <target> <text...>  type text into another pane (-l: pre-fill, do not submit)
   mast id                            print this tab's id ($MAST_TAB)
@@ -2064,7 +2064,7 @@ mod tests {
         script.replace("\r\n", "\n")
     }
 
-    // 관리자 스크립트 두 개가 설치 블록·CLI 디스패치·버전 20과 함께 들어갔는지 확인한다.
+    // 관리자 스크립트 두 개가 설치 블록·CLI 디스패치·버전 21과 함께 들어갔는지 확인한다.
     // provision-setup.test.ts 는 Linux 전용이라 macOS 에서도 도는 검사가 필요하다.
     #[test]
     fn setup_script_installs_the_manager_scripts_and_dispatches_mast_manager() {
@@ -2074,8 +2074,8 @@ mod tests {
             assert_eq!(placeholder_len(bytes, at), 0, "unreplaced token at byte {at}");
         }
         assert!(
-            script.contains("MARKER=\"$MAST_HOME/.setup-v20\""),
-            "SETUP_VERSION 20 is not reflected in the generated marker"
+            script.contains("MARKER=\"$MAST_HOME/.setup-v21\""),
+            "SETUP_VERSION 21 is not reflected in the generated marker"
         );
         assert!(
             script.contains("manager) shift; exec python3 \"$HOME/.mast/bin/mast-manager.py\" \"$@\" ;;"),

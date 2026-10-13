@@ -603,12 +603,6 @@ export function getManagerBoard(): Promise<ManagerBoardPayload> {
   return invoke<ManagerBoardPayload>("get_manager_board");
 }
 
-/** choice 카드의 이어보기(resume)/새로 시작(fresh) 선택 — 하네스가 없으면
- *  사유 문자열로 reject 된다 (실패 문구는 카드가 표시한다). */
-export function managerAction(action: "resume" | "fresh", key: string): Promise<void> {
-  return invoke<void>("manager_action", { action, key });
-}
-
 /** 보드 status·board 갱신 구독 — payload 는 `getManagerBoard` 와 같다. */
 export function onManagerBoard(
   handler: (payload: ManagerBoardPayload) => void,

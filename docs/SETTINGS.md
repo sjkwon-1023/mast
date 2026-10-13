@@ -167,8 +167,9 @@ CLI는 `mast config set browser.enabled false`, `mast config set browser.enabled
 ## `manager` (preview)
 
 Settings for the manager workspace preview: the manager agent's model and reasoning effort,
-the merge summarizer's model and effort, and how long a workspace may stay idle before a
-merge. **Absent means off.** When the object exists, `enabled` is required and is the switch.
+the summary agent's model and effort, and how long a workspace may stay idle before a
+summary pass. **Absent means off.** When the object exists, `enabled` is required and is the
+switch.
 
 ```json
 "manager": {
@@ -213,6 +214,12 @@ field while `manager` is absent stores `{"enabled": false, "<field>": <value>}` 
 `manager is disabled; run mast config set manager.enabled true`. Resetting `manager.enabled`
 alone is refused — use `mast config reset manager`. `mast config get manager` and
 `mast config get manager.<field>` show the saved value next to the built-in default.
+
+워크스페이스별 최신 요약은 `~/.mast/manager/summaries/<key>.json`에 `progress`·`needs_input`·
+`next` 세 문자열만 담아 원자적으로 기록한다. 보드와 생성되는 `digest.md`가 이 파일을 읽으며,
+요약은 길이가 제한된 보고이고 무엇이든 실행할 권한이 아니다. 기존 `tasks/`·`archive/` 파일은
+그대로 두고 자동 승계하지 않는다. `mast manager patch`는 없어졌고 `start`·`workspaces`·
+`events`는 남는다.
 
 Read once at boot like the other keys: a change needs a full restart.
 

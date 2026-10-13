@@ -18,13 +18,12 @@
 //! - 종료는 waiter 스레드가 `try_wait` 폴링으로 감지해 `Exited` 를 한 번 알린다.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use mast_core::command::Dispatcher;
 use mast_core::manager::{
-    parse_harness_line, AppToHarness, HarnessAction, HarnessLine, HarnessToApp,
+    parse_harness_line, AppToHarness, HarnessLine, HarnessToApp,
     MAX_HARNESS_LINE_BYTES,
 };
 
@@ -180,11 +179,10 @@ pub(crate) enum HarnessEvent {
     },
 }
 
-/// 실행 중인 하네스 핸들 — 감독이 소유하고, Tauri 명령이 action 을 넣는다.
+/// 실행 중인 하네스 핸들 — 감독이 소유한다.
 pub(crate) struct HarnessProcess {
     child: Arc<Mutex<Child>>,
     wake: Arc<Wake>,
-    actions: mpsc::Sender<AppToHarness>,
     /// 테스트 전용 — 재시작 경로가 이전 실행의 writer 를 끝냈는지 관측한다.
     #[cfg(test)]
     writer: Mutex<std::thread::JoinHandle<()>>,
@@ -199,19 +197,6 @@ impl Drop for HarnessProcess {
 }
 
 impl HarnessProcess {
-    /// action 큐에 넣고 writer 를 깨운다. `manager_action` 이 쓴다.
-    pub(crate) fn send_action(&self, action: HarnessAction, key: String) {
-        if self
-            .actions
-            .send(AppToHarness::Action { action, key })
-            .is_err()
-        {
-            // writer 가 이미 끝났다 — 보낼 곳이 없다. 감독이 곧 exit 을 본다.
-            winlog!("manager: the harness writer has stopped; action dropped");
-        }
-        self.wake.signal();
-    }
-
     /// writer 를 끝낸다 — 하네스가 스스로 끝나 Exited 를 받은 감독이 부른다.
     /// 닫지 않으면 writer 가 영구 대기하며 stdin·Dispatcher 참조를 놓지 못한다.
     pub(crate) fn close_wake(&self) {
@@ -286,11 +271,10 @@ pub(crate) fn spawn_harness(
     let stderr = child.stderr.take().expect("stderr was piped");
     let child = Arc::new(Mutex::new(child));
 
-    let (actions, queued) = mpsc::channel();
     let writer = {
         let dispatcher = Arc::clone(&dispatcher);
         let wake = Arc::clone(&wake);
-        move || writer_loop(stdin, dispatcher, wake, hello, queued)
+        move || writer_loop(stdin, dispatcher, wake, hello)
     };
     let reader = {
         let on_event = Arc::clone(&on_event);
@@ -339,21 +323,19 @@ pub(crate) fn spawn_harness(
     Ok(HarnessProcess {
         child,
         wake,
-        actions,
         #[cfg(test)]
         writer: Mutex::new(writer),
     })
 }
 
 /// stdin 을 단독 소유하는 writer — hello·snapshot 을 먼저 쓰고, 깨우기마다
-/// `events_since`(gap 이면 overview)와 action 큐를 내보낸다. 쓰기 실패(EPIPE)는
+/// `events_since`(gap 이면 overview)를 내보낸다. 쓰기 실패(EPIPE)는
 /// 하네스 종료로 본다.
 fn writer_loop(
     mut stdin: ChildStdin,
     dispatcher: Arc<Mutex<Dispatcher>>,
     wake: Arc<Wake>,
     hello: AppToHarness,
-    actions: mpsc::Receiver<AppToHarness>,
 ) {
     if !write_line(&mut stdin, &hello) {
         return;
@@ -373,12 +355,6 @@ fn writer_loop(
     loop {
         if !wake.wait_for_signal() {
             return;
-        }
-        // action 이 먼저다 — 사용자 선택은 이벤트보다 지연이 덜 용서된다.
-        while let Ok(action) = actions.try_recv() {
-            if !write_line(&mut stdin, &action) {
-                return;
-            }
         }
         // Dispatcher lock 안에서는 뜨기만 하고, 쓰기는 lock 밖에서 한다.
         let message = {
@@ -732,7 +708,7 @@ mod tests {
 
         use mast_core::command::{Command as CoreCommand, Dispatcher, SessionHost, ShellSpawnReq};
         use mast_core::manager::{
-            AppToHarness, HarnessAction, HarnessSettings, HarnessState, HarnessToApp,
+            AppToHarness, HarnessSettings, HarnessState, HarnessToApp,
             HARNESS_PROTOCOL,
         };
         use mast_core::session::SessionId;
@@ -857,7 +833,7 @@ sys.exit(7)
             let recorded = recorded_lines(record.path());
             let hello_json: Value = serde_json::from_str(&recorded[0]).unwrap();
             assert_eq!(hello_json, serde_json::to_value(hello()).unwrap());
-            assert_eq!(hello_json["protocol"], 1);
+            assert_eq!(hello_json["protocol"], 2);
             assert_eq!(hello_json["settings"]["idleSeconds"], 45);
             let snapshot_json: Value = serde_json::from_str(&recorded[1]).unwrap();
             assert_eq!(snapshot_json["type"], "snapshot");
@@ -915,22 +891,38 @@ sys.exit(7)
             assert_eq!(events_json["events"][0]["seq"], 2);
             assert_eq!(events_json["events"][0]["kind"], "workspaceOpened");
 
-            // nextSeq 가 같으면 아무것도 쓰지 않는다 — action 만 나간다.
+            // nextSeq 가 같으면 아무것도 쓰지 않는다 — 신호를 소비시킨 뒤 변이 없이
+            // 잠시 기다려도 새 줄이 없어야 하고, 뒤이은 변이의 events 줄이 바로 다음 줄이다.
             wake.signal();
-            process.send_action(HarnessAction::Resume, "k1".into());
+            assert!(
+                wait_until(Duration::from_secs(5), || !wake.is_signaled()),
+                "the writer did not consume the stale wake"
+            );
+            std::thread::sleep(Duration::from_millis(200));
+            assert_eq!(
+                recorded_lines(record.path()).len(),
+                3,
+                "a wake with the same nextSeq must not write"
+            );
+            dispatcher
+                .lock()
+                .unwrap()
+                .dispatch(CoreCommand::CreateWorkspace {
+                    name: "third".into(),
+                    root_path: None,
+                    distro: None,
+                    tab: None,
+                })
+                .unwrap();
+            wake.signal();
             assert!(wait_until(Duration::from_secs(5), || {
                 recorded_lines(record.path()).len() >= 4
             }));
             let recorded = recorded_lines(record.path());
-            assert_eq!(
-                recorded.len(),
-                4,
-                "a wake with the same nextSeq must not write"
-            );
-            let action_json: Value = serde_json::from_str(&recorded[3]).unwrap();
-            assert_eq!(action_json["type"], "action");
-            assert_eq!(action_json["action"], "resume");
-            assert_eq!(action_json["key"], "k1");
+            assert_eq!(recorded.len(), 4);
+            let third_json: Value = serde_json::from_str(&recorded[3]).unwrap();
+            assert_eq!(third_json["type"], "events");
+            assert_eq!(third_json["nextSeq"], 4);
 
             // (c) 중지 — stdin EOF 로 하네스가 exit 7 하고 2초 안에 끝난다.
             let started = Instant::now();

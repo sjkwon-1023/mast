@@ -453,9 +453,8 @@ fn main() {
             secure_remote::secure_remote_status,
             secure_remote::secure_remote_firewall_status,
             secure_remote::secure_remote_firewall_allow,
-            // 관리자 보드 — 초기 스냅샷과 이어보기/새로 시작 선택.
+            // 관리자 보드 조회.
             manager::get_manager_board,
-            manager::manager_action,
         ]))
         .build(tauri::generate_context!())
         .expect("error while building mast")

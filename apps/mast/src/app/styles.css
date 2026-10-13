@@ -1827,7 +1827,6 @@ body {
   font-weight: 600;
 }
 
-.board-card-ws,
 .board-updated {
   color: var(--fg-muted);
   font-size: 11px;
@@ -1867,22 +1866,9 @@ body {
   color: var(--accent);
 }
 
-.board-reported.done,
-.board-verified.done {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.board-headline,
 .board-progress,
 .board-section {
   margin-top: 5px;
-}
-
-.board-headline {
-  color: var(--fg);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .board-progress {
@@ -1904,88 +1890,17 @@ body {
   letter-spacing: 0.04em;
 }
 
-.board-item {
-  padding: 2px 0 2px 8px;
-  border-left: 2px solid var(--border);
+.board-needs-input {
+  padding-left: 8px;
+  border-left: 2px solid var(--warn);
   margin-top: 3px;
-}
-
-.board-item-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.board-toggle {
-  margin-left: 6px;
-  padding: 0 4px;
-  background: transparent;
-  color: var(--fg-muted);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  font: inherit;
-  font-size: 10px;
-  cursor: pointer;
-}
-
-.board-toggle:hover {
-  color: var(--fg);
-  background: var(--border);
-}
-
-.board-quote {
-  margin: 3px 0 0;
-  padding: 2px 8px;
-  border-left: 2px solid var(--accent);
-  color: var(--fg-muted);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.board-group {
-  margin-top: 4px;
 }
 
 .board-next-item {
   padding-left: 8px;
   overflow-wrap: anywhere;
-}
-
-.board-plan {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-  min-width: 0;
-}
-
-.board-plan-goal {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.board-open-plan {
-  flex: 0 0 auto;
-  padding: 0 6px;
-  background: transparent;
-  color: var(--fg);
-  border: 1px solid var(--accent);
-  border-radius: 3px;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.board-open-plan:hover:not(:disabled) {
-  background: var(--accent);
-  color: #ffffff;
-}
-
-.board-open-plan:disabled {
-  border-color: var(--border);
-  color: var(--fg-muted);
-  cursor: default;
 }
 
 /* 워크스페이스 Root / Repo 줄 — 긴 경로는 말줄임하고 전체는 title 로 보여 준다. */
@@ -2045,9 +1960,7 @@ body {
   margin-top: 6px;
 }
 
-.board-goto,
-.board-resume,
-.board-fresh {
+.board-goto {
   padding: 1px 8px;
   background: transparent;
   color: var(--fg);
@@ -2058,30 +1971,8 @@ body {
   cursor: pointer;
 }
 
-.board-goto:hover,
-.board-resume:hover:not(:disabled),
-.board-fresh:hover:not(:disabled) {
+.board-goto:hover {
   background: var(--border);
-}
-
-.board-resume,
-.board-fresh {
-  border-color: var(--accent);
-}
-
-.board-resume:disabled,
-.board-fresh:disabled {
-  border-color: var(--border);
-  color: var(--fg-muted);
-  cursor: default;
-}
-
-.board-choice {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--fg-muted);
-  font-size: 11px;
 }
 
 .board-empty,

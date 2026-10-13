@@ -124,7 +124,7 @@
   "appToHarness": [
     {
       "type": "hello",
-      "protocol": 1,
+      "protocol": 2,
       "managerWorkspace": 7,
       "managerDir": "/home/u/.mast/manager",
       "managerDistro": "Ubuntu",
@@ -237,11 +237,6 @@
         }
       ],
       "nextSeq": 43
-    },
-    {
-      "type": "action",
-      "action": "resume",
-      "key": "k3f9c1a2b4d5e6f70819b"
     }
   ],
   "harnessToApp": [
@@ -260,11 +255,13 @@
         {
           "workspaceId": 4,
           "key": null,
-          "state": "none",
+          "state": "unsupported",
           "reason": "no_root",
-          "task": null,
+          "summary": null,
+          "updatedAt": null,
+          "lastError": null,
+          "inputTruncated": false,
           "error": null,
-          "archive": null,
           "repo": null
         },
         {
@@ -272,19 +269,23 @@
           "key": null,
           "state": "unsupported",
           "reason": "other_distro",
-          "task": null,
+          "summary": null,
+          "updatedAt": null,
+          "lastError": null,
+          "inputTruncated": false,
           "error": null,
-          "archive": null,
           "repo": null
         },
         {
           "workspaceId": 5,
           "key": "k1a2b3c4d5e6f7081920a",
-          "state": "choice",
-          "reason": null,
-          "task": null,
+          "state": "none",
+          "reason": "no_transcript",
+          "summary": null,
+          "updatedAt": null,
+          "lastError": null,
+          "inputTruncated": false,
           "error": null,
-          "archive": null,
           "repo": {
             "name": "mast",
             "path": "/home/u/p/mast",
@@ -297,8 +298,8 @@
       "type": "notify",
       "workspaceId": 3,
       "reason": "question",
-      "title": "manager needs a choice",
-      "body": "Resume the stored task or start fresh for workspace feature-x."
+      "title": "manager needs an answer",
+      "body": "Workspace feature-x is waiting for your answer."
     }
   ]
 }

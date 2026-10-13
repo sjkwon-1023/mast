@@ -6,88 +6,22 @@
 // (숨기면 보드가 "기록 없음"과 "깨진 기록"을 구분하지 못한다). 최상위 형식이
 // 깨졌을 때만 entries 를 비우고 error 를 채운다 — 헤더 오류 표시용이다.
 //
-// 계약: 하네스 board/status 메시지, 작업 JSON 스키마, 카드 정렬·내용·이동 대상·헤더
-// (ADR-0032). 작업 JSON 은 snake_case, 이 모듈의 카드 모델은 camelCase.
+// 계약: 하네스 board/status 메시지와 board entry 스키마(ADR-0032). 최신 요약은
+// progress/needs_input/next 세 문자열이고, 이 모듈은 표시에 필요한 타입·enum만
+// 검증한다(길이·상태 조합 검사는 하지 않는다).
 
 import type { AgentStatus, AppState, TabId, Workspace, WorkspaceId } from "../../shared/types";
 
 // ---- 하네스 → 앱 메시지 ----
 
-export type BoardEntryState = "active" | "none" | "unsupported" | "choice" | "error";
+export type BoardEntryState = "active" | "none" | "unsupported" | "error";
 export type BoardEntryReason = "no_root" | "other_distro" | "no_transcript";
 
-export interface BoardArchive {
-  count: number;
-  latestClosedAt: string | null;
-}
-
-/** 작업 JSON 의 Item 공통부 중 보드가 읽는 필드 — 열거값·타입만 검증한다. */
-export type BoardTaskItemStatus = "active" | "resolved" | "superseded";
-
-export interface BoardTaskAnchor {
-  tab: number | null;
-}
-
-/** open_questions 항목 — 카드와 이동 대상이 anchor.tab 을 읽는다. */
-export interface BoardTaskQuestion {
-  id: string;
-  text: string;
-  quote: string | null;
-  status: BoardTaskItemStatus;
-  anchor: BoardTaskAnchor | null;
-}
-
-/** decisions 항목 — by 로 user/ai 그룹을 가른다. */
-export interface BoardTaskDecision {
-  id: string;
-  text: string;
-  quote: string | null;
-  status: BoardTaskItemStatus;
-  by: "user" | "ai";
-}
-
-/** next 항목 — 카드는 활성 text 만 보여 준다. */
-export interface BoardTaskNext {
-  id: string;
-  text: string;
-  status: BoardTaskItemStatus;
-}
-
-export interface BoardTaskPlanStep {
-  text: string;
-  done: boolean;
-}
-
-export interface BoardTaskPlan {
-  path: string;
-  goal: string;
-  steps: BoardTaskPlanStep[];
-  status: "active" | "removed";
-}
-
-export interface BoardTaskProgress {
-  text: string;
-  reported_done: boolean;
-  verified_done: boolean;
-}
-
-/** 작업 meta — 보드가 읽는 updated_at(정렬)·last_error(stale)·limits(배지)만. */
-export interface BoardTaskMeta {
-  updated_at: string;
-  last_error: string | null;
-  limits: string[];
-}
-
-/** 작업 JSON 미러 — 보드가 읽는 필드만 담는다. 모르는 필드는 파싱에서 무시. */
-export interface BoardTask {
-  title: string;
-  headline: string;
-  meta: BoardTaskMeta;
-  progress: BoardTaskProgress;
-  open_questions: BoardTaskQuestion[];
-  decisions: BoardTaskDecision[];
-  next: BoardTaskNext[];
-  plans: BoardTaskPlan[];
+/** 최신 요약 세 필드 — 하네스가 bounded 로 저장한 표시 문자열. */
+export interface BoardSummary {
+  progress: string;
+  needs_input: string;
+  next: string;
 }
 
 /** 보드 entry 의 repo — 하네스가 git 공통 디렉터리에서 판별한 레포. */
@@ -102,9 +36,11 @@ export interface BoardEntry {
   key: string | null;
   state: BoardEntryState;
   reason: BoardEntryReason | null;
-  task: BoardTask | null;
+  summary: BoardSummary | null;
+  updatedAt: string | null;
+  lastError: string | null;
+  inputTruncated: boolean;
   error: string | null;
-  archive: BoardArchive | null;
   repo: BoardRepo | null;
 }
 
@@ -140,11 +76,9 @@ const ENTRY_STATES: readonly BoardEntryState[] = [
   "active",
   "none",
   "unsupported",
-  "choice",
   "error",
 ];
 const ENTRY_REASONS: readonly BoardEntryReason[] = ["no_root", "other_distro", "no_transcript"];
-const ITEM_STATUSES: readonly BoardTaskItemStatus[] = ["active", "resolved", "superseded"];
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -161,15 +95,6 @@ function parseNullableString(value: unknown, path: string): Parsed<string | null
   return fail(`${path} must be a string or null`);
 }
 
-function parseArchive(value: unknown, path: string): Parsed<BoardArchive | null> {
-  if (value === null) return { ok: true, value: null };
-  if (!isRecord(value)) return fail(`${path} must be an object or null`);
-  if (typeof value.count !== "number") return fail(`${path}.count must be a number`);
-  const latest = parseNullableString(value.latestClosedAt, `${path}.latestClosedAt`);
-  if (!latest.ok) return latest;
-  return { ok: true, value: { count: value.count, latestClosedAt: latest.value } };
-}
-
 /** repo 는 카드 표시에만 쓰므로 형식이 틀려도 entry 를 버리지 않고 null 로 둔다. */
 function parseRepo(value: unknown): BoardRepo | null {
   if (!isRecord(value)) return null;
@@ -180,16 +105,6 @@ function parseRepo(value: unknown): BoardRepo | null {
   if (typeof path !== "string" || path === "") return null;
   if (remote !== null && remote !== undefined && typeof remote !== "string") return null;
   return { name, path, remote: typeof remote === "string" && remote !== "" ? remote : null };
-}
-
-function parseAnchor(value: unknown, path: string): Parsed<BoardTaskAnchor | null> {
-  if (value === null) return { ok: true, value: null };
-  if (!isRecord(value)) return fail(`${path} must be an object or null`);
-  const tab = value.tab;
-  if (tab !== null && typeof tab !== "number") {
-    return fail(`${path}.tab must be a number or null`);
-  }
-  return { ok: true, value: { tab } };
 }
 
 /** 열거값 검사 — 문자열이 아니거나 목록 밖이면 오류. */
@@ -204,139 +119,18 @@ function parseEnum<T extends string>(
   return fail(`${path} must be one of ${allowed.join(", ")}`);
 }
 
-function parseQuestionItem(value: unknown, path: string): Parsed<BoardTaskQuestion> {
+/** 요약은 표시에 필요한 세 문자열 타입만 검사한다 (길이 검사 없음). */
+function parseSummary(value: unknown, path: string): Parsed<BoardSummary> {
   if (!isRecord(value)) return fail(`${path} must be an object`);
-  const id = value.id;
-  if (typeof id !== "string") return fail(`${path}.id must be a string`);
-  const text = value.text;
-  if (typeof text !== "string") return fail(`${path}.text must be a string`);
-  const quote = parseNullableString(value.quote, `${path}.quote`);
-  if (!quote.ok) return quote;
-  const status = parseEnum(value.status, ITEM_STATUSES, `${path}.status`);
-  if (!status.ok) return status;
-  const anchor = parseAnchor(value.anchor, `${path}.anchor`);
-  if (!anchor.ok) return anchor;
-  return { ok: true, value: { id, text, quote: quote.value, status: status.value, anchor: anchor.value } };
-}
-
-function parseDecisionItem(value: unknown, path: string): Parsed<BoardTaskDecision> {
-  if (!isRecord(value)) return fail(`${path} must be an object`);
-  const id = value.id;
-  if (typeof id !== "string") return fail(`${path}.id must be a string`);
-  const text = value.text;
-  if (typeof text !== "string") return fail(`${path}.text must be a string`);
-  const quote = parseNullableString(value.quote, `${path}.quote`);
-  if (!quote.ok) return quote;
-  const status = parseEnum(value.status, ITEM_STATUSES, `${path}.status`);
-  if (!status.ok) return status;
-  const by = parseEnum(value.by, ["user", "ai"] as const, `${path}.by`);
-  if (!by.ok) return by;
-  return { ok: true, value: { id, text, quote: quote.value, status: status.value, by: by.value } };
-}
-
-function parseNextItem(value: unknown, path: string): Parsed<BoardTaskNext> {
-  if (!isRecord(value)) return fail(`${path} must be an object`);
-  const id = value.id;
-  if (typeof id !== "string") return fail(`${path}.id must be a string`);
-  const text = value.text;
-  if (typeof text !== "string") return fail(`${path}.text must be a string`);
-  const status = parseEnum(value.status, ITEM_STATUSES, `${path}.status`);
-  if (!status.ok) return status;
-  return { ok: true, value: { id, text, status: status.value } };
-}
-
-function parsePlan(value: unknown, path: string): Parsed<BoardTaskPlan> {
-  if (!isRecord(value)) return fail(`${path} must be an object`);
-  const planPath = value.path;
-  if (typeof planPath !== "string") return fail(`${path}.path must be a string`);
-  const goal = value.goal;
-  if (typeof goal !== "string") return fail(`${path}.goal must be a string`);
-  const status = parseEnum(value.status, ["active", "removed"] as const, `${path}.status`);
-  if (!status.ok) return status;
-  const rawSteps = value.steps;
-  if (!Array.isArray(rawSteps)) return fail(`${path}.steps must be an array`);
-  const steps: BoardTaskPlanStep[] = [];
-  for (let i = 0; i < rawSteps.length; i += 1) {
-    const raw = rawSteps[i];
-    if (!isRecord(raw)) return fail(`${path}.steps[${i}] must be an object`);
-    if (typeof raw.text !== "string") return fail(`${path}.steps[${i}].text must be a string`);
-    if (typeof raw.done !== "boolean") return fail(`${path}.steps[${i}].done must be a boolean`);
-    steps.push({ text: raw.text, done: raw.done });
+  for (const field of ["progress", "needs_input", "next"] as const) {
+    if (typeof value[field] !== "string") return fail(`${path}.${field} must be a string`);
   }
-  return { ok: true, value: { path: planPath, goal, steps, status: status.value } };
-}
-
-function parseItems<T>(
-  raw: unknown,
-  path: string,
-  parser: (item: unknown, itemPath: string) => Parsed<T>,
-): Parsed<T[]> {
-  if (!Array.isArray(raw)) return fail(`${path} must be an array`);
-  const items: T[] = [];
-  for (let i = 0; i < raw.length; i += 1) {
-    const item = parser(raw[i], `${path}[${i}]`);
-    if (!item.ok) return item;
-    items.push(item.value);
-  }
-  return { ok: true, value: items };
-}
-
-function parseTask(value: unknown, path: string): Parsed<BoardTask> {
-  if (!isRecord(value)) return fail(`${path} must be an object`);
-  const title = value.title;
-  if (typeof title !== "string") return fail(`${path}.title must be a string`);
-  const headline = value.headline;
-  if (typeof headline !== "string") return fail(`${path}.headline must be a string`);
-
-  const meta = value.meta;
-  if (!isRecord(meta)) return fail(`${path}.meta must be an object`);
-  if (typeof meta.updated_at !== "string") return fail(`${path}.meta.updated_at must be a string`);
-  const lastError = parseNullableString(meta.last_error, `${path}.meta.last_error`);
-  if (!lastError.ok) return lastError;
-  const limits = parseItems(meta.limits, `${path}.meta.limits`, (item, itemPath) => {
-    if (typeof item !== "string") return fail<string>(`${itemPath} must be a string`);
-    return { ok: true, value: item };
-  });
-  if (!limits.ok) return limits;
-
-  const progress = value.progress;
-  if (!isRecord(progress)) return fail(`${path}.progress must be an object`);
-  if (typeof progress.text !== "string") return fail(`${path}.progress.text must be a string`);
-  if (typeof progress.reported_done !== "boolean") {
-    return fail(`${path}.progress.reported_done must be a boolean`);
-  }
-  if (typeof progress.verified_done !== "boolean") {
-    return fail(`${path}.progress.verified_done must be a boolean`);
-  }
-
-  const openQuestions = parseItems(value.open_questions, `${path}.open_questions`, parseQuestionItem);
-  if (!openQuestions.ok) return openQuestions;
-  const decisions = parseItems(value.decisions, `${path}.decisions`, parseDecisionItem);
-  if (!decisions.ok) return decisions;
-  const next = parseItems(value.next, `${path}.next`, parseNextItem);
-  if (!next.ok) return next;
-  const plans = parseItems(value.plans, `${path}.plans`, parsePlan);
-  if (!plans.ok) return plans;
-
   return {
     ok: true,
     value: {
-      title,
-      headline,
-      meta: {
-        updated_at: meta.updated_at,
-        last_error: lastError.value,
-        limits: limits.value,
-      },
-      progress: {
-        text: progress.text,
-        reported_done: progress.reported_done,
-        verified_done: progress.verified_done,
-      },
-      open_questions: openQuestions.value,
-      decisions: decisions.value,
-      next: next.value,
-      plans: plans.value,
+      progress: value.progress as string,
+      needs_input: value.needs_input as string,
+      next: value.next as string,
     },
   };
 }
@@ -354,13 +148,18 @@ function parseEntry(raw: Record<string, unknown>, path: string): Parsed<BoardEnt
   if (!key.ok) return key;
   const error = parseNullableString(raw.error, `${path}.error`);
   if (!error.ok) return error;
-  const archive = parseArchive(raw.archive, `${path}.archive`);
-  if (!archive.ok) return archive;
-  let task: BoardTask | null = null;
-  if (raw.task !== null) {
-    const parsedTask = parseTask(raw.task, `${path}.task`);
-    if (!parsedTask.ok) return parsedTask;
-    task = parsedTask.value;
+  const updatedAt = parseNullableString(raw.updatedAt, `${path}.updatedAt`);
+  if (!updatedAt.ok) return updatedAt;
+  const lastError = parseNullableString(raw.lastError, `${path}.lastError`);
+  if (!lastError.ok) return lastError;
+  if (typeof raw.inputTruncated !== "boolean") {
+    return fail(`${path}.inputTruncated must be a boolean`);
+  }
+  let summary: BoardSummary | null = null;
+  if (raw.summary !== null) {
+    const parsedSummary = parseSummary(raw.summary, `${path}.summary`);
+    if (!parsedSummary.ok) return parsedSummary;
+    summary = parsedSummary.value;
   }
   return {
     ok: true,
@@ -369,9 +168,11 @@ function parseEntry(raw: Record<string, unknown>, path: string): Parsed<BoardEnt
       key: key.value,
       state: state.value,
       reason,
-      task,
+      summary,
+      updatedAt: updatedAt.value,
+      lastError: lastError.value,
+      inputTruncated: raw.inputTruncated,
       error: error.value,
-      archive: archive.value,
       repo: parseRepo(raw.repo),
     },
   };
@@ -409,44 +210,10 @@ export function parseBoard(value: unknown): ParsedBoard {
 
 // ---- 카드 모델 ----
 
-export interface QuestionCard {
-  id: string;
-  text: string;
-  quote: string | null;
-  anchorTab: TabId | null;
-}
-
-export interface DecisionCard {
-  id: string;
-  text: string;
-  quote: string | null;
-}
-
-export interface NextCard {
-  id: string;
-  text: string;
-}
-
-export interface PlanCard {
-  path: string;
-  goal: string;
-  steps: BoardTaskPlanStep[];
-  status: "active" | "removed";
-  /** 원문 링크 — removed 거나 워크스페이스 rootPath 가 없으면 null(비활성). */
-  linkPath: string | null;
-}
-
-export interface CardProgress {
-  text: string;
-  reportedDone: boolean;
-  verifiedDone: boolean;
-}
-
-export interface CardDecisions {
-  user: DecisionCard[];
-  ai: DecisionCard[];
-  /** superseded 상태로 남은 결정 수 — 카드에 "N superseded" 로 표시한다. */
-  supersededCount: number;
+export interface CardSummary {
+  progress: string;
+  needsInput: string;
+  next: string;
 }
 
 export interface BoardCard {
@@ -454,30 +221,24 @@ export interface BoardCard {
   workspaceName: string;
   /** 하네스가 판별한 레포. 없으면 null 이며 그룹에서는 "Other" 로 묶인다. */
   repo: BoardRepo | null;
-  /** task.title 이 비었으면 워크스페이스 이름 (REQ-18·D10). */
-  title: string;
-  headline: string;
-  progress: CardProgress;
-  openQuestions: QuestionCard[];
-  decisions: CardDecisions;
-  next: NextCard[];
-  plans: PlanCard[];
+  summary: CardSummary;
   liveStatus: AgentStatus;
   state: BoardEntryState;
   /** entry 가 아예 없는 워크스페이스("no record yet")는 false. */
   hasEntry: boolean;
   reason: BoardEntryReason | null;
-  archive: BoardArchive | null;
   /** state "error" 의 사유 또는 파싱 오류 메시지. */
   error: string | null;
-  /** task.meta.last_error 가 있거나 글루가 failed/restarting/unsupported 일 때. */
+  /** entry.lastError 가 있거나 글루가 failed/restarting/unsupported 일 때. */
   stale: boolean;
-  limits: string[];
+  /** 마지막 성공 수집이 입력을 생략했다. */
+  inputTruncated: boolean;
   updatedAt: string | null;
   updatedAgo: string | null;
 }
 
 const STALE_GLUE_STATES: readonly GlueState[] = ["failed", "restarting", "unsupported"];
+const EMPTY_SUMMARY: CardSummary = { progress: "", needsInput: "", next: "" };
 
 /** "3m ago" 같은 짧은 영어 상대 시각. null/파싱 불가는 null. */
 export function formatUpdatedAgo(iso: string | null, now: number): string | null {
@@ -498,81 +259,45 @@ function findEntry(board: ParsedBoard | null, workspaceId: WorkspaceId): ParsedE
   return board.entries.find((entry) => entry.workspaceId === workspaceId) ?? null;
 }
 
-function cardPlans(task: BoardTask | null, rootPath: string | null): PlanCard[] {
-  return (task?.plans ?? []).map((plan) => ({
-    path: plan.path,
-    goal: plan.goal,
-    steps: plan.steps,
-    status: plan.status,
-    linkPath:
-      plan.status === "removed" || rootPath === null ? null : `${rootPath}/${plan.path}`,
-  }));
-}
-
 function buildCard(
   ws: Workspace,
   entry: ParsedEntry | null,
   status: GlueStatus,
   now: number,
 ): BoardCard {
-  const task = entry !== null && entry.kind === "entry" ? entry.task : null;
   const validEntry = entry !== null && entry.kind === "entry" ? entry : null;
-  const decisions = task?.decisions ?? [];
-  const updatedAt = task?.meta.updated_at ?? null;
+  const summary = validEntry?.summary ?? null;
+  const updatedAt = validEntry?.updatedAt ?? null;
   return {
     workspaceId: ws.id,
     workspaceName: ws.name,
     repo: validEntry?.repo ?? null,
-    title: task !== null && task.title.trim() !== "" ? task.title : ws.name,
-    headline: task?.headline ?? "",
-    progress:
-      task === null
-        ? { text: "", reportedDone: false, verifiedDone: false }
+    summary:
+      summary === null
+        ? EMPTY_SUMMARY
         : {
-            text: task.progress.text,
-            reportedDone: task.progress.reported_done,
-            verifiedDone: task.progress.verified_done,
+            progress: summary.progress,
+            needsInput: summary.needs_input,
+            next: summary.next,
           },
-    openQuestions: (task?.open_questions ?? [])
-      .filter((item) => item.status === "active")
-      .map((item) => ({
-        id: item.id,
-        text: item.text,
-        quote: item.quote,
-        anchorTab: item.anchor?.tab ?? null,
-      })),
-    decisions: {
-      user: decisions
-        .filter((item) => item.status === "active" && item.by === "user")
-        .map((item) => ({ id: item.id, text: item.text, quote: item.quote })),
-      ai: decisions
-        .filter((item) => item.status === "active" && item.by === "ai")
-        .map((item) => ({ id: item.id, text: item.text, quote: item.quote })),
-      supersededCount: decisions.filter((item) => item.status === "superseded").length,
-    },
-    next: (task?.next ?? [])
-      .filter((item) => item.status === "active")
-      .map((item) => ({ id: item.id, text: item.text })),
-    plans: cardPlans(task, ws.rootPath),
     liveStatus: ws.agentStatus,
     state: entry === null ? "none" : entry.kind === "invalid" ? "error" : entry.state,
     hasEntry: entry !== null,
     reason: validEntry?.reason ?? null,
-    archive: validEntry?.archive ?? null,
     error: entry?.error ?? null,
-    stale: (task?.meta.last_error ?? null) !== null || STALE_GLUE_STATES.includes(status.state),
-    limits: task?.meta.limits ?? [],
+    stale: (validEntry?.lastError ?? null) !== null || STALE_GLUE_STATES.includes(status.state),
+    inputTruncated: validEntry?.inputTruncated ?? false,
     updatedAt,
     updatedAgo: formatUpdatedAgo(updatedAt, now),
   };
 }
 
-/** 입력 대기 — 라이브 needsInput 이거나 답을 기다리는 활성 question 이 있다. */
+/** 입력 대기 — 라이브 needsInput 이거나 요약이 답을 기다린다. */
 export function isWaitingInput(card: BoardCard): boolean {
-  return card.liveStatus === "needsInput" || card.openQuestions.length > 0;
+  return card.liveStatus === "needsInput" || card.summary.needsInput.trim() !== "";
 }
 
-/** 정렬 그룹(R2): needsInput 또는 활성 question → 0, running → 1, 그 외 → 2. */
+/** 정렬 그룹(R2): needsInput 또는 needs_input → 0, running → 1, 그 외 → 2. */
 function sortGroup(card: BoardCard): number {
   if (isWaitingInput(card)) return 0;
   if (card.liveStatus === "running") return 1;
@@ -708,9 +433,7 @@ export interface GoToTarget {
 /** 카드에서 이동할 원래 탭 (R2).
  *
  *  1. 그 워크스페이스에서 agentStatus 가 needsInput 인 탭 (여럿이면 가장 작은 id)
- *  2. 가장 최근 활성 question 의 anchor.tab — 그 탭이 스냅샷에 있을 때만.
- *     open_questions 는 append 순서라 마지막 활성 항목이 가장 최근이다.
- *  3. 없으면 워크스페이스 전환만 (tab null). */
+ *  2. 없으면 워크스페이스 전환만 (tab null). */
 export function goToTarget(card: BoardCard, state: AppState): GoToTarget {
   const ws = state.workspaces.find((candidate) => candidate.id === card.workspaceId);
   if (ws === undefined) return { workspace: card.workspaceId, tab: null };
@@ -721,14 +444,6 @@ export function goToTarget(card: BoardCard, state: AppState): GoToTarget {
     .sort((a, b) => a - b);
   const smallestWaiting = waiting[0];
   if (smallestWaiting !== undefined) return { workspace: ws.id, tab: smallestWaiting };
-  const newest = card.openQuestions[card.openQuestions.length - 1];
-  if (
-    newest !== undefined &&
-    newest.anchorTab !== null &&
-    tabs.some((tab) => tab.id === newest.anchorTab)
-  ) {
-    return { workspace: ws.id, tab: newest.anchorTab };
-  }
   return { workspace: ws.id, tab: null };
 }
 

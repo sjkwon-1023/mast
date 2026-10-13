@@ -275,8 +275,8 @@ fn error_reply_json(error: ManagerQueryError) -> String {
 }
 
 /// 하네스 stdio 프로토콜 버전. `hello.protocol` 과 다르면 하네스가 exit 3(미지원)으로
-/// 끝난다.
-pub const HARNESS_PROTOCOL: u32 = 1;
+/// 끝난다. v2는 최신 요약 세 필드 계약으로 바뀌며 구버전 설치 스크립트와 섞이지 않는다.
+pub const HARNESS_PROTOCOL: u32 = 2;
 
 /// 하네스 stdio 한 줄의 바이트 상한 — stdin·stdout 양방향 같은 값이다.
 pub const MAX_HARNESS_LINE_BYTES: usize = 4 * 1024 * 1024;
@@ -315,16 +315,6 @@ pub enum AppToHarness {
         events: Vec<AgentEvent>,
         next_seq: u64,
     },
-    /// 사용자의 이어보기(`resume`)/새로 시작(`fresh`) 선택.
-    Action { action: HarnessAction, key: String },
-}
-
-/// [`AppToHarness::Action`] 의 동작.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum HarnessAction {
-    Resume,
-    Fresh,
 }
 
 /// [`AppToHarness::Hello`] 가 싣는 모델·요약 설정. 글루가 설정 값으로 채운다.
@@ -549,7 +539,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::model::{AgentKind, AgentSession};
 
     fn workspace(id: u64) -> EventWorkspace {
         EventWorkspace {
@@ -559,37 +548,6 @@ mod tests {
             repo_root: None,
             distro: None,
         }
-    }
-
-    #[test]
-    fn agent_event_serializes_the_contract_shape_with_nulls() {
-        let event = AgentEvent {
-            seq: 41,
-            kind: AgentEventKind::Status,
-            workspace: workspace(1),
-            tab: Some(4),
-            status: Some(AgentStatus::Idle),
-            message: Some("done".into()),
-            agent_session: None,
-        };
-        assert_eq!(
-            serde_json::to_value(&event).unwrap(),
-            json!({
-                "seq": 41,
-                "kind": "status",
-                "workspace": {
-                    "id": 1,
-                    "name": "feature-x",
-                    "rootPath": "/home/u/p/x",
-                    "repoRoot": null,
-                    "distro": null
-                },
-                "tab": 4,
-                "status": "idle",
-                "message": "done",
-                "agentSession": null
-            })
-        );
     }
 
     #[test]
@@ -603,45 +561,6 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
         }
-    }
-
-    #[test]
-    fn agent_event_session_field_serializes_the_agent_meta() {
-        let event = AgentEvent {
-            seq: 1,
-            kind: AgentEventKind::Session,
-            workspace: workspace(7),
-            tab: Some(9),
-            status: None,
-            message: None,
-            agent_session: Some(AgentSession {
-                agent: AgentKind::Claude,
-                session_id: "abc".into(),
-                transcript_path: "/home/u/.claude/projects/x/abc.jsonl".into(),
-            }),
-        };
-        assert_eq!(
-            serde_json::to_value(&event).unwrap(),
-            json!({
-                "seq": 1,
-                "kind": "session",
-                "workspace": {
-                    "id": 7,
-                    "name": "feature-x",
-                    "rootPath": "/home/u/p/x",
-                    "repoRoot": null,
-                    "distro": null
-                },
-                "tab": 9,
-                "status": null,
-                "message": null,
-                "agentSession": {
-                    "agent": "claude",
-                    "sessionId": "abc",
-                    "transcriptPath": "/home/u/.claude/projects/x/abc.jsonl"
-                }
-            })
-        );
     }
 
     #[test]
@@ -785,103 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn events_since_serializes_the_contract_shape() {
-        let reply = EventsSince {
-            events: vec![AgentEvent {
-                seq: 1,
-                kind: AgentEventKind::WorkspaceOpened,
-                workspace: workspace(1),
-                tab: None,
-                status: None,
-                message: None,
-                agent_session: None,
-            }],
-            next_seq: 42,
-            gap: true,
-        };
-        assert_eq!(
-            serde_json::to_value(&reply).unwrap(),
-            json!({
-                "events": [{
-                    "seq": 1,
-                    "kind": "workspaceOpened",
-                    "workspace": {
-                        "id": 1,
-                        "name": "feature-x",
-                        "rootPath": "/home/u/p/x",
-                        "repoRoot": null,
-                        "distro": null
-                    },
-                    "tab": null,
-                    "status": null,
-                    "message": null,
-                    "agentSession": null
-                }],
-                "nextSeq": 42,
-                "gap": true
-            })
-        );
-    }
-
-    #[test]
-    fn overview_serializes_the_contract_shape() {
-        let overview = ManagerOverview {
-            next_seq: 42,
-            workspaces: vec![OverviewWorkspace {
-                id: 1,
-                name: "feature-x".into(),
-                root_path: Some("/home/u/p/x".into()),
-                repo_root: None,
-                distro: None,
-                manager: false,
-                agent_status: AgentStatus::Idle,
-                tabs: vec![OverviewTab {
-                    tab: 4,
-                    title: "claude".into(),
-                    kind: "terminal",
-                    status: "running",
-                    agent_status: AgentStatus::Idle,
-                    last_agent_message: Some("done".into()),
-                    agent_session: Some(AgentSession {
-                        agent: AgentKind::Claude,
-                        session_id: "abc".into(),
-                        transcript_path: "/home/u/.claude/projects/x/abc.jsonl".into(),
-                    }),
-                }],
-            }],
-        };
-        assert_eq!(
-            serde_json::to_value(&overview).unwrap(),
-            json!({
-                "nextSeq": 42,
-                "workspaces": [{
-                    "id": 1,
-                    "name": "feature-x",
-                    "rootPath": "/home/u/p/x",
-                    "repoRoot": null,
-                    "distro": null,
-                    "manager": false,
-                    "agentStatus": "idle",
-                    "tabs": [{
-                        "tab": 4,
-                        "title": "claude",
-                        "kind": "terminal",
-                        "status": "running",
-                        "agentStatus": "idle",
-                        "lastAgentMessage": "done",
-                        "agentSession": {
-                            "agent": "claude",
-                            "sessionId": "abc",
-                            "transcriptPath": "/home/u/.claude/projects/x/abc.jsonl"
-                        }
-                    }]
-                }]
-            })
-        );
-    }
-
-    #[test]
-    fn manager_reply_json_wraps_success_and_errors() {
+    fn manager_reply_json_wraps_success() {
         let events = EventsSince {
             events: Vec::new(),
             next_seq: 1,
@@ -894,18 +717,6 @@ mod tests {
             .unwrap(),
             json!({"result": {"events": [], "nextSeq": 1, "gap": false}})
         );
-        for error in [
-            ManagerQueryError::Forbidden,
-            ManagerQueryError::InvalidParams,
-            ManagerQueryError::TooLarge,
-        ] {
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&manager_reply_json(Err(error))).unwrap(),
-                json!({
-                    "error": {"code": error.code(), "message": error.message()}
-                })
-            );
-        }
     }
 
     #[test]
@@ -934,18 +745,6 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&over).unwrap(),
             json!({"error": {"code": "too_large", "message": "the manager reply exceeds 4 MiB"}})
-        );
-    }
-
-    #[test]
-    fn parse_manager_request_accepts_the_two_ops() {
-        assert_eq!(
-            parse_manager_request(br#"{"op":"workspaces"}"#).unwrap(),
-            ManagerRequest::Workspaces
-        );
-        assert_eq!(
-            parse_manager_request(br#"{"op":"events","since":3}"#).unwrap(),
-            ManagerRequest::Events { since: 3 }
         );
     }
 

@@ -94,12 +94,12 @@ for Windows + WSL2; an Apple Silicon native source build is also available.
   is requested only after you click its allow button. See [`docs/SETTINGS.md`](./docs/SETTINGS.md).
 - **Layout persistence** — workspaces, splits and tabs come back, each shell respawned where it was,
   and a tab that was running an agent returns with its resume command one `Up` away.
-- **Manager workspace (preview, opt-in)** — a pinned workspace whose agent and task board summarize
-  Claude Code and Codex work across all workspaces: waiting questions, user/ai decisions with quoted
-  evidence, progress, next steps and plan links. Enable with
-  `mast config set manager.enabled true` (needs the Codex CLI and a full restart). The manager query
-  is read-only, and `mast manager patch` records user decisions and corrections.
-  See [ADR-0032](docs/adr/0032-manager-workspace-preview.md).
+- **관리자 워크스페이스(preview, 옵트인)** — 고정된 워크스페이스의 에이전트와 보드가 모든
+  워크스페이스의 Claude Code·Codex 작업을 `progress`(현재 진행)·`needs_input`(답변 필요)·
+  `next`(다음 행동) 세 필드로 요약한다. `mast config set manager.enabled true`로 켜고(Codex
+  CLI 필요) 완전히 재시작한다. 워크스페이스별 최신 요약은 `~/.mast/manager/summaries/`에
+  저장되고, 기존 `tasks/`·`archive/` 파일은 보존되며 자동 승계되지 않는다. 요약은 실행
+  권한이 아니라 보고다. [ADR-0032](docs/adr/0032-manager-workspace-preview.md) 참고.
 
 내장 브라우저 탭은 `◎` 버튼으로 연다. 에이전트는 `mast browser`로 같은 탭의 요소와
 스크린샷을 확인하고 입력·클릭할 수 있다. `mast config set browser.enabled false`로

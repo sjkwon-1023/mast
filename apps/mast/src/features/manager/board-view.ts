@@ -10,7 +10,7 @@
 //   초기값이 새 이벤트를 되돌리지 않게.
 // - 라이브 상태(정렬 그룹·배지)는 스냅샷이 필요하므로 workspace-view 가 생성자에
 //   snapshot getter 를 넘기고, 뷰어 update() 마다 재렌더한다. IPC 재호출은 없다.
-// - 접힘·펼침(quote)과 카드별 action 오류는 이 뷰의 로컬 상태라 재렌더에도 남는다.
+// - 카드별 action 오류는 이 뷰의 로컬 상태라 재렌더에도 남는다.
 // - 카드의 Root/Repo 줄은 스냅샷의 rootPath·repoRoot 를 그대로 보여 주고, 폴더 선택기로
 //   고른 경로를 setWorkspaceRoot / setWorkspaceRepoRoot 로 보낸다 (ADR-0032 §14).
 //
@@ -18,7 +18,6 @@
 
 import {
   getManagerBoard,
-  managerAction,
   onManagerBoard,
   pickWorkspaceFolder,
 } from "../../infrastructure/backend";
@@ -87,10 +86,8 @@ export class BoardView implements ViewerView {
   private loadError: string | null = null;
   /** 구독 실패 문구 — 이벤트가 영영 오지 않는다는 뜻이라 payload 로 지우지 않는다. */
   private subscribeError: string | null = null;
-  /** 카드별 managerAction·경로 변경 실패 문구 — 카드에 남고 다음 성공에 지운다. */
+  /** 카드별 경로 변경 실패 문구 — 카드에 남고 다음 성공에 지운다. */
   private readonly cardErrors = new Map<WorkspaceId, string>();
-  /** 펼친 quote 의 키 (`<workspaceId>:q:<id>` / `<workspaceId>:d:<id>`). */
-  private readonly expanded = new Set<string>();
   /** 접은 레포 그룹의 키 (repo.path 또는 "other"). 기본은 펼침. */
   private readonly collapsedGroups = new Set<string>();
   private disposed = false;
@@ -98,6 +95,9 @@ export class BoardView implements ViewerView {
   private unsubscribe: (() => void) | null = null;
   /** 마지막 렌더의 입력 서명 — 무관한 revision 마다 DOM·스크롤을 흔들지 않는다. */
   private signature: string | null = null;
+  /** 적용한 payload 번호 — 서명에 넣어 board 전체를 직렬화하지 않고도 새 payload를
+   *  구분한다. generatedAt(초 단위)이 같아도 번호가 달라 연속 payload가 모두 표시된다. */
+  private payloadSeq = 0;
 
   constructor(parent: HTMLElement, private readonly deps: BoardViewDeps) {
     this.root = document.createElement("div");
@@ -165,6 +165,7 @@ export class BoardView implements ViewerView {
   }
 
   private applyPayload(payload: ManagerBoardPayload): void {
+    this.payloadSeq += 1;
     this.status = payload.status;
     this.board = payload.board === null ? null : parseBoard(payload.board);
     this.loadError = null;
@@ -237,16 +238,15 @@ export class BoardView implements ViewerView {
     return groups.map((group) => this.repoGroup(group));
   }
 
-  /** 표시에 영향을 주는 입력만 모은다 — 스냅샷 전체(tabs 등)는 이동 버튼이
-   *  클릭 시점에 직접 읽으므로 서명에 넣지 않는다. */
+  /** 표시에 영향을 주는 입력만 모은다 — board 본문은 payload 번호가 대신하고,
+   *  스냅샷 전체(tabs 등)는 이동 버튼이 클릭 시점에 직접 읽으므로 넣지 않는다. */
   private renderSignature(state: AppState | null): string {
     return JSON.stringify([
+      this.payloadSeq,
       this.status,
-      this.board,
       this.loadError,
       this.subscribeError,
       [...this.cardErrors],
-      [...this.expanded].sort(),
       [...this.collapsedGroups].sort(),
       state === null
         ? null
@@ -319,10 +319,7 @@ export class BoardView implements ViewerView {
 
     const head = document.createElement("div");
     head.className = "board-card-head";
-    head.append(this.textSpan("board-card-title", card.title));
-    if (card.title !== card.workspaceName) {
-      head.append(this.textSpan("board-card-ws", card.workspaceName));
-    }
+    head.append(this.textSpan("board-card-title", card.workspaceName));
     head.append(
       this.badge(`board-badge board-live board-live-${card.liveStatus}`, AGENT_STATUS_LABELS[card.liveStatus]),
     );
@@ -341,12 +338,7 @@ export class BoardView implements ViewerView {
     } else if (card.state === "error") {
       el.append(this.textDiv("board-error", card.error ?? "invalid board entry"));
     } else {
-      if (card.headline !== "") el.append(this.textDiv("board-headline", card.headline));
-      this.appendProgress(el, card);
-      this.appendQuestions(el, card);
-      this.appendDecisions(el, card);
-      this.appendNext(el, card);
-      this.appendPlans(el, card);
+      this.appendSummary(el, card);
     }
 
     const workspace = this.workspace(card.workspaceId);
@@ -361,7 +353,9 @@ export class BoardView implements ViewerView {
   private cardBadges(card: BoardCard): HTMLElement | null {
     const badges: HTMLElement[] = [];
     if (card.stale) badges.push(this.badge("board-badge board-stale", "stale"));
-    for (const limit of card.limits) badges.push(this.badge("board-badge board-limit", limit));
+    if (card.inputTruncated) {
+      badges.push(this.badge("board-badge board-limit", "input truncated"));
+    }
     if (card.reason !== null) badges.push(this.badge("board-badge board-reason", card.reason));
     if (badges.length === 0) return null;
     const row = document.createElement("div");
@@ -370,90 +364,26 @@ export class BoardView implements ViewerView {
     return row;
   }
 
-  private appendProgress(el: HTMLElement, card: BoardCard): void {
-    const { progress } = card;
-    if (progress.text === "" && !progress.reportedDone && !progress.verifiedDone) return;
-    const row = document.createElement("div");
-    row.className = "board-progress";
-    if (progress.text !== "") {
-      row.append(this.textSpan("board-progress-text", progress.text));
-    }
-    row.append(
-      this.badge(
-        progress.reportedDone ? "board-badge board-reported done" : "board-badge board-reported",
-        "reported",
-      ),
-      this.badge(
-        progress.verifiedDone ? "board-badge board-verified done" : "board-badge board-verified",
-        "verified",
-      ),
-    );
-    el.append(row);
-  }
-
-  private appendQuestions(el: HTMLElement, card: BoardCard): void {
-    if (card.openQuestions.length === 0) return;
-    const section = this.section(el, "Open questions");
-    for (const question of card.openQuestions) {
-      const item = document.createElement("div");
-      item.className = "board-item";
-      item.append(this.textSpan("board-item-text", question.text));
-      this.appendQuote(item, card.workspaceId, `q:${question.id}`, question.quote);
-      section.append(item);
-    }
-  }
-
-  private appendDecisions(el: HTMLElement, card: BoardCard): void {
-    const { user, ai, supersededCount } = card.decisions;
-    if (user.length === 0 && ai.length === 0 && supersededCount === 0) return;
-    const section = this.section(el, "Decisions");
-    if (supersededCount > 0) {
-      section.append(this.badge("board-badge board-superseded", `${supersededCount} superseded`));
-    }
-    for (const [group, decisions] of [
-      ["user", user],
-      ["ai", ai],
-    ] as const) {
-      if (decisions.length === 0) continue;
-      const block = document.createElement("div");
-      block.className = "board-group";
-      block.append(this.badge(`board-badge board-group-${group}`, group));
-      for (const decision of decisions) {
-        const item = document.createElement("div");
-        item.className = "board-item";
-        item.append(this.textSpan("board-item-text", decision.text));
-        this.appendQuote(item, card.workspaceId, `d:${decision.id}`, decision.quote);
-        block.append(item);
-      }
-      section.append(block);
-    }
-  }
-
-  private appendNext(el: HTMLElement, card: BoardCard): void {
-    if (card.next.length === 0) return;
-    const section = this.section(el, "Next");
-    for (const item of card.next) section.append(this.textDiv("board-next-item", item.text));
-  }
-
-  private appendPlans(el: HTMLElement, card: BoardCard): void {
-    if (card.plans.length === 0) return;
-    const section = this.section(el, "Plans");
-    for (const plan of card.plans) {
+  /** 최신 요약 세 필드 — 빈 필드는 그리지 않는다. */
+  private appendSummary(el: HTMLElement, card: BoardCard): void {
+    const { progress, needsInput, next } = card.summary;
+    if (progress !== "") {
       const row = document.createElement("div");
-      row.className = "board-plan";
-      row.append(this.textSpan("board-plan-goal", plan.goal));
-      const done = plan.steps.filter((step) => step.done).length;
-      row.append(this.badge("board-badge board-plan-steps", `${done}/${plan.steps.length}`));
-      const open = document.createElement("button");
-      open.type = "button";
-      open.className = "board-open-plan";
-      open.textContent = "Open plan";
-      const linkPath = plan.linkPath;
-      open.disabled = linkPath === null;
-      if (linkPath !== null) open.addEventListener("click", () => this.openPlan(card, linkPath));
-      row.append(open);
-      section.append(row);
+      row.className = "board-progress";
+      row.append(this.textSpan("board-progress-text", progress));
+      el.append(row);
     }
+    if (needsInput !== "") {
+      this.appendField(el, "Needs input", "board-needs-input", needsInput);
+    }
+    if (next !== "") {
+      this.appendField(el, "Next", "board-next-item", next);
+    }
+  }
+
+  private appendField(el: HTMLElement, title: string, className: string, text: string): void {
+    const section = this.section(el, title);
+    section.append(this.textDiv(className, text));
   }
 
   private actions(card: BoardCard): HTMLElement {
@@ -467,31 +397,10 @@ export class BoardView implements ViewerView {
     goto.addEventListener("click", () => this.goTo(card));
     actions.append(goto);
 
-    if (card.state === "choice") {
-      const choice = document.createElement("div");
-      choice.className = "board-choice";
-      choice.append(this.textSpan("board-choice-text", "Previous record found —"));
-      // key 는 카드 모델이 아니라 파싱된 entry 가 갖는다 (board-model 은 표시
-      // 판정만 소유 — 카드 모델의 몫을 침범하지 않는다).
-      const key = this.entryKey(card.workspaceId);
-      for (const [action, label] of [
-        ["resume", "Resume"],
-        ["fresh", "Start fresh"],
-      ] as const) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = `board-${action}`;
-        button.textContent = label;
-        button.disabled = key === null;
-        if (key !== null) button.addEventListener("click", () => this.choose(card, action, key));
-        choice.append(button);
-      }
-      actions.append(choice);
-    }
     return actions;
   }
 
-  /** Root 는 새 탭의 기본 cwd 이자 작업 기억의 키, Repo 는 보드의 레포 묶음 루트다.
+  /** Root 는 새 탭의 기본 cwd 이자 요약의 키, Repo 는 보드의 레포 묶음 루트다.
    *  Repo 가 지정되지 않았으면 하네스가 Root 에서 git 으로 판별한다. */
   private paths(ws: Workspace): HTMLElement {
     const paths = document.createElement("div");
@@ -563,13 +472,6 @@ export class BoardView implements ViewerView {
     return state?.workspaces.find((candidate) => candidate.id === workspaceId) ?? null;
   }
 
-  private entryKey(workspaceId: WorkspaceId): string | null {
-    for (const entry of this.board?.entries ?? []) {
-      if (entry.kind === "entry" && entry.workspaceId === workspaceId) return entry.key;
-    }
-    return null;
-  }
-
   // ── 버튼 동작 ────────────────────────────────────────────────────────
 
   private goTo(card: BoardCard): void {
@@ -585,22 +487,6 @@ export class BoardView implements ViewerView {
       // 주소를 잡지만, 화면이 먼저 그 워크스페이스로 가야 보상 focus 가 맞는다.
       if (out === null || target.tab === null) return;
       await this.deps.dispatch({ type: "activateTab", tab: target.tab });
-    })();
-  }
-
-  private openPlan(card: BoardCard, linkPath: string): void {
-    const snapshot = this.deps.snapshot();
-    const ws = snapshot?.state.workspaces.find((candidate) => candidate.id === card.workspaceId);
-    if (ws === undefined) return;
-    void (async () => {
-      const out = await this.deps.dispatch({
-        type: "createTab",
-        pane: ws.activePane,
-        tab: { type: "markdownViewer", path: linkPath },
-      });
-      // 탭 생성이 실패하면 전환하지 않는다 — 갈 곳에 볼 것이 없다.
-      if (out === null) return;
-      await this.deps.dispatch({ type: "switchWorkspace", workspace: card.workspaceId });
     })();
   }
 
@@ -660,51 +546,7 @@ export class BoardView implements ViewerView {
     this.render();
   }
 
-  private choose(card: BoardCard, action: "resume" | "fresh", key: string): void {
-    void managerAction(action, key).then(
-      () => {
-        if (this.disposed) return;
-        this.cardErrors.delete(card.workspaceId);
-        this.render();
-      },
-      (err: unknown) => {
-        if (this.disposed) return;
-        // 실패는 카드에 남긴다 — 상태 라인은 다른 명령과 공유라 카드 문맥이 사라진다.
-        this.cardErrors.set(card.workspaceId, String(err));
-        this.render();
-      },
-    );
-  }
-
   // ── DOM 헬퍼 ────────────────────────────────────────────────────────
-
-  private appendQuote(
-    parent: HTMLElement,
-    workspaceId: WorkspaceId,
-    id: string,
-    quote: string | null,
-  ): void {
-    if (quote === null) return;
-    const key = `${workspaceId}:${id}`;
-    const open = this.expanded.has(key);
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "board-toggle";
-    toggle.textContent = open ? "hide quote" : "quote";
-    toggle.setAttribute("aria-expanded", String(open));
-    toggle.addEventListener("click", () => {
-      if (this.expanded.has(key)) this.expanded.delete(key);
-      else this.expanded.add(key);
-      this.render();
-    });
-    parent.append(toggle);
-    if (open) {
-      const block = document.createElement("blockquote");
-      block.className = "board-quote";
-      block.textContent = quote;
-      parent.append(block);
-    }
-  }
 
   /** 섹션 껍데기 — 제목을 붙여 부모에 append 하고, 내용을 넣을 노드를 돌려준다. */
   private section(parent: HTMLElement, title: string): HTMLElement {

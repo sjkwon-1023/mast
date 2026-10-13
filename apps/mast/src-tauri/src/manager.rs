@@ -259,20 +259,6 @@ pub(crate) fn get_manager_board(app: AppHandle) -> supervisor::ManagerBoardPaylo
     }
 }
 
-/// `manager_action` — choice 카드의 이어보기(`resume`)/새로 시작(`fresh`)을 실행 중
-/// 하네스의 action 큐에 넣는다.
-#[tauri::command]
-pub(crate) fn manager_action(app: AppHandle, action: String, key: String) -> Result<(), String> {
-    let action = supervisor::parse_action(&action)?;
-    if !supervisor::valid_manager_key(&key) {
-        return Err("the manager key must be k followed by 20 hex digits".to_owned());
-    }
-    let Some(runtime) = app.try_state::<ManagerRuntime>() else {
-        return Err(supervisor::HARNESS_NOT_RUNNING.to_owned());
-    };
-    runtime.shared().send_action(action, key)
-}
-
 /// 관리자 워크스페이스 하나를 보장한다 — 이미 있으면 아무것도 하지 않는다(복원 상태).
 /// 홈 탐지·생성이 실패하거나 스폰이 실패하면 로그만 남기고 부팅을 계속한다.
 pub(crate) fn ensure_workspace(handle: &AppHandle, dispatcher: &Arc<Mutex<Dispatcher>>) {
