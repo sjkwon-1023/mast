@@ -45,10 +45,10 @@ notifies you when one starts waiting, and lets you answer from your phone even w
 - **Stay in one tool** — split panes and tabs, plus folder, text and Markdown viewers, without
   opening an IDE.
 - **Control your terminals from bed** — pair a phone on the same local network as your PC,
-  read output and send input to agent CLIs or ordinary Bash shells.
+  read output and send input to agent CLIs or ordinary shells.
 - **Let agents talk to each other** — agents can use `mast ls` and `mast send` inside their
   terminals to hand work to another pane in the same workspace.
-- **Resume with Up** — after restarting mast, press `Up` in a restored Bash pane to recall
+- **Resume with Up** — after restarting mast, press `Up` in a restored bash or zsh pane to recall
   its saved Claude Code or Codex resume command, then `Enter` to continue the conversation.
   This resumes the agent's saved session; the old process does not stay running after exit.
 - **Portable** — a single executable. No installer, no setup wizard.
@@ -73,7 +73,7 @@ for Windows + WSL2; an Apple Silicon native build is also available.
   Refresh, and limits each diff to 512 KiB. Git and GNU `timeout` must be installed in that WSL
   distro. On macOS, mast runs Git directly; see [the macOS guide](docs/MACOS.md).
 - **Phone terminal control (opt-in)** — pair by QR, then read output, scroll a full-screen TUI,
-  or send input to an agent CLI or a regular Bash shell. It is not limited to agent prompts.
+  or send input to an agent CLI or a regular shell. It is not limited to agent prompts.
   *Pair phone* always offers two working modes and a disabled `Tailscale — Planned` entry:
   - **Local HTTP** — the original mode, off by default. Turn it on with the `"remote"` key in
     `settings.json`; it serves plain HTTP on your LAN and the pairing token lives in the phone
@@ -123,7 +123,7 @@ Ubuntu 같은 Linux 배포판이 설치된 WSL2가 필요하다. WSL이 준비�
    launching mast. On Ubuntu, install the integration helpers with
    `sudo apt install python3 jq coreutils`; Claude Code approval tracking and every Codex hook
    need Python 3.8 or later.
-   Agents are optional if you only want Bash terminals.
+   Agents are optional if you only want terminals.
 3. **Install and run.** In PowerShell, run
 
    ```powershell

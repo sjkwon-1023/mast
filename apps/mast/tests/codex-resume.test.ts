@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
@@ -52,7 +52,7 @@ if (onLinux) {
 
 const sourceDir = dirname(fileURLToPath(import.meta.url));
 const provisionSource = readFileSync(join(sourceDir, "../src-tauri/src/provision.rs"), "utf8");
-const hostSource = readFileSync(join(sourceDir, "../src-tauri/src/host.rs"), "utf8");
+const launchScript = readFileSync(join(sourceDir, "../../../scripts/wsl/launch.sh"), "utf8");
 
 function extractCodexHook(source: string): string {
   const start = "cat > \"$CODEX_NOTIFY.tmp\" <<'MAST_CODEX_NOTIFY_EOF'\n";
@@ -63,34 +63,20 @@ function extractCodexHook(source: string): string {
   return source.slice(begin + start.length, finish);
 }
 
-function extractHostTabScript(source: string): string {
-  const prefix = "Some(tab) => format!(";
-  const begin = source.indexOf(prefix);
-  if (begin < 0) throw new Error("host.rs bash_argv Some(tab) format disappeared");
-  const quoted = source.slice(begin + prefix.length).match(/^\s*"((?:\\[\s\S]|[^"\\])*)"\s*\n\s*\),/);
-  if (!quoted) throw new Error("host.rs bash_argv format string disappeared");
-  const collapsed = quoted[1].replace(/\\\r?\n[ \t]*/g, "");
-  return JSON.parse(`"${collapsed}"`) as string;
-}
-
 const codexHook = extractCodexHook(provisionSource);
 
-function freshWrapperScript(): string {
-  let script = extractHostTabScript(hostSource);
-  for (const [placeholder, value] of [
-    ["{STARTED}", ":"],
-    ["{THEME_SYNC}", ":"],
-    ["{cd_clause}", ""],
-    ["{PATH_PREFIX}", ""],
-    ["{OSC7}", ""],
-    ["{tab}", "6"],
-  ] as const) {
-    script = script.replaceAll(placeholder, value);
-  }
-  const productionExec = "exec bash -l";
-  if (!script.includes(productionExec)) throw new Error("host wrapper no longer execs bash -l");
-  return script.replace(productionExec, "exec bash --noprofile --norc -c 'history -r; history 1'");
-}
+// 로그인 셸 자리에 세우는 bash 스텁: 래퍼가 넘긴 환경을 보고하고 탭 history 를 한 번 읽어 보여 준다.
+// 래퍼는 $SHELL 이 basename bash 인 절대경로 실행 파일일 때만 그것을 띄우므로 스텁은 bin/bash 다.
+const SHELL_PROBE = [
+  'printf "pwd=%s\\n" "$PWD"',
+  'printf "PATH0=%s\\n" "${PATH%%:*}"',
+  'printf "MAST=%s MAST_TAB=%s COLORTERM=%s\\n" "${MAST-}" "${MAST_TAB-}" "${COLORTERM-}"',
+  'printf "HISTFILE=%s\\n" "${HISTFILE-}"',
+  'printf "PROMPT_COMMAND=%s\\n" "${PROMPT_COMMAND-}"',
+  "history -r; history 1",
+].join("; ");
+
+const START_MARK = "\u001b]777;mast-started\u0007";
 
 type RunOptions = { tab?: string | null; codexHome?: string; env?: NodeJS.ProcessEnv };
 
@@ -99,11 +85,16 @@ class Harness {
   readonly home = join(this.root, "home with spaces");
   readonly defaultCodexHome = join(this.home, ".codex");
   readonly hookPath = join(this.root, "mast-codex-notify.sh");
+  readonly shellStub = join(this.root, "bin", "bash");
   readonly notifyArgsPath = join(this.home, ".mast", "notify-argv");
   readonly dispatcherArgsPath = join(this.home, ".mast", "dispatcher-argv");
 
   constructor() {
     mkdirSync(join(this.home, ".mast", "bin"), { recursive: true });
+    mkdirSync(dirname(this.shellStub), { recursive: true });
+    writeFileSync(this.shellStub, `#!${tools.bash}\nexec ${tools.bash} --noprofile --norc -c ${shellQuote(SHELL_PROBE)}\n`, {
+      mode: 0o700,
+    });
     const stub = [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -133,14 +124,20 @@ class Harness {
     });
   }
 
-  runFreshWrapper(): string {
-    const env: NodeJS.ProcessEnv = { ...scrubbedEnv(), HOME: this.home };
-    return execFileSync("bash", ["-c", freshWrapperScript()], {
-      env,
+  // Rust 가 넘기는 것과 같은 인자 계약(`bash -c <본문> mast-wsl <tab> <cwd>`)으로 배포 본문을 실행한다.
+  launch(tab: string, cwd: string, env: NodeJS.ProcessEnv = {}): SpawnSyncReturns<string> {
+    return spawnSync("bash", ["-c", launchScript, "mast-wsl", tab, cwd], {
+      cwd: this.home,
+      env: { ...scrubbedEnv(), HOME: this.home, SHELL: this.shellStub, ...env },
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
       timeout: 10_000,
     });
+  }
+
+  runFreshWrapper(): string {
+    const result = this.launch("6", "");
+    if (result.status !== 0) throw new Error(`launcher exited ${result.status}: ${result.stderr}`);
+    return result.stdout;
   }
 
   resume(tab = "6"): string | undefined {
@@ -661,4 +658,69 @@ integration("Codex notify hands the idle decision to the dispatcher", () => {
       expect(harness.resume()).toMatch(/^codex resume pty-root\n/);
     });
   }, 20_000);
+});
+
+integration("WSL tab launcher", () => {
+  it("marks the tab first, then sets the mast environment, theme sync and the cwd hook", () => {
+    withHarness((harness) => {
+      const result = harness.launch("6", "");
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.startsWith(START_MARK)).toBe(true);
+      expect(result.stdout).toContain("\u001b]10;#cccccc\u001b\\\u001b]11;#1e1e1e\u001b\\");
+      expect(result.stdout).toContain(`PATH0=${join(harness.home, ".mast", "bin")}\n`);
+      expect(result.stdout).toContain("MAST=1 MAST_TAB=6 COLORTERM=truecolor\n");
+      expect(result.stdout).toContain(`HISTFILE=${join(harness.home, ".mast", "history", "tab-6")}\n`);
+      expect(result.stdout).toContain('PROMPT_COMMAND=printf "\\033]7;file://%s\\007" "${PWD//%/%25}"\n');
+      // OSC 0/2(제목)은 탭 제목을 덮으므로 어떤 경로에서도 내지 않는다.
+      expect(result.stdout).not.toMatch(/\u001b\][02];/);
+    });
+  });
+
+  it("keeps the home cwd for an empty value and says so when the directory is gone", () => {
+    withHarness((harness) => {
+      const empty = harness.launch("6", "");
+      expect(empty.stdout).toContain(`pwd=${harness.home}\n`);
+      expect(empty.stdout).not.toContain("is gone");
+
+      const gone = join(harness.root, "deleted dir");
+      const missing = harness.launch("6", gone);
+      expect(missing.status, missing.stderr).toBe(0);
+      expect(missing.stdout).toContain(`${gone} is gone; starting in $HOME`);
+      expect(missing.stdout).toContain(`pwd=${harness.home}\n`);
+    });
+  });
+
+  it("enters a hostile cwd as one argument and runs none of its shell syntax", () => {
+    withHarness((harness) => {
+      const dir = join(harness.root, `it's 한글 $(touch PWNED) "quoted"; spaced`);
+      mkdirSync(dir);
+      const result = harness.launch("6", dir);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(`pwd=${dir}\n`);
+      expect(result.stdout).not.toContain("is gone");
+      expect(existsSync(join(harness.home, "PWNED"))).toBe(false);
+      expect(existsSync(join(dir, "PWNED"))).toBe(false);
+    });
+  });
+
+  it("rejects a tab id that is not decimal after the start mark and before any tab file", () => {
+    withHarness((harness) => {
+      const result = harness.launch("6x", "");
+      expect(result.status).not.toBe(0);
+      expect(result.stdout.startsWith(START_MARK)).toBe(true);
+      expect(result.stderr).toContain("tab id must be a decimal number");
+      expect(existsSync(join(harness.home, ".mast", "history"))).toBe(false);
+    });
+  });
+
+  it("without a tab id exports no tab identity and does not inherit another tab's", () => {
+    withHarness((harness) => {
+      const result = harness.launch("", "", { MAST_TAB: "99", HISTFILE: "/tmp/not-ours" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("MAST=1 MAST_TAB= COLORTERM=truecolor\n");
+      expect(result.stdout).toContain("HISTFILE=\n");
+      expect(result.stdout).toContain("PROMPT_COMMAND=printf");
+      expect(existsSync(join(harness.home, ".mast", "history"))).toBe(false);
+    });
+  });
 });

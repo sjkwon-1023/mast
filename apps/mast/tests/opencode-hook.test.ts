@@ -12,7 +12,7 @@ import { setupVersion } from "./setup-script";
 const project = resolve(dirname(new URL(import.meta.url).pathname), "../../..");
 const pluginPath = join(project, "scripts/wsl/mast-opencode-plugin.js");
 const provision = readFileSync(join(project, "apps/mast/src-tauri/src/provision.rs"), "utf8");
-const host = readFileSync(join(project, "apps/mast/src-tauri/src/host.rs"), "utf8");
+const launch = readFileSync(join(project, "scripts/wsl/launch.sh"), "utf8");
 const version = setupVersion(provision);
 const originalHome = process.env.HOME;
 const setup = provision.split('const SETUP_SCRIPT: &str = r###"')[1]?.split('"###;')[0]
@@ -61,17 +61,12 @@ function hostHistory(home: string, command: string): string {
   mkdirSync(dirname(resume), { recursive: true });
   writeFileSync(resume, `${command}\n123\n`);
   rmSync(join(home, ".mast/history/tab-41"), { force: true });
-  const match = host.split("Some(tab) => format!(")[1]
-    ?.match(/^\s*"((?:\\[\s\S]|[^"\\])*)"\s*\n\s*\),/);
-  if (!match) throw new Error("host bash wrapper missing");
-  let script = JSON.parse(`"${match[1].replace(/\\\r?\n[ \t]*/g, "")}"`) as string;
-  for (const [key, value] of Object.entries({
-    "{STARTED}": ":", "{THEME_SYNC}": ":", "{cd_clause}": "", "{PATH_PREFIX}": "",
-    "{OSC7}": "", "{tab}": "41",
-  })) script = script.replaceAll(key, value);
-  script = script.replace("exec bash -l", "exec bash --noprofile --norc -c 'history -r; history 1'");
-  const result = spawnSync("bash", ["-c", script], {
-    env: { ...process.env, HOME: home }, encoding: "utf8", timeout: 5000,
+  // 로그인 셸 자리에는 history 만 보여 주는 bash 스텁을 세운다 (SHELL 은 bash 절대경로여야 고른다).
+  const shell = join(home, "bin", "bash");
+  mkdirSync(dirname(shell), { recursive: true });
+  writeFileSync(shell, "#!/usr/bin/env bash\nexec bash --noprofile --norc -c 'history -r; history 1'\n", { mode: 0o700 });
+  const result = spawnSync("bash", ["-c", launch, "mast-wsl", "41", ""], {
+    env: { ...process.env, HOME: home, SHELL: shell }, encoding: "utf8", timeout: 5000,
   });
   expect(result.status, result.stderr).toBe(0);
   return result.stdout;

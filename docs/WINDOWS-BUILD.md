@@ -290,10 +290,12 @@ Cross-compiling adds the triple: `--target aarch64-pc-windows-msvc` writes to
 
 ## 4. `MAST_DISTRO` environment variable
 
-Both apps spawn the WSL shell as `wsl.exe [-d $MAST_DISTRO] -- bash -l` — spike's glue
-reads it directly per spawn (see spike-plan.md section 4.5); mast threads it through
-`mast-core`'s `Command::CreateWorkspace` → `ShellSpawnReq::distro` (see
-`crates/mast-core/src/command.rs`), same underlying `wsl.exe` invocation either way.
+Both apps pass the distribution to `wsl.exe` as `-d $MAST_DISTRO`. spike spawns the shell as
+`wsl.exe [-d $MAST_DISTRO] -- bash -l`, and its glue reads the variable directly per spawn (see
+spike-plan.md section 4.5). mast threads it through `mast-core`'s `Command::CreateWorkspace` →
+`ShellSpawnReq::distro` (see `crates/mast-core/src/command.rs`) and spawns
+`wsl.exe --cd ~ [-d $MAST_DISTRO] --exec bash -c <scripts/wsl/launch.sh>`; that wrapper execs the
+WSL login shell, zsh or bash ([ADR-0011](adr/0011-tab-cwd-tracking.md) amendment).
 `MAST_DISTRO` selects which WSL distribution to spawn into:
 
 - **Unset**: `wsl.exe` uses your default distribution (`wsl -l -v` shows which one has `*`).
@@ -2890,6 +2892,59 @@ whether a real waiting agent shows up on the right row.
    approximation). Run `~/.mast/bin/mast-notify.sh mast:running` in the first tab: only its dot
    disappears at the next poll while the second tab keeps its own — and the workspace badge
    stays `needs input` because the second tab is still waiting. Reset both tabs afterwards.
+
+### Unreleased — WSL zsh login shell field verification (ADR-0011 amendment 2026-10-14)
+
+Pending Windows/WSL field verification. The Linux PTY tests and the Windows unit tests do not show
+that a Windows build starts zsh in a real distro, keeps a tab's cwd across a restart, or stops the
+Claude trust prompt. For each result, record the app build, the distro, the login shell and
+`claude --version`. Leave the user's `.profile` as it is: its `exec zsh` is the case under test.
+
+1. **Upgrade start.** After the upgrade to setup v22, open the first bash tab and the first zsh tab.
+   Each must reach a prompt and must not show the "The shell has not started" banner, which means
+   the start marker arrived. On the first boot after the upgrade, restored tabs respawn before
+   setup runs, but the wrapper's asset check is not synchronized with it: a zsh tab whose check ran
+   before setup installed the assets prints `zsh integration is not installed yet` and takes the
+   bash login path until Restart, and a zsh tab whose check ran after it starts integrated zsh with
+   no notice. Both are expected.
+2. **Environment and direct start.** In the target distro, run
+   `printf 'SHELL=%s ZSH_VERSION=%s BASH_VERSION=%s\n' "$SHELL" "${ZSH_VERSION-}" "${BASH_VERSION-}"`,
+   `getent passwd "$(id -u)"`, and
+   `printf 'ZDOTDIR=%s HISTFILE=%s MAST_TAB=%s\n' "${ZDOTDIR-}" "${HISTFILE-}" "${MAST_TAB-}"`,
+   and check that the shell and history file name are the expected ones. Compare the `PATH` of a
+   mast zsh tab (`printf '%s\n' "$PATH"`) with a normal `wsl.exe` zsh login: zsh started by mast
+   does not read `~/.profile`, so this comparison is the check. No user file may change, and the
+   user's startup files must load once per shell start.
+3. **Original cwd symptom.** In a project folder, run `cd -- "$HOME/dev/projects/example-app"` and
+   then `pwd`. Check first that the path exists. After the prompt returns, the sidebar card must show
+   that path, and the agent-set tab title must not be replaced by the directory name.
+4. **Save and restart.** When the prompt has returned, quit and relaunch mast normally. In the same
+   tab, `pwd` must print the project and `echo "$HISTFILE"` must print that tab's
+   `~/.mast/history/zsh-tab-<id>`. Do not edit the saved `rootPath` by hand.
+5. **Resume and trust.** Record `claude --version`. Finish a real Claude Code session that was
+   already trusted in the project, restart, and press `↑` once: the exact resume command must
+   appear, and nothing may run before Enter. Then resume in the same project and record separately
+   whether the trust question still appears. If it does, examine only the cwd at that moment, the
+   cwd where the session was created, and that project's trust entry. Do not dump or edit the whole
+   trust file. A control run started from home is not a condition for the mast fix.
+6. **First install and upgrade.** On a separate test distro or `HOME`, check a fresh install and an
+   upgrade from setup v21 to v22. While only some zsh assets are present, a tab must print
+   `zsh integration is not installed yet; this tab starts without it`, must not exit, and must run
+   the bash path. If the user's `~/.profile` turns bash into zsh, that zsh has no mast integration,
+   and the sidebar path does not update until Restart; record which shell the tab runs. After setup
+   finishes, exit the shell in that tab and press Restart on the exited tab, or relaunch mast. The
+   tab must then start zsh with integration, and the sidebar path must follow `cd`. If setup fails,
+   read `tail -n 80 "$HOME/.mast/setup.log"`. Do not delete assets from a distro in use to create
+   the failure.
+7. **Existing bash and other distros.** On a distro whose login shell is bash, tabs keep
+   `history/tab-<id>` and the existing resume behavior. On the default distro and on the distro named
+   by `MAST_DISTRO`, confirm that the shell is chosen inside that distro. In an isolated test
+   environment, check the fallback notice for a login shell that is neither bash nor zsh; the tab
+   then runs `/bin/bash`.
+8. **Closing tabs.** Note a temporary tab id, then close only that tab and check
+   `test ! -e "$HOME/.mast/history/tab-<id>"` and `test ! -e "$HOME/.mast/history/zsh-tab-<id>"`,
+   replacing `<id>` with the recorded number. Other open tabs' history and the user's own history
+   must remain. A Restart is not a deletion condition.
 
 ## 11. ARM64 cross-build notes
 

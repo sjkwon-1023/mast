@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterAll, describe, expect, it } from "vitest";
@@ -62,6 +62,7 @@ const VERSION = setupVersion();
 const SCRIPT = assembleSetupScript();
 const ROOT = mkdtempSync(join(tmpdir(), "mast provision setup-"));
 const WSL_SCRIPTS = resolve(dirname(fileURLToPath(import.meta.url)), "../../../scripts/wsl");
+const REPO_ROOT = resolve(WSL_SCRIPTS, "../..");
 // 개발기에 uv 로 받아 둔 실제 3.8 이 있으면 경계 버전을 진짜 인터프리터로도 확인한다.
 const PYTHON38 = join(homedir(), ".local/share/uv/python/cpython-3.8-linux-x86_64-gnu/bin/python3.8");
 // Windows 쪽 설치본을 흉내 내려면 /mnt 아래에 실행 파일을 둬야 한다. WSL 개발기의 /mnt/wsl 은 누구나 쓸 수 있고, CI
@@ -95,6 +96,25 @@ const INSTALLED_FROM_REPO: [name: string, executable: boolean][] = [
   ["mast-agy-hook.sh", true],
   ["mast-opencode-plugin.js", false],
 ];
+
+// (macOS 원본, ~/.mast 아래 설치 목적지) 짝. INSTALLED_FROM_REPO 와 같은 이유로 표에서 뽑지 않고 적어 둔다.
+const SHELL_ASSETS: [source: string, destination: string[]][] = [
+  ["scripts/macos/integration.sh", ["shell", "integration.sh"]],
+  ["scripts/macos/zsh-integration.zsh", ["shell", "zsh-integration.zsh"]],
+  ["scripts/macos/zshenv", ["shell", "zsh", ".zshenv"]],
+  ["scripts/macos/zprofile", ["shell", "zsh", ".zprofile"]],
+  ["scripts/macos/zshrc", ["shell", "zsh", ".zshrc"]],
+  ["scripts/macos/zlogin", ["shell", "zsh", ".zlogin"]],
+];
+
+function expectShellAssetsInstalled(distro: Distro): void {
+  for (const [source, destination] of SHELL_ASSETS) {
+    expect(readFileSync(distro.path(".mast", ...destination))).toEqual(readFileSync(join(REPO_ROOT, source)));
+  }
+}
+
+const shellAssetFingerprints = (distro: Distro) =>
+  SHELL_ASSETS.map(([, destination]) => fingerprint(distro.path(".mast", ...destination)));
 
 const CLAUDE_STATUS_ONLY = { hooks: { UserPromptSubmit: [running], Notification: [needsInput], Stop: [idle] } };
 const AGY_HOOKS = { mast: AGY_MAST };
@@ -360,7 +380,14 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(check.stderr).toBe("");
     expect(check.status).toBe(0);
     expect(SCRIPT).not.toMatch(/@[A-Z_]+@/);
-    expect(embeddedFiles().map((file) => file.installedName).sort()).toEqual([...INSTALLED_FROM_REPO.map(([name]) => name), "SKILL.md", "SKILL.md"].sort());
+    expect(embeddedFiles().map((file) => relative(REPO_ROOT, file.path)).sort()).toEqual(
+      [
+        ...INSTALLED_FROM_REPO.map(([name]) => `scripts/wsl/${name}`),
+        ...SHELL_ASSETS.map(([source]) => source),
+        "scripts/wsl/skills/mast-send/SKILL.md",
+        "scripts/wsl/skills/mast/SKILL.md",
+      ].sort(),
+    );
     for (const file of embeddedFiles()) {
       expect(SCRIPT).toContain(`<<'${file.delimiter}'\n${readFileSync(file.path, "utf8")}${file.delimiter}\n`);
     }
@@ -405,6 +432,100 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     ]) {
       expect(log).toContain(line);
     }
+  });
+
+  // zsh 직접 실행이 읽는 macOS 통합 파일 여섯 개. 설치 판정이 마커 조기 반환보다 앞에 있고, 셸만 복구할 때는
+  // 에이전트 설정(사용자가 끝낸 opt-out 포함)을 건드리지 않는다.
+  it("installs the six zsh integration files byte for byte from macOS on a fresh distro", () => {
+    const distro = new Distro().withAgents();
+
+    expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [distro.trustNotice()] });
+    expectShellAssetsInstalled(distro);
+  });
+
+  it("installs the zsh integration files and runs the full setup behind a v21 marker", () => {
+    const distro = new Distro().withAgents();
+    distro.write(distro.path(".mast", ".setup-v21"), "");
+
+    expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [distro.trustNotice()] });
+    expectShellAssetsInstalled(distro);
+    expect(distro.marker()).toBe(true);
+    expect(distro.log()).toContain(FULL_RUN_LOG);
+  });
+
+  it("does not rewrite the zsh integration files on a run behind the current marker", () => {
+    const distro = new Distro().withAgents();
+    expect(distro.run().status).toBe(0);
+    const before = shellAssetFingerprints(distro);
+    const log = distro.log();
+
+    expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
+    expect(shellAssetFingerprints(distro)).toEqual(before);
+    const rerunLog = distro.log().slice(log.length);
+    for (const [, destination] of SHELL_ASSETS) expect(rerunLog).not.toContain(distro.path(".mast", ...destination));
+  });
+
+  it("restores the zsh integration files when one is lost and keeps the agent setup the user ended", () => {
+    const distro = new Distro().withAgents();
+    expect(distro.run().status).toBe(0);
+    // 사용자가 Claude 훅을 비우고 Codex·Antigravity CLI 훅 파일을 지운 상태. 유실된 파일 하나가 여섯 개 묶음을
+    // 다시 깔게 하지만, 그 묶음이 에이전트 단계를 다시 여는 일은 없어야 한다.
+    distro.write(distro.claudeSettings(), fileText({ hooks: {} }));
+    rmSync(distro.codexHooks());
+    rmSync(distro.agyHooks());
+    const calls = distro.calls();
+    const log = distro.log();
+    rmSync(distro.path(".mast", "shell", "zsh", ".zshrc"));
+
+    expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
+    expectShellAssetsInstalled(distro);
+    expect(readFileSync(distro.claudeSettings(), "utf8")).toBe(fileText({ hooks: {} }));
+    expect(existsSync(distro.codexHooks())).toBe(false);
+    expect(existsSync(distro.agyHooks())).toBe(false);
+    expect(distro.calls()).toEqual(calls);
+    const rerunLog = distro.log().slice(log.length);
+    for (const [, destination] of SHELL_ASSETS) expect(rerunLog).toContain(distro.path(".mast", ...destination));
+    expect(rerunLog).not.toContain(FULL_RUN_LOG);
+    expect(rerunLog).not.toContain(AGENT_ONLY_LOG);
+  });
+
+  it("fails without the marker when the zsh integration directory cannot be created", () => {
+    const distro = new Distro().withAgents();
+    distro.write(distro.path(".mast", "shell"), "");
+
+    const run = distro.run();
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(`[mast] setup: cannot create ${distro.path(".mast", "shell", "zsh")}`);
+    expect(distro.marker()).toBe(false);
+    expect(distro.callers()).toEqual([]);
+  });
+
+  it("fails without the marker when a zsh integration destination is a directory, and moves nothing into it", () => {
+    const distro = new Distro().withAgents();
+    const target = distro.path(".mast", "shell", "zsh", ".zshrc");
+    mkdirSync(target, { recursive: true });
+
+    expect(distro.run()).toEqual({
+      status: 1,
+      stdout: "",
+      stderr: [`[mast] setup: cannot install ${target}: a directory is in the way`],
+    });
+    expect(readdirSync(target)).toEqual([]);
+    expect(existsSync(`${target}.tmp`)).toBe(false);
+    expect(distro.marker()).toBe(false);
+  });
+
+  it("leaves the user's zsh and bash start files byte for byte as they were", () => {
+    const distro = new Distro().withAgents();
+    const userFiles = [".zshenv", ".zshrc", ".profile", ".bashrc"];
+    for (const name of userFiles) distro.write(distro.path(name), `# user ${name}\nexec zsh -l\n`);
+    const before = userFiles.map((name) => fingerprint(distro.path(name)));
+
+    expect(distro.run().status).toBe(0);
+    expect(userFiles.map((name) => fingerprint(distro.path(name)))).toEqual(before);
+    expect(existsSync(distro.path(".zprofile"))).toBe(false);
+    expect(existsSync(distro.path(".zlogin"))).toBe(false);
   });
 
   it("installs the mast usage skill where Claude Code, Codex and Antigravity CLI discover it", () => {

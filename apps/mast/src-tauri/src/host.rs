@@ -122,7 +122,7 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
         // unix(개발): $SHELL -l ($SHELL 없으면 bash -l), cwd 는 직접 사용.
         // 탭별 HISTFILE 은 여기서 적용하지 않는다 — $SHELL 이 bash 라는 보장이
         // 없어(zsh·fish 는 HISTFILE 시맨틱이 다르다) 셸 기본 history 를 그대로
-        // 쓴다. 탭별 history 는 WSL(bash 고정) 경로 한정 기능이다.
+        // 쓴다. 탭별 history 는 WSL(bash·zsh) 경로와 macOS 경로의 기능이다.
         let program = std::env::var("SHELL")
             .ok()
             .filter(|s| !s.is_empty())
@@ -137,146 +137,25 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
     }
 }
 
-/// `wsl.exe ... --exec` 뒤에 붙는 **WSL 안 셸 argv** (셸 경유 없는 직접 실행 — spawn_spec 주석).
+/// `wsl.exe ... --exec` 뒤에 붙는 WSL 안 셸 argv (셸 경유 없는 직접 실행 — spawn_spec 주석).
 ///
-/// 모든 경로가 `MAST=1` 을 물고 로그인 셸을 exec 한다 — 탭 안에서 도는 에이전트·
-/// 스크립트가 "여기가 mast 다"를 스스로 알아야 send 채널·알림 계약을 쓸지 판단할
-/// 수 있기 때문이다 (`mast-send` 스킬의 자가 인지 조건). `history_tab` 이 Some
-/// 이면 `MAST_TAB` 으로 자기 탭 id 까지 알려 주고, 그 탭 전용 HISTFILE 을 물린다
-/// — 탭의 안정 ID 는 재시작을 넘어 유지되므로 재시작 후에도 같은 탭의 history 만
-/// 복원된다. 셸 안에서 `mkdir -p` 로 디렉터리를 만드는 이유
-/// 는 Windows 쪽에서 WSL 파일시스템 경로를 추측하지 않기 위해서이고, `$HOME` 은
-/// 공백이 섞여도 안전하도록 따옴표로 감싼다. `VAR=... exec bash -l` 의 할당은
-/// exec 되는 프로세스의 환경으로 전달되며(= 그 셸의 자식들에게도 상속된다),
-/// **Ubuntu 기본 `.bashrc`/`.profile` 은 HISTSIZE 류만 손대고 HISTFILE 은 덮지
-/// 않으므로** 이 env 상속만으로 충분하다. mkdir 이 실패하면 `&&` 가 끊겨 셸이
-/// 그대로 종료된다 — 탭이 exited 로 표시돼 실패가 드러난다 (조용한 fallback 없음).
+/// 본문은 `scripts/wsl/launch.sh` 를 `include_str!` 로 넣은 것이고, 셸이 하는 일과 각 줄의
+/// 이유는 그 파일의 주석이 정본이다. 여기에는 전달 계약만 둔다: `bash -c <본문> mast-wsl
+/// <탭 id> <cwd>` 순서이며 `$0` 은 고정 이름, `$1`·`$2` 가 위치 인자다. `None` 은 빈
+/// 문자열이다. 본문이 bash 문법이므로 전송 셸도 bash 를 명시한다.
 ///
-/// **에이전트 세션 resume 힌트**: 재시작 후 respawn 되는 셸은 새 셸이라 그 탭에서 돌던
-/// 에이전트 세션이 화면에서 사라진다. Claude Code hook 과 Codex notify 프로그램이 매
-/// 호출마다 `~/.mast/resume/tab-<id>` 에 1행 = resume 명령, 2행 = 기록 시각(epoch)을
-/// 남기므로 (`provision.rs` 의 `mast-notify.sh`·`mast-codex-notify.sh` — 계약은
-/// `scripts/wsl/claude-hook-example.md`; 두 에이전트가 같은 파일을 쓰므로 그 탭에서
-/// **마지막으로 턴을 끝낸 사용자 세션**이 이긴다. Codex 내부 임시 턴과 서브에이전트는
-/// 쓰는 쪽에서 제외한다),
-/// exec 직전에 그 1행을 읽어 ① 탭의 HISTFILE 끝에 덧붙이고(↑ 한 번에 나온다)
-/// ② 흐린 안내 한 줄을 찍는다. **자동 실행은 하지 않는다** — 재개할지는 사용자가 정한다.
-/// 파일이 없으면 아무 출력도 없다. 기록 시각으로 신선도를 판단하지 않는 것은 의도된
-/// 단순화다 (오래된 힌트인지는 사용자가 안다). 이 블록은 `&&` 사슬 안에 있지만 파일
-/// 부재·읽기 실패·append 실패 어느 쪽으로도 0 으로 끝난다(조건 거짓인 `if` 는 0,
-/// `read` 실패는 `|| true` 가 흡수, append 실패는 뒤따르는 printf 가 가린다) — 힌트가
-/// 셸 자체를 못 띄우게 만드는 일은 없어야 한다. 유일하게 새는 status 는 **안내 printf
-/// 자체가 이 pane 의 tty 에 못 쓰는** 경우인데, 그건 애초에 쓸 수 있는 탭이 아니다.
-/// `RESUME`·`cmd` 는 여기서 처음 대입되는 평범한 셸 변수라 exec 로 프로세스 이미지가
-/// 갈릴 때 사라진다 (로그인 셸 환경 무오염). 엄밀히는 같은 이름이 **export 된 채로
-/// 상속돼 들어오면** bash 가 export 속성을 유지하지만, spawn 환경은 mast 가 이
-/// 함수에서 통째로 정하므로 그런 값은 오지 않는다.
-///
-/// 힌트 1행은 **읽는 쪽에서도 형태를 검증한다**: 기록 형식과 대칭인
-/// `claude --resume <영숫자·-·_ 토큰>` 과 `codex resume <영숫자·-·_ 토큰>` 정확 일치만
-/// 통과시키고, 그 외(escape 시퀀스·셸 메타문자·다른 명령)는 조용히 무시한다 — 같은
-/// uid 가 파일을 바꿔치기해도 "↑+Enter 를 유도하는 임의 명령 표면"이 되지 않는다.
-/// **화이트리스트라 새 에이전트를 붙이려면 여기에 형태를 추가해야 한다** (쓰는 쪽만
-/// 고치면 힌트가 조용히 버려진다). 같은 uid 는 어차피
-/// `~/.bashrc` 를 고칠 수 있으니 권한 경계가 아니라 오발 방지이며, 쓰는 쪽
-/// (`mast-notify.sh`·`mast-codex-notify.sh`)의 id charset 가드와 짝이다. 또 힌트는 표시로
-/// 소비되지 않으므로, 세션이 바뀌지 않은 채 재시작을 N 번 하면 같은 줄이
-/// HISTFILE 에 N 개 쌓인다 (인접하므로 ↑ 한 번은 그대로).
-///
-/// `PATH` 프리펜드는 프로비저닝이 까는 `mast` CLI(`~/.mast/bin/mast`)를 탭 안에서
-/// 경로 없이 부르기 위한 것이다 (`provision.rs` 2절). 로그인 셸이 이 값을 덮지 않는
-/// 이유는 Debian/Ubuntu 계열의 `/etc/profile`·`~/.profile` 관례가 PATH 를 **재대입이
-/// 아니라 `PATH="...:$PATH"` 로 프리펜드**하기 때문이다 — 우리 항목은 앞에서 밀릴 뿐
-/// 사라지지 않는다. 디렉터리가 아직 없어도 무해하다 (PATH 의 없는 항목은 그냥 건너뛴다).
-///
-/// **ConPTY 색 테이블 동기화 (OSC 10/11 set)**: exec 전에 우리 테마의 fg/bg 를 tty 로
-/// 한 번 내보낸다. WT 1.22+ 의 conhost 는 TUI 앱의 OSC 10/11 **질의**를 자기가 가로채
-/// 자기 색 테이블(기본 ≈검정)로 대신 응답하므로(ms/terminal#17729), Codex 처럼 배경색을
-/// 질의해 입력창 배경을 만드는 앱이 검정 기준으로 색을 골라 우리 배경(#1e1e1e)과 겹친다
-/// — 실기 스크린샷의 "입력칸 구분 없음"의 실원인. set 은 conhost 가 handled 로 소비해
-/// 자기 테이블을 갱신하므로 이후 질의가 올바른 값으로 답한다 (xterm 까지는 오지 않아
-/// 프론트 무영향). **값의 정본은 `apps/mast/src/features/terminal/settings.ts` 의 `TERMINAL_THEME`
-/// foreground/background 다 — 테마를 바꾸면 여기도 같이 바꾼다** (갈라지면 재발).
-/// `COLORTERM=truecolor` 는 그 짝: Codex 의 색 선택이 truecolor 분기를 타게 한다.
-///
-/// **3자 동기화 계약**: 같은 값을 쓰는 세 번째 자리가 `sink.rs` 의
-/// `COLOR_REPLY_FOREGROUND`/`COLOR_REPLY_BACKGROUND` 다 — OSC 10/11 **질의**에 앱이
-/// 직접 답하는 응답기다 (conhost 는 이 질의에 응답하지 않는다). 셋 중 하나를 바꾸면
-/// 나머지 둘도 같이 바꾼다.
+/// 본문의 OSC 10/11 값은 3자 색 동기화 계약의 한 자리다. 같은 값이 `sink.rs` 의
+/// `COLOR_REPLY_*` 와 `TERMINAL_THEME` 에도 있으므로 셋을 함께 바꾼다.
 #[cfg(windows)]
 fn bash_argv(history_tab: Option<u64>, cwd: Option<&str>) -> Vec<String> {
-    // 이 파일이 없으면 `mast` 를 못 찾을 뿐이고, 프로비저닝이 다음 부팅에서 다시
-    // 시도한다 — 스폰 핫패스에서 존재를 확인하지 않는다 (wsl.exe 왕복 금지).
-    const PATH_PREFIX: &str = "PATH=\"$HOME/.mast/bin:$PATH\"";
-    // TERMINAL_THEME 동기화 계약 (rustdoc 참조): fg #cccccc, bg #1e1e1e.
-    const THEME_SYNC: &str = r"printf '\033]10;#cccccc\033\\\033]11;#1e1e1e\033\\'";
-    // 시작 표식 — 이 래퍼가 WSL 안에서 실제로 실행됐다는 유일한 증거다. 반드시 맨
-    // 앞이어야 하고(뒤따르는 파일 I/O 가 막혀도 도달 자체는 증명해야 한다), 바로 뒤의
-    // THEME_SYNC 로는 대신할 수 없다 — OSC 10/11 set 은 conhost 가 소비해 우리
-    // 리더까지 오지 않는다(이 함수 rustdoc). 왜 OSC 777 인지는
-    // `mast_core::osc::OscEvent::Osc777Started` rustdoc.
-    const STARTED: &str = r"printf '\033]777;mast-started\007'";
-    // OSC 7 emitter (ADR-0011). 이것이 없으면 탭 cwd 는 생성 시점 값에 얼어붙고 재시작이
-    // 그 값으로 셸을 띄운다 — 파서·라우터·저장은 이미 다 있고 내는 쪽만 없었다.
-    //
-    // 왜 사용자 `~/.bashrc` 가 아니라 여기인가: 남의 파일을 고치지 않고, 재프로비저닝
-    // 왕복 없이 다음 실행부터 먹으며, 로그인 셸이 우리 값을 덮지 않기 때문이다. starship
-    // 은 상속받은 PROMPT_COMMAND 를 `STARSHIP_PROMPT_COMMAND` 로 보존해 자기 precmd 뒤에
-    // 실행하므로 공존한다 (실기 측정).
-    //
-    // `%` 만 미리 인코딩하는 이유: 수신측(`notify::parse_file_uri`)이 `%XX` 만 디코드하고
-    // 나머지는 그대로 두므로, 경로에 든 리터럴 `%` 만 되살려 주면 왕복이 무손실이다.
-    // 공백·비ASCII 는 인코딩하지 않아도 같은 문자열로 돌아온다. 매 프롬프트마다 도는
-    // 코드라 서브셸 없는 파라미터 확장으로 끝낸다.
-    //
-    // **OSC 0(제목)은 절대 같이 내지 않는다** — 에이전트가 세운 탭 제목을 매 프롬프트마다
-    // 디렉터리 이름으로 덮어써 사이드바의 실제 용도를 지운다.
-    const OSC7: &str = r#"PROMPT_COMMAND='printf "\033]7;file://%s\007" "${PWD//%/%25}"'"#;
-    // 목적지 cwd 로의 이동. `--cd ~` 로 이미 홈에 있으므로 실패해도 셸은 홈에서 뜨고,
-    // 그 사실만 흐리게 알린다 (조용한 fallback 금지 — 사용자가 왜 딴 데 있는지 알아야
-    // 한다). 경로는 셸 문법을 깨지 못하게 작은따옴표로 인용한다.
-    let cd_clause = match cwd {
-        None => String::new(),
-        Some(path) => {
-            let quoted = single_quote(path);
-            format!(
-                "{{ cd -- {quoted} 2>/dev/null \
-                 || printf '\\033[2m[mast] %s is gone; starting in $HOME\\033[0m\\n' {quoted}; }}; "
-            )
-        }
-    };
-    let script = match history_tab {
-        Some(tab) => format!(
-            "{STARTED}; {THEME_SYNC}; {cd_clause}mkdir -p \"$HOME/.mast/history\" \
-             && RESUME=\"$HOME/.mast/resume/tab-{tab}\" && cmd= \
-             && if [ -s \"$RESUME\" ]; then IFS= read -r cmd < \"$RESUME\" || true; fi \
-             && case \"$cmd\" in 'claude --resume '*) \
-             expr \"x$cmd\" : 'xclaude --resume [A-Za-z0-9_-][A-Za-z0-9_-]*$' >/dev/null || cmd= ;; \
-             'codex resume '*) \
-             expr \"x$cmd\" : 'xcodex resume [A-Za-z0-9_-][A-Za-z0-9_-]*$' >/dev/null || cmd= ;; \
-             'opencode --session '*) \
-             expr \"x$cmd\" : 'xopencode --session [A-Za-z0-9_-][A-Za-z0-9_-]*$' >/dev/null || cmd= ;; \
-             *) cmd= ;; esac \
-             && if [ -n \"$cmd\" ]; then \
-             printf '%s\\n' \"$cmd\" >> \"$HOME/.mast/history/tab-{tab}\"; \
-             printf '\\033[2m[mast] resume previous agent: %s\\033[0m\\n' \"$cmd\"; fi \
-             && {PATH_PREFIX} COLORTERM=truecolor MAST=1 MAST_TAB={tab} {OSC7} \
-             HISTFILE=\"$HOME/.mast/history/tab-{tab}\" exec bash -l"
-        ),
-        // 탭 id 를 모르는 경로(히스토리 미할당)에서는 MAST 만 — 없는 id 를 지어내지 않는다.
-        None => format!(
-            "{STARTED}; {THEME_SYNC}; {cd_clause}{PATH_PREFIX} COLORTERM=truecolor MAST=1 {OSC7} exec bash -l"
-        ),
-    };
-    vec!["bash".to_string(), "-c".to_string(), script]
-}
-
-/// 셸 작은따옴표 인용 — 값 안의 `'` 를 `'\''` 로 끊어 붙인다. 경로가 우리 래퍼
-/// 스크립트의 문법을 깨거나 명령을 주입하지 못하게 하는 유일한 방어선이다 (탭 cwd 는
-/// 셸이 OSC 7 로 보고한 값이라 이론상 무엇이든 들어올 수 있다).
-#[cfg(windows)]
-fn single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', r"'\''"))
+    vec![
+        "bash".to_string(),
+        "-c".to_string(),
+        include_str!("../../../../scripts/wsl/launch.sh").to_string(),
+        "mast-wsl".to_string(),
+        history_tab.map(|tab| tab.to_string()).unwrap_or_default(),
+        cwd.unwrap_or_default().to_string(),
+    ]
 }
 
 /// 시작 표식을 기다리는 기본 마감. 웜 스타트 실측이 163~194ms 라 크게 여유롭지만,
@@ -496,7 +375,7 @@ fn release_records(records: Arc<RecordStore>, tabs: &[TabId]) {
 /// 쓰다 만 힌트 임시 파일(`tab-<id>.tmp.<pid>`)까지.
 ///
 /// **Windows 에서 경로를 조립하지 않고 WSL 안에서 `$HOME` 을 펼친다.** 이 디렉터리를
-/// 만드는 쪽(`bash_argv` 의 `mkdir -p`)이 같은 이유로 같은 규율을 따른다 — 리눅스
+/// 만드는 쪽(`scripts/wsl/launch.sh` 의 `mkdir -p`)이 같은 이유로 같은 규율을 따른다 — 리눅스
 /// 홈 위치는 배포판·사용자마다 다르고, UNC 로 추측하면 틀렸을 때 조용히 아무것도
 /// 지우지 않는다.
 ///
@@ -547,7 +426,7 @@ fn release_tab_files(tabs: &[TabId], distro: Option<&str>) {
     }
 }
 
-/// 삭제 스크립트 본문. 탭 하나가 남기는 파일은 탭별 `HISTFILE`, resume 힌트, 에이전트 훅
+/// 삭제 스크립트 본문. 탭 하나가 남기는 파일은 탭별 `HISTFILE`(`tab-<id>`, `zsh-tab-<id>`), resume 힌트, 에이전트 훅
 /// 디스패처의 상태·lock·진단 파일(`~/.mast/agent-hooks/`), 그리고 쓰다 죽은 프로세스가 남긴
 /// 임시 파일(`<파일>.tmp.<pid>`)이다.
 ///
@@ -560,7 +439,7 @@ fn release_script(tabs: &[TabId]) -> String {
     for tab in tabs {
         let id = tab.0;
         script.push_str(&format!(
-            r#" "$HOME/.mast/history/tab-{id}" "$HOME/.mast/resume/tab-{id}" "$HOME/.mast/resume/tab-{id}".tmp.*"#
+            r#" "$HOME/.mast/history/tab-{id}" "$HOME/.mast/history/zsh-tab-{id}" "$HOME/.mast/resume/tab-{id}" "$HOME/.mast/resume/tab-{id}".tmp.*"#
         ));
         script.push_str(&format!(
             r#" "$HOME/.mast/agent-hooks/tab-{id}.json" "$HOME/.mast/agent-hooks/tab-{id}.lock" "$HOME/.mast/agent-hooks/tab-{id}.diag" "$HOME/.mast/agent-hooks/tab-{id}.json".tmp.* "$HOME/.mast/agent-hooks/tab-{id}.diag".tmp.*"#
@@ -590,8 +469,9 @@ fn release_tab_files(tabs: &[TabId], _distro: Option<&str>) {
 mod tests {
     use super::*;
 
+    /// 탭 id 와 cwd 가 있으면 본문은 `-c` 다음 한 칸이고, 위치 인자는 `mast-wsl`, 탭 id, cwd 순서다.
     #[test]
-    fn history_tab_wraps_bash_with_mast_env_and_per_tab_histfile() {
+    fn spawn_passes_the_launch_script_and_tab_and_cwd_as_positional_args() {
         let req = ShellSpawnReq {
             cwd: Some("/home/me/proj".to_string()),
             distro: Some("Ubuntu".to_string()),
@@ -600,7 +480,7 @@ mod tests {
         };
         let spec = spawn_spec(&req);
         assert_eq!(spec.program, "wsl.exe");
-        // distro 는 `-d`, cwd 는 **`--cd ~` + 래퍼의 cd** 로 간다 (spawn_spec 주석).
+        // distro 는 `-d`, cwd 는 **`--cd ~`** 로 가고 목적지는 본문이 옮긴다 (spawn_spec 주석).
         assert_eq!(
             &spec.args[..6],
             &[
@@ -612,79 +492,37 @@ mod tests {
                 "bash".to_string(),
             ]
         );
-        let script = spec.args.last().expect("script argv");
-
-        // 시작 표식은 반드시 맨 앞 — 뒤따르는 어떤 실패보다 먼저 도달을 증명해야 한다.
-        assert!(
-            script.starts_with(r"printf '\033]777;mast-started\007'; "),
-            "{script}"
+        assert_eq!(spec.args[6], "-c");
+        assert_eq!(spec.args[7], include_str!("../../../../scripts/wsl/launch.sh"));
+        assert_eq!(
+            &spec.args[8..],
+            &["mast-wsl".to_string(), "7".to_string(), "/home/me/proj".to_string()]
         );
-        // 목적지 cwd 는 인용된 채로 래퍼 안에서 cd 되고, 실패해도 셸은 뜬다.
-        assert!(script.contains(r"{ cd -- '/home/me/proj' 2>/dev/null"), "{script}");
-        assert!(script.contains("is gone; starting in $HOME"), "{script}");
-        // OSC 7 emitter (ADR-0011) — 이게 빠지면 탭 cwd 가 다시 얼어붙는다.
-        assert!(
-            script.contains(r#"PROMPT_COMMAND='printf "\033]7;file://%s\007" "${PWD//%/%25}"'"#),
-            "{script}"
-        );
-        // 제목(OSC 0)은 절대 같이 내지 않는다 — 에이전트가 세운 탭 제목을 덮는다.
-        assert!(!script.contains(r"\033]0;"), "{script}");
-        // 탭별 HISTFILE·resume 힌트·PATH 는 종전 계약 그대로.
-        assert!(
-            script.contains(r#"HISTFILE="$HOME/.mast/history/tab-7" exec bash -l"#),
-            "{script}"
-        );
-        assert!(
-            script.contains(r#"RESUME="$HOME/.mast/resume/tab-7""#),
-            "{script}"
-        );
-        assert!(script.contains("'opencode --session '*"), "{script}");
-        assert!(script.contains("xopencode --session [A-Za-z0-9_-]"), "{script}");
-        assert!(script.contains(r#"PATH="$HOME/.mast/bin:$PATH""#), "{script}");
-        assert!(script.contains("MAST_TAB=7"), "{script}");
     }
 
-    /// 셸 인용 — 경로가 래퍼 문법을 깨거나 명령을 주입하지 못한다. 탭 cwd 는 셸이
-    /// OSC 7 로 보고한 값이라 이론상 무엇이든 들어올 수 있다.
+    /// `None` 은 빈 위치 인자 두 칸이다 — 본문이 빈 값을 보고 탭 전용 경로와 cd 를 건너뛴다.
     #[test]
-    fn tab_cwd_is_single_quoted_into_the_wrapper() {
+    fn missing_tab_and_cwd_are_empty_positional_args() {
+        let spec = spawn_spec(&ShellSpawnReq::default());
+        assert_eq!(
+            &spec.args[spec.args.len() - 3..],
+            &["mast-wsl".to_string(), String::new(), String::new()]
+        );
+    }
+
+    /// 탭 cwd 는 셸이 OSC 7 로 보고한 값이라 무엇이든 들어올 수 있다. 본문에 끼워 넣지 않고
+    /// 인자 한 칸 그대로 넘겨야 명령 주입이 생기지 않는다 (인자 경계의 실행 검증은 TS 테스트가 본다).
+    #[test]
+    fn tab_cwd_is_passed_raw_and_never_spliced_into_the_script() {
+        let cwd = "/home/me/it's here; $(rm -rf /)";
         let req = ShellSpawnReq {
-            cwd: Some("/home/me/it's here; rm -rf /".to_string()),
+            cwd: Some(cwd.to_string()),
+            history_tab: Some(3),
             ..ShellSpawnReq::default()
         };
         let spec = spawn_spec(&req);
-        let script = spec.args.last().expect("script argv");
-        assert!(
-            script.contains(r"cd -- '/home/me/it'\''s here; rm -rf /' 2>/dev/null"),
-            "{script}"
-        );
-    }
-
-    /// cwd 가 없으면 cd 절 자체가 없다 — `--cd ~` 가 이미 홈에 세워 둔다.
-    #[test]
-    fn without_cwd_there_is_no_cd_clause() {
-        let spec = spawn_spec(&ShellSpawnReq::default());
-        let script = spec.args.last().expect("script argv");
-        assert!(!script.contains("cd --"), "{script}");
-    }
-
-    #[test]
-    fn without_history_tab_the_shell_still_gets_mast_but_no_tab_id() {
-        let spec = spawn_spec(&ShellSpawnReq::default());
-        // 탭 id 가 없으면 MAST 만 물린 로그인 셸 (셸 기본 history 그대로).
-        // PATH 프리펜드는 두 경로에 다 걸린다 — mast CLI 는 탭 id 와 무관하다.
-        // resume 힌트도 없다 — 힌트 파일은 탭 id 로 주소가 정해지므로 id 가 없으면
-        // 읽을 파일 자체가 없다 (없는 id 를 지어내지 않는 규율의 연장).
-        let script = spec.args.last().expect("script argv");
-        assert!(script.contains("COLORTERM=truecolor MAST=1 "), "{script}");
-        assert!(!script.contains("MAST_TAB"), "{script}");
-        assert!(!script.contains("HISTFILE"), "{script}");
-        assert!(!script.contains("RESUME"), "{script}");
-        // OSC 7 은 탭 id 와 무관하게 두 경로 다 낸다 — cwd 추적은 history 와 별개다.
-        assert!(
-            script.contains(r#"PROMPT_COMMAND='printf "\033]7;file://%s\007" "${PWD//%/%25}"'"#),
-            "{script}"
-        );
+        assert_eq!(spec.args.last().map(String::as_str), Some(cwd));
+        assert!(!spec.args[spec.args.len() - 4].contains(cwd));
     }
 
     /// 닫힌 탭 정리 스크립트 — 탭마다 history·resume·에이전트 훅 파일과 그 임시 파일을 지우고,
@@ -700,10 +538,10 @@ mod tests {
             release_script(&[TabId(7), TabId(12)]),
             concat!(
                 r#"rm -f --"#,
-                r#" "$HOME/.mast/history/tab-7" "$HOME/.mast/resume/tab-7" "$HOME/.mast/resume/tab-7".tmp.*"#,
+                r#" "$HOME/.mast/history/tab-7" "$HOME/.mast/history/zsh-tab-7" "$HOME/.mast/resume/tab-7" "$HOME/.mast/resume/tab-7".tmp.*"#,
                 r#" "$HOME/.mast/agent-hooks/tab-7.json" "$HOME/.mast/agent-hooks/tab-7.lock" "$HOME/.mast/agent-hooks/tab-7.diag""#,
                 r#" "$HOME/.mast/agent-hooks/tab-7.json".tmp.* "$HOME/.mast/agent-hooks/tab-7.diag".tmp.*"#,
-                r#" "$HOME/.mast/history/tab-12" "$HOME/.mast/resume/tab-12" "$HOME/.mast/resume/tab-12".tmp.*"#,
+                r#" "$HOME/.mast/history/tab-12" "$HOME/.mast/history/zsh-tab-12" "$HOME/.mast/resume/tab-12" "$HOME/.mast/resume/tab-12".tmp.*"#,
                 r#" "$HOME/.mast/agent-hooks/tab-12.json" "$HOME/.mast/agent-hooks/tab-12.lock" "$HOME/.mast/agent-hooks/tab-12.diag""#,
                 r#" "$HOME/.mast/agent-hooks/tab-12.json".tmp.* "$HOME/.mast/agent-hooks/tab-12.diag".tmp.*"#,
             )
