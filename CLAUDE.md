@@ -105,7 +105,11 @@ MVP.
   first.
 - **Query-reply `/tmp` confinement is string-level only** — a pre-planted symlink routes
   the reply outside; the canonicalize-at-write fix is unverified on 9P.
-- **Resume-hint ↑ integration is bash-only.**
+- **WSL zsh tabs are not yet field-verified** (ADR-0011 amendment 2026-10-14): cwd tracking is
+  covered by Linux PTY tests only, the ↑ resume hint only by the macOS cases of the shared zsh
+  files, and the zsh `PATH` has not been compared
+  with a plain `wsl.exe` zsh login. The checklist is WINDOWS-BUILD §10 "Unreleased — WSL zsh login
+  shell field verification".
 
 #### Phone remote surface
 
@@ -223,7 +227,9 @@ also runs the Windows installer tests.
 - `src-tauri` cannot compile for the Linux host (no webkit2gtk) — the `windows-gates` job
   IS the compile gate for the glue.
 - Windows build/run and the manual verification flow: `docs/WINDOWS-BUILD.md`.
-- The app spawns `wsl.exe [-d $MAST_DISTRO] -- bash -l` on Windows, `$SHELL -l` on Unix.
+- The app spawns `wsl.exe --cd ~ [-d $MAST_DISTRO] --exec bash -c <scripts/wsl/launch.sh>` on
+  Windows; that wrapper execs the WSL login shell, zsh or bash (falling back to `/bin/bash`), and
+  `$SHELL -l` on Unix.
 
 ## Conventions
 

@@ -38,7 +38,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 21;
+const SETUP_VERSION: u32 = 22;
 
 /// 설치 스크립트 heredoc 에 통째로 들어가는 레포 파일들: (자리표시자, heredoc 종결 줄, 내용).
 ///
@@ -46,7 +46,7 @@ const SETUP_VERSION: u32 = 21;
 /// (`setup_script`). 그래서 설치된 파일은 레포 파일과 바이트 단위로 같다. 순서대로 치환하므로
 /// 앞서 넣은 파일에 뒤 자리표시자나 자기 종결 줄이 들어 있으면 스크립트가 조용히 깨진다 —
 /// 아래 `const _` 가 그 경우를 빌드 실패로 만든다.
-const EMBEDDED_FILES: [(&str, &str, &str); 10] = [
+const EMBEDDED_FILES: [(&str, &str, &str); 16] = [
     ("@BROWSER_HELPER@", "MAST_BROWSER_EOF", include_str!("../../../../scripts/wsl/mast-browser.py")),
     (
         "@CONFIG_HELPER@",
@@ -93,6 +93,20 @@ const EMBEDDED_FILES: [(&str, &str, &str); 10] = [
         "MAST_SKILL_EOF",
         include_str!("../../../../scripts/wsl/skills/mast-send/SKILL.md"),
     ),
+    (
+        "@SHELL_INTEGRATION@",
+        "MAST_SHELL_INTEGRATION_EOF",
+        include_str!("../../../../scripts/macos/integration.sh"),
+    ),
+    (
+        "@ZSH_INTEGRATION@",
+        "MAST_ZSH_INTEGRATION_EOF",
+        include_str!("../../../../scripts/macos/zsh-integration.zsh"),
+    ),
+    ("@ZSHENV@", "MAST_ZSHENV_EOF", include_str!("../../../../scripts/macos/zshenv")),
+    ("@ZPROFILE@", "MAST_ZPROFILE_EOF", include_str!("../../../../scripts/macos/zprofile")),
+    ("@ZSHRC@", "MAST_ZSHRC_EOF", include_str!("../../../../scripts/macos/zshrc")),
+    ("@ZLOGIN@", "MAST_ZLOGIN_EOF", include_str!("../../../../scripts/macos/zlogin")),
 ];
 
 const VERSION_PLACEHOLDER: &str = "@SETUP_VERSION@";
@@ -600,7 +614,12 @@ resolve_dispatcher_python() {
 }
 
 # $1 = 설치 경로, $2 = 실행 파일이면 exec. 본문은 heredoc 으로 stdin 에 들어온다.
+# 목적지가 디렉터리면 mv 가 임시 파일을 그 안으로 옮겨 성공처럼 보이므로 먼저 막는다.
 install_embedded() {
+  if [ -d "$1" ]; then
+    echo "[mast] setup: cannot install $1: a directory is in the way" >&2
+    exit 1
+  fi
   if ! cat > "$1.tmp" || { [ "$2" = exec ] && ! chmod +x "$1.tmp"; } || ! mv -f "$1.tmp" "$1"; then
     rm -f "$1.tmp"
     echo "[mast] setup: cannot install $1" >&2
@@ -836,6 +855,44 @@ if [ ! -f "$SKILL_LOADER" ] || [ "$(cat "$SKILL_LOADER")" != "$skill_loader_body
   fi
 fi
 
+# --- 0. zsh integration assets ----------------------------------------------------------
+# zsh 탭이 시작할 때 읽는 macOS 통합 파일 여섯 개를 원본 바이트 그대로 깐다. 마커가 없거나 여섯 중 하나라도
+# 일반 파일로 읽히지 않을 때만 전부 다시 깐다. 이 블록은 에이전트 설정을 건드리지 않고 에이전트 단계보다 먼저
+# 돌므로, 셸 파일 하나가 유실돼도 사용자가 끝낸 에이전트 설정(opt-out 포함)은 되살아나지 않는다.
+shell_assets_ready() {
+  local file
+  for file in "$MAST_HOME/shell/integration.sh" "$MAST_HOME/shell/zsh-integration.zsh" \
+    "$MAST_HOME/shell/zsh/.zshenv" "$MAST_HOME/shell/zsh/.zprofile" \
+    "$MAST_HOME/shell/zsh/.zshrc" "$MAST_HOME/shell/zsh/.zlogin"; do
+    [ -f "$file" ] && [ -r "$file" ] || return 1
+  done
+}
+
+if [ ! -f "$MARKER" ] || ! shell_assets_ready; then
+  if ! mkdir -p "$MAST_HOME/shell/zsh"; then
+    echo "[mast] setup: cannot create $MAST_HOME/shell/zsh" >&2
+    exit 1
+  fi
+  install_embedded "$MAST_HOME/shell/integration.sh" data <<'MAST_SHELL_INTEGRATION_EOF'
+@SHELL_INTEGRATION@
+MAST_SHELL_INTEGRATION_EOF
+  install_embedded "$MAST_HOME/shell/zsh-integration.zsh" data <<'MAST_ZSH_INTEGRATION_EOF'
+@ZSH_INTEGRATION@
+MAST_ZSH_INTEGRATION_EOF
+  install_embedded "$MAST_HOME/shell/zsh/.zshenv" data <<'MAST_ZSHENV_EOF'
+@ZSHENV@
+MAST_ZSHENV_EOF
+  install_embedded "$MAST_HOME/shell/zsh/.zprofile" data <<'MAST_ZPROFILE_EOF'
+@ZPROFILE@
+MAST_ZPROFILE_EOF
+  install_embedded "$MAST_HOME/shell/zsh/.zshrc" data <<'MAST_ZSHRC_EOF'
+@ZSHRC@
+MAST_ZSHRC_EOF
+  install_embedded "$MAST_HOME/shell/zsh/.zlogin" data <<'MAST_ZLOGIN_EOF'
+@ZLOGIN@
+MAST_ZLOGIN_EOF
+fi
+
 if [ -f "$MARKER" ] && [ "$CODEX_PENDING" = no ] && [ "$AGY_PENDING" = no ]; then
   exit 0
 fi
@@ -940,7 +997,7 @@ fi
 
 # Resume hint. mast respawns a tab's shell on restart, so the agent session that ran in it
 # is gone from the screen; recording how to re-enter it lets the fresh shell offer the command
-# (apps/mast/src-tauri/src/host.rs::bash_argv reads this file and never runs it). Rewritten
+# (scripts/wsl/launch.sh for a bash tab, integration.sh for a zsh tab; neither runs it). Rewritten
 # on every hook call, so the tab's most recent session wins. Line 1 is the command, line 2 the
 # epoch seconds it was recorded at. tmp+mv makes the replacement atomic for a concurrent
 # reader, and every failure here is swallowed: a notification must not break on it.
@@ -1120,7 +1177,7 @@ log "codex notify script installed: $CODEX_NOTIFY"
 # id. Agents and scripts call this instead of hand-assembling OSC 777 sequences and
 # re-inventing the tty resolution. Its mast_emit is the same discipline as the notify
 # script's — keep the two in sync. $HOME/.mast/bin is prepended to PATH inside every mast
-# tab (host.rs::bash_argv), so `mast` resolves without a path.
+# tab (scripts/wsl/launch.sh), so `mast` resolves without a path.
 cat > "$CLI.tmp" <<'MAST_CLI_EOF'
 #!/usr/bin/env bash
 # mast — the command line of a pane running inside mast.

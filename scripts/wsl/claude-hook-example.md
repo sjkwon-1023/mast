@@ -27,7 +27,7 @@ with the tool call it guards, happen entirely in the WSL-side scripts this docum
 
 ## Automatic provisioning
 
-**mast auto-provisions this on first run per distro (`~/.mast/.setup-v21`); this
+**mast auto-provisions this on first run per distro (`~/.mast/.setup-v22`); this
 document remains the contract and the manual path.**
 
 On launch the app streams a setup script into `wsl.exe [-d <distro>] -- bash -s` for every
@@ -50,7 +50,7 @@ A full run, in order:
 3. The **`mast` CLI** at `~/.mast/bin/mast` (executable) — the command-line half of the send
    and query channels below (`mast ls` / `mast send` / `mast id`), so nothing has to assemble
    an escape sequence or repeat the tty resolution by hand. Every mast terminal has
-   `~/.mast/bin` prepended to `PATH` (`apps/mast/src-tauri/src/host.rs::bash_argv`), so inside
+   `~/.mast/bin` prepended to `PATH` (`scripts/wsl/launch.sh`), so inside
    a tab it is just `mast`.
 4. `~/.mast/bin/mast-config.py`, the standard-library Python helper for `mast config`.
    Unlike send/query, config does **not** emit OSC: it resolves and edits the Windows settings
@@ -106,9 +106,9 @@ A full run, in order:
 
 | Marker | Written when | To run it again |
 |---|---|---|
-| `~/.mast/.setup-v21` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v21` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
-| `~/.mast/.setup-v21-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v21-codex` reruns that step alone |
-| `~/.mast/.setup-v21-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v21-agy` reruns that step alone |
+| `~/.mast/.setup-v22` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v22` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
+| `~/.mast/.setup-v22-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v22-codex` reruns that step alone |
+| `~/.mast/.setup-v22-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v22-agy` reruns that step alone |
 
 With the main marker in place, a launch still runs an agent step whose directory exists and
 whose sub-marker does not — which is how a Codex or Antigravity CLI installed after setup v16
@@ -130,8 +130,8 @@ When a run fails:
 - A file that is not writable or is a dangling symlink, and for Codex a `config.toml` with inline
   hooks, is **skipped** with a notice and counts as finished: the sub-marker is written — for
   Claude Code, whose merge is part of steps 1–11, the main marker — so no launch retries it. Once
-  the cause is fixed, `rm ~/.mast/.setup-v21-codex` (or `-agy`; for Claude Code
-  `rm ~/.mast/.setup-v21`) wires the hooks, or add the notice's snippet by hand.
+  the cause is fixed, `rm ~/.mast/.setup-v22-codex` (or `-agy`; for Claude Code
+  `rm ~/.mast/.setup-v22`) wires the hooks, or add the notice's snippet by hand.
 - A Codex or Antigravity CLI hooks file whose **content** the merge cannot handle is refused
   with exit 3: the file is left untouched and the sub-marker **is** written, because a rerun
   would refuse it the same way. The notice names the problem and says to edit the file and
@@ -165,8 +165,8 @@ that setup could not write somewhere — `cannot install …`, `cannot create �
 | When | The notice says |
 |---|---|
 | No `python3` | Install it, or wire the hooks by hand from this document |
-| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v21` (`rm ~/.mast/.setup-v21-codex` when only the Codex step ran) |
-| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v21` |
+| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v22` (`rm ~/.mast/.setup-v22-codex` when only the Codex step ran) |
+| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v22` |
 | A Codex install older than a hook feature mast relies on | Its path, and each missing feature ([version limits](#codex-version-limits)) |
 | Codex hooks were written | How to trust them — the wording follows the Codex version |
 | `config.toml` has inline `[hooks]` tables, `features.hooks = false`, `approvals_reviewer = "auto_review"`, or a stale `[hooks.state]` entry | What mast did not do, and why |
@@ -449,9 +449,12 @@ a title is the weaker address because a prompt hook may rewrite it on every prom
 `PATH`; a tab with per-tab history also exports `MAST_TAB=<tab id>` (its own stable tab id).
 That is how an agent knows it is inside mast at all — the skill's description keys off
 `MAST` — and the id is the tab's self-reference for a reply address. The wrapper that sets
-them is `apps/mast/src-tauri/src/host.rs::bash_argv`, so they reach the login shell and
-every child of it. The `PATH` entry survives the login shell because the Debian/Ubuntu rc
-convention *prepends* to `PATH` (`PATH="$HOME/bin:$PATH"`) rather than reassigning it.
+them is `scripts/wsl/launch.sh`, so they reach the login shell and every child of it. For a
+bash tab the `PATH` entry survives the login shell because the Debian/Ubuntu rc convention
+*prepends* to `PATH` (`PATH="$HOME/bin:$PATH"`) rather than reassigning it. A zsh tab sets the
+same variables before `exec zsh -il`. The zsh startup files put the entry back: `zlogin` runs last
+and sources `zsh-integration.zsh`, which sources `integration.sh`, and that prepends `~/.mast/bin`
+to `PATH` again, so a zsh tab also has the entry at the front.
 
 **Security.** Any terminal program on the machine that can write to a pane's PTY can inject
 input into another pane this way. That is intended — mast assumes your own machine and
@@ -673,7 +676,7 @@ fi
 
 # Resume hint. mast respawns a tab's shell on restart, so the agent session that ran in it
 # is gone from the screen; recording how to re-enter it lets the fresh shell offer the command
-# (apps/mast/src-tauri/src/host.rs::bash_argv reads this file and never runs it). Rewritten
+# (scripts/wsl/launch.sh for a bash tab, integration.sh for a zsh tab; neither runs it). Rewritten
 # on every hook call, so the tab's most recent session wins. Line 1 is the command, line 2 the
 # epoch seconds it was recorded at. tmp+mv makes the replacement atomic for a concurrent
 # reader, and every failure here is swallowed: a notification must not break on it.
@@ -1014,8 +1017,8 @@ places and run by neither of them.
 | Field | Contract |
 |---|---|
 | Path | `~/.mast/resume/tab-<id>`, where `<id>` is the writer's `MAST_TAB` — the tab's stable id, which survives a restart, so the file and the tab that gets the hint are the same tab. |
-| Line 1 | The resume command: `claude --resume <id>`, `codex resume <id>`, or `opencode --session <id>`. The reader takes **only this line**. |
-| Line 2 | Epoch seconds at the time of writing. Recorded for diagnosis; **nothing reads it** — see freshness below. |
+| Line 1 | The resume command: `claude --resume <id>`, `codex resume <id>`, or `opencode --session <id>`. The bash reader takes **only this line**; the zsh reader also reads line 2 (see below). |
+| Line 2 | Epoch seconds at the time of writing. The zsh reader uses it only to tell a changed hint from one it already offered in the same shell. Bash never reads it, and freshness is not judged by it — see below. |
 | Written when | An invocation has both a non-empty `MAST_TAB` and an id matching `^[A-Za-z0-9_-]+$` — Claude Code's `.session_id`, Codex's `thread-id` (`thread_id` is accepted too), or OpenCode's confirmed root session id. Codex additionally requires its saved session metadata to show a resumable top-level session (`resumable` below). OpenCode records a root at creation or its first observed activity, before idle. |
 | Not written when | The tab has no `MAST_TAB` (a tab without per-tab history), the payload does not parse or carries no id, or the id is not a plain token. Claude Code additionally needs parsable hook JSON and `jq`, and writes nothing when stdin is a TTY (the script run by hand, so no JSON is read at all). For Codex, also for every ownership other than `resumable` — a top-level session from another source, a temporary thread, a subagent or internal session, metadata that cannot be read — and for a `codex exec` nested in another agent's turn. For OpenCode, sessions with `parentID` are rejected, and the prior hint is preserved when the session lookup fails. |
 | Atomicity | Written to `<path>.tmp.<pid>` and `mv`d into place, so a concurrent reader sees either the old file or the new one, never a half-written line. The pid suffix keeps two writers firing at once in the same tab from sharing a temp name. |
@@ -1026,26 +1029,30 @@ That is the intended behavior, not a collision to be designed away: a tab where 
 Claude Code to Codex should offer the Codex thread back, and the same in reverse. There is one
 hint per tab; Codex's internal temporary turns and subagents must not replace it.
 
-The reader is `apps/mast/src-tauri/src/host.rs::bash_argv`, the same wrapper that sets
-`MAST_TAB` and `HISTFILE`. Before it execs the login shell it reads line 1 and, if it is
-non-empty:
+There are two readers, one per shell. The bash reader is `scripts/wsl/launch.sh`, the wrapper
+that sets `MAST_TAB` and `HISTFILE`. Before it execs the login shell it reads line 1 and, if it
+is non-empty:
 
 1. **appends it to the tab's `HISTFILE`**, so a single press of ↑ at the fresh prompt puts the
    command on the command line, and
 2. prints one dimmed line, `[mast] resume previous agent: <cmd>`.
 
-If the file does not exist the wrapper prints nothing at all — a tab that never ran an agent
-looks exactly as it did before. The block is written so that it does not fail the `&&` chain
-that ends in `exec bash -l` — a broken hint must not cost you the shell. (The one status it
-cannot swallow is the hint `printf` failing to write to the pane's own tty, which is not a
-state a usable tab is in.)
+The zsh reader is `_mast_resume` in `scripts/macos/integration.sh`, which `zsh-integration.zsh`
+sources. It runs at the first prompt, adds the command to the shell history with `print -s`, and
+prints the same dimmed line. At later prompts it adds a hint that changed since the last check,
+and does so quietly. Both readers accept only the three exact forms below and never run the
+command.
+
+If the file does not exist the reader prints nothing at all — a tab that never ran an agent
+looks exactly as it did before. A failed read or append is ignored and the wrapper still execs the
+login shell, so a broken hint must not cost you the shell.
 
 **Both sides check the shape.** The writer guards the id's charset, and the reader accepts
 only three exact forms — `claude --resume <token>`, `codex resume <token>`, and
 `opencode --session <token>`, where `<token>`
 is `[A-Za-z0-9_-]+` — dropping the hint silently otherwise, so a substituted file cannot
 become a surface for luring an ↑+Enter into running something else. That reader list is a
-**whitelist**: wiring a third agent means adding its form there as well, or its hint is
+**whitelist**: wiring a third agent means adding its form to both readers as well, or its hint is
 recorded and then quietly thrown away. Anything running as you could edit `~/.bashrc`
 directly, so this is a misfire guard rather than a privilege boundary — the same stance as the
 send channel.
@@ -1501,8 +1508,11 @@ hook. The step needs `python3` for the merge, but not Python 3.8: no dispatcher 
 
 ## Emitting title and cwd from the shell prompt (OSC 0 / OSC 7)
 
-The tab title and cwd are emitted by the shell on every prompt, not by a hook. In the WSL
-side's `~/.bashrc`:
+The tab title and cwd are emitted by the shell on every prompt, not by a hook. mast's own tabs
+already report the cwd (OSC 7): bash tabs through `PROMPT_COMMAND` in `scripts/wsl/launch.sh`,
+zsh tabs through `scripts/macos/integration.sh`. This snippet is optional. Use it in the WSL
+side's `~/.bashrc` only for a shell that mast does not start, or to show the directory name as
+the tab title:
 
 ```bash
 # On every prompt, emit the current directory (OSC 7) and the tab title (OSC 0).
@@ -1532,8 +1542,8 @@ PROMPT_COMMAND="__mast_osc${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
    therefore has a tty, so it only takes step 1 — its purpose is to see whether the delivery
    path itself is alive.
 2. Read `~/.mast/setup.log`: each merged row (`added`, `wired`, `migrated`, `narrowed`) and
-   every notice is there, and the markers `~/.mast/.setup-v21`, `.setup-v21-codex` and
-   `.setup-v21-agy` show which steps finished.
+   every notice is there, and the markers `~/.mast/.setup-v22`, `.setup-v22-codex` and
+   `.setup-v22-agy` show which steps finished.
 3. Then run each agent inside a mast terminal and confirm that its hooks update the tab's badge
    and dot, the pane badge, and the sidebar status and preview. The field checklist is
    `docs/WINDOWS-BUILD.md` §10, "v0.3.32 — Agent state signals verification (setup v16)". A

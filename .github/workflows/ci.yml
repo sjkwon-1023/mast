@@ -3,17 +3,19 @@
 # job 구성과 러너 선택 근거. `push` 트리거는 `main` 과 `v*` 태그뿐이라(아래 `on:`),
 # 기능 브랜치 push 는 PR 을 열기 전까지 어느 job 도 돌지 않는다.
 # - gates (ubuntu, 모든 PR + main/v* push): Linux 게이트 — core/remote 테스트, Cargo.lock
-#   검사, 프런트 빌드+vitest, Secure Remote 번들 감사.
+#   검사, 프런트 빌드+vitest, Secure Remote 번들 감사, 실제 bash/zsh 로 도는 셸 PTY 테스트.
 # - windows-gates (windows, 모든 PR + main/v* push): Windows 타깃 컴파일 게이트 — x64·ARM64
 #   clippy(`--all-targets` 라 lib·bin 컴파일 검사를 포함한다)와 x64 네이티브 테스트(mast-remote,
-#   글루 secure_remote). ring 같은 네이티브 TLS 스택의 build script 는 check 에서도 C 컴파일을
-#   하며 MSVC C 툴체인(lib.exe/clang)을 요구한다 (2026-09 확인) — ubuntu 에서 Windows
-#   타깃으로 도는 예전 방식은 이 의존성과 함께 성립하지 않는다. 공개 저장소의 표준
+#   글루 secure_remote, host/provision 래퍼 테스트). ring 같은 네이티브 TLS 스택의 build
+#   script 는 check 에서도 C 컴파일을 하며 MSVC C 툴체인(lib.exe/clang)을 요구한다
+#   (2026-09 확인) — ubuntu 에서 Windows 타깃으로 도는 예전 방식은 이 의존성과 함께
+#   성립하지 않는다. 공개 저장소의 표준
 #   Windows 러너는 무료이고, 러너 이미지에 ARM64 도구와 Clang 이 들어 있다.
 # - windows-artifacts (windows, 수동/태그만): 릴리스 빌드(x64 + ARM64 아티팩트)와
 #   Release 첨부. 매 push 가 아니라 ARM64 실기 테스트(23단계)용 산출이 목적이다.
-# - macos-artifacts (macOS Apple Silicon, 수동/태그만): 서명하지 않은 `mast.app` 을 zip 으로
-#   묶어 Release 에 첨부한다. 설치는 curl 로 받는 `scripts/macos/install.sh` 경로다 (ADR-0033).
+# - macos-artifacts (macOS Apple Silicon, 수동/태그만): 빌드 전에 셸 PTY 테스트를 실제 macOS 에서
+#   돌리고, 서명하지 않은 `mast.app` 을 zip 으로 묶어 Release 에 첨부한다. 설치는 curl 로 받는
+#   `scripts/macos/install.sh` 경로다 (ADR-0033).
 #   Windows 설치 스크립트(`scripts/win/install.ps1`) 테스트는 windows-gates 가 돌린다.
 
 name: CI
@@ -57,6 +59,16 @@ jobs:
       - name: Remote crate tests
         run: cargo test -p mast-remote
 
+      # test_shells.py 의 WSL 사례는 zsh 가 없으면 skip 이 아니라 실패한다. 이 설치 단계를 빼거나
+      # 실패를 무시하게 바꾸지 않는다.
+      - name: Install zsh (shell PTY tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh
+
+      - name: Shell PTY tests (bash + zsh)
+        run: python3 scripts/macos/tests/test_shells.py -v
+
       # 락을 손으로 고친 뒤 조용히 어긋나는 걸 막는다 — 위 cargo 단계가 Cargo.lock 을
       # 갱신했다면 여기서 red 가 된다.
       - name: Cargo.lock is up to date
@@ -89,6 +101,7 @@ jobs:
     # 모든 PR + main/v* 태그 push 의 Windows 타깃 컴파일 게이트. Linux 크로스로는 ring 의
     # C 빌드가 불가능하므로 여기서 돈다 (파일 상단 주석 참조). ARM64 는 크로스 check 라
     # 링크가 없어도 되고, 빌드 스크립트가 요구하는 clang 은 러너 이미지에 있다.
+    # mast-app 의 host/provision 래퍼 테스트는 Windows 전용 cfg 라 이 job 에서만 실행된다.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -126,6 +139,12 @@ jobs:
 
       - name: Browser state tests (x64 Windows, native)
         run: cargo test -p mast-app --target x86_64-pc-windows-msvc browser
+
+      - name: Host launch wrapper tests (x64 Windows, native)
+        run: cargo test -p mast-app --target x86_64-pc-windows-msvc host::tests
+
+      - name: Provision tests (x64 Windows, native)
+        run: cargo test -p mast-app --target x86_64-pc-windows-msvc provision::tests
 
       - name: Install script tests (Windows PowerShell 5.1)
         run: python -m unittest discover -s scripts/win/tests -v
@@ -203,6 +222,7 @@ jobs:
   macos-artifacts:
     # windows-artifacts 와 같은 트리거·권한. 서명·공증 없이 올리므로 브라우저로 받은 zip 은
     # Gatekeeper 가 막는다 — 안내는 curl 설치 한 줄이다 (ADR-0033).
+    # 빌드 전에 기존 macOS 셸 사례(ShellStartup)를 실제 macOS 에서 돌린다. 상시 macOS job 은 아니다.
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-latest
     permissions:
@@ -223,6 +243,9 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/mast/package-lock.json
+
+      - name: Shell PTY tests (macOS native)
+        run: python3 scripts/macos/tests/test_shells.py -v
 
       # tauri.conf.json 은 번들을 끈다(Windows 는 단일 exe) — 여기서만 .app 번들을 켠다.
       - name: Build mast.app (release)

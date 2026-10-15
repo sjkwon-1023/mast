@@ -10,11 +10,15 @@ path now also deletes the tab's record file, `records/tab-<id>.bin`.
 and their `.tmp.*` leftovers. A hook that lands after the `rm` can recreate the lock file (and the
 state or diagnostic file when it has something to record), and nothing sweeps those.
 
+**Amended by [ADR-0011](0011-tab-cwd-tracking.md)'s WSL zsh amendment** (2026-10-14): a zsh tab's
+`history/zsh-tab-<id>` file is removed by the same batched `rm` as `history/tab-<id>`.
+
 ## Context
 
-Every mast terminal tab gets private state inside WSL. The spawn wrapper points `HISTFILE` at
-`~/.mast/history/tab-<id>` (`host.rs::bash_argv`), and the agent hooks write a resume hint to
-`~/.mast/resume/tab-<id>` — via `tab-<id>.tmp.<pid>` first, so a hook killed mid-write leaves
+Every mast terminal tab gets private state inside WSL. The spawn wrapper (`scripts/wsl/launch.sh`)
+points `HISTFILE` at `~/.mast/history/tab-<id>` for a bash tab, or at `~/.mast/history/zsh-tab-<id>`
+for a zsh tab (the zsh name is set by `scripts/macos/zsh-integration.zsh`), and the agent hooks write
+a resume hint to `~/.mast/resume/tab-<id>` — via `tab-<id>.tmp.<pid>` first, so a hook killed mid-write leaves
 one of those behind too. Both paths are keyed by the tab's stable id, which is what makes them
 work: the id survives restarts, so a revived tab finds its own history and its own `↑`.
 

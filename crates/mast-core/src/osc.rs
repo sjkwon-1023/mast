@@ -63,7 +63,7 @@ pub enum OscEvent {
     /// (ADR-0004), 실기 장애에서 셸이 한 바이트도 내지 못한 채 그 4바이트만 흐른
     /// 기록이 있다(`terminal-view.ts` attach 주석). 래퍼 첫 줄의 테마 시퀀스도 근거가
     /// 못 된다 — OSC 10/11 set 은 conhost 가 handled 로 소비해 여기까지 오지 않는다
-    /// (`host.rs::bash_argv` rustdoc). 반면 OSC 777 은 conhost 가 모르는 시퀀스라
+    /// (`scripts/wsl/launch.sh` 주석). 반면 OSC 777 은 conhost 가 모르는 시퀀스라
     /// 그대로 통과하며, 그 통과는 알림 파이프라인으로 이미 실기 검증됐다(ADR-0006).
     Osc777Started,
     /// OSC 10/11 — 전경/배경색 **질의**(`ESC ] 10 ; ? ST`). `code` 는 10 = 전경,

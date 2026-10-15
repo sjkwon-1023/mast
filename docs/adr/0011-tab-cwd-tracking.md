@@ -96,3 +96,61 @@ back to `rootPath` when the shown tab is not a terminal (`sidebar-model.ts` reus
 `/Users/<user>` into `~`, next to `/home/<user>`. `rootPath` itself is unchanged: it is still the
 default cwd for new tabs, and nothing in the UI edits it. The value is still the last
 prompt-time cwd, so a card does not move while an agent `cd`s on its own.
+
+## Amendment (2026-10-14): WSL login shells can be zsh
+
+**Problem.** A WSL user whose `~/.profile` replaces bash with `exec zsh -l` got a bash wrapper
+whose `PROMPT_COMMAND` never ran. The tab's cwd stayed at `~`, and every restart reopened there.
+The wrapper body now lives in `scripts/wsl/launch.sh`; the `PROMPT_COMMAND` export moved there
+from the argv that `host.rs::bash_argv` built. Decisions 1–4 still describe the bash path.
+
+**Decisions.**
+
+- **Shell selection.** The wrapper uses `$SHELL` inside WSL, or the passwd shell when `$SHELL` is
+  empty. A value that is not an absolute, executable regular file with basename `bash` or `zsh`
+  falls back to `/bin/bash` with one dim line. Control characters are replaced before printing.
+- **zsh path.** The six macOS integration files are reused unchanged: `integration.sh`,
+  `zsh-integration.zsh`, `zshenv`, `zprofile`, `zshrc` and `zlogin`. The setup script embeds them
+  from `scripts/macos/` with `include_str!`, so the repo has no WSL copy. Setup v22 installs them
+  under `~/.mast/shell/`. The wrapper starts `zsh -il` with `ZDOTDIR=~/.mast/shell/zsh`, and the
+  user's `ZDOTDIR` and startup files are preserved as on macOS. cwd is reported by `_mast_cwd`
+  at every prompt; `PROMPT_COMMAND` is not set on this path.
+- **Missing assets.** If any of the six files is not a readable regular file, the tab prints
+  `[mast] zsh integration is not installed yet; this tab starts without it. Once setup finishes, exit it and press Restart`
+  and starts the bash path. It does not fail. The user's login files can switch that path to
+  another shell; such a tab has no mast integration, so its cwd is not reported until Restart
+  (a known limit). After an upgrade, `respawn` runs before provisioning
+  (`boot.rs`), so a failing check would leave restored zsh tabs exited, and there is no bulk
+  Restart to recover them. Recovery: once setup finishes, exit the shell in that tab and press
+  Restart on the exited tab, or relaunch mast. A restored tab is respawned on the next boot, and
+  the launcher checks the assets at every spawn, so it sees the installed files. The Restart
+  banner appears only for an exited or not-started tab, so a running shell cannot be restarted
+  in place.
+- **History.** A zsh tab uses `~/.mast/history/zsh-tab-<id>`, set by `zsh-integration.zsh`. A bash
+  tab keeps `tab-<id>`. For any tab id, both shells create `~/.mast/history` before `exec`, and the
+  wrapper exits nonzero if it cannot. Closing the tab removes both names
+  ([ADR-0013](0013-retiring-a-closed-tab.md)).
+- **Resume hint.** A zsh tab reads the hint at its first prompt through `_mast_resume` in
+  `integration.sh` and adds the command to the shell history with `print -s`. The same function
+  reads line 2 only to tell a changed hint from one already offered in that shell. Freshness is not
+  judged, as on bash.
+- **PATH.** A zsh started directly does not read `~/.profile`. The `PATH` of a mast zsh tab is
+  therefore judged against a normal `wsl.exe` zsh login, not against the bash tab's `PATH`. That
+  comparison is a field check.
+
+**Trust prompt.** Two things are kept apart.
+
+- *Field evidence, before this change:* Claude Code 2.1.296 scopes trust for the home directory to
+  the session. Every tab restarted in `~`, so Claude asked "trust this folder?" on each restart.
+- *Expected result, not yet verified:* restoring the tab's cwd should stop the repeated question
+  for a project that is already trusted. No user setting is changed, and no trust is approved
+  automatically.
+
+**Verification status.** Automated: the Linux PTY tests in `scripts/macos/tests/test_shells.py`
+run the `scripts/wsl/launch.sh` body with real bash and zsh on the CI Linux gate. They cover shell
+selection, the missing-asset fallback, the cwd argument and the cwd report. The zsh history and
+resume-hint cases of the shared zsh files run only on macOS, in the `macos-artifacts` job. The
+Windows-target `host::tests` and `provision::tests` run on the CI `windows-gates` job. Not run:
+Windows/WSL field verification (WINDOWS-BUILD §10, "Unreleased — WSL zsh login shell field
+verification"), a macOS run of the shared files for this change, and the trust check. Items not run
+are not counted as passed.
