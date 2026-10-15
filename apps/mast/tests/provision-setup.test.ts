@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -18,7 +19,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { assembleSetupScript, embeddedFiles, setupVersion } from "./setup-script";
 import {
@@ -1603,5 +1604,300 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(run.stderr).toEqual(notice ? [distro.trustNotice(), agyNotice(version, agy)] : [distro.trustNotice()]);
     expect(readJson(distro.agyHooks())).toEqual(AGY_HOOKS);
     expect(distro.marker()).toBe(true);
+  });
+});
+
+// `mast update` 는 설치된 CLI 가 Windows PowerShell 을 한 번 부르는 동작이다. 실제 PowerShell 과 설치기는 돌리지
+// 않는다. 테스트가 만든 powershell.exe 가 argv·호출 횟수·WSLENV 를 기록하고, 이 호스트의 실제 interop 과
+// /mnt/c 설치본은 어떤 사례에서도 닿지 않도록 격리한다.
+const INSTALLER_COMMAND =
+  "$ErrorActionPreference = 'Stop'; irm https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/win/install.ps1 | iex";
+const POWERSHELL_ARGV = ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", INSTALLER_COMMAND];
+const WSLENV_VALUE = "MAST_TEST/u";
+const INTEROP_DISABLED = "mast update: WSL interop is disabled; enable it to run Windows PowerShell";
+const NO_POWERSHELL =
+  "mast update: cannot find Windows PowerShell; enable WSL interop/drive access and check Windows PATH";
+const BINFMT_DIR = "/proc/sys/fs/binfmt_misc/";
+const FIXED_POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe";
+const OLD_CLI = "#!/usr/bin/env bash\n# mast CLI from before update existed\nexit 2\n";
+// 사본의 `for entry in …` 목록은 따옴표가 없어서 fixture 경로에 공백이 있으면 쪼개진다. ROOT 는 공백을 포함하므로
+// 이 블록만 공백 없는 임시 디렉터리를 쓴다. 모든 suite 가 skip 된 파일은 최상위 afterAll 도 돌지 않으므로, 생성과 정리를
+// 아래 Linux suite 의 beforeAll/afterAll 에 둔다.
+let UPDATE_ROOT = "";
+
+// 설치 스크립트 안의 CLI 본문(MAST_CLI_EOF heredoc) 원문.
+function cliHeredoc(): string {
+  const opener = "<<'MAST_CLI_EOF'\n";
+  const begin = SCRIPT.indexOf(opener) + opener.length;
+  const end = SCRIPT.indexOf("\nMAST_CLI_EOF\n", begin);
+  return SCRIPT.slice(begin, end + 1);
+}
+
+// 현재 버전으로 setup 을 끝낸 뒤 v22 설치로 되돌린다. 셸 자산과 helper 는 그대로 두고, 주·하위 마커를 v22 이름으로
+// 바꾸고 CLI 를 옛 것으로 바꾼다. 그래야 v23 재실행이 버전 상향 때문인지 누락 파일 복구 때문인지 구분된다.
+function completedV22Install(): Distro {
+  const distro = new Distro().withAgents();
+  expect(distro.run().status).toBe(0);
+  expect(distro.agentMarker("codex")).toBe(true);
+  expect(distro.agentMarker("agy")).toBe(true);
+  for (const suffix of ["", "-codex", "-agy"]) {
+    const current = distro.path(".mast", `.setup-v${VERSION}${suffix}`);
+    if (existsSync(current)) renameSync(current, distro.path(".mast", `.setup-v22${suffix}`));
+  }
+  expect(distro.marker()).toBe(false);
+  distro.write(distro.path(".mast", "bin", "mast"), OLD_CLI);
+  return distro;
+}
+
+type InteropEntries = Record<"WSLInterop" | "WSLInterop-late", string | null>;
+type UpdateRun = { status: number | null; stdout: string; stderr: string };
+
+// 한 사례의 OS 경계 fixture. binfmt 항목, PATH 의 powershell.exe, 고정 경로의 powershell.exe 를 임시 디렉터리에 둔다.
+class UpdateCase {
+  readonly root = mkdtempSync(join(UPDATE_ROOT, "case-"));
+  readonly binfmt = join(this.root, "binfmt");
+  readonly pathDir = join(this.root, "path");
+  readonly fixed = join(this.root, "mnt-c", "Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  readonly distro: Distro;
+
+  constructor(distro: Distro, interop: InteropEntries = { WSLInterop: "enabled\n", "WSLInterop-late": null }) {
+    expect(this.root).not.toMatch(/\s/);
+    this.distro = distro;
+    mkdirSync(this.binfmt, { recursive: true });
+    for (const [name, content] of Object.entries(interop)) {
+      if (content !== null) writeFileSync(join(this.binfmt, name), content);
+    }
+  }
+
+  // 가짜 powershell.exe. 호출마다 argc 와 인자를 NUL 로 구분해 쌓고, WSLENV 값과 정해진 표식을 낸 뒤 exit 한다.
+  powershell(where: "path" | "fixed", { exit = 0, mode = 0o755, shebang = "#!/bin/sh" } = {}): void {
+    const target = where === "path" ? join(this.pathDir, "powershell.exe") : this.fixed;
+    const calls = this.callsFile(where);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(
+      target,
+      [
+        shebang,
+        `printf '%s\\000' "$#" >> ${shellQuote(calls)}`,
+        `for arg in "$@"; do printf '%s\\000' "$arg" >> ${shellQuote(calls)}; done`,
+        `printf '%s' "\${WSLENV-unset}" > ${shellQuote(`${calls}.wslenv`)}`,
+        `printf '%s\\n' ${shellQuote(`${where} stdout`)}`,
+        `printf '%s\\n' ${shellQuote(`${where} stderr`)} >&2`,
+        `exit ${exit}`,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(target, mode);
+  }
+
+  calls(where: "path" | "fixed"): string[][] {
+    const file = this.callsFile(where);
+    if (!existsSync(file)) return [];
+    const parts = readFileSync(file, "utf8").split("\0");
+    const calls: string[][] = [];
+    for (let at = 0; at < parts.length - 1; ) {
+      const count = Number(parts[at]);
+      calls.push(parts.slice(at + 1, at + 1 + count));
+      at += 1 + count;
+    }
+    return calls;
+  }
+
+  wslenv(where: "path" | "fixed"): string {
+    return readFileSync(`${this.callsFile(where)}.wslenv`, "utf8");
+  }
+
+  // `mast update <args>` 를 bash 로 실행한다. 기본은 사본이고, original 이면 설치된 파일 그대로다.
+  // 인자 없는 원본 실행은 실제 /proc 항목과 /mnt/c 를 보므로 여기서 막는다.
+  run(args: string[], { original = false, onPath = true } = {}): UpdateRun {
+    if (original && args.length === 0) {
+      throw new Error("the installed CLI may run only with arguments; a bare run reaches the host PowerShell");
+    }
+    const cli = original ? this.distro.path(".mast", "bin", "mast") : this.copy();
+    const result = spawnSync(tools.bash, [cli, "update", ...args], {
+      cwd: this.root,
+      env: {
+        HOME: this.distro.home,
+        PATH: [...(onPath ? [this.pathDir] : []), this.distro.tools].join(":"),
+        WSLENV: WSLENV_VALUE,
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    if (result.error) throw result.error;
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  }
+
+  private callsFile(where: "path" | "fixed"): string {
+    return join(this.root, `${where}.calls`);
+  }
+
+  // 두 리터럴만 이 fixture 경로로 바꾼 사본. 치환 뒤에도 실제 /proc 항목과 /mnt/c 경로가 남지 않음을 확인해,
+  // 치환이 빠진 채 실제 Windows 설치기가 실행되는 일이 없게 한다.
+  private copy(): string {
+    const body = readFileSync(this.distro.path(".mast", "bin", "mast"), "utf8");
+    const replaced = body.split(BINFMT_DIR).join(`${this.binfmt}/`).split(FIXED_POWERSHELL).join(this.fixed);
+    expect(replaced).not.toContain(BINFMT_DIR);
+    expect(replaced).not.toContain(FIXED_POWERSHELL);
+    const path = join(this.root, "mast");
+    writeFileSync(path, replaced);
+    return path;
+  }
+}
+
+linuxSuite("mast update (WSL CLI and the Windows PowerShell handoff)", { timeout: 120_000 }, () => {
+  let installed: Distro;
+  beforeAll(() => {
+    UPDATE_ROOT = mkdtempSync(join(tmpdir(), "mast-update-"));
+    installed = new Distro().withAgents();
+    expect(installed.run().status).toBe(0);
+  });
+  afterAll(() => {
+    rmSync(UPDATE_ROOT, { recursive: true, force: true });
+  });
+
+  it("installs the assembled CLI and keeps its OS-boundary literals exactly once each", () => {
+    const body = readFileSync(installed.path(".mast", "bin", "mast"), "utf8");
+
+    expect(body).toBe(cliHeredoc());
+    expect(body).toContain(`for entry in ${BINFMT_DIR}WSLInterop ${BINFMT_DIR}WSLInterop-late; do`);
+    expect(body.split(FIXED_POWERSHELL).length - 1).toBe(1);
+  });
+
+  it.each([0, 1, 23])("runs the fixed installer command through the PATH PowerShell and relays exit %i", (exit) => {
+    const update = new UpdateCase(installed);
+    update.powershell("path", { exit });
+
+    expect(update.run([])).toEqual({ status: exit, stdout: "path stdout\n", stderr: "path stderr\n" });
+    expect(update.calls("path")).toEqual([POWERSHELL_ARGV]);
+    expect(update.wslenv("path")).toBe(WSLENV_VALUE);
+    expect(update.calls("fixed")).toEqual([]);
+  });
+
+  it.each([["--help"], ["extra"], ["--version"]])(
+    "rejects arguments %j with exit 2 before the interop check or any PowerShell call",
+    (...args) => {
+      const update = new UpdateCase(installed, { WSLInterop: "disabled\n", "WSLInterop-late": null });
+      update.powershell("path");
+
+      expect(update.run(args)).toEqual({ status: 2, stdout: "", stderr: "usage: mast update\n" });
+      expect(update.calls("path")).toEqual([]);
+    },
+  );
+
+  it("rejects arguments in the installed CLI before any PowerShell call", () => {
+    const update = new UpdateCase(installed);
+    update.powershell("path");
+
+    expect(update.run(["--help"], { original: true })).toEqual({ status: 2, stdout: "", stderr: "usage: mast update\n" });
+    expect(update.calls("path")).toEqual([]);
+  });
+
+  it.each([
+    { name: "only WSLInterop enabled", interop: { WSLInterop: "enabled\n", "WSLInterop-late": null } },
+    { name: "only WSLInterop-late enabled", interop: { WSLInterop: "disabled\n", "WSLInterop-late": "enabled\n" } },
+  ])("continues when $name", ({ interop }) => {
+    const update = new UpdateCase(installed, interop);
+    update.powershell("path");
+
+    expect(update.run([]).status).toBe(0);
+    expect(update.calls("path")).toEqual([POWERSHELL_ARGV]);
+  });
+
+  it.each([
+    { name: "both disabled", interop: { WSLInterop: "disabled\n", "WSLInterop-late": "disabled\n" } },
+    { name: "both absent", interop: { WSLInterop: null, "WSLInterop-late": null } },
+    { name: "enabled only on a later line", interop: { WSLInterop: "disabled\nenabled\n", "WSLInterop-late": null } },
+  ])("refuses with exit 1 and never calls PowerShell when $name", ({ interop }) => {
+    const update = new UpdateCase(installed, interop);
+    update.powershell("path");
+
+    expect(update.run([])).toEqual({ status: 1, stdout: "", stderr: `${INTEROP_DISABLED}\n` });
+    expect(update.calls("path")).toEqual([]);
+  });
+
+  it("prefers the PowerShell found on PATH over the fixed Windows path", () => {
+    const update = new UpdateCase(installed);
+    update.powershell("path");
+    update.powershell("fixed");
+
+    expect(update.run([]).status).toBe(0);
+    expect(update.calls("path")).toEqual([POWERSHELL_ARGV]);
+    expect(update.calls("fixed")).toEqual([]);
+  });
+
+  it("uses the fixed Windows path when PATH has no powershell.exe", () => {
+    const update = new UpdateCase(installed);
+    update.powershell("fixed", { exit: 23 });
+
+    expect(update.run([], { onPath: false })).toEqual({ status: 23, stdout: "fixed stdout\n", stderr: "fixed stderr\n" });
+    expect(update.calls("fixed")).toEqual([POWERSHELL_ARGV]);
+  });
+
+  it("exits 1 when neither PATH nor the fixed Windows path has a PowerShell", () => {
+    const update = new UpdateCase(installed);
+
+    expect(update.run([], { onPath: false })).toEqual({ status: 1, stdout: "", stderr: `${NO_POWERSHELL}\n` });
+    expect(update.calls("path")).toEqual([]);
+  });
+
+  it("keeps the exec failure of a PATH PowerShell that cannot start, without trying the fixed path", () => {
+    const update = new UpdateCase(installed);
+    update.powershell("path", { shebang: "#!/nonexistent/mast-test-interpreter" });
+    update.powershell("fixed");
+
+    const run = update.run([]);
+
+    expect(run.status).toBe(127);
+    expect(run.stderr).toContain("cannot execute: required file not found");
+    expect(run.stdout).toBe("");
+    expect(update.calls("path")).toEqual([]);
+    expect(update.calls("fixed")).toEqual([]);
+  });
+
+  it("lists update in the installed CLI's help", () => {
+    const help = spawnSync(tools.bash, [installed.path(".mast", "bin", "mast"), "--help"], {
+      env: { HOME: installed.home, PATH: installed.tools },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain("\n  mast update                        update mast on Windows via its installer script\n");
+  });
+
+  it("replaces a v22 CLI without update, writes the v23 marker, and keeps both on a rerun", () => {
+    const distro = completedV22Install();
+    const cli = distro.path(".mast", "bin", "mast");
+    const logBefore = distro.log();
+
+    // 완료된 설치의 Codex 훅은 그대로라 병합 헬퍼가 hooks.json 을 다시 쓰지 않고, 신뢰 안내도 다시 나오지 않는다.
+    expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
+    expect(readFileSync(cli, "utf8")).toBe(cliHeredoc());
+    expect(distro.marker()).toBe(true);
+    // 옛 마커는 지우지 않는다 — 마커 정리는 사용자 몫이다.
+    expect(existsSync(distro.path(".mast", ".setup-v22"))).toBe(true);
+    expect(distro.log().slice(logBefore.length)).toContain(FULL_RUN_LOG);
+
+    // 에이전트 단계가 끝난 v23 재실행은 조용히 끝나므로(setup 의 마커 조기 종료) 전체 실행 표식만 확인한다.
+    // CLI 는 $CLI.tmp 를 mv 로 바꿔 끼우므로, 내용이 같아도 다시 쓰였다면 inode 가 달라진다.
+    const written = statSync(cli);
+    const logBeforeRerun = distro.log();
+    expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
+    expect(statSync(cli)).toMatchObject({ ino: written.ino, mtimeMs: written.mtimeMs });
+    expect(distro.log().slice(logBeforeRerun.length)).not.toContain(FULL_RUN_LOG);
+  });
+
+  it("leaves the v23 marker unwritten when the CLI cannot be installed", () => {
+    const distro = completedV22Install();
+    const cli = distro.path(".mast", "bin", "mast");
+    mkdirSync(`${cli}.tmp`);
+
+    const run = distro.run();
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(`[mast] setup: cannot install ${cli}`);
+    expect(distro.marker()).toBe(false);
+    expect(readFileSync(cli, "utf8")).toBe(OLD_CLI);
   });
 });

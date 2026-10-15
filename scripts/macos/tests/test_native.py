@@ -6,7 +6,10 @@ import io
 import json
 import os
 from pathlib import Path
+import runpy
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -86,6 +89,100 @@ class NativeCli(unittest.TestCase):
         execv.assert_called_once_with(
             sys.executable,
             [sys.executable, str(cli.BIN / "mast-browser.py"), "snapshot", "#42"])
+
+
+class NativeUpdate(unittest.TestCase):
+    URL = "https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos/install.sh"
+    ENVIRONMENT = {"MAST_DOWNLOAD_URL": "https://example.invalid/mast.zip",
+                   "MAST_REPO_URL": "https://example.invalid/repo",
+                   "MAST_APP_DIR": "/Users/tester/Mast's $HOME"}
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.handlers = {number: signal.getsignal(number) for number in (signal.SIGPIPE, signal.SIGXFSZ)}
+
+    def tearDown(self):
+        for number, handler in self.handlers.items():
+            signal.signal(number, handler)
+        self.temp.cleanup()
+
+    def captured_update(self):
+        with patch.object(cli.os, "execv") as execv:
+            self.assertEqual(cli.main(["update"]), 0)
+        execv.assert_called_once()
+        return execv.call_args.args
+
+    def run_captured(self, curl_body):
+        # 가짜 curl 만 PATH 앞에 둔다. 실제 curl 과 설치기는 이 테스트에서 실행되지 않는다.
+        bindir = self.root / "bin"
+        bindir.mkdir()
+        record = self.root / "curl-argv"
+        curl = bindir / "curl"
+        curl.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shlex.quote(str(record)) + "\n" + curl_body)
+        curl.chmod(0o755)
+        _, argv = self.captured_update()
+        env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ["PATH"], **self.ENVIRONMENT)
+        result = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=30)
+        return result, record.read_text().splitlines()
+
+    def test_update_runs_the_fixed_pipeline_in_system_bash(self):
+        path, argv = self.captured_update()
+        self.assertEqual(path, "/bin/bash")
+        self.assertEqual(argv, ["/bin/bash", "-c", "set -o pipefail; curl -fsSL " + self.URL + " | /bin/bash"])
+
+    def test_extra_arguments_exit_2_before_anything_runs(self):
+        for extra in (["--help"], ["extra"], ["--", self.URL]):
+            with self.subTest(extra=extra), patch.object(cli.os, "execv") as execv, \
+                    contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(cli.main(["update", *extra]), 2)
+            self.assertEqual(err.getvalue(), "usage: mast update\n")
+            execv.assert_not_called()
+
+    def test_start_failure_uses_the_generic_error_path(self):
+        err = io.StringIO()
+        with patch.object(sys, "argv", ["mast", "update"]), \
+                patch.object(cli.os, "execv", side_effect=OSError("no /bin/bash")), \
+                contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as exited:
+                runpy.run_path(str(ROOT / "scripts/macos/mast.py"), run_name="__main__")
+        self.assertEqual(exited.exception.code, 1)
+        self.assertEqual(err.getvalue(), "mast: no /bin/bash\n")
+
+    def test_update_needs_no_mast_tab_and_emits_no_osc(self):
+        with patch.dict(os.environ), patch.object(cli, "emit") as emit:
+            os.environ.pop("MAST_TAB", None)
+            self.captured_update()
+        emit.assert_not_called()
+
+    def test_update_restores_the_default_signals_before_exec(self):
+        seen = {}
+
+        def record(path, argv):
+            seen["handlers"] = [signal.getsignal(number) for number in (signal.SIGPIPE, signal.SIGXFSZ)]
+
+        with patch.object(cli.os, "execv", side_effect=record):
+            cli.main(["update"])
+        self.assertEqual(seen["handlers"], [signal.SIG_DFL, signal.SIG_DFL])
+
+    def test_a_failed_download_is_not_hidden_by_the_empty_installer_run(self):
+        result, _ = self.run_captured("exit 22\n")
+        self.assertEqual(result.returncode, 22)
+
+    def test_installer_exit_code_and_output_pass_through_unchanged(self):
+        installer = ("printf 'installer %s|%s|%s\\n' \"$MAST_DOWNLOAD_URL\" \"$MAST_REPO_URL\" \"$MAST_APP_DIR\"\n"
+                     "printf 'installer stderr\\n' >&2\n"
+                     "exit 23\n")
+        result, record = self.run_captured("cat <<'INSTALLER'\n" + installer + "INSTALLER\n")
+        self.assertEqual(record, ["-fsSL", self.URL])
+        self.assertEqual(result.returncode, 23)
+        self.assertEqual(result.stdout, "installer https://example.invalid/mast.zip|https://example.invalid/repo|"
+                                        "/Users/tester/Mast's $HOME\n")
+        self.assertEqual(result.stderr, "installer stderr\n")
+
+    def test_successful_download_and_installer_exit_zero(self):
+        result, _ = self.run_captured("cat <<'INSTALLER'\nprintf 'installed\\n'\nINSTALLER\n")
+        self.assertEqual((result.returncode, result.stdout), (0, "installed\n"))
 
 
 class NativeInstaller(unittest.TestCase):
