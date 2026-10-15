@@ -147,7 +147,9 @@ from the argv that `host.rs::bash_argv` built. Decisions 1–4 still describe th
   automatically.
 
 **Verification status.** Automated: the Linux PTY tests in `scripts/macos/tests/test_shells.py`
-run real bash and zsh, including the `scripts/wsl/launch.sh` body, on the CI Linux gate. The
+run the `scripts/wsl/launch.sh` body with real bash and zsh on the CI Linux gate. They cover shell
+selection, the missing-asset fallback, the cwd argument and the cwd report. The zsh history and
+resume-hint cases of the shared zsh files run only on macOS, in the `macos-artifacts` job. The
 Windows-target `host::tests` and `provision::tests` run on the CI `windows-gates` job. Not run:
 Windows/WSL field verification (WINDOWS-BUILD §10, "Unreleased — WSL zsh login shell field
 verification"), a macOS run of the shared files for this change, and the trust check. Items not run

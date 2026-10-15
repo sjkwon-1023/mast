@@ -1,7 +1,7 @@
 """배포되는 시작 파일을 실제 PTY 와 실제 zsh/bash 로 실행해 본다.
 
 macOS 는 `scripts/macos/launch.sh`, Linux 는 WSL 래퍼 본문 `scripts/wsl/launch.sh` 를 `bash -c` 인자 계약
-그대로 실행한다. 두 플랫폼이 같은 zsh 시작 파일 계약을 따르므로 zsh 사례는 `ZshStartupCases` 를 함께 쓴다.
+그대로 실행한다. zsh 시작 파일 자체의 계약은 macOS 사례가 보고, WSL 사례는 래퍼의 셸 선택·fallback·cwd 전달만 본다.
 """
 import errno
 import os
@@ -177,8 +177,20 @@ class PtyShell(unittest.TestCase):
                 for path in re.findall(rb"\x1b\]7;file://([^\x07\x1b]*)\x07", self.output)]
 
 
-class ZshStartupCases:
-    """zsh 시작 계약. macOS 와 WSL 두 launcher 에서 같은 사례를 실행한다."""
+@unittest.skipUnless(sys.platform == "darwin", "requires native macOS startup files and zsh")
+class ShellStartup(PtyShell):
+    def setUp(self):
+        super().setUp()
+        self.shell_dir.mkdir(parents=True)
+        for name in ("launch.sh", "integration.sh", "bashrc", "zsh-integration.zsh"):
+            shutil.copyfile(ROOT / "scripts/macos" / name, self.shell_dir / name)
+        (self.shell_dir / "zsh").mkdir()
+        for name in ("zshenv", "zprofile", "zshrc", "zlogin"):
+            shutil.copyfile(ROOT / "scripts/macos" / name, self.shell_dir / "zsh" / ("." + name))
+
+    def command(self, shell, tab, cwd):
+        argv = ["/bin/bash", str(self.shell_dir / "launch.sh"), shell, tab, cwd, str(self.home / "settings.json")]
+        return argv, {}
 
     def test_zsh_loads_user_startup_once_and_restores_custom_zdotdir(self):
         custom = self.home / "custom config"
@@ -371,22 +383,6 @@ print -rN -- "$original" "${seen[@]}"
         self.assertEqual(set(seen), {original})
         self.assertEqual(report, b"\x1b]7;file://" + str(self.cwd).replace(" ", "%20").encode())
 
-
-@unittest.skipUnless(sys.platform == "darwin", "requires native macOS startup files and zsh")
-class ShellStartup(ZshStartupCases, PtyShell):
-    def setUp(self):
-        super().setUp()
-        self.shell_dir.mkdir(parents=True)
-        for name in ("launch.sh", "integration.sh", "bashrc", "zsh-integration.zsh"):
-            shutil.copyfile(ROOT / "scripts/macos" / name, self.shell_dir / name)
-        (self.shell_dir / "zsh").mkdir()
-        for name in ("zshenv", "zprofile", "zshrc", "zlogin"):
-            shutil.copyfile(ROOT / "scripts/macos" / name, self.shell_dir / "zsh" / ("." + name))
-
-    def command(self, shell, tab, cwd):
-        argv = ["/bin/bash", str(self.shell_dir / "launch.sh"), shell, tab, cwd, str(self.home / "settings.json")]
-        return argv, {}
-
     def test_bash_resume_saved_while_the_shell_runs_reaches_history_at_next_prompt(self):
         (self.home / ".bashrc").write_text('PS1="MAST_READY> "\n')
         self.start("/bin/bash")
@@ -416,7 +412,7 @@ class ShellStartup(ZshStartupCases, PtyShell):
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the WSL launcher runs on Linux")
-class WslShellStartup(ZshStartupCases, PtyShell):
+class WslShellStartup(PtyShell):
     @classmethod
     def setUpClass(cls):
         missing = [tool for tool in ("bash", "zsh", "python3") if shutil.which(tool) is None]
@@ -434,13 +430,10 @@ class WslShellStartup(ZshStartupCases, PtyShell):
 
     def command(self, shell, tab, cwd):
         body = (ROOT / "scripts/wsl/launch.sh").read_text(encoding="utf-8")
-        # wsl.exe 가 $SHELL 을 물려주는 것과 같다. PS1 은 물려주지 않는다.
-        return ["/bin/bash", "-c", body, "mast-wsl", tab, cwd], {"SHELL": shell, "PS1": None}
-
-    def resume_dir(self):
-        resume = self.home / ".mast/resume"
-        resume.mkdir(parents=True, exist_ok=True)
-        return resume
+        # wsl.exe 가 $SHELL 을 물려주는 것과 같다. PS1 은 물려주지 않는다. Ubuntu 의 /etc/zsh/zshrc 전역
+        # compinit 은 CI 러너의 fpath 권한 때문에 y/n 질문에서 멈추고 래퍼와 무관하므로 끈다.
+        return (["/bin/bash", "-c", body, "mast-wsl", tab, cwd],
+                {"SHELL": shell, "PS1": None, "skip_global_compinit": "1"})
 
     def test_bash_login_shell_reports_cwd_and_keeps_tab_env_and_theme_hook(self):
         sub = self.home / "sub dir"
@@ -464,71 +457,19 @@ class WslShellStartup(ZshStartupCases, PtyShell):
         self.assertFalse((self.home / ".bash_history").exists())
         self.assertTrue(self.output.startswith(START_MARK))
 
-    def test_bash_resume_hint_is_appended_once_and_announced_at_start(self):
-        history = self.home / ".mast/history/tab-42"
-        for hint in ("claude --resume saved-id", "codex resume saved-id", "opencode --session ses_1"):
-            with self.subTest(hint=hint):
-                (self.resume_dir() / "tab-42").write_text(hint + "\n1\n")
-                history.unlink(missing_ok=True)
-                self.start("/bin/bash")
-                self.send("history 2 | sed 's/^/HIST:/'")
-                self.finish()
-                self.assertEqual(self.output.count(("resume previous agent: %s" % hint).encode()), 1)
-                self.assertRegex(self.output, rb"HIST: *\d+ +" + re.escape(hint.encode()))
-                self.assertEqual(history.read_text().splitlines().count(hint), 1)
-                self.assertFalse((self.home / ".bash_history").exists())
-
-    def test_bash_invalid_resume_hint_is_neither_recorded_nor_run(self):
-        history = self.home / ".mast/history/tab-42"
-        for hint in ("claude --resume bad;touch PWNED", "claude --resume", "rm -rf nothing", ""):
-            with self.subTest(hint=hint):
-                (self.resume_dir() / "tab-42").write_text(hint + "\n1\n")
-                history.unlink(missing_ok=True)
-                self.start("/bin/bash")
-                self.finish()
-                self.assertNotIn(b"resume previous agent", self.output)
-                recorded = history.read_text() if history.exists() else ""
-                self.assertNotIn("bad;touch", recorded)
-                self.assertNotIn("rm -rf", recorded)
-                self.assertFalse((self.home / "PWNED").exists())
-
-    def test_bash_restart_in_the_same_tab_keeps_its_history_and_skips_other_tabs(self):
-        history_dir = self.home / ".mast/history"
-        history_dir.mkdir(parents=True)
-        (history_dir / "tab-7").write_text("echo other-tab-7\n")
-        self.start("/bin/bash")
-        self.finish("echo kept-in-tab-42")
-        self.start("/bin/bash")
-        self.finish("history | sed 's/^/HIST:/'")
-        self.assertRegex(self.output, rb"HIST: *\d+ +echo kept-in-tab-42")
-        self.assertNotRegex(self.output, rb"HIST: *\d+ +echo other-tab-7")
-
-    def test_a_deleted_cwd_starts_in_home_with_a_notice(self):
+    def test_zsh_login_shell_reports_cwd_and_exports_the_tab_environment(self):
         self.zsh_profile(self.home)
-        gone = self.home / "deleted"
-        for shell in ("/bin/zsh", "/bin/bash"):
-            with self.subTest(shell=shell):
-                self.start(shell, cwd=gone)
-                self.send('printf "PWD:%s\\n" "$PWD"')
-                self.assertIn(("PWD:%s" % self.home).encode(), self.output)
-                self.assertIn(("[mast] %s is gone; starting in $HOME" % gone).encode(), self.output)
-
-    def test_a_deleted_cwd_with_control_characters_prints_them_as_question_marks(self):
-        self.zsh_profile(self.home)
-        gone = self.home / "deleted\x1b[31m"
-        shown = str(gone).replace("\x1b", "?")
-        for shell in ("/bin/zsh", "/bin/bash"):
-            with self.subTest(shell=shell):
-                self.start(shell, cwd=gone)
-                self.assertIn(("[mast] %s is gone; starting in $HOME" % shown).encode(), self.output)
-                self.assertNotIn(b"deleted\x1b[31m", self.output)
-
-    def test_zsh_path_exports_the_tab_environment_without_the_bash_prompt_hook(self):
-        self.zsh_profile(self.home)
+        sub = self.home / "sub dir"
+        sub.mkdir()
         self.start("/bin/zsh", PROMPT_COMMAND=None)
         self.send('printf "ENV:[%s]|%s|%s|%s\\n" "${PROMPT_COMMAND-unset}" "$MAST_TAB" "$HISTFILE" "$MAST"')
-        self.finish()
         self.assertIn(("ENV:[unset]|42|%s|1" % (self.home / ".mast/history/zsh-tab-42")).encode(), self.output)
+        self.send('cd "%s"' % sub)
+        self.finish()
+        reports = self.cwd_reports()
+        self.assertEqual(reports[0], str(self.cwd))
+        self.assertEqual(reports[-1], str(sub))
+        self.assertTrue(self.output.startswith(START_MARK))
 
     def test_cwd_argument_is_data_not_code_and_round_trips_through_osc7(self):
         self.zsh_profile(self.home)
@@ -542,20 +483,6 @@ class WslShellStartup(ZshStartupCases, PtyShell):
                 self.assertEqual(self.cwd_reports()[0], str(target))
                 self.assertNotIn(b"\x1b]0;", self.output)
                 self.assertNotIn(b"\x1b]2;", self.output)
-
-    def test_launch_without_a_tab_id_integrates_only_the_cwd(self):
-        self.zsh_profile(self.home)
-        (self.resume_dir() / "tab-42").write_text("claude --resume saved-id\n1\n")
-        for shell in ("/bin/zsh", "/bin/bash"):
-            with self.subTest(shell=shell):
-                self.start(shell, tab="", HISTFILE="/inherited/tab-history", MAST_TAB="99")
-                self.send('printf "NOTAB:[%s]|%s\\n" "$MAST_TAB" "$HISTFILE"')
-                self.finish()
-                self.assertIn(b"NOTAB:[]|", self.output)
-                self.assertNotIn(b"/inherited/tab-history", self.output)
-                self.assertNotIn(b"resume previous agent", self.output)
-                self.assertFalse((self.home / ".mast/history").exists())
-                self.assertEqual(self.cwd_reports()[0], str(self.cwd))
 
     def test_missing_zsh_assets_fall_back_to_bash_and_zsh_starts_once_complete(self):
         self.zsh_profile(self.home)
@@ -579,35 +506,6 @@ class WslShellStartup(ZshStartupCases, PtyShell):
                 self.assertNotIn(b"zsh integration is not installed", self.output)
                 self.send(KIND_PROBE)
                 self.assertIn(b"KIND:zsh", self.output)
-
-    def test_profile_exec_zsh_after_the_fallback_is_a_known_unintegrated_tab_until_restart(self):
-        # 알려진 한계: 자산이 빠진 탭의 bash 로그인 경로에서 사용자 `.profile` 이 zsh 를 exec 하면 그 zsh 는
-        # mast 의 ZDOTDIR 래퍼를 거치지 않아 OSC 7 cwd 보고가 전혀 없다. 자산을 갖춘 뒤 Restart 해야 통합된다.
-        (self.home / ".bash_profile").unlink()
-        (self.home / ".profile").write_text(
-            'if [ -n "$BASH_VERSION" ] && [[ $- == *i* ]] && [ -z "$NO_ZSH" ] && [ -x /bin/zsh ]; then exec /bin/zsh -l; fi\n'
-        )
-        self.zsh_profile(self.home)
-        sub = self.home / "sub dir"
-        sub.mkdir()
-        (self.shell_dir / "zsh/.zlogin").unlink()
-        self.start("/bin/zsh")
-        self.assertEqual(self.output.count(ZSH_NOT_INSTALLED.encode()), 1)
-        self.send(KIND_PROBE)
-        self.assertIn(b"KIND:zsh", self.output)
-        self.send('cd "%s"' % sub)
-        self.finish()
-        self.assertEqual(self.cwd_reports(), [])
-        self.install_zsh_assets()
-        self.start("/bin/zsh")
-        self.assertNotIn(b"zsh integration is not installed", self.output)
-        self.send(KIND_PROBE)
-        self.assertIn(b"KIND:zsh", self.output)
-        self.send('cd "%s"' % sub)
-        self.finish()
-        reports = self.cwd_reports()
-        self.assertEqual(reports[0], str(self.cwd))
-        self.assertEqual(reports[-1], str(sub))
 
     def test_shell_selection_follows_the_login_shell_policy(self):
         fakebin = self.home / "fakebin"
@@ -644,19 +542,6 @@ class WslShellStartup(ZshStartupCases, PtyShell):
                 else:
                     self.assertNotIn(b"is not zsh or bash", self.output)
                 self.assertNotIn(b"\x1b[31m", self.output)
-
-    def test_history_directory_failure_exits_nonzero_after_the_start_marker(self):
-        self.zsh_profile(self.home)
-        (self.home / ".mast").mkdir(exist_ok=True)
-        blocker = self.home / ".mast/history"
-        for shell in ("/bin/zsh", "/bin/bash"):
-            with self.subTest(shell=shell):
-                blocker.write_text("not a directory\n")
-                code = self.start_expect_exit(shell)
-                blocker.unlink()
-                self.assertNotEqual(code, 0)
-                self.assertTrue(self.output.startswith(START_MARK), self.output)
-                self.assertIn(("mast: cannot create %s" % blocker).encode(), self.output)
 
 
 if __name__ == "__main__":

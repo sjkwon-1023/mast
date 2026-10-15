@@ -105,8 +105,9 @@ MVP.
   first.
 - **Query-reply `/tmp` confinement is string-level only** — a pre-planted symlink routes
   the reply outside; the canonicalize-at-write fix is unverified on 9P.
-- **WSL zsh tabs are not yet field-verified** (ADR-0011 amendment 2026-10-14): cwd tracking and
-  the ↑ resume hint are covered by Linux PTY tests only, and the zsh `PATH` has not been compared
+- **WSL zsh tabs are not yet field-verified** (ADR-0011 amendment 2026-10-14): cwd tracking is
+  covered by Linux PTY tests only, the ↑ resume hint only by the macOS cases of the shared zsh
+  files, and the zsh `PATH` has not been compared
   with a plain `wsl.exe` zsh login. The checklist is WINDOWS-BUILD §10 "Unreleased — WSL zsh login
   shell field verification".
 
