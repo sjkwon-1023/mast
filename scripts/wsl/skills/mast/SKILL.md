@@ -18,6 +18,9 @@ mast is a Windows terminal workspace for WSL agents. Inside a mast terminal,
 - `mast config get [key]`: read saved settings. Changes need an app restart.
 - `mast skill-load`: reinstall bundled skills from the installed app.
   Restart the agent session to discover updated skills.
+- `mast update`: update Mast with its installer. Run it only when the user asks. The
+  installer replaces the app while it runs; the user must quit and reopen Mast to use the
+  new version, so do not restart Mast on your own.
 
 Run terminal commands outside a sandbox: they use the real terminal and shared
 reply files. Check the target with `mast ls` first. Quote `#<id>` and the text.

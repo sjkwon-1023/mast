@@ -24,6 +24,10 @@ downloads nothing:
 curl -fsSL https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos/install.sh | bash
 ```
 
+Versions before `mast update` have no such command, so run the line above to get there. After
+that, `mast update` in a Mast terminal runs the same script; quit and reopen Mast to use the new
+version.
+
 The app is **not signed or notarized**. Installing with `curl` keeps macOS from quarantining
 it; a `mast-macos-arm64.zip` downloaded with a browser is quarantined and Gatekeeper blocks it.
 See [the macOS guide](docs/MACOS.md) for building from source, configuration, limits and the
@@ -139,6 +143,14 @@ Ubuntu 같은 Linux 배포판이 설치된 WSL2가 필요하다. WSL이 준비�
    **More info** → **Run anyway**. With Smart App Control turned on, Windows blocks the unsigned
    exe either way.
 
+   Versions before `mast update` need the command above. After that, run `mast update` in a mast
+   terminal: it runs the same command in Windows PowerShell and installs the latest release. Quit
+   mast completely and reopen it to use the new version. It needs WSL interop enabled. The install
+   folder is `%LOCALAPPDATA%\Programs\mast`, or the `MAST_APP_DIR` folder when that is set in
+   Windows or listed in `WSLENV`. mast does not convert paths; `WSLENV` with the `/p` flag
+   (`MAST_APP_DIR/p`) is the only way a WSL path gets translated. A portable copy run from another
+   folder is not updated.
+
 mast opens your default WSL distribution and automatically sets up agent integration on first
 launch. Anything it could not set up, and what to do about it, is written to `~/.mast/setup.log`.
 
@@ -156,9 +168,10 @@ launch. Anything it could not set up, and what to do about it, is written to `~/
 [Integration details and manual setup](./scripts/wsl/claude-hook-example.md).
 
 The sidebar shows your installed version. Once per app launch, mast checks GitHub for a newer
-stable release in the background. **Update available** opens the release page; the install line
-above updates in place, even while mast is running — the new version applies the next time you
-start it. Failed checks stay quiet.
+stable release in the background. **Update available** only opens the release page; it never
+downloads or installs anything. The install line above or `mast update` updates in place, even
+while mast is running — the new version applies the next time you start it. Failed checks stay
+quiet.
 
 ## Settings
 

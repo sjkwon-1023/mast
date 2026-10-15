@@ -31,11 +31,13 @@ notarized** ([ADR-0033](adr/0033-unsigned-releases-installed-by-script.md)). Fil
 with a browser is quarantined and blocked; install it with the script instead. Because each
 build has a different ad-hoc identity, macOS may ask again for permissions after an update,
 including allowing Local HTTP or Secure Remote through the macOS Firewall again.
-Run the same line to update; Mast can stay open, and the new version applies when you quit
-and reopen it. The script compares the installed version with the latest release and
-downloads nothing when they match. `MAST_DOWNLOAD_URL` installs a specific release's zip
-without that check, `MAST_REPO_URL` points at another repository (a fork), and `MAST_APP_DIR`
-(default `/Applications`) changes the install folder.
+Run the same line to update, or `mast update` from a Mast terminal, which runs the same script
+under `/bin/bash` with `pipefail`. Versions before `mast update` need the line. Mast can stay
+open, and the new version applies when you quit and reopen it. The script compares the installed
+version with the latest release and downloads nothing when they match. `MAST_DOWNLOAD_URL`
+installs a specific release's zip without that check, `MAST_REPO_URL` points at another
+repository (a fork), and `MAST_APP_DIR` (default `/Applications`) changes the install folder.
+`mast update` inherits these variables, so they apply to it too.
 
 The release notice only links to a release page; it does not download or install an
 update. Signing/notarization and expanded OS integrations remain separate work.

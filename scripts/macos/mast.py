@@ -21,12 +21,19 @@ HELP = """usage:
   mast config [get|set|reset ...]     inspect or change saved settings
   mast browser --help               inspect and control browser tabs
   mast skill-load                   reinstall the bundled agent skills
+  mast update                       update Mast with the macOS installer
 
 Quote numeric addresses: mast send '#176' 'cargo test'. Sends stay in this
 workspace and never target their sender. No agent command runs automatically
 on restart. Agent sandboxes may require permission to access the real TTY and
 shared /tmp; sandboxed sends cannot guarantee delivery.
 """
+
+# pipefail 이 없으면 curl 실패가 빈 입력을 실행한 bash 의 성공 종료에 가려진다. 고정 문자열이라 인자를 끼워 넣지 않는다.
+UPDATE_COMMAND = (
+    "set -o pipefail; curl -fsSL https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos/install.sh"
+    " | /bin/bash"
+)
 
 
 def hooks():
@@ -169,6 +176,15 @@ def main(args):
                 raise ValueError("usage: mast skill-load")
             rest = ["--skills-only"]
         os.execv(sys.executable, [sys.executable, str(BIN / script)] + rest)
+    elif command == "update":
+        if rest:
+            print("usage: mast update", file=sys.stderr)
+            return 2
+        # Python 이 무시하도록 설정한 SIGPIPE·SIGXFSZ 는 exec 뒤에도 남아
+        # curl 등이 EPIPE 를 받으므로, 셸 기본 동작으로 되돌린 뒤 exec 한다.
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+        signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
+        os.execv("/bin/bash", ["/bin/bash", "-c", UPDATE_COMMAND])
     else:
         raise ValueError("unknown command: " + command)
     return 0

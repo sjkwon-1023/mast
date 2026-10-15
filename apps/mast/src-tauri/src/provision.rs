@@ -38,7 +38,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 22;
+const SETUP_VERSION: u32 = 23;
 
 /// 설치 스크립트 heredoc 에 통째로 들어가는 레포 파일들: (자리표시자, heredoc 종결 줄, 내용).
 ///
@@ -1185,6 +1185,7 @@ cat > "$CLI.tmp" <<'MAST_CLI_EOF'
 #   mast ls                            list the tabs mast has open
 #   mast send [-l] <target> <text...>  put text into another pane's terminal
 #   mast id                            print this tab's id ($MAST_TAB)
+#   mast update                        update mast on Windows via its installer script
 #
 # send/query는 실제 터미널에 OSC 777을 쓴다. config는 Windows 설정 파일을 직접
 # 수정하며 이 출력 채널에 설정 변경 권한을 추가하지 않는다. 데몬·소켓은 없다.
@@ -1201,6 +1202,7 @@ usage:
   mast ls                            list tabs in this workspace: TAB, TITLE, WORKSPACE, STATUS, COMMAND
   mast send [-l] <target> <text...>  type text into another pane (-l: pre-fill, do not submit)
   mast id                            print this tab's id ($MAST_TAB)
+  mast update                        update mast on Windows via its installer script
   mast config                        show saved app settings and configuration commands
   mast skill-load                    overwrite bundled agent skills from the installed app
 
@@ -1310,6 +1312,43 @@ cmd_id() {
     exit 1
   fi
   printf '%s\n' "$MAST_TAB"
+}
+
+# Windows 설치기를 PowerShell 로 실행한다. 명령 문자열은 고정이고 호출자 인자는 받지 않는다.
+cmd_update() {
+  if [[ $# -ne 0 ]]; then
+    echo 'usage: mast update' >&2
+    exit 2
+  fi
+
+  # mast-open 과 같은 검사다. 배포판에 따라 WSLInterop 또는 WSLInterop-late 중 하나만 있다.
+  local entry interop=""
+  for entry in /proc/sys/fs/binfmt_misc/WSLInterop /proc/sys/fs/binfmt_misc/WSLInterop-late; do
+    if [ "$(head -n 1 "$entry" 2>/dev/null)" = "enabled" ]; then
+      interop="enabled"
+      break
+    fi
+  done
+  if [ "$interop" != "enabled" ]; then
+    echo 'mast update: WSL interop is disabled; enable it to run Windows PowerShell' >&2
+    exit 1
+  fi
+
+  # set -e 에서 PATH 검색 실패가 스크립트를 끝내지 않도록 빈 값으로 받는다. PATH 에서 찾은 항목이
+  # 실행되지 않아도 고정 경로로 바꾸지 않고 실패한다.
+  local ps
+  ps="$(command -v powershell.exe 2>/dev/null || true)"
+  if [[ -z "$ps" ]]; then
+    ps=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
+  fi
+  if [[ ! -x "$ps" ]]; then
+    echo 'mast update: cannot find Windows PowerShell; enable WSL interop/drive access and check Windows PATH' >&2
+    exit 1
+  fi
+
+  # exec 로 이 프로세스를 PowerShell 로 바꿔 stdio 와 종료 코드를 그대로 넘긴다.
+  exec "$ps" -NoLogo -NoProfile -NonInteractive -Command \
+    "\$ErrorActionPreference = 'Stop'; irm https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/win/install.ps1 | iex"
 }
 
 cmd_ls() {
@@ -1538,6 +1577,7 @@ case "${1:-}" in
   ls) shift; cmd_ls "$@" ;;
   send) shift; cmd_send "$@" ;;
   id) shift; cmd_id "$@" ;;
+  update) shift; cmd_update "$@" ;;
   -h|--help|help) usage ;;
   '') usage >&2; exit 2 ;;
   *) printf 'mast: unknown command: %s\n' "$1" >&2; usage >&2; exit 2 ;;
