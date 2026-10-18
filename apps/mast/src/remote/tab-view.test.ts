@@ -354,6 +354,87 @@ describe("TabView first frame", () => {
     for (const url of screenUrls) expect(url).not.toContain("since=");
   });
 
+  it("델타 응답은 실제 파서를 거쳐 화면 끝에 이어 붙는다", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = deferredTransport();
+      const mounted = new TabView({
+        tab: TAB,
+        title: "t",
+        onBack: () => undefined,
+        transport: fake.transport,
+      });
+      view = mounted;
+      document.body.append(mounted.root);
+      const pre = mounted.root.querySelector("pre.screen-pre") as HTMLPreElement;
+      mounted.start();
+      fake.resolveScreen(FULL_REPLY);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pre.textContent).toContain("apps  crates  docs");
+
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_GUARD_MS);
+      expect(fake.screenCalls()).toBe(2);
+      fake.resolveScreen({
+        meta: { sizeOwner: "desktop", endOffset: 19, reset: false, cols: 120, rows: 30, session: "4242:7" },
+        bytes: new TextEncoder().encode("added\r\n"),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pre.textContent).toContain("apps  crates  docs");
+      expect(pre.textContent).toContain("added");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("세션이 바뀐 응답은 옛 화면을 버리고, 다음 전체 스냅샷으로 다시 세운다", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = deferredTransport();
+      const mounted = new TabView({
+        tab: TAB,
+        title: "t",
+        onBack: () => undefined,
+        transport: fake.transport,
+      });
+      view = mounted;
+      document.body.append(mounted.root);
+      const pre = mounted.root.querySelector("pre.screen-pre") as HTMLPreElement;
+      mounted.start();
+      fake.resolveScreen(FULL_REPLY);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pre.textContent).toContain("apps  crates  docs");
+
+      // 탭 Restart 는 새 PTY 세션이다. 옛 세션의 창에 새 세션의 바이트를 이어 붙이지 않고,
+      // 인스턴스를 접은 뒤 다음 폴이 `since` 없이 나가 새 스냅샷을 받는다.
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_GUARD_MS);
+      expect(fake.screenCalls()).toBe(2);
+      fake.resolveScreen({
+        meta: { sizeOwner: "desktop", endOffset: 12, reset: true, cols: 120, rows: 30, session: "4343:9" },
+        bytes: new TextEncoder().encode("fresh shell\r\n"),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pre.textContent).toContain("apps  crates  docs");
+      expect(pre.textContent).not.toContain("fresh shell");
+
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_GUARD_MS);
+      expect(fake.screenCalls()).toBe(3);
+      fake.resolveScreen({
+        meta: { sizeOwner: "desktop", endOffset: 12, reset: true, cols: 120, rows: 30, session: "4343:9" },
+        bytes: new TextEncoder().encode("fresh shell\r\n"),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pre.textContent).toContain("fresh shell");
+      expect(pre.textContent).not.toContain("apps  crates  docs");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // --- PTY 크기 모드 (ADR-0016 개정) ---
 
   /** 출력 영역과 글자 격자를 흉내 낸다 — happy-dom 은 레이아웃이 없어 실제 측정이

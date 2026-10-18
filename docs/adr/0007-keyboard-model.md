@@ -205,3 +205,26 @@ scrolls or clears), including a pending Korean syllable arriving before `Cmd+Lef
 the viewer and `keys.ts` suites cover the rest. Live WKWebView delivery of the `Cmd` and `Fn`
 keys and the Windows `Ctrl+Shift+arrows` pass-through are field checks (`docs/MACOS.md`,
 `docs/WINDOWS-BUILD.md`).
+
+## Amendment (2026-10-18) — the Windows Alt bypass is removed; macOS Option+←/→ is sent by `macTerminalKeyAction`
+
+This amendment replaces two statements above: the Windows Alt+arrow rewrite in the 2026-09-20
+amendment (`altArrowSequence`), and item 5 of the 2026-09-23 amendment, which says xterm itself sends
+`ESC b` / `ESC f` for Option+←/→. Both stay above as history.
+
+1. **Windows.** `altArrowSequence` is deleted, and `view.ts` no longer intercepts plain Alt+arrows.
+   Alt+↑/↓/←/→ with no Shift go to the PTY as xterm 6.0's default `ESC[1;3A/B/C/D`. The rewrite existed
+   because xterm 5.5's `Keyboard.ts` turned Alt+arrows into Ctrl+arrows (`ESC[1;5X`) on non-Mac platforms.
+   6.0.0's `Keyboard.ts` has no such mapping. Ctrl+Alt+arrows keep xterm's modifier sequence (`ESC[1;7X`).
+   Alt+Shift+arrows stay pane focus and are not sent to the PTY.
+2. **macOS.** `Option+←/→` with no Shift or ⌘ sends `ESC b` / `ESC f` from `macTerminalKeyAction`
+   (`MAC_OPTION_WORD_KEYS` in `features/terminal/interaction.ts`). xterm 5.5 applied this conversion only
+   when Alt was the sole modifier, and 6.0 removed it. `macOptionIsMeta` does not change the result.
+   `Option+↑/↓` still send xterm's `ESC[1;3A/B`. Option combined with Shift or ⌘ is not intercepted and goes
+   to xterm's default handling. No test covers that combination.
+3. **Tests.** `alt-arrows.test.ts` checks the four directions as `ESC[1;3X` at the PTY, Ctrl+Alt+↑ as
+   `ESC[1;7A`, and the premise `라이브러리 전제: xterm 6.0 기본은 Alt+방향키를 실제 Alt 시퀀스로 보낸다`.
+   `mac-terminal-keys.test.ts` checks Option+←/→ with `macOptionIsMeta` off and on, and Option+↑/↓.
+
+Verification: Linux only, against the 6.0.0 browser build in happy-dom. Windows WebView2 and macOS
+WKWebView delivery are field checks in WINDOWS-BUILD §10.

@@ -557,10 +557,10 @@ export class TabView {
     this.destroyTerminal();
     // 크기는 서버(PTY)의 것 — 그래야 replay 가 데스크톱과 같은 줄로 접힌다. 화면에
     // 보이는 줄바꿈은 그 위에 CSS 가 한 번 더 접는 것이다.
-    // `allowProposedApi` 는 headless 쪽의 차이다: `@xterm/headless` 5.5.0 은 `buffer`
-    // getter 를 proposed API 로 게이트해 두어 이 옵션 없이는 접근 자체가 던진다 —
-    // 같은 5.5.0 의 `@xterm/xterm` 은 게이트하지 않는다. 던지면 검은 화면에 입력이 막힌다.
-    // `modes` 는 게이트되지 않는다.
+    // `allowProposedApi` 는 headless 쪽의 차이다: `@xterm/headless` 6.0.0 은 `buffer`·`parser`
+    // getter 를 proposed API 로 게이트해 이 옵션 없이는 접근 자체가 던진다 — 같은 6.0.0 의
+    // `@xterm/xterm` 은 두 getter 를 게이트하지 않는다 (src/browser/public/Terminal.ts).
+    // 던지면 검은 화면에 입력이 막힌다. `modes` 는 게이트되지 않는다.
     const term = new Terminal({
       cols,
       rows,

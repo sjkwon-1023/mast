@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 //
-// macOS WebKit 한글 입력 — 실제 xterm 5.5 브라우저 빌드와 TerminalView 배선으로 확인한다.
+// macOS WebKit 한글 입력 — 실제 xterm 6.0 브라우저 빌드와 TerminalView 배선으로 확인한다.
 //
 // 이 Mac 의 WebKit 은 한글 두벌식에서 composition 이벤트를 보내지 않고, 키마다
 // 입력창 변경(insertText / insertReplacementText) → keydown 229 → keyup 순으로 온다.
@@ -139,7 +139,7 @@ async function ptyBytes(): Promise<string> {
 describe("macOS WebKit 한글 입력 (실제 xterm + TerminalView)", () => {
   beforeEach(() => h.writeStdin.mockClear());
 
-  it("라이브러리 전제: 어댑터 없는 xterm 5.5 는 음절마다 첫 자모만 보낸다", async () => {
+  it("라이브러리 전제: 어댑터 없는 xterm 6.0 은 음절마다 첫 자모만 보낸다", async () => {
     // 이 전제가 깨지면(업스트림이 insertReplacementText 를 처리하면) 어댑터가 중복이 된다.
     const host = document.createElement("div");
     document.body.appendChild(host);

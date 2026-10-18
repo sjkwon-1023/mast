@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 //
-// macOS 터미널 키 — 실제 xterm 5.5 브라우저 빌드와 TerminalView 배선으로, 키 하나가 PTY 에
+// macOS 터미널 키 — 실제 xterm 6.0 브라우저 빌드와 TerminalView 배선으로, 키 하나가 PTY 에
 // 어떤 바이트를 보내는지(백엔드 mock 의 writeStdin) 또는 화면·스크롤백이 어떻게 바뀌는지를 본다.
 // xterm 은 Mac 모드로 불러온다(xterm-mac-mode.test-support.ts) — Option 키 처리 등 xterm 의
 // Mac 동작을 그대로 돌린다.
@@ -33,9 +33,15 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { TerminalView } from "./view";
 import { applyTerminalSettings } from "./settings";
 import { shouldOpenLink } from "./interaction";
-import { attachBody, termOf } from "../../test-helpers";
+import {
+  attachBody,
+  cssDimensionsOf,
+  installCharMeasureGeometry,
+  termOf,
+} from "../../test-helpers";
 
 restoreProcessTitle();
+installCharMeasureGeometry();
 
 const KEY_CODES: Record<string, number> = {
   ArrowUp: 38,
@@ -110,8 +116,11 @@ function optionType(view: TerminalView, char: string, code: string): void {
 }
 
 /** 스크롤백이 생길 만큼 줄을 찍는다 (기본 24행). */
+/** 스크롤 판정 전에 측정 경계가 양수 치수를 냈고 scrollback 이 생겼는지 본다. */
 async function fillScrollback(term: Terminal): Promise<void> {
   await write(term, Array.from({ length: 200 }, (_, i) => `line ${i}`).join("\r\n"));
+  expect(cssDimensionsOf(term).cell.height).toBeGreaterThan(0);
+  expect(term.buffer.active.baseY).toBeGreaterThan(0);
 }
 
 async function sent(): Promise<string[]> {
@@ -142,6 +151,13 @@ describe("macOS 줄 편집 키", () => {
     press(view, "ArrowLeft", { altKey: true });
     press(view, "ArrowRight", { altKey: true });
     expect(await sent()).toEqual(["\x1bb", "\x1bf"]);
+  });
+
+  it("Option+↑/↓ 는 xterm 기본 시퀀스 ESC[1;3A / ESC[1;3B 를 보낸다", async () => {
+    const view = await attachedView();
+    press(view, "ArrowUp", { altKey: true });
+    press(view, "ArrowDown", { altKey: true });
+    expect(await sent()).toEqual(["\x1b[1;3A", "\x1b[1;3B"]);
   });
 
   it("⌘← / ⌘→ / ⌘⌫ 는 줄 처음·줄 끝·줄 지우기(Ctrl+A / Ctrl+E / Ctrl+U)를 보낸다", async () => {
@@ -192,6 +208,22 @@ describe("macOS Option = Meta 설정", () => {
     const meta = await attachedView();
     optionType(meta, "∫", "KeyB");
     expect(await sent()).toEqual(["\x1bb"]);
+  });
+
+  it("Option+←/→ 는 설정을 켜도 같은 ESC b / ESC f 다", async () => {
+    applyTerminalSettings({
+      fontFamily: null,
+      fontSize: null,
+      highlightLanguages: null,
+      log: null,
+      remote: null,
+      showTabIds: null,
+      macOptionIsMeta: true,
+    });
+    const view = await attachedView();
+    press(view, "ArrowLeft", { altKey: true });
+    press(view, "ArrowRight", { altKey: true });
+    expect(await sent()).toEqual(["\x1bb", "\x1bf"]);
   });
 });
 

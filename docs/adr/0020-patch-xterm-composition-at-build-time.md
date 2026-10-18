@@ -90,3 +90,41 @@ major upgrade is not a one-line change.
 - Field verification is a byte-level test, not a TUI observation: `cat > /tmp/ime.txt`, type the
   sentence, `xxd` the file — idle pane first, then next to a pane flooding output
   (WINDOWS-BUILD §10 v0.3.26).
+
+## Amendment (2026-10-18) — 6.0.0 ships the upstream fix; the build-time patch is removed
+
+The fix this ADR patched into 5.5.0 is in the published `@xterm/xterm` 6.0.0 bundles. Checked on the
+installed package: the stale expression `this._textarea.value.substring(e.start,e.end)` occurs 0 times
+in both `lib/xterm.js` (CJS) and `lib/xterm.mjs` (ESM), and the upstream form
+`this._textarea.value.substring(e.start,this._compositionPosition.start)` occurs once in each.
+
+This amendment supersedes Decisions 1–3 and the 6.0 rejection in Decision 4. The text above stays as
+the record of the 5.5.0 fault and of why the patch existed.
+
+1. **The patch is gone.** `tooling/xterm-composition-patch.ts` is deleted and `vite.config.ts` no longer
+   loads it. The exact-count check went with it. A future bundle change that alters the expression is
+   caught by the regression test below, not by a build error.
+2. **The regression lock runs the stock bundles.** `tooling/ime-composition.test.ts` loads the shipped
+   6.0.0 `lib/xterm.js` and `lib/xterm.mjs` by path and feeds the 두벌식 event sequence for `테스트 문장`
+   at flush intervals 1, 2, 3, 4 and the full length. Each bundle must produce the typed text from
+   `onData` every time (`flush 간격과 무관하게 친 그대로 보낸다`). Negative control: the same test against
+   the 5.5.0 CJS bundle fails at `flushEvery=2`, producing `테스트문장`.
+3. **Chosen versions.** `@xterm/xterm` `^6.0.0` (locked 6.0.0), `@xterm/headless` `6.0.0` (exact),
+   `@xterm/addon-fit` `^0.11.0` (locked 0.11.0), `@xterm/addon-web-links` `^0.12.0` (locked 0.12.0).
+   `@xterm/addon-webgl` is removed because mast never enabled it.
+4. **WebGL and fit obligation narrowed.** Decision 4's WebGL/fit re-measurement is limited to the
+   deployed combination, the DOM renderer with fit. WebGL was not measured on 6.0. Introducing it needs
+   its own verification.
+5. **`apps/spike` stays on 5.5.0.** It is the frozen ADR-0001 measurement harness and keeps its own lock.
+6. **Why the headless alias.** `@xterm/headless` 6.0.0 declares `"module": "lib/xterm.mjs"`, a file the
+   package does not ship; its ESM build is `lib-headless/xterm-headless.mjs`. The remote and
+   secure-remote Vite builds fail to resolve it. Both configs alias `@xterm/headless` to the CJS
+   `lib-headless/xterm-headless.js`. The ESM build is not used: its license header contains
+   `http://bellard.org/jslinux/`, which the Secure Remote plaintext audit reads as an HTTP marker.
+7. **What stays open upstream at 6.0.0.** The coalescing itself (#6089), a keydown that ends a
+   composition and sends twice (#5778 / #6140), and Windows TSF replacing the textarea value wholesale
+   (#6049). The 2026-10-18 Windows report (`수준이야` typed, `주주ㅇ야` shown) has no confirmed cause, and
+   this upgrade is not recorded as fixing it. The byte check in WINDOWS-BUILD §10 (F1) decides that.
+
+Verification: Linux only, on the 6.0.0 build (vitest, `npm run build`, both Secure Remote audits). The
+Windows and macOS checks are not run; they are listed as pending in WINDOWS-BUILD §10.
