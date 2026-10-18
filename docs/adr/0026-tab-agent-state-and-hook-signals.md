@@ -721,3 +721,17 @@ marker and the setup marker re-enables a skipped integration.
 Automated tests cover the shared hook and merge behavior plus macOS setup with isolated PATH and
 temporary configuration. A real agy turn and the below-1.1.10 warning remain device checks; they
 are not recorded as passed here.
+
+## Amendment (2026-10-19) — a `vscode` Codex session is resumable
+
+A tab that ran Claude Code and then Codex still offered the Claude resume hint after a restart.
+The Codex session (codex-cli 0.163.0, `originator: "codex-tui"`, launched in that tab) had its
+first `session_meta` recorded with `source: "vscode"`, so the ownership check filed it as
+`confirmed` and never wrote the `codex resume` hint. `source: "vscode"` therefore does not mean
+the session came from VS Code, and the same id was resumed in that tab with `codex resume`.
+
+`resumable` now covers `cli`, `exec` and `vscode`, in both `mast-codex-notify.sh` and the macOS
+`notify.py`. `confirmed` keeps a custom source and an older rollout without `source`. `rejected`
+and `unknown` are unchanged. `SETUP_VERSION` goes to 24 so existing WSL installs pick up the hook.
+Automated tests cover the classification; a real Codex turn writing the hint in a mast tab is a
+field check.

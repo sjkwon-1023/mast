@@ -417,7 +417,8 @@ class NativeResume(unittest.TestCase):
         directory.mkdir(parents=True)
         path = directory / "rollout-2026-test-thread.jsonl"
         for source, expected in [({"subagent": "review"}, ("rejected", False)),
-                                 ("cli", ("confirmed", True)), ("appServer", ("confirmed", False))]:
+                                 ("cli", ("confirmed", True)), ("vscode", ("confirmed", True)),
+                                 ("appServer", ("confirmed", False))]:
             path.write_text(json.dumps({"type": "session_meta", "payload": {"id": "thread", "source": source}}) + "\n")
             with patch.dict(os.environ, {"CODEX_HOME": str(self.root / ".codex")}):
                 self.assertEqual(self.notify.ownership("thread"), expected)

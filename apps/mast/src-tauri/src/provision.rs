@@ -38,7 +38,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 23;
+const SETUP_VERSION: u32 = 24;
 
 /// 설치 스크립트 heredoc 에 통째로 들어가는 레포 파일들: (자리표시자, heredoc 종결 줄, 내용).
 ///
@@ -1087,9 +1087,11 @@ fi
 # Codex 0.154의 임시 catch-up 턴도 같은 MAST_TAB으로 notify를 호출한다. payload에는 임시 세션 여부가 없으므로
 # 저장된 transcript 의 첫 레코드로 판정한다. transcript 형식은 Codex의 내부 계약이라 확인하지 못하면 기존
 # 힌트를 보존한다. DB 스키마나 cwd로 다른 세션을 추측하지 않는다.
-# - resumable: id 가 맞고 source 가 cli·exec. mast 탭에서 `codex resume` 으로 이어 갈 수 있어 힌트를 쓴다.
-# - confirmed: id 가 맞고 서브에이전트·내부 세션이 아닌 나머지 최상위 세션. vscode·custom 이나 source 가 없는 옛
-#   rollout(Codex 는 없는 값을 vscode 로 읽는다)을 탭에서 resume 한 경우다. idle 은 이 탭 것이지만 힌트는 쓰지 않는다.
+# - resumable: id 가 맞고 source 가 cli·exec·vscode. mast 탭에서 `codex resume` 으로 이어 갈 수 있어 힌트를 쓴다.
+#   vscode 는 TUI 로 띄운 세션에도 붙는다(codex-cli 0.163.0 의 originator codex-tui 세션이 source vscode 로
+#   기록됐고, 그 id 를 탭에서 그대로 resume 했다).
+# - confirmed: id 가 맞고 서브에이전트·내부 세션이 아닌 나머지 최상위 세션. custom 이나 source 가 없는 옛
+#   rollout 을 탭에서 resume 한 경우다. idle 은 이 탭 것이지만 힌트는 쓰지 않는다.
 # - rejected: source 가 {"subagent": …} 나 {"internal": …} 인 경우만. Codex 의 is_non_root_agent 와 같은 기준이고,
 #   dispatcher 는 이 판정으로 idle 을 생략하므로 좁게 둔다.
 # - unknown: 읽지 못했거나 잘렸거나 시간이 넘은 경우.
@@ -1105,7 +1107,7 @@ for transcript in "$1"/sessions/*/*/*/rollout-*-"$2".jsonl; do
   found="$(printf '%s\n' "$metadata" | jq -r --arg id "$2" '
     if .type == "session_meta" and .payload.id == $id then
       .payload.source as $source
-      | if $source == "cli" or $source == "exec" then "resumable"
+      | if $source == "cli" or $source == "exec" or $source == "vscode" then "resumable"
         elif ($source | type) == "object" and ($source | has("subagent") or has("internal")) then "rejected"
         else "confirmed" end
     else "unknown" end' 2> /dev/null)"

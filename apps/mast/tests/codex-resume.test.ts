@@ -278,6 +278,17 @@ integration("Codex resume notify integration", () => {
     });
   });
 
+  // codex-cli 0.163.0 은 TUI 로 띄운 세션(originator codex-tui)도 source vscode 로 기록한다.
+  it("replaces a Claude hint with a Codex session whose source is vscode", () => {
+    withHarness((harness) => {
+      harness.seedResume("claude --resume earlier");
+      harness.transcript(codex(harness), "tui-vscode", metadata("tui-vscode", "vscode"));
+      harness.run(payload("tui-vscode"));
+      expect(harness.resume()).toMatch(/^codex resume tui-vscode\n/);
+      expect(lastHistoryEntry(harness.runFreshWrapper())).toBe("codex resume tui-vscode");
+    });
+  });
+
   it("preserves a Claude hint for a subagent and replaces it for a real Codex root", () => {
     withHarness((harness) => {
       const claudeHint = harness.seedResume("claude --resume claude-root");
@@ -342,8 +353,8 @@ integration("Codex resume notify integration", () => {
   it("keeps the prior hint for a source mast cannot resume, an oversized record, and a truncated record", () => {
     withHarness((harness) => {
       const original = harness.seedResume("codex resume original");
-      const unsupported = "vscode-source";
-      harness.transcript(codex(harness), unsupported, metadata(unsupported, "vscode"));
+      const unsupported = "custom-source";
+      harness.transcript(codex(harness), unsupported, metadata(unsupported, { custom: "atlas" }));
       harness.run(payload(unsupported));
       expect(harness.resume()).toBe(original);
 
@@ -453,7 +464,6 @@ integration("Codex notify hands the idle decision to the dispatcher", () => {
   });
 
   const OTHER_ROOT_SOURCES = [
-    { name: "a VS Code session", record: (id: string) => metadata(id, "vscode") },
     { name: "a custom source", record: (id: string) => metadata(id, { custom: "atlas" }) },
     { name: "an old rollout without a source", record: (id: string) => JSON.stringify({ type: "session_meta", payload: { id } }) },
   ];
@@ -650,10 +660,10 @@ integration("Codex notify hands the idle decision to the dispatcher", () => {
       expect(harness.notifyArgs()).toBeUndefined();
       expect(harness.resume()).toMatch(/^codex resume pty-root\n/);
 
-      const vscode = "pty-vscode";
-      harness.transcript(codex(harness), vscode, metadata(vscode, "vscode"));
-      expect(runInPty(harness, payload(vscode, "picked up from VS Code"))).toBe(
-        "\u001b]777;notify;mast:idle;picked up from VS Code\u0007",
+      const custom = "pty-custom";
+      harness.transcript(codex(harness), custom, metadata(custom, { custom: "atlas" }));
+      expect(runInPty(harness, payload(custom, "picked up elsewhere"))).toBe(
+        "\u001b]777;notify;mast:idle;picked up elsewhere\u0007",
       );
       expect(harness.resume()).toMatch(/^codex resume pty-root\n/);
     });

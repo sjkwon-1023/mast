@@ -58,7 +58,7 @@ def ownership(thread):
             if isinstance(source, dict) and ("subagent" in source or "internal" in source):
                 verdict = "rejected"
                 continue
-            return "confirmed", source in ("cli", "exec")
+            return "confirmed", source in ("cli", "exec", "vscode")
     return verdict, False
 
 
