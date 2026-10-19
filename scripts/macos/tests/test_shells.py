@@ -321,6 +321,30 @@ class AutoResumeCases:
                 self.finish()
                 self.assertEqual(self.history_text(shell).count(self.HINT), 1)
 
+    def test_a_late_refresh_of_the_resumed_session_is_not_added_but_a_later_run_is(self):
+        # notify 는 에이전트가 끝난 뒤에 도착할 수 있다. 실행 세대로 기록된 같은 명령은 언제 와도 다시 넣지 않고,
+        # 이후 프롬프트에서 같은 세션을 다시 띄운 기록(다른 세대)은 받아야 한다.
+        self.prepare()
+        (self.home / ".mast/bin/claude").write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$MAST_PROMPT_GEN" >> "$HOME/agent-log"\n'
+        )
+        self.auto = "1"
+        hint = self.home / ".mast/resume/tab-42"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                self.start(shell)
+                [run_generation] = self.agent_log()
+                hint.write_text("%s\n2\n%s\n" % (self.HINT, run_generation))
+                self.send("true")
+                self.send("true")
+                self.assertEqual(self.history_text(shell).count(self.HINT), 1)
+                hint.write_text("%s\n3\n%s\n" % (self.HINT, self.generation()))
+                self.send("true")
+                self.finish()
+                self.assertEqual(self.history_text(shell).count(self.HINT), 2)
+
     def test_a_run_that_exits_normally_is_not_offered_to_run_again(self):
         self.prepare()
         self.auto = "1"

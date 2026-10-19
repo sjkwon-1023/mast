@@ -759,8 +759,10 @@ session owns a tab's hint, and an automatic run uses that hint unchanged.
 run, with tokens of `[A-Za-z0-9_-]` up to 96 characters, through `command` and a fixed argv. There is no
 `eval`, no `sh -c` and no PTY input injection. Each shell tries once. The command enters the tab's
 history once, before the queue, so a skipped or cancelled run still leaves the manual hint. After the
-run the shell records a new generation, and when the resumed session rewrites the same command with a new
-timestamp, that refresh is treated as already seen so the command is not added to history again. Nested
+run the shell records a new generation. The shell remembers the command it ran and the generation it ran
+under; a hint with that command and that generation, which the resumed session keeps writing (a notify
+arriving after the agent exits included), is not added to history again, while the same session started
+later from another prompt (a different generation) is. Nested
 shells never record a generation and never run a hint; an inherited generation is covered under accepted
 limits.
 
