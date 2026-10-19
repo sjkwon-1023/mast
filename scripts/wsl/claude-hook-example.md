@@ -1111,9 +1111,10 @@ When the hint is eligible, the shell:
 Each shell tries once. If the queue skips or cancels the run, the command stays in the tab's history and the
 shell prints the manual `[mast] resume previous agent: <command>` line instead.
 
-If the generation file cannot be written, the shell removes `~/.mast/prompt/tab-<id>` and prints
+If the generation file cannot be written, the shell tries to remove `~/.mast/prompt/tab-<id>` and prints
 `[mast] auto-resume unavailable: cannot write ~/.mast/prompt/tab-<id>` once per shell. A first prompt that
-cannot record its generation does not run the candidate.
+cannot record its generation does not run the candidate. If the removal fails too and write access returns
+before the next boot, that boot can run the exited agent once (accepted; see ADR-0026).
 
 **Queue.** `mast-auto-resume.py` admits runs one at a time through `fcntl.flock` on `~/.mast/auto-resume.lock`.
 The lock is held only until a run is admitted, and the file is never deleted or replaced, so every waiter
@@ -1132,9 +1133,10 @@ section's behavior: `launch.sh` sees that the file does not define `_mast_prompt
 launch-time manual hint and OSC 7 prompt, without an automatic run.
 
 **Nested shells (accepted limit).** A nested shell carries the root's `MAST_PROMPT_GEN` unless the mast
-integration runs in it. That is the case for a nested zsh, and for a nested bash on macOS. An agent started
-by hand in such a shell, and exited while that nested shell stays open until mast quits, is run once at the
-next boot. The WSL bash path drops the inherited value. ADR-0026's amendment explains why this is accepted.
+integration runs in it, and it runs only in a bash nested under a WSL bash root. A nested zsh, a bash nested under a
+zsh root, and a bash nested under a macOS bash root keep the value. An agent started by hand in such a
+shell, and exited while that nested shell stays open until mast quits, is run once at the next boot.
+ADR-0026's amendment explains why this is accepted.
 
 ### The Codex half — `mast-codex-notify.sh`
 

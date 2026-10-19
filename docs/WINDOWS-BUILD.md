@@ -2970,8 +2970,9 @@ a zsh tab.
    command fails visibly, the normal prompt returns, and nothing is retried.
 8. **Nested shell.** Start `bash` or `zsh` inside a restored tab, run an agent there and exit it normally, then
    quit and relaunch. `~/.mast/prompt/tab-<id>` must keep its value in the nested shell, and the restored tab must
-   not run that agent. This holds for WSL bash only. For zsh and macOS bash the nested shell carries the
-   root's generation and the agent runs once (ADR-0026 amendment, accepted limit); record what happened.
+   not run that agent. This holds only for a bash nested under a WSL bash root. For a nested zsh, a bash under
+   a zsh root, and macOS, the nested shell carries the root's generation and the agent runs once (ADR-0026
+   amendment, accepted limit); record the root and nested shell and what happened.
 9. **Codex before its first turn.** Quit while a new Codex session has not completed its first turn. Nothing is
    restored; this is the accepted limit.
 10. **Upgrade, first shell.** Upgrade from the previous build with `autoResume` on, then open the first bash tab.

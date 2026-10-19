@@ -759,14 +759,19 @@ session owns a tab's hint, and an automatic run uses that hint unchanged.
 run, with tokens of `[A-Za-z0-9_-]` up to 96 characters, through `command` and a fixed argv. There is no
 `eval`, no `sh -c` and no PTY input injection. Each shell tries once. The command enters the tab's
 history once, before the queue, so a skipped or cancelled run still leaves the manual hint. After the
-run the shell records a new generation. Nested shells never record a generation and never run a hint; an
-inherited generation is covered under accepted limits.
+run the shell records a new generation, and when the resumed session rewrites the same command with a new
+timestamp, that refresh is treated as already seen so the command is not added to history again. Nested
+shells never record a generation and never run a hint; an inherited generation is covered under accepted
+limits.
 
 **Write failure.** If the generation cannot be written, for example because the prompt file is read-only,
 the shell removes `~/.mast/prompt/tab-<id>` and prints `[mast] auto-resume unavailable: cannot write
 ~/.mast/prompt/tab-<id>` once per shell. A first prompt whose generation cannot be recorded does not run a
 candidate and shows the manual hint instead. The removal matters: an old generation left on disk would
-match its own hint at the next boot.
+match its own hint at the next boot. It is an attempt, and its result is not checked: if both the write and
+the removal fail (the prompt file and its directory both unwritable) and write access comes back before the
+next boot, that boot can run the exited agent once. This needs the user's own permission change under
+`~/.mast/prompt` and is accepted.
 
 **One manual hint.** With a matching integration, the first prompt owns the manual hint and its history
 entry in bash and zsh, whether or not `autoResume` is on. `launch.sh` prints and records the hint only for an
@@ -791,11 +796,13 @@ this unreleased branch first set; it is not raised again for this change.
 with no written hint is not restored, for example a Codex session quit before its first turn completes.
 The dead-tab case (`0x40010004`) and Windows shutdown handling are outside this change.
 
-**Accepted limit: nested shells that do not run the mast integration.** A nested bash on WSL drops the inherited
-`MAST_PROMPT_GEN` at its first prompt, because the integration runs there through the inherited
-`PROMPT_COMMAND`. A nested non-login zsh does not: a root zsh restores the user's `ZDOTDIR` after startup,
-so the nested zsh reads only the user's startup files and never the integration. A nested bash on macOS does
-not inherit `PROMPT_COMMAND` at all. In these shells an agent started by hand writes a three-line hint that
+**Accepted limit: nested shells that do not run the mast integration.** Only a nested bash started under a
+WSL **bash** root drops the inherited `MAST_PROMPT_GEN`, at its first prompt, because the integration runs
+there through the `PROMPT_COMMAND` that the WSL bash launcher exports. Every other nesting keeps it. A
+nested non-login zsh does not run the integration: a root zsh restores the user's `ZDOTDIR` after startup,
+so the nested zsh reads only the user's startup files. A bash nested under a zsh root (WSL or macOS) gets
+no `PROMPT_COMMAND`, since the zsh tab exports none by contract, and a bash nested under a macOS bash root
+does not inherit the non-exported one. In these shells an agent started by hand writes a three-line hint that
 carries the root's generation, and if that nested shell is still open when mast quits, the next boot runs
 it once. Closing this would mean changing the zsh `ZDOTDIR` restore, exporting the macOS bash prompt hook to
 every nested shell, guessing shell commands in a root `preexec`, or walking the process tree from each hint

@@ -169,7 +169,7 @@ _mast_auto_candidate() {
 # 후보 하나를 한 번만 시도한다. 명령은 대기 전에 탭 history 에 넣어, 대기 중 취소하거나 건너뛰어도 수동
 # hint 로 남는다. 허가는 대기열 helper 만 내리고, 허가받은 뒤에만 고정 argv 로 CLI 를 실행한다.
 _mast_auto_run() {
-  local interp rc
+  local interp rc cmd stamp
   printf '\033[2m[mast] auto-resume: %s\033[0m\n' "$_mast_auto_cmd"
   _mast_history_add "$_mast_auto_cmd"
   _mast_resume_seen=$_mast_auto_seen
@@ -186,6 +186,12 @@ _mast_auto_run() {
       codex) command codex resume "$_mast_auto_token" ;;
       opencode) command opencode --session "$_mast_auto_token" ;;
     esac
+    # 재개한 세션은 같은 명령을 새 시각으로 hint 에 다시 쓴다. 그 갱신을 새 hint 로 보고 다음 프롬프트가
+    # history 에 또 넣지 않도록, 같은 명령이면 지금 내용을 이미 본 것으로 둔다. 다른 세션의 hint 는 그대로 받는다.
+    if _mast_read_bounded "$HOME/.mast/resume/tab-$MAST_TAB" 1024; then
+      { IFS= read -r cmd && IFS= read -r stamp; } <<< "$_mast_blob"
+      [[ $cmd == "$_mast_auto_cmd" ]] && _mast_resume_seen=$cmd$'\n'$stamp
+    fi
   else
     (( rc == 1 || rc == 130 )) || printf '\033[2m[mast] auto-resume helper failed (exit %s)\033[0m\n' "$rc"
     printf '\033[2m[mast] resume previous agent: %s\033[0m\n' "$_mast_auto_cmd"

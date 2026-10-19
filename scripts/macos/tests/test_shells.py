@@ -302,6 +302,25 @@ class AutoResumeCases:
                 self.finish()
                 self.assertEqual(self.history_text(shell).count(self.HINT), 1)
 
+    def test_a_resumed_session_refreshing_its_hint_is_not_added_to_history_again(self):
+        # 실제 writer 는 재개한 세션의 같은 명령을 새 시각으로 다시 쓴다. 다음 프롬프트가 그것을 새 hint 로 보면
+        # 실행한 resume 명령이 history 에 두 번 남는다.
+        self.prepare()
+        (self.home / ".mast/bin/claude").write_text(
+            '#!/bin/sh\nprintf "claude %s\\n" "$*" >> "$HOME/agent-log"\n'
+            'printf "claude --resume %s\\n2\\n%s\\n" "$2" "$MAST_PROMPT_GEN" > "$HOME/.mast/resume/tab-$MAST_TAB"\n'
+        )
+        self.auto = "1"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                self.start(shell)
+                self.assertEqual(self.agent_log(), ["claude --resume tok-2"])
+                self.send("true")
+                self.finish()
+                self.assertEqual(self.history_text(shell).count(self.HINT), 1)
+
     def test_a_run_that_exits_normally_is_not_offered_to_run_again(self):
         self.prepare()
         self.auto = "1"
