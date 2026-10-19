@@ -5,7 +5,8 @@ import { IS_MAC } from "./platform";
 // ⌘+ / - / 0 확대·축소, F2(Fn+F2) 이름 바꾸기. ⌘C/V 편집, ⌘⇧R 새로고침, ⌘Q 종료는
 // 담당이 따로 있다. 터미널 안의 ⌘←/→/⌫ 줄 편집, ⌘K 지우기, Fn+↑/↓/←/→ 스크롤,
 // ⇧Fn+↑/↓ 는 아래 표의 macOS 행(features/terminal/view.ts 소유)이다. 목록에 없는
-// Ctrl/Option 조합은 계속 PTY 몫이다 (Option+←/→ 는 xterm Mac 기본 `ESC b`/`ESC f`).
+// Ctrl/Option 조합은 계속 PTY 몫이다 (Option+←/→ 의 `ESC b`/`ESC f` 는
+// features/terminal/interaction.ts::macTerminalKeyAction 이 보낸다).
 // 키보드 판정 — DOM 무의존 순수 모듈.
 //
 // 3층 구조(워크스페이스 / pane / 탭)의 이동 키와, 마우스로만 되던 조작
@@ -41,7 +42,8 @@ import { IS_MAC } from "./platform";
 // | `Ctrl+V` / `Ctrl+Shift+V` / `Shift+Insert` | 붙여넣기 (클립보드 → xterm paste) | features/terminal/view.ts customKeyEventHandler |
 // | `Ctrl+C` / `Ctrl+Shift+C` / `Ctrl+Insert` (선택 있을 때만) | 복사 — 선택 없는 `Ctrl+C` 는 SIGINT 로 통과. 복사 뒤 선택을 지운다. macOS 는 `⌘C` 이고 선택을 남긴다(Ctrl+C 는 항상 PTY) | features/terminal/interaction.ts `isCopySelectionKey` (기록 뷰도 같은 판정 — features/viewers/record/view.ts) |
 // | `Shift+Enter` (터미널 내) | ESC CR 재작성 — Claude Code 줄바꿈 관례 | features/terminal/view.ts customKeyEventHandler |
-// | `Alt+↑↓←→` (터미널 내, Shift 없이 — **Windows 만**) | 실제 Alt 시퀀스(`ESC[1;3X`)로 재작성 — xterm 5.5 의 Alt→Ctrl 재작성(HACK) 우회. pane 이동은 `Alt+Shift` 계열이라 여기 닿지 않는다. macOS 는 재작성하지 않는다 (xterm Mac 기본 = Terminal.app: Option+←/→ `ESC b`/`ESC f`) | features/terminal/view.ts customKeyEventHandler + features/terminal/interaction.ts::altArrowSequence |
+// | `Alt+↑↓←→` (터미널 내, Shift 없이 — **Windows 만**) | xterm 6.0 기본 Alt 시퀀스(`ESC[1;3X`)를 그대로 PTY 로 보낸다. xterm 5.5 의 Alt→Ctrl 재작성(HACK)은 6.0 에서 삭제돼 mast 는 우회하지 않는다. pane 이동은 `Alt+Shift` 계열이라 여기 닿지 않는다 | xterm 기본 (features/terminal/view.ts customKeyEventHandler 는 통과) |
+// | macOS `Option+←` / `Option+→` (터미널 내, Shift·⌘ 없이) | 셸 단어 이동 `ESC b` / `ESC f` (Terminal.app 관례). xterm 6.0 은 이 변환을 삭제했으므로 mast 가 보낸다. `macOptionIsMeta` 설정과 무관. `Option+↑↓` 는 xterm 기본 `ESC[1;3A/B` | features/terminal/interaction.ts::macTerminalKeyAction |
 // | macOS `⌘←` / `⌘→` / `⌘⌫` (터미널 내) | 줄 처음 `\x01` / 줄 끝 `\x05` / 줄 지우기 `\x15` 로 PTY 에 보낸다 (Terminal.app·iTerm2 관례) | features/terminal/view.ts customKeyEventHandler + features/terminal/interaction.ts::macTerminalKeyAction |
 // | macOS `⌘K` (터미널 내, 일반 버퍼에서만) | 화면 + 스크롤백 지우기 (xterm `clear()`, PTY 에는 보내지 않음). alt 버퍼(vim 등)에서는 가로채지 않는다 | 같은 곳 |
 // | macOS `PgUp` / `PgDn` / `Home` / `End` = `Fn+↑/↓/←/→` (터미널 내, 수식 없이) | 일반 버퍼이고 마우스 추적이 꺼져 있을 때만 스크롤백 한 페이지 위/아래·맨 위/맨 아래. alt 버퍼·마우스 추적 중에는 가로채지 않는다(PTY 몫) | 같은 곳 |

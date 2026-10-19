@@ -2946,6 +2946,76 @@ Claude trust prompt. For each result, record the app build, the distro, the logi
    replacing `<id>` with the recorded number. Other open tabs' history and the user's own history
    must remain. A Restart is not a deletion condition.
 
+### Unreleased — xterm 6.0 upgrade field verification (ADR-0020/0019/0007 amendments 2026-10-18)
+
+Not run on any device yet. The Linux gates (vitest, `npm run build`, both Secure Remote audits) cover
+the 6.0.0 build in happy-dom. They do not show WebView2 or WKWebView delivery, a real DPI, or a phone.
+For each item, record the commit, `@xterm/xterm` 6.0.0, and the platform and its version. Mark an item
+passed only after running it on that platform.
+
+1. **F1 — Korean input bytes on Windows (ADR-0020).** Run the dev build (`npm run tauri dev` in
+   `apps\mast`) and the release build (`npm run tauri build -- --no-bundle`, then
+   `target\release\mast-app.exe`) from the same commit. Record the Windows version, the WebView2 runtime
+   version, the keyboard and IME, dev or release, and log on or off. In each combination, idle and next
+   to a pane that floods output, type `수준이야` and `테스트 문장` by hand at least 10 times each. Pasting
+   does not count. During composition, try Space, Enter, Backspace, an arrow key, the 한/영 toggle, and a
+   focus change to another pane.
+
+   In a WSL pane, capture what the shell received. Prepare the expected files by copy and paste, not by
+   typing Korean through the IME:
+
+   ```bash
+   cat > /tmp/mast-ime-level.txt     # type 수준이야, press Enter, then Ctrl+D on an empty line
+   printf '%s\n' '수준이야' > /tmp/mast-ime-level.expected
+   xxd -g 1 /tmp/mast-ime-level.txt
+   cmp /tmp/mast-ime-level.expected /tmp/mast-ime-level.txt
+   ```
+
+   Repeat for `테스트 문장` with `/tmp/mast-ime-sentence.*`. `cmp` must exit 0. The UTF-8 bytes of
+   `수준이야` are `ec 88 98 ec a4 80 ec 9d b4 ec 95 bc`, followed by one `0a`. `테스트 문장` is
+   `ed 85 8c ec 8a a4 ed 8a b8 20 eb ac b8 ec 9e a5`, followed by one `0a`. If a mismatch remains, keep
+   the input file, the `xxd` output, the composition log lines and the load and switch conditions, and
+   record "6.0 upgraded, IME symptom not resolved". Do not work around the upstream issues in this step.
+
+2. **F2 — Scrollbar and restore (ADR-0019 amendment).** In a mast WSL tab, run `seq 1 5000` and a
+   Codex transcript. Return from another workspace to the bottom, to 20 lines up, and to line 0. After
+   the restore settles, the identified line must be within ±2 lines of where it started, with no stuck
+   top. While a replay or reprint runs, try each of key, wheel, track click and slider drag. After a key,
+   output keeps following the bottom. After a wheel, a track click or a slider drag, the chosen position
+   holds when new output arrives during the restore. A click on text does not cancel. Input in another pane must not cancel the restore. Repeat ED 3, resize, a short
+   replay, leaving during a restore, Ctrl+Shift+R and the automatic WebView reload from the ADR-0019
+   checklist in §10. Keep a plain shell, Codex and an alternate-screen TUI separate, and record each CLI
+   version. After `clear`, new output must follow the bottom. In developer tools, record the event target
+   of a real track and slider, and how it relates to `.xterm-screen`. The presence of `.xterm-viewport`
+   is not evidence that a cancel worked.
+
+3. **F3 — Fit, rendering, load and recording (ADR-0019 amendment, ADR-0020).** In a quarter-size pane
+   at Windows DPI 100% and 150%, while resizing the window, dragging the splitter and zooming, the last
+   column, last row, cursor and selection must not be hidden. A pane with scrollback must show its
+   scrollbar without the pointer, and the track and slider must be usable. An empty pane and an alternate-screen TUI must show no
+   scrollbar. Check PageUp, PageDown, Home
+   and End on the normal buffer, scrolling in a mouse-tracking TUI, and the recorded viewer: selection,
+   copy, resize and zoom.
+
+   Load: in a mast WSL tab run `bash scripts/wsl/flood.sh 10 --random-lines`. From the repo root, measure
+   the release app with `.\scripts\win\measure.ps1 -ProcessName mast-app -IntervalSec 5 -Samples 12 -OutCsv .\xterm6-4pane.csv`.
+   Compare with `8cabfbd` on the same machine if possible. The ADR-0001 ceiling for sustained four-pane use
+   is 150 MB of private working set. Record only numbers that were measured. WebGL rendering is not part
+   of this build, so it is not a pass item.
+
+4. **F4 — Phone, Local HTTP and Secure Remote (ADR-0016, ADR-0028).** Record the phone OS and browser
+   version. Open Local HTTP and then Secure Remote through the existing pairing path. The shell and a TUI
+   must render without a blank or error screen, and input must enable after the first replay. Check new
+   output delta, refresh and reset, arrow keys, bracketed paste, phone size changes and return to
+   desktop, and a late callback after disconnect. If the Secure Remote device connection was already
+   unverified (§17), this upgrade does not change that status.
+
+5. **F5 — macOS WKWebView (ADR-0007 amendment, ADR-0020).** On a Mac, run `npm run tauri dev` or the
+   native app built from this commit. Type `한글`, two sentences, and leave a syllable pending. Then try
+   Option+←/→, Cmd editing and paste, and blur. Option+letter sends one character by default, and an ESC
+   prefix with the Meta setting. Option+←/→ does word motion with either setting. The inline preview must
+   follow the cursor after resize, scroll and zoom. The Linux synthetic Mac tests do not replace this run.
+
 ### Unreleased — agent auto-resume field verification (ADR-0026 amendment 2026-10-19)
 
 Pending Windows/WSL field verification. None of the items below is recorded as passed. For each result,

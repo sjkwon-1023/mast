@@ -67,9 +67,12 @@ MVP.
 - **Terminal modes after reattach** (ADR-0015): the alt screen is deliberately not
   re-asserted, so a TUI whose `?1049h` was evicted returns on the normal buffer; a paste
   during the replay gate is logged, not buffered.
-- **IME** (ADR-0020): whether the 2026-08-22 "stuck composition" report was the patched
-  xterm fault is unconfirmed, so the `shared/keys.ts` `isComposing` guard and the
-  composition log lines stay. The eventual fix is the xterm 6 upgrade as its own change.
+- **IME** (ADR-0020, amended 2026-10-18): `@xterm/xterm` is 6.0.0, which ships the upstream
+  composition fix, so the 5.5 build-time patch is gone. Upstream limits remain (xterm.js #6089,
+  #5778/#6140, #6049). Whether the 2026-10-18 Windows report (`수준이야` typed, `주주ㅇ야` shown) is
+  one of them is unconfirmed until the byte check in WINDOWS-BUILD §10 F1 runs; the upgrade does not
+  close it. The `shared/keys.ts` `isComposing` guard stays so shortcuts do not fire mid-composition,
+  and the composition log lines (ADR-0014) stay as the evidence for F1.
 - **Splitter resize is mouse-drag only.**
 - **Per-pane split-button affordance** (ADR-0004): a first-time user read the header
   buttons as "split the selected pane".

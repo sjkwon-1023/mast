@@ -3,9 +3,10 @@
 // 이 Mac 의 WebKit(Tauri WKWebView, Safari 모두)은 한글 두벌식 입력에서 composition
 // 이벤트를 보내지 않는다. 대신 키 하나마다 (a) 입력창이 먼저 바뀌고 — 새 음절의 첫 자모는
 // `insertText`, 같은 음절의 갱신은 마지막 글자를 바꾸는 `insertReplacementText` — 그 뒤
-// (b) keyCode 229 keydown, (c) 실제 keyCode 의 keyup 이 온다. xterm 5.5 는 `insertText` 를
-// 받자마자 보내고 교체는 무시하므로 PTY 에는 음절마다 첫 자모만 갔다("한글" → "ㅎㄱ").
-// ADR-0020 의 패치는 composition 이벤트 경로의 결함이라 이 경로와 무관하다.
+// (b) keyCode 229 keydown, (c) 실제 keyCode 의 keyup 이 온다. xterm 6.0 도 `insertText` 를
+// 받자마자 보내고 교체(`insertReplacementText`)는 처리하지 않는다 (`CoreBrowserTerminal._inputEvent`).
+// 그래서 어댑터 없이는 PTY 에 음절마다 첫 자모만 간다("한글" → "ㅎㄱ").
+// ADR-0020이 다룬 composition 경로의 결함과는 무관하다.
 //
 // 그래서 확정을 입력창 내용 기준으로 다시 한다. `committed` 는 입력창에서 이미 처리된
 // (우리가 보냈거나 xterm 이 처리한) 앞부분의 길이이고, 그 뒤가 아직 바뀔 수 있는 조합

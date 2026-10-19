@@ -2,12 +2,11 @@
 //
 // Alt+방향키가 PTY 까지 **진짜 Alt 수식**으로 가는지 잠그는 회귀 테스트.
 //
-// 실패 모양: mast 는 plain Alt+방향키를 가로채지 않는데도(xterm custom handler 통과)
-// Codex 질문 UI 의 Alt+Up 이 동작하지 않았다. 원인은 xterm 5.5 의
-// `evaluateKeyboardEvent` 가 Alt+방향키를 Ctrl+방향키(`ESC[1;5A`)로 바꿔 보내는
-// HACK 이다 — PTY 에는 Alt 가 아니라 Ctrl 이 도착한다. 터미널 뷰가 그 HACK 을
-// 우회해 실제 시퀀스(`ESC[1;3A`)를 직접 보내는 것을 여기서 실제 브라우저 빌드로
-// 확인한다 (headless 빌드는 키보드 경로를 갖지 않아 이 파일의 대상이 아니다).
+// 실패 모양(xterm 5.5 에서 관측): `evaluateKeyboardEvent` 가 Alt+방향키를 Ctrl+방향키(`ESC[1;5A`)로
+// 바꿔 보내서 Codex 질문 UI 의 Alt+Up 이 PTY 에서 Ctrl 로 도착했다. xterm 6.0 은 이 변환을
+// 삭제했고 mast 는 우회를 두지 않으므로, 여기서는 실제 브라우저 빌드의 기본 배선이 진짜 Alt
+// 시퀀스(`ESC[1;3X`)를 보내는지 확인한다 (headless 빌드는 키보드 경로를 갖지 않아 이 파일의
+// 대상이 아니다).
 //
 // 백엔드 IPC 는 mock 이라 writeStdin 으로 나가는 바이트가 곧 PTY 도착 바이트다.
 
@@ -95,6 +94,19 @@ describe("Alt+방향키 전달", () => {
     }
   });
 
+  it("Ctrl+Alt+방향키는 xterm 기본 수식 시퀀스(ESC[1;7X)를 그대로 보낸다", async () => {
+    const view = await attachedView();
+    const term = termOf(view);
+    try {
+      term.textarea!.dispatchEvent(arrowEvent("ArrowUp", { altKey: true, ctrlKey: true }));
+      await vi.waitFor(() => {
+        expect(h.writeStdin).toHaveBeenLastCalledWith(7, "\x1b[1;7A");
+      });
+    } finally {
+      view.dispose();
+    }
+  });
+
   it("실제 배선: window capture 는 Alt+Shift 만 pane 이동으로 소비하고 Shift 없는 Alt+방향키는 터미널에 넘긴다", async () => {
     const view = await attachedView();
     const term = termOf(view);
@@ -132,10 +144,9 @@ describe("Alt+방향키 전달", () => {
     }
   });
 
-  it("라이브러리 전제: xterm 5.5 기본은 Alt+방향키를 Ctrl+방향키로 바꾼다", async () => {
-    // 이 전제가 깨지면(업스트림이 고치면) view 의 우회로가 중복이 된다 — 그때는
-    // 우회로를 걷어낼지 판단해야 하므로 여기서 소리내어 잠근다. 우회 판정 자체는
-    // interaction.ts::altArrowSequence 가 갖고, 이 테스트는 stock 동작만 본다.
+  it("라이브러리 전제: xterm 6.0 기본은 Alt+방향키를 실제 Alt 시퀀스로 보낸다", async () => {
+    // 이 전제가 깨지면(업스트림이 다시 Ctrl 로 바꾸면) Alt+방향키가 TUI 에 Ctrl 로 도착한다.
+    // 그때는 키 입력 배선을 다시 판단해야 하므로 여기서 소리내어 잠근다.
     const host = document.createElement("div");
     document.body.appendChild(host);
     const term = new Terminal({ cols: 80, rows: 24 });
@@ -145,7 +156,7 @@ describe("Alt+방향키 전달", () => {
     try {
       term.textarea!.dispatchEvent(arrowEvent("ArrowUp", { altKey: true }));
       await vi.waitFor(() => {
-        expect(data).toEqual(["\x1b[1;5A"]);
+        expect(data).toEqual(["\x1b[1;3A"]);
       });
     } finally {
       term.dispose();

@@ -11,15 +11,13 @@ import {
 } from "./scroll";
 import { clampFontSize } from "../../shared/font-size";
 import {
-  altArrowSequence as platformAltArrowSequence,
   isCopySelectionKey as platformCopySelectionKey,
   shouldOpenLink as platformShouldOpenLink,
 } from "./interaction";
 
-// Windows 계약(선택 복사·Alt+방향키 재작성·클릭 한 번 링크)을 명시적으로 유지한다. 테스트
-// 호스트가 Mac 이어도 같다. Mac 동작은 mac-terminal-keys.test.ts 가 따로 본다.
+// Windows 계약(선택 복사·클릭 한 번 링크)을 명시적으로 유지한다. 테스트 호스트가 Mac 이어도
+// 같다. Mac 동작은 mac-terminal-keys.test.ts 가 따로 본다.
 const isCopySelectionKey = (event: KeyboardEvent, selected: boolean) => platformCopySelectionKey(event, selected, false);
-const altArrowSequence = (event: KeyboardEvent) => platformAltArrowSequence(event, false);
 const shouldOpenLink = (uri: string, mode: string) => platformShouldOpenLink(uri, mode, { metaKey: false }, false);
 
 describe("clampFontSize", () => {
@@ -110,44 +108,6 @@ describe("isCopySelectionKey", () => {
     expect(isCopySelectionKey(key({ ctrlKey: true, altKey: true }), true)).toBe(false);
     expect(isCopySelectionKey(key({}), true)).toBe(false);
     expect(isCopySelectionKey(key({ ctrlKey: true, key: "v" }), true)).toBe(false);
-  });
-});
-
-describe("altArrowSequence", () => {
-  // xterm 의 Alt→Ctrl 재작성 우회 판정 — 여기가 틀리면 TUI 는 Alt 대신 Ctrl 을 받는다.
-  const ev = (init: Partial<KeyboardEvent>): KeyboardEvent =>
-    ({
-      key: "ArrowUp",
-      altKey: false,
-      ctrlKey: false,
-      metaKey: false,
-      shiftKey: false,
-      isComposing: false,
-      ...init,
-    }) as KeyboardEvent;
-
-  it("Alt 단독 + 방향키 4종은 실제 Alt 시퀀스를 돌려준다", () => {
-    expect(altArrowSequence(ev({ key: "ArrowUp", altKey: true }))).toBe("\x1b[1;3A");
-    expect(altArrowSequence(ev({ key: "ArrowDown", altKey: true }))).toBe("\x1b[1;3B");
-    expect(altArrowSequence(ev({ key: "ArrowRight", altKey: true }))).toBe("\x1b[1;3C");
-    expect(altArrowSequence(ev({ key: "ArrowLeft", altKey: true }))).toBe("\x1b[1;3D");
-  });
-
-  it("수식이 더 붙거나 Alt 가 없으면 null — xterm·pane 이동 소유다", () => {
-    for (const init of [
-      { key: "ArrowUp" },
-      { key: "ArrowUp", shiftKey: true },
-      { key: "ArrowUp", altKey: true, shiftKey: true }, // pane 이동
-      { key: "ArrowUp", altKey: true, ctrlKey: true },
-      { key: "ArrowUp", altKey: true, metaKey: true },
-      { key: "a", altKey: true },
-    ]) {
-      expect(altArrowSequence(ev(init))).toBeNull();
-    }
-  });
-
-  it("IME 조합 중에는 조합기 소유라 가로채지 않는다", () => {
-    expect(altArrowSequence(ev({ key: "ArrowUp", altKey: true, isComposing: true }))).toBeNull();
   });
 });
 
@@ -324,15 +284,15 @@ describe("scrollbackWipeRestoreOffset", () => {
 
 // **라이브러리 전제 잠금.** "커스텀 CSI 핸들러가 xterm 내장 ED 처리보다 먼저 돈다"
 // 는 위 판정이 서 있는 바닥이다 — 순서가 뒤집히면 훅은 이미 지워진 버퍼(baseY 0)를
-// 읽어 offset 0 → null 이 되고, 기능은 에러 없이 조용히 죽는다. 브라우저 빌드는
-// vitest 에서 띄울 수 없어 같은 5.5.0 의 headless 로 본다 (파서·버퍼는 공유 코어다).
+// 읽어 offset 0 → null 이 되고, 기능은 에러 없이 조용히 죽는다. 뷰포트가 필요 없는
+// 순서이므로 같은 파서·버퍼 코어를 쓰는 headless 6.0.0 으로 본다.
 describe("ESC[3J 파서 훅", () => {
   it("훅이 읽는 baseY/viewportY 는 스크롤백이 지워지기 전 값이다", async () => {
     const term = new HeadlessTerminal({
       cols: 20,
       rows: 5,
       scrollback: 1000,
-      // headless 5.5.0 은 buffer 를 이 옵션 뒤에 둔다 (v0.3.19 의 폰 검은 화면).
+      // headless 6.0.0 은 buffer·parser 를 이 옵션 뒤에서만 연다 (v0.3.19 의 폰 검은 화면).
       allowProposedApi: true,
     });
     const write = async (data: string): Promise<void> =>
