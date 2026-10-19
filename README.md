@@ -57,10 +57,14 @@ App Control turned on, Windows blocks the unsigned exe either way.
 
 ### Updating
 
-Run `mast update` in any mast terminal, then quit mast completely and open it again. It runs the
-same installer and works while mast is open. (Versions older than `mast update` need the
-PowerShell line above once.) The sidebar shows your version, and mast tells you when a newer
-release is out; it never installs anything on its own.
+In any mast terminal, run:
+
+```sh
+mast update
+```
+
+Then quit mast completely and open it again. The sidebar shows your version, and mast tells you
+when a newer release is out; it never installs anything on its own.
 
 ## Install on macOS (Apple Silicon)
 
