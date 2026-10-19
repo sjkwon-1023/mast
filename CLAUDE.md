@@ -67,12 +67,21 @@ MVP.
 - **Terminal modes after reattach** (ADR-0015): the alt screen is deliberately not
   re-asserted, so a TUI whose `?1049h` was evicted returns on the normal buffer; a paste
   during the replay gate is logged, not buffered.
-- **IME** (ADR-0020, amended 2026-10-18): `@xterm/xterm` is 6.0.0, which ships the upstream
-  composition fix, so the 5.5 build-time patch is gone. Upstream limits remain (xterm.js #6089,
-  #5778/#6140, #6049). Whether the 2026-10-18 Windows report (`수준이야` typed, `주주ㅇ야` shown) is
-  one of them is unconfirmed until the byte check in WINDOWS-BUILD §10 F1 runs; the upgrade does not
-  close it. The `shared/keys.ts` `isComposing` guard stays so shortcuts do not fire mid-composition,
-  and the composition log lines (ADR-0014) stay as the evidence for F1.
+- **Korean input on Windows still drops or overwrites syllables** (ADR-0020, amended 2026-10-18).
+  `@xterm/xterm` 6.0.0 ships the upstream composition fix and the 5.5 build-time patch is gone, but
+  the field reports continue on 6.0: `수준이야` → `주주ㅇ야` (2026-10-18) and `이미지` → `미미지`
+  (2026-10-19), each an earlier syllable overwritten by the next one, rarely. Once it happens it
+  persists until the window loses focus to another app and comes back. `mast.log` at 2026-10-19
+  22:15:31 holds the only out-of-order sequence among 809 composition events in that window: a
+  `compositionstart` before the open composition ended, then an `update` and a second `end` after it
+  closed — Microsoft IME overlapping compositions, which xterm's composition helper does not handle
+  (upstream #6049 family; #6089 and #5778/#6140 also remain). Unconfirmed: whether those bytes reached
+  the PTY (mast) or only the agent's input box — capture with `cat > /tmp/ime.txt` and `xxd` while the
+  bad state persists, from another pane reached with `Alt+Shift+arrows` (WINDOWS-BUILD §10 F1).
+  Candidates, smallest first: detect the overlapping sequence and blur/refocus xterm's textarea, the
+  reset an app switch performs; otherwise a Windows input adapter that commits from the textarea
+  value, like the macOS `webkit-ime.ts`. The `shared/keys.ts` `isComposing` guard and the composition
+  log lines (ADR-0014) stay.
 - **Splitter resize is mouse-drag only.**
 - **Per-pane split-button affordance** (ADR-0004): a first-time user read the header
   buttons as "split the selected pane".
@@ -158,8 +167,15 @@ MVP.
   killing `wsl.exe` reaps the Linux-side relay (WINDOWS-BUILD §10 v0.3.9 item 2).
 - **The records directory has no total-size cap** (ADR-0018); a total cap or age sweep
   belongs in the existing boot sweep.
-- **No bulk Restart of exited tabs** after a sleep; it needs the boot wave's pacing
-  (ADR-0010 amendment).
+- **Tabs killed by a Windows shutdown, restart or sleep stay dead** (ADR-0010, ADR-0018). With mast
+  open, WSL goes down first and mast records every shell as exited with `0x40010004`
+  (`DBG_TERMINATE_PROCESS`); field 2026-10-19 07:33, a restart from the Start menu. Those tabs come
+  back as dead records with a Restart button, so `autoResume` never sees them. Candidates: handle
+  `WM_QUERYENDSESSION` so mast saves and quits before WSL is torn down, keeping the tabs `Running`
+  for the next boot's respawn and auto-resume; and, for deaths while mast stays up (sleep,
+  `wsl --shutdown`), an opt-in restart of `0x40010004` tabs when their workspace is opened, paced by
+  the boot wave rather than all at once — which also covers the missing bulk Restart. Restarting
+  replaces the dead tab's record view (ADR-0018), so it needs an amendment there.
 - **ConPTY shutdown audit**: the soak test (WINDOWS-BUILD §13) covers normal exit, kill
   and rapid respawn; failed spawn is uncovered. Dropping the PTY writer while the child is
   alive makes conhost end it with `0xC000013A`, so keep the drop order in `session.rs`.
