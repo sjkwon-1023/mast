@@ -944,23 +944,24 @@ class WslShellStartup(AutoResumeCases, PtyShell):
 
 AUTO_RESUME = ROOT / "scripts/wsl/mast-auto-resume.py"
 QUEUE_MIN_INTERVAL = 3.0
-# 허가 기록과 래퍼가 찍는 시각 사이의 수 ms 만큼 여유를 둔다.
-PERMIT_SLACK = 0.05
 LOAD_IDLE = 0
 LOAD_BUSY = 1000
-# 부하만 바꾼다. 래퍼가 os.getloadavg 를 덮고, 허가가 나면 종료 직전 시각을 파일로 남긴다.
+# 부하만 바꾼다. 래퍼가 os.getloadavg 를 덮고, helper 가 기록하는 허가 시각을 그대로 파일에도 남긴다.
+# 종료 시각을 재면 잠금을 푼 뒤의 스케줄링 지연이 간격에 섞여 CI 에서 3 초 판정이 흔들린다.
 LOAD_WRAPPER = """
-import os, runpy, sys, time
+import importlib.util, os, sys
 load, helper, stamp = sys.argv[1], sys.argv[2], sys.argv[3]
 os.getloadavg = lambda: (float(load),) * 3
-sys.argv = [helper] + sys.argv[4:]
-try:
-    runpy.run_path(helper, run_name="__main__")
-except SystemExit as done:
-    if done.code == 0:
-        with open(stamp, "w") as out:
-            out.write(repr(time.monotonic()))
-    raise
+spec = importlib.util.spec_from_file_location("mast_auto_resume", helper)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+record_permit = module.record_permit
+def stamped(fd, now):
+    record_permit(fd, now)
+    with open(stamp, "w") as out:
+        out.write(repr(now))
+module.record_permit = stamped
+sys.exit(module.main([helper] + sys.argv[4:]))
 """
 QUEUED = "\033[2m[mast] auto-resume queued: claude --resume x (Ctrl+C to cancel)\033[0m\n"
 
@@ -1183,7 +1184,7 @@ class AutoResumeQueueProcess(unittest.TestCase):
             self.assertEqual((proc.returncode, out), (0, b""), err.decode("utf-8", "replace"))
         permits = sorted(float(stamp.read_text()) for stamp in stamps)
         for earlier, later in zip(permits, permits[1:]):
-            self.assertGreaterEqual(later - earlier, QUEUE_MIN_INTERVAL - PERMIT_SLACK)
+            self.assertGreaterEqual(later - earlier, QUEUE_MIN_INTERVAL)
 
     def test_ctrl_c_cancels_the_holder_and_hands_the_lock_to_the_next_helper(self):
         holder = self.spawn(LOAD_BUSY, self.home / "holder-stamp")
