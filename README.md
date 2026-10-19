@@ -3,238 +3,157 @@
 [![CI](https://github.com/sjkwon-1023/mast/actions/workflows/ci.yml/badge.svg)](https://github.com/sjkwon-1023/mast/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Run several coding agents on Windows + WSL2 and see which one is waiting for you — from your
-desk or from your phone.**
+**A lightweight terminal multiplexer for Windows + WSL2, made for running several coding agents
+side by side.** Split panes and tabs, see at a glance which agent is waiting for you, and answer
+it from your desk or your phone. A native Apple Silicon build is available too.
 
 ![Demo of sending a command from the phone remote to a desktop terminal](docs/image/mast-mobile-command-demo.gif)
 
-Check terminal output and send input from your phone on the same trusted local network as your PC.
-
-## macOS (Apple Silicon)
-
-The native macOS port shares the same workspace, pane, tab and terminal core as Windows.
-It includes the Git Changes viewer, a startup-only release notice, opt-in Local HTTP,
-on-demand Secure Remote pairing, and Antigravity CLI running/idle hooks.
-
-Install the latest release into `/Applications`, or update to it, with one line. Mast may stay
-open — the new version applies the next time you reopen it, and an up-to-date install
-downloads nothing:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos/install.sh | bash
-```
-
-Versions before `mast update` have no such command, so run the line above to get there. After
-that, `mast update` in a Mast terminal runs the same script; quit and reopen Mast to use the new
-version.
-
-The app is **not signed or notarized**. Installing with `curl` keeps macOS from quarantining
-it; a `mast-macos-arm64.zip` downloaded with a browser is quarantined and Gatekeeper blocks it.
-See [the macOS guide](docs/MACOS.md) for building from source, configuration, limits and the
-device verification checklist. Automatic binary updates are not included.
-
-## What it's for
-
-You are running Claude Code, Codex and a couple of shells at once, and each stops to ask you
-something at a moment you cannot predict. A plain terminal hides that — the agent waiting for an
-answer looks exactly like the one still working, and you find out by cycling through windows.
-
-mast keeps a status card per workspace (running, needs input, done) with the agent's last message,
-notifies you when one starts waiting, and lets you answer from your phone even while lying in bed.
-
 ## Why mast
 
-- **A lightweight agent terminal** — run several coding agents in one Windows + WSL2 workspace
-  and see who needs you at a glance, without an IDE runtime.
-- **Stay in one tool** — split panes and tabs, plus folder, text and Markdown viewers, without
-  opening an IDE.
-- **Control your terminals from bed** — pair a phone on the same local network as your PC,
-  read output and send input to agent CLIs or ordinary shells.
-- **Let agents talk to each other** — agents can use `mast ls` and `mast send` inside their
-  terminals to hand work to another pane in the same workspace.
-- **Resume with Up** — after restarting mast, press `Up` in a restored bash or zsh pane to recall
-  its saved Claude Code or Codex resume command, then `Enter` to continue the conversation.
-  This resumes the agent's saved session; the old process does not stay running after exit.
-  With `autoResume` on (`mast config set autoResume true`, off by default), a tab whose agent was
-  still running at quit runs that command itself at its first prompt, one tab at a time.
-- **Portable** — a single executable. No installer, no setup wizard.
-- **Reload any time** — `Ctrl+Shift+R` rebuilds the window; the shells and agents keep running.
+- **Light on your machine.** The app process itself stays around 15 MB. Workspaces you are not
+  looking at do not keep a screen alive — only their shells keep running — so a long list of
+  workspaces costs almost nothing until you open one. The window is drawn by WebView2, which
+  Windows lists as separate `msedgewebview2` processes.
+- **Know who needs you.** Claude Code, Codex and Antigravity CLI report whether they are running,
+  waiting for your input or done. Each workspace card shows the most urgent tab with the agent's
+  last message, and Windows notifies you when one starts waiting.
+- **Answer from your phone.** Pair a phone on your home network by QR code, then read output and
+  type into any tab — an agent or a plain shell.
+- **Pick up where you left off.** Close mast and reopen it: workspaces, splits and tabs come back
+  in the directories they were in. Press `Up` in a restored tab to get the command that resumes its
+  Claude Code, Codex or OpenCode session, or turn on `autoResume` to have agents that were still
+  running relaunch by themselves, one tab at a time.
+- **Agents can work together.** Inside a mast terminal, `mast ls` lists the tabs in the workspace
+  and `mast send` types into another one, so one agent can hand work to another.
+- **One executable.** No installer, no setup wizard. `Ctrl+Shift+R` reloads the window without
+  stopping your shells or agents.
 
-Most agent multiplexers are built for macOS and Linux terminals. Mast began as an agent terminal
-for Windows + WSL2; an Apple Silicon native build is also available.
+## Install on Windows
 
-## Features
+**You need** Windows 11 (x64 or ARM64) with WebView2, which Windows 11 includes, and WSL2 with a
+Linux distribution such as Ubuntu. If WSL is not ready, mast walks you through installing it; the
+built-in browser tab works without WSL.
 
-- **Split panes** — split either way, drag to resize, `Alt+Shift`+arrows to move focus. A new pane or tab
-  opens in the directory the pane's shell is in.
-- **Tabs inside panes** — every pane has its own tab strip; background tabs stay alive.
-- **Agent status and notifications** — Claude Code and Codex report running / needs input / idle
-  for each tab, and Antigravity CLI reports running / idle. The sidebar card shows the most urgent
-  tab, the waiting tab gets its own badge, and a Windows toast names the tab that starts waiting.
-- **Agent-to-agent communication** — `mast ls` discovers tabs and `mast send '#<id>' 'text'`
-  sends input to another agent or shell in the same workspace (`-l` pre-fills without submitting).
-- **Viewer tabs** — the Windows build has a folder browser, text viewer and Markdown viewer for
-  files inside WSL. The pane-header Changes button opens changed files and a selected unified
-  diff, with Working / Staged / All scopes. It is read-only, refreshes when reopened or with
-  Refresh, and limits each diff to 512 KiB. Git and GNU `timeout` must be installed in that WSL
-  distro. On macOS, mast runs Git directly; see [the macOS guide](docs/MACOS.md).
-- **Phone terminal control (opt-in)** — pair by QR, then read output, scroll a full-screen TUI,
-  or send input to an agent CLI or a regular shell. It is not limited to agent prompts.
-  *Pair phone* always offers two working modes and a disabled `Tailscale — Planned` entry:
-  - **Local HTTP** — the original mode, off by default. Turn it on with the `"remote"` key in
-    `settings.json`; it serves plain HTTP on your LAN and the pairing token lives in the phone
-    browser's local storage. It is not hardened for public internet exposure — keep it on
-    your own network.
-  - **Secure Remote** — no setting to enable: the dialog opens a UDP 7331 listener while it
-    shows the QR (at most two minutes if it is never scanned). After pairing, one phone can
-    connect at a time until the certificate expires (up to 14 days) or mast exits. The phone
-    loads a public HTTPS page from GitHub Pages, shows which `host:port` it is opening, and
-    connects straight to the PC over WebTransport, pinning the SHA-256 fingerprint of the
-    certificate issued for that pairing. After successful authentication, the phone browser
-    saves the LAN address, token and certificate fingerprint in its local storage until the
-    certificate expires. The page can reconnect after a reload or screen lock while mast keeps
-    running. Closing mast ends the pairing and requires a fresh QR. The dialog removes the QR
-    and URL once the phone connects or the pairing ends, so a dead QR is never shown as live.
-    A browser without WebTransport shows an explicit error; one that ignores the
-    certificate-pinning option fails later at TLS with a connection error, never a silent
-    fallback to plain HTTP.
-
-  Both QRs carry this PC's **LAN address**, and mast opens no path beyond your own network —
-  there is no cloud relay. For the QR to work as generated, your PC and phone must be on the
-  same trusted LAN, typically the same home router; mobile data (4G/5G) or an unrelated Wi-Fi
-  network reaches the PC only through a separate path you set up yourself — VPN, Tailscale or
-  port forwarding — never automatically. Guest Wi-Fi or client isolation can block access even
-  on the same router. On Windows, the pairing dialog checks TCP/UDP-specific Windows Firewall
-  rules and offers to write the applicable rule behind a UAC prompt. On macOS, it checks an
-  app-level macOS Firewall rule shared by Local HTTP and Secure Remote; administrator approval
-  is requested only after you click its allow button. See [`docs/SETTINGS.md`](./docs/SETTINGS.md).
-- **Layout persistence** — workspaces, splits and tabs come back, each shell respawned where it was,
-  and a tab that was running an agent returns with its resume command one `Up` away.
-
-내장 브라우저 탭은 `◎` 버튼으로 연다. 에이전트는 `mast browser`로 같은 탭의 요소와
-스크린샷을 확인하고 입력·클릭할 수 있다. `mast config set browser.enabled false`로
-끄고 완전히 재시작하면 추가 브라우저 실행 자원을 만들지 않는다.
-[브라우저 사용법과 WSL 시작 안내](./docs/BROWSER.md).
-
-## Install
-
-**요구 사항:** Windows 11 (x64 또는 ARM64)과 WebView2. 터미널과 WSL 파일 뷰어는
-Ubuntu 같은 Linux 배포판이 설치된 WSL2가 필요하다. WSL이 준비되지 않았으면 앱에서
-설치·초기 설정·재검사를 안내하며, 내장 브라우저는 WSL 없이 사용할 수 있다.
-
-1. **Prepare WSL2.** If needed, run `wsl --install` in administrator PowerShell, restart Windows,
-   then open Ubuntu and create your Linux user account.
-   [WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install).
-2. **Prepare your agents.** Install Claude Code, Codex or Antigravity CLI inside WSL before first
-   launching mast. On Ubuntu, install the integration helpers with
-   `sudo apt install python3 jq coreutils`; Claude Code approval tracking and every Codex hook
-   need Python 3.8 or later.
-   Agents are optional if you only want terminals.
-3. **Install and run.** In PowerShell, run
+1. **Set up WSL2** if you have not: run `wsl --install` in an administrator PowerShell, restart
+   Windows, then open Ubuntu once and create your Linux user.
+   ([Microsoft's guide](https://learn.microsoft.com/en-us/windows/wsl/install))
+2. **Install your agents inside WSL** (optional — mast is a fine plain terminal too): Claude Code,
+   Codex, Antigravity CLI or OpenCode. For full agent status, also run
+   `sudo apt install python3 jq coreutils`.
+3. **Install mast.** In PowerShell:
 
    ```powershell
    irm https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/win/install.ps1 | iex
    ```
 
-   It downloads `mast-x64.exe` or `mast-arm64.exe` for your PC into
-   `%LOCALAPPDATA%\Programs\mast\mast.exe`; run that file once and mast appears in the Start
-   menu. The executable is unsigned, and downloading it this way keeps SmartScreen from
-   flagging it. You can still take the exe from the
-   [latest release](https://github.com/sjkwon-1023/mast/releases/latest) and run it from anywhere —
-   a browser download makes SmartScreen warn; verify it came from this repository, then choose
-   **More info** → **Run anyway**. With Smart App Control turned on, Windows blocks the unsigned
-   exe either way.
+   This puts `mast.exe` in `%LOCALAPPDATA%\Programs\mast`. Run it once and mast appears in the
+   Start menu.
 
-   Versions before `mast update` need the command above. After that, run `mast update` in a mast
-   terminal: it runs the same command in Windows PowerShell and installs the latest release. Quit
-   mast completely and reopen it to use the new version. It needs WSL interop enabled. The install
-   folder is `%LOCALAPPDATA%\Programs\mast`, or the `MAST_APP_DIR` folder when that is set in
-   Windows or listed in `WSLENV`. mast does not convert paths; `WSLENV` with the `/p` flag
-   (`MAST_APP_DIR/p`) is the only way a WSL path gets translated. A portable copy run from another
-   folder is not updated.
+The executable is not code-signed. Installing with the line above avoids the SmartScreen warning.
+If you download the exe from the [latest release](https://github.com/sjkwon-1023/mast/releases/latest)
+in a browser instead, SmartScreen warns once: choose **More info** → **Run anyway**. With Smart
+App Control turned on, Windows blocks the unsigned exe either way.
 
-mast opens your default WSL distribution and automatically sets up agent integration on first
-launch. Anything it could not set up, and what to do about it, is written to `~/.mast/setup.log`.
+### Updating
 
-- **Claude Code** needs nothing more. With Python 3.8+ and Claude Code 2.1.118 or later, a tab
-  that asked for approval shows running again as soon as the approved tool finishes.
-- **Codex** needs one step from you. mast installs its hooks in `~/.codex/hooks.json` (always
-  `~/.codex`; a custom `CODEX_HOME` is not followed), and Codex runs none of them until you trust
-  them in the **Hooks need review** prompt at its next launch. Until you do, that prompt returns
-  on every Codex launch. To decline for good, create `~/.mast/no-codex-hooks` and delete mast's
-  entries from that file. With a Python older than 3.8 mast installs no Codex hooks, and a Codex
-  tab reports only idle, at the end of each turn; without python3 at all, setup stops before
-  wiring any agent and prints a notice.
-- **Antigravity CLI** reports running and idle only: it has no hook for a pending approval.
+In any mast terminal, run:
 
-[Integration details and manual setup](./scripts/wsl/claude-hook-example.md).
+```sh
+mast update
+```
 
-The sidebar shows your installed version. Once per app launch, mast checks GitHub for a newer
-stable release in the background. **Update available** only opens the release page; it never
-downloads or installs anything. The install line above or `mast update` updates in place, even
-while mast is running — the new version applies the next time you start it. Failed checks stay
-quiet.
+Then quit mast completely and open it again. The sidebar shows your version, and mast tells you
+when a newer release is out; it never installs anything on its own.
+
+## Install on macOS (Apple Silicon)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos/install.sh | bash
+```
+
+This installs mast into `/Applications`. Later, `mast update` in a mast terminal does the same;
+quit and reopen mast to use the new version. The app is not signed or notarized: install it with
+the line above, because a zip downloaded in a browser is blocked by Gatekeeper. See the
+[macOS guide](docs/MACOS.md) for details and limits.
+
+## First steps
+
+- On first launch mast opens your default WSL distribution and wires up the agents it finds. If
+  something could not be set up, `~/.mast/setup.log` says what and how to fix it.
+- **Codex** asks you once to trust mast's hooks (the **Hooks need review** prompt). Accept it to
+  get Codex status; until you do, Codex asks again at every launch.
+- Split a pane with `Ctrl+Shift+D` or `Alt+Shift+D`, open a tab with `Ctrl+Shift+T`, and start a
+  new workspace with `Ctrl+Shift+N`. A new pane or tab opens in the directory you were in.
+- When an agent asks for something, its tab and workspace card turn to **needs input**. Click the
+  card to jump there.
+
+[How the agent integration works, and setting it up by hand](scripts/wsl/claude-hook-example.md).
+
+## Features
+
+- **Panes, tabs and workspaces** — split either way and drag to resize; every pane has its own
+  tabs, and background tabs keep running.
+- **Agent status and notifications** — running / needs input / done per tab, the agent's last
+  message on the workspace card, and a Windows notification when a tab starts waiting.
+  Antigravity CLI reports running and done only.
+- **Viewers** — a folder browser, text and Markdown viewers for your WSL files, and a read-only
+  **Changes** view of your Git working tree and staged changes (needs Git in WSL).
+- **Phone remote (opt-in)** — *Pair phone* shows a QR code. **Secure Remote** needs no setup and
+  encrypts the connection; **Local HTTP** is a plain-HTTP mode you turn on in settings. Both work
+  only on your own network — mast has no cloud relay, so mobile data or another Wi-Fi reaches your
+  PC only through a VPN or tunnel you set up yourself.
+  [Details](docs/SETTINGS.md#remote-local-http).
+- **Built-in browser tab** — open it with the `◎` button; agents can inspect and click it with
+  `mast browser`. [Browser guide](docs/BROWSER.md).
+- **Resume and auto-resume** — see *Pick up where you left off* above. `autoResume` runs only
+  agents that were still open when mast quit, never one you exited yourself.
 
 ## Settings
 
-Run these commands in a mast Bash pane:
+Change settings from a mast terminal:
 
 ```sh
-mast config
+mast config                             # show every setting
 mast config set fontSize 15
-mast config set autoResume true         # run restored agents' resume commands on their own
-mast config set remote                  # enable Local HTTP phone access on port 7331
-mast config set remote --port 7441      # enable it on a different port
-mast config set remote false            # disable Local HTTP phone access
-mast config reset fontSize              # restore the built-in font sizes
+mast config set autoResume true         # relaunch agents that were running at quit
+mast config set remote                  # turn on Local HTTP phone access (port 7331)
+mast config reset fontSize
 ```
 
-Changes are saved to `%AppData%\app.mast.desktop\settings.json` and require a **full mast restart**;
-`Ctrl+Shift+R` is not enough. Finish or save your work first: restarting ends running terminal
-processes. No command restarts the app automatically. The CLI needs Python 3, WSL Windows interop,
-PowerShell and access to the Windows drive. You can still edit the JSON file manually.
-
-The `remote` key controls the **Local HTTP** mode only. **Secure Remote** has no setting: it is
-started and stopped from the *Pair phone* dialog, and its listener exists only for one pairing.
-Local HTTP stays off until you enable it. Every key is optional, invalid settings are rejected,
-and unknown existing keys are preserved. Full reference: [`docs/SETTINGS.md`](./docs/SETTINGS.md).
+Settings live in `%AppData%\app.mast.desktop\settings.json` and take effect after you **quit mast
+completely and open it again** (`Ctrl+Shift+R` is not enough). Quitting ends running terminal
+processes, so finish your work first. [All settings](docs/SETTINGS.md).
 
 ## Keyboard shortcuts
 
-Most app shortcuts use `Ctrl+Shift` or `Alt+Shift`; unlisted keys go to the PTY.
+App shortcuts use `Ctrl+Shift` or `Alt+Shift`; every other key goes to the terminal.
 
 | Key | Action |
 |---|---|
 | `Ctrl+1` … `Ctrl+9` / `Alt+1` … `Alt+9` | Switch workspace by sidebar position |
-| `Ctrl+Shift+[` / `]` or `Alt+Shift+[` / `]` | Cycle workspaces |
-| `Alt+Shift+↑ ↓ ← →` | Move focus to the adjacent pane |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Cycle tabs in the active pane |
+| `Ctrl+Shift+[` / `]` or `Alt+Shift+[` / `]` | Previous / next workspace |
+| `Alt+Shift+↑ ↓ ← →` | Move to the neighboring pane |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab in the pane |
 | `Ctrl+Shift+T` / `Alt+Shift+T` | New terminal tab |
 | `Ctrl+Shift+B` / `Alt+Shift+B` | New folder browser tab |
-| `Ctrl+Shift+W` / `Alt+Shift+W` | Close the active tab |
+| `Ctrl+Shift+W` / `Alt+Shift+W` | Close the tab |
 | `Ctrl+Shift+D` | Split the pane top/bottom |
-| `Alt+Shift+D` | Split along the active pane's longer side |
+| `Alt+Shift+D` | Split along the pane's longer side |
 | `Ctrl+Shift+N` / `Alt+Shift+N` | New workspace |
-| `Ctrl+Shift+Q` / `Alt+Shift+Q` | Close the active workspace |
+| `Ctrl+Shift+Q` / `Alt+Shift+Q` | Close the workspace |
 | `Ctrl+Shift+R` | Reload the window |
 | `Ctrl+V` / `Ctrl+Shift+V` / `Shift+Insert` | Paste |
-| `Ctrl+C` / `Ctrl+Shift+C` | Copy when there is a selection — a bare `Ctrl+C` with no selection still sends SIGINT |
+| `Ctrl+C` / `Ctrl+Shift+C` | Copy the selection (with nothing selected, `Ctrl+C` interrupts as usual) |
 
-Drag workspace cards to reorder them; `Ctrl+1`–`Ctrl+9` follow that order. The full list, including
-viewer-local keys, is in [`apps/mast/src/shared/keys.ts`](./apps/mast/src/shared/keys.ts).
-Hold `Alt` for 1.314 seconds to show Alt shortcut keys on buttons and workspace cards; release
-it to hide the guide. The guide also lists Alt shortcuts without a matching button. The Ctrl
-bindings above remain available but are not shown in the app's shortcut hints.
+Drag workspace cards to reorder them. Hold `Alt` for about a second to see the Alt shortcuts on
+the buttons. The full list is in [`apps/mast/src/shared/keys.ts`](apps/mast/src/shared/keys.ts).
 
 ## Troubleshooting
 
-**A tab opens but stays empty, or running sessions stop responding.** This is usually WSL under
-memory pressure rather than mast: the VM cannot find contiguous memory for the channel a new
-terminal needs, and processes already running start thrashing. A tab whose shell never came up says
-so and offers Retry; sessions that were already running have to be started again.
-
-WSL2 defaults to half the host RAM with a swap file a quarter that size, which a container build or
-a large compile can exhaust. Raising swap in `%UserProfile%\.wslconfig` usually settles it:
+**A new tab stays empty, or running sessions stop responding.** This is usually WSL running out of
+memory rather than mast. WSL2 gets half of your RAM by default; a big build can exhaust it. Raising
+its swap in `%UserProfile%\.wslconfig` usually fixes it:
 
 ```ini
 [wsl2]
@@ -242,13 +161,18 @@ swap=8GB
 autoMemoryReclaim=gradual
 ```
 
-`wsl --shutdown` applies it — that ends every WSL session, so do it between tasks.
+Run `wsl --shutdown` to apply it — this ends every WSL session, so do it between tasks. A tab whose
+shell never started offers **Retry**.
+
+**Claude Code asks "trust this folder" at every launch.** This happens when it starts in your home
+directory (`~`); the answer is kept for project folders. Start agents from a project folder.
 
 ## Status
 
-One maintainer, used daily. Tested on an x64 Windows 11 desktop; ARM64 is built and linted on every
-release but has never run on real hardware.
+One maintainer, used daily on an x64 Windows 11 desktop. ARM64 is built and checked on every
+release but has not run on real hardware yet. Contributor notes live in [`CLAUDE.md`](CLAUDE.md)
+and [`docs/WINDOWS-BUILD.md`](docs/WINDOWS-BUILD.md).
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT — see [LICENSE](LICENSE).
