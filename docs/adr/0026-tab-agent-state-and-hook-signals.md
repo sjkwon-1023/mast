@@ -759,7 +759,18 @@ session owns a tab's hint, and an automatic run uses that hint unchanged.
 run, with tokens of `[A-Za-z0-9_-]` up to 96 characters, through `command` and a fixed argv. There is no
 `eval`, no `sh -c` and no PTY input injection. Each shell tries once. The command enters the tab's
 history once, before the queue, so a skipped or cancelled run still leaves the manual hint. After the
-run the shell records a new generation. Nested shells record nothing and never auto-run.
+run the shell records a new generation. Nested shells never record a generation and never run a hint; an
+inherited generation is covered under accepted limits.
+
+**Write failure.** If the generation cannot be written, for example because the prompt file is read-only,
+the shell removes `~/.mast/prompt/tab-<id>` and prints `[mast] auto-resume unavailable: cannot write
+~/.mast/prompt/tab-<id>` once per shell. A first prompt whose generation cannot be recorded does not run a
+candidate and shows the manual hint instead. The removal matters: an old generation left on disk would
+match its own hint at the next boot.
+
+**One manual hint.** With a matching integration, the first prompt owns the manual hint and its history
+entry in bash and zsh, whether or not `autoResume` is on. `launch.sh` prints and records the hint only for an
+older or missing `integration.sh`; otherwise bash would record the same hint twice.
 
 **Queue.** `scripts/wsl/mast-auto-resume.py` (installed as `~/.mast/bin/mast-auto-resume.py`; macOS
 through ASSETS) admits runs through `fcntl.flock` on `~/.mast/auto-resume.lock`. The lock is held only
@@ -779,6 +790,17 @@ this unreleased branch first set; it is not raised again for this change.
 **Accepted limits.** No hint is written early (no SessionStart or UserPromptSubmit writer), so a session
 with no written hint is not restored, for example a Codex session quit before its first turn completes.
 The dead-tab case (`0x40010004`) and Windows shutdown handling are outside this change.
+
+**Accepted limit: nested shells that do not run the mast integration.** A nested bash on WSL drops the inherited
+`MAST_PROMPT_GEN` at its first prompt, because the integration runs there through the inherited
+`PROMPT_COMMAND`. A nested non-login zsh does not: a root zsh restores the user's `ZDOTDIR` after startup,
+so the nested zsh reads only the user's startup files and never the integration. A nested bash on macOS does
+not inherit `PROMPT_COMMAND` at all. In these shells an agent started by hand writes a three-line hint that
+carries the root's generation, and if that nested shell is still open when mast quits, the next boot runs
+it once. Closing this would mean changing the zsh `ZDOTDIR` restore, exporting the macOS bash prompt hook to
+every nested shell, guessing shell commands in a root `preexec`, or walking the process tree from each hint
+writer. Each costs more than the case it fixes (an agent exited inside a nested shell left open at quit, the
+outcome being one extra session opened), so it is accepted and stays in the field checklist.
 
 **Assets older than the launcher.** `launch.sh` ships inside the app and changes on update, while
 `~/.mast/shell` is refreshed by setup, which runs after the boot respawn. A bash tab started in between

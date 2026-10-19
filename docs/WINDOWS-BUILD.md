@@ -2950,7 +2950,7 @@ Claude trust prompt. For each result, record the app build, the distro, the logi
 
 Pending Windows/WSL field verification. None of the items below is recorded as passed. For each result,
 record the app build, the distro, the login shell (bash, or zsh with starship) and the agent CLI versions.
-Do not delete files from a distro in use to create a failure. Items 3–8 and 10–11 run in both a bash tab and
+Do not delete files from a distro in use to create a failure. Items 3–8 and 10–12 run in both a bash tab and
 a zsh tab.
 
 1. **Default off.** With no `autoResume` key in `settings.json`, a restored tab shows only the manual
@@ -2968,8 +2968,10 @@ a zsh tab.
    manual hint, and the agent must not start.
 7. **Missing session or executable.** Remove the session, or run in a shell where the CLI is not on `PATH`. The
    command fails visibly, the normal prompt returns, and nothing is retried.
-8. **Nested shell.** Start `bash` or `zsh` inside a restored tab. `~/.mast/prompt/tab-<id>` must keep its value,
-   and no `[mast] auto-resume` line may appear.
+8. **Nested shell.** Start `bash` or `zsh` inside a restored tab, run an agent there and exit it normally, then
+   quit and relaunch. `~/.mast/prompt/tab-<id>` must keep its value in the nested shell, and the restored tab must
+   not run that agent. This holds for WSL bash only. For zsh and macOS bash the nested shell carries the
+   root's generation and the agent runs once (ADR-0026 amendment, accepted limit); record what happened.
 9. **Codex before its first turn.** Quit while a new Codex session has not completed its first turn. Nothing is
    restored; this is the accepted limit.
 10. **Upgrade, first shell.** Upgrade from the previous build with `autoResume` on, then open the first bash tab.
@@ -2978,6 +2980,9 @@ a zsh tab.
     not auto-run; after setup finishes, a newly opened tab follows items 3–4.
 11. **Tab close.** Close one tab, then check `test ! -e "$HOME/.mast/prompt/tab-<id>"`. If
     `~/.mast/auto-resume.lock` exists, it must still exist.
+12. **Unwritable generation file.** Run an agent to normal exit with `~/.mast/prompt/tab-<id>` made read-only
+    (`chmod 0444`), then quit and relaunch. The tab must not run the agent. The shell must print
+    `[mast] auto-resume unavailable: cannot write ~/.mast/prompt/tab-<id>` once, and the file must be gone.
 
 ## 11. ARM64 cross-build notes
 

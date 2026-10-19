@@ -1084,8 +1084,9 @@ passes it to every shell it spawns, as the third argument of the WSL launcher an
 one. With it off, nothing in this section happens.
 
 With it on, a restored root shell may run its tab's line-1 command once, at its first prompt. A root shell
-is one whose `MAST_SHELL_PID` is its own PID, so nested shells never run anything and never write a
-generation. The command runs only when all of these hold:
+is one whose `MAST_SHELL_PID` is its own PID. Nested shells never run anything and never write a generation,
+but a nested shell can carry the root's generation into a hint it writes; see Limits. The command runs only
+when all of these hold:
 
 - line 3 of the hint equals the generation in `~/.mast/prompt/tab-<id>`, which the previous root shell wrote
   at its last prompt;
@@ -1110,6 +1111,10 @@ When the hint is eligible, the shell:
 Each shell tries once. If the queue skips or cancels the run, the command stays in the tab's history and the
 shell prints the manual `[mast] resume previous agent: <command>` line instead.
 
+If the generation file cannot be written, the shell removes `~/.mast/prompt/tab-<id>` and prints
+`[mast] auto-resume unavailable: cannot write ~/.mast/prompt/tab-<id>` once per shell. A first prompt that
+cannot record its generation does not run the candidate.
+
 **Queue.** `mast-auto-resume.py` admits runs one at a time through `fcntl.flock` on `~/.mast/auto-resume.lock`.
 The lock is held only until a run is admitted, and the file is never deleted or replaced, so every waiter
 locks the same inode. Admissions are at least 3 s apart, and the first one is immediate. While the 1-minute
@@ -1125,6 +1130,11 @@ reports; a Codex session quit before its first turn completes is one example. A 
 previous `integration.sh` is still installed (setup refreshes it after the boot respawn) does not get this
 section's behavior: `launch.sh` sees that the file does not define `_mast_prompt` and keeps the previous
 launch-time manual hint and OSC 7 prompt, without an automatic run.
+
+**Nested shells (accepted limit).** A nested shell carries the root's `MAST_PROMPT_GEN` unless the mast
+integration runs in it. That is the case for a nested zsh, and for a nested bash on macOS. An agent started
+by hand in such a shell, and exited while that nested shell stays open until mast quits, is run once at the
+next boot. The WSL bash path drops the inherited value. ADR-0026's amendment explains why this is accepted.
 
 ### The Codex half — `mast-codex-notify.sh`
 

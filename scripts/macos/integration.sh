@@ -102,6 +102,9 @@ _mast_resume() {
 _mast_root_shell() {
   [[ ${MAST_SHELL_PID-} == "$$" && -n ${MAST_TAB-} && ${MAST_TAB} != *[!0-9]* ]]
 }
+# 중첩 셸은 상속받은 세대를 갱신하지 않는다. 남겨 두면 그 안에서 끝난 에이전트가 세대 3행 힌트로 기록돼
+# 다음 부팅의 자동 실행 후보가 되므로, 이 파일을 읽는 시점에 지운다.
+_mast_root_shell || unset MAST_PROMPT_GEN
 _mast_first_prompt=${_mast_first_prompt-1}
 _mast_gen_re='^[A-Za-z0-9_-]{1,128}$'
 _mast_stamp_re='^[0-9]{1,20}$'
@@ -109,15 +112,26 @@ _mast_token_re='^[A-Za-z0-9_-]{1,96}$'
 
 # 프롬프트 세대 `<nonce>-<counter>` 를 기록하고 export 한다. nonce 는 셸 시작 때 한 번 만든다.
 # 짧은 단일 write 라 tmp+mv 원자 교체는 하지 않는다. 쓰다 끊긴 파일은 reader 의 형식 검사에서 거부된다.
+# 기록이 실패하면 옛 세대가 디스크에 남아 다음 부팅의 후보가 되므로 파일을 지우고, 이 셸의 자동 재실행이
+# 불가하다는 안내를 셸당 한 번 한다. 실패하면 MAST_PROMPT_GEN 을 지우고 1 을 돌려준다.
 _mast_prompt_generation() {
   _mast_root_shell || return 0
   if [[ -z ${_mast_prompt_nonce-} ]]; then _mast_prompt_nonce="$$-$RANDOM$RANDOM"; fi
   _mast_prompt_count=$(( ${_mast_prompt_count:-0} + 1 ))
-  MAST_PROMPT_GEN="$_mast_prompt_nonce-$_mast_prompt_count"
-  export MAST_PROMPT_GEN
+  local gen="$_mast_prompt_nonce-$_mast_prompt_count"
   [[ -d $HOME/.mast/prompt ]] || mkdir -p "$HOME/.mast/prompt" 2>/dev/null
-  { printf '%s\n' "$MAST_PROMPT_GEN" >| "$HOME/.mast/prompt/tab-$MAST_TAB"; } 2>/dev/null
-  return 0
+  if { printf '%s\n' "$gen" >| "$HOME/.mast/prompt/tab-$MAST_TAB"; } 2>/dev/null; then
+    MAST_PROMPT_GEN=$gen
+    export MAST_PROMPT_GEN
+    return 0
+  fi
+  unset MAST_PROMPT_GEN
+  rm -f "$HOME/.mast/prompt/tab-$MAST_TAB" 2>/dev/null
+  if [[ -z ${_mast_prompt_warned-} ]]; then
+    _mast_prompt_warned=1
+    printf '\033[2m[mast] auto-resume unavailable: cannot write ~/.mast/prompt/tab-%s\033[0m\n' "$MAST_TAB"
+  fi
+  return 1
 }
 
 # 일반 파일만 상한 안에서 읽어 _mast_blob 에 둔다. symlink, 디렉터리, 줄바꿈으로 끝나지 않는 내용,
@@ -180,11 +194,12 @@ _mast_auto_run() {
 }
 
 # 첫 프롬프트의 판정. 실행까지 맡았으면 0, 아니면 1 이고 호출자가 수동 hint 를 안내한다. 자동 실행은
-# 셸당 한 번이며, 판정 전에 세대를 올리면 같은 후보가 다음 부팅에서 다시 잡히지 않는다.
+# 셸당 한 번이며, 판정 전에 세대를 올리면 같은 후보가 다음 부팅에서 다시 잡히지 않는다. 세대를 기록하지
+# 못하면 후보가 있어도 실행하지 않는다. 기록되지 않은 세대로 끝난 에이전트가 다음 부팅에 다시 실행되기 때문이다.
 _mast_auto_resume_first() {
   _mast_root_shell || return 1
   _mast_auto_candidate
-  _mast_prompt_generation
+  _mast_prompt_generation || return 1
   [[ -n $_mast_auto_cmd ]] || return 1
   _mast_auto_run
   return 0
@@ -197,7 +212,7 @@ _mast_prompt() {
     history -a
     if (( _mast_first_prompt )); then
       _mast_first_prompt=0
-      _mast_auto_resume_first || { [[ ${MAST_AUTO_RESUME-} == 1 ]] && _mast_resume; }
+      _mast_auto_resume_first || _mast_resume
     else
       _mast_prompt_generation
       _mast_resume quiet

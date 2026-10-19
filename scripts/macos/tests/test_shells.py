@@ -198,8 +198,21 @@ if args[:1] == ["-I"]:
 sys.argv = args
 runpy.run_path(args[0], run_name="__main__")
 '''
-# 에이전트 대역: 받은 인자와 실행 시점의 세대를 기록하고 바로 끝난다.
-AGENT_FIXTURE = '#!/bin/sh\nprintf "NAME %s gen=%s\\n" "$*" "$MAST_PROMPT_GEN" >> "$HOME/agent-log"\n'
+# 에이전트 대역: 받은 인자와 실행 시점의 세대를 기록하고 바로 끝난다. 실제 writer 처럼 탭 힌트를 쓰며,
+# 세대가 상속돼 있을 때만 3행이다.
+AGENT_HINTS = {
+    "claude": "claude --resume fresh-id",
+    "codex": "codex resume fresh-id",
+    "opencode": "opencode --session fresh-id",
+}
+AGENT_FIXTURE = (
+    '#!/bin/sh\n'
+    'printf "NAME %s gen=%s\\n" "$*" "$MAST_PROMPT_GEN" >> "$HOME/agent-log"\n'
+    'printf "FORM\\n1\\n" > "$HOME/.mast/resume/tab-$MAST_TAB"\n'
+    '[ -z "$MAST_PROMPT_GEN" ] || printf "%s\\n" "$MAST_PROMPT_GEN" >> "$HOME/.mast/resume/tab-$MAST_TAB"\n'
+)
+# 세대를 기록하지 못했을 때 셸이 한 번 내는 안내의 핵심 문구.
+UNAVAILABLE = "auto-resume unavailable"
 
 
 class AutoResumeCases:
@@ -208,6 +221,9 @@ class AutoResumeCases:
     auto = ""
     bash_history = "tab-42"
     SHELLS = ("/bin/bash", "/bin/zsh")
+    # 중첩 셸이 상속된 세대를 지우는 경로. 루트 zsh 는 시작 뒤 ZDOTDIR 을 사용자 값으로 되돌려 중첩 zsh 가 mast 통합을
+    # 읽지 않고, macOS bashrc 는 PROMPT_COMMAND 를 export 하지 않는다. 그 둘은 ADR-0026 의 수용된 한계다.
+    NESTED_GUARDED = ()
     HINT = "claude --resume tok-2"
 
     def prepare(self):
@@ -219,8 +235,8 @@ class AutoResumeCases:
         interpreter.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, bin_dir / "load_patch.py"))
         interpreter.chmod(0o755)
         (bin_dir / "mast-python").write_text(str(interpreter) + "\n")
-        for agent in ("claude", "codex", "opencode"):
-            (bin_dir / agent).write_text(AGENT_FIXTURE.replace("NAME", agent))
+        for agent, hint in AGENT_HINTS.items():
+            (bin_dir / agent).write_text(AGENT_FIXTURE.replace("NAME", agent).replace("FORM", hint))
             (bin_dir / agent).chmod(0o755)
         self.zsh_profile(self.home)
         (self.home / ".bashrc").write_text('PS1="MAST_READY> "\n')
@@ -390,7 +406,7 @@ class AutoResumeCases:
     def test_nested_shells_neither_record_a_generation_nor_run_a_hint(self):
         self.prepare()
         self.auto = "1"
-        for shell, nested in (("/bin/bash", "bash"), ("/bin/zsh", "zsh")):
+        for shell, nested in self.NESTED_GUARDED:
             with self.subTest(shell=shell):
                 self.reset()
                 self.start(shell)  # 후보가 없으므로 이 셸은 세대만 올린다.
@@ -398,12 +414,96 @@ class AutoResumeCases:
                 # 루트의 현재 세대와 맞는 hint 를 두고, 중첩 셸이 그것을 실행하지 않는지 본다.
                 self.write_state("%s\n1\n%s\n" % (self.HINT, root), None)
                 self.send(nested)
-                self.send('printf "NESTED:%s|%s\\n" "$MAST_PROMPT_GEN" "$(< $HOME/.mast/prompt/tab-42)"')
+                self.send('printf "NESTED:%s|%s\\n" "${MAST_PROMPT_GEN-unset}" "$(< $HOME/.mast/prompt/tab-42)"')
                 self.send("exit")
-                self.assertIn(("NESTED:%s|%s" % (root, root)).encode(), self.output)
+                # 중첩 셸은 상속된 세대를 지우고, 루트의 세대 파일은 그대로 둔다.
+                self.assertIn(("NESTED:unset|%s" % root).encode(), self.output)
                 self.assertNotIn(b"[mast] auto-resume:", self.output)
                 self.assertEqual(self.agent_log(), [])
                 self.finish()
+
+    def test_an_agent_that_ends_in_a_nested_shell_is_not_resumed_at_the_next_boot(self):
+        self.prepare()
+        self.auto = "1"
+        for shell, nested in self.NESTED_GUARDED:
+            with self.subTest(shell=shell):
+                self.reset()
+                (self.home / ".mast/resume").mkdir(parents=True)
+                self.start(shell)  # 루트 세대 G1
+                self.send(nested)
+                self.send("claude")  # 중첩 셸의 에이전트는 세대 없는 두 줄 힌트만 남긴다.
+                self.kill()  # 탭(루트)을 닫는다. 중첩 셸은 프롬프트에 머문 채 끊긴다.
+                self.start(shell)
+                self.finish()
+                self.assertEqual(len(self.agent_log()), 1)
+                self.assertNotIn(b"[mast] auto-resume:", self.output)
+                self.assertIn(("resume previous agent: %s" % AGENT_HINTS["claude"]).encode(), self.output)
+
+    def test_auto_resume_off_offers_the_hint_once_and_records_it_once(self):
+        self.prepare()
+        self.auto = ""
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                self.start(shell)
+                self.send("true")
+                self.finish()
+                self.assertEqual(self.output.count(("resume previous agent: %s" % self.HINT).encode()), 1)
+                self.assertEqual(self.history_text(shell).count(self.HINT), 1)
+                self.assertEqual(self.agent_log(), [])
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes a 0444 file, so the write failure cannot be produced")
+    def test_an_unwritable_generation_file_is_removed_so_its_hint_is_not_run_later(self):
+        self.prepare()
+        self.auto = "1"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                (self.home / ".mast/resume").mkdir(parents=True)
+                self.start(shell)  # 세대 G1 을 기록한다.
+                (self.home / ".mast/prompt/tab-42").chmod(0o444)
+                # 에이전트는 G1 으로 3행 힌트를 쓰고, 끝난 뒤의 G2 기록이 실패해 세대 파일이 지워진다.
+                self.send("claude")
+                self.assertFalse((self.home / ".mast/prompt/tab-42").exists())
+                self.assertEqual(self.output.count(UNAVAILABLE.encode()), 1)
+                self.finish()
+                self.assertEqual(len(self.agent_log()), 1)
+                self.start(shell)  # 세대 파일이 없으니 3행 힌트가 있어도 후보가 아니다.
+                self.finish()
+                self.assertEqual(len(self.agent_log()), 1)
+                self.assertNotIn(b"[mast] auto-resume:", self.output)
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes a 0444 file, so the write failure cannot be produced")
+    def test_a_first_prompt_that_cannot_record_its_generation_offers_only_the_hint(self):
+        self.prepare()
+        self.auto = "1"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                (self.home / ".mast/prompt/tab-42").chmod(0o444)
+                self.start(shell)
+                self.finish()
+                self.assertEqual(self.agent_log(), [])
+                self.assertNotIn(b"[mast] auto-resume:", self.output)
+                self.assertIn(("resume previous agent: %s" % self.HINT).encode(), self.output)
+                self.assertEqual(self.output.count(UNAVAILABLE.encode()), 1)
+
+    def test_the_unavailable_notice_is_printed_once_per_shell(self):
+        self.prepare()
+        self.auto = "1"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                # 세대 파일 자리에 디렉터리를 두면 쓰기와 제거가 모두 실패한다. root 에서도 같은 실패가 난다.
+                (self.home / ".mast/prompt/tab-42").mkdir(parents=True)
+                self.start(shell)
+                self.send("true")
+                self.send("true")
+                self.finish()
+                self.assertEqual(self.output.count(UNAVAILABLE.encode()), 1)
+                self.assertEqual(self.agent_log(), [])
 
 
 @unittest.skipUnless(sys.platform == "darwin", "requires native macOS startup files and zsh")
@@ -646,6 +746,7 @@ print -rN -- "$original" "${seen[@]}"
 @unittest.skipUnless(sys.platform.startswith("linux"), "the WSL launcher runs on Linux")
 class WslShellStartup(AutoResumeCases, PtyShell):
     bash_history = "tab-42"
+    NESTED_GUARDED = (("/bin/bash", "bash"),)
 
     @classmethod
     def setUpClass(cls):

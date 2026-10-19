@@ -805,11 +805,10 @@ integration("WSL tab launcher", () => {
       // 상속된 값은 인자가 정확히 1 일 때만 살아남는다.
       const result = harness.launch("6", "", { MAST_AUTO_RESUME: "1" }, flag);
       expect(result.status, result.stderr).toBe(0);
-      const on = flag === "1";
-      expect(result.stdout).toContain(`AUTO=${on ? "1" : ""}\n`);
-      // 켜짐이면 launch 는 힌트를 건드리지 않는다. 첫 프롬프트가 판정하거나 수동 안내를 한다.
-      expect(result.stdout.includes("claude --resume earlier")).toBe(!on);
-      expect(result.stdout.includes("resume previous agent")).toBe(!on);
+      expect(result.stdout).toContain(`AUTO=${flag === "1" ? "1" : ""}\n`);
+      // 통합 자산이 있으면 launch 는 힌트를 건드리지 않는다. 안내와 history 기록은 켜짐·꺼짐과 무관하게 첫 프롬프트가 맡는다.
+      expect(result.stdout.includes("claude --resume earlier")).toBe(false);
+      expect(result.stdout.includes("resume previous agent")).toBe(false);
     });
   });
 
