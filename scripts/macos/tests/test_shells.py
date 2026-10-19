@@ -339,10 +339,11 @@ class AutoResumeCases:
                 hint.write_text("%s\n2\n%s\n" % (self.HINT, run_generation))
                 self.send("true")
                 self.send("true")
-                self.assertEqual(self.history_text(shell).count(self.HINT), 1)
                 hint.write_text("%s\n3\n%s\n" % (self.HINT, self.generation()))
                 self.send("true")
                 self.finish()
+                # macOS bash 3.2 는 셸이 끝날 때 history 파일을 만들므로 종료 뒤 한 번 센다. 자동 실행 1회와 다른
+                # 세대의 기록 1회다. 늦은 갱신을 다시 넣었다면 3 이다.
                 self.assertEqual(self.history_text(shell).count(self.HINT), 2)
 
     def test_a_run_that_exits_normally_is_not_offered_to_run_again(self):
