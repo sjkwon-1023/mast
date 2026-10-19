@@ -7,6 +7,8 @@ export MAST_TTY="$(/usr/bin/tty)"
 export MAST_SHELL_PID=$$
 export TERM_PROGRAM=mast BASH_SILENCE_DEPRECATION_WARNING=1
 export MAST_CONFIG_PATH="${4:-}"
+# 자동 재실행 opt-in. 정확한 1 만 켜고, 상속된 값은 지운다.
+if [[ ${5-} == 1 ]]; then export MAST_AUTO_RESUME=1; else unset MAST_AUTO_RESUME; fi
 export PATH="$HOME/.mast/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 # Finder 는 대화형 터미널의 UTF-8 locale 을 반드시 물려받지는 않는다.
 if [[ -z ${LANG:-} && -z ${LC_ALL:-} && -z ${LC_CTYPE:-} ]]; then export LANG=en_US.UTF-8; fi

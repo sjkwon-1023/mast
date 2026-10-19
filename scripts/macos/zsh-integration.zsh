@@ -10,12 +10,12 @@ if [[ -n $MAST_TAB && $MAST_TAB != *[!0-9]* ]]; then
   setopt APPEND_HISTORY INC_APPEND_HISTORY
   # 같은 이유로 여기서 바로 넣으면 resume 줄이 파일 내용 앞에 놓여 ↑ 로 나오지 않으므로 첫
   # 프롬프트 직전에 넣는다.
-  _mast_resume_first=1
   _mast_resume_prompt() {
-    if (( _mast_resume_first )); then
-      _mast_resume_first=0
-      _mast_resume
+    if (( _mast_first_prompt )); then
+      _mast_first_prompt=0
+      _mast_auto_resume_first || _mast_resume
     else
+      _mast_prompt_generation
       _mast_resume quiet
     fi
   }

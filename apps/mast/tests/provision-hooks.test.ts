@@ -88,7 +88,7 @@ afterAll(() => {
 });
 
 // 훅 게이트와 탭 id 는 이 테스트를 돌리는 셸(mast 안의 Claude Code 등)에서 새어 들어오면 안 된다.
-const SCRUBBED_ENV = ["CLAUDECODE", "CODEX_THREAD_ID", "MAST", "MAST_TAB", "CODEX_HOME", "BASH_ENV"];
+const SCRUBBED_ENV = ["CLAUDECODE", "CODEX_THREAD_ID", "MAST", "MAST_TAB", "MAST_PROMPT_GEN", "CODEX_HOME", "BASH_ENV"];
 
 const CONTRACT_DOC = "scripts/wsl/claude-hook-example.md";
 type ModeCase = {
@@ -1708,5 +1708,46 @@ linuxSuite("mast-agy-hook.sh", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("\u001b]777;notify;mast:idle;All tests pass, shipped\u0007{}\r\n");
     expect(existsSync(home.path(".mast", "resume"))).toBe(false);
+  });
+});
+
+linuxSuite("mast-notify.sh resume hint generation", () => {
+  // 실제 스크립트에 Claude 훅 입력을 넣고, 쓰인 힌트 파일을 줄 단위로 돌려준다.
+  function hintLinesAfterHook(generation: string | undefined): string[] {
+    const home = new Home();
+    const notify = home.write(home.path(".mast", "bin", "mast-notify.sh"), extractNotifyScript(provisionSource));
+    chmodSync(notify, 0o755);
+    const result = spawnSync(tools.bash, [notify, "mast:idle", "done"], {
+      env: home.env({ MAST_TAB: "6", ...(generation === undefined ? {} : { MAST_PROMPT_GEN: generation }) }),
+      input: JSON.stringify({ session_id: "claude-root-1", message: "All tests pass" }),
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    if (result.error) throw result.error;
+    expect(result.status).toBe(0);
+    return readFileSync(home.path(".mast", "resume", "tab-6"), "utf8").split("\n");
+  }
+
+  const commandAndStamp = ["claude --resume claude-root-1", expect.stringMatching(/^\d+$/)];
+
+  it("writes the prompt generation as line 3 when it is well-formed", () => {
+    expect(hintLinesAfterHook("gen_1-A")).toEqual([...commandAndStamp, "gen_1-A", ""]);
+  });
+
+  it("accepts a prompt generation of exactly 128 characters", () => {
+    const generation = "g".repeat(128);
+    expect(hintLinesAfterHook(generation)).toEqual([...commandAndStamp, generation, ""]);
+  });
+
+  it.each([
+    ["unset", undefined],
+    ["empty", ""],
+    ["129 characters", "g".repeat(129)],
+    ["containing a space", "gen 1"],
+    ["containing a semicolon", "gen;1"],
+    ["containing a dollar sign", "gen$1"],
+    ["containing a newline", "gen\n1"],
+  ])("writes two lines when the prompt generation is %s", (_name, generation) => {
+    expect(hintLinesAfterHook(generation)).toEqual([...commandAndStamp, ""]);
   });
 });

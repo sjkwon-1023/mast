@@ -3,7 +3,11 @@
 macOS 는 `scripts/macos/launch.sh`, Linux 는 WSL 래퍼 본문 `scripts/wsl/launch.sh` 를 `bash -c` 인자 계약
 그대로 실행한다. zsh 시작 파일 자체의 계약은 macOS 사례가 보고, WSL 사례는 래퍼의 셸 선택·fallback·cwd 전달만 본다.
 """
+import contextlib
 import errno
+import fcntl
+import importlib.util
+import io
 import os
 from pathlib import Path
 import pty
@@ -16,6 +20,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 import urllib.parse
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -177,8 +182,378 @@ class PtyShell(unittest.TestCase):
                 for path in re.findall(rb"\x1b\]7;file://([^\x07\x1b]*)\x07", self.output)]
 
 
+# 자동 재실행의 인터프리터 대역. 실제 helper 를 그대로 실행하고 부하만 MAST_TEST_LOAD 로 바꾼다.
+# "error" 는 부하 조회 실패(건너뜀), 숫자는 그 부하다. 부하가 높으면 helper 는 허가 전까지 대기한다.
+LOAD_PATCH = '''import os, runpy, sys
+load = os.environ.get("MAST_TEST_LOAD", "0")
+if load == "error":
+    def unavailable():
+        raise OSError("load average unavailable")
+    os.getloadavg = unavailable
+else:
+    os.getloadavg = lambda: (float(load),) * 3
+args = sys.argv[1:]
+if args[:1] == ["-I"]:
+    args = args[1:]
+sys.argv = args
+runpy.run_path(args[0], run_name="__main__")
+'''
+# 에이전트 대역: 받은 인자와 실행 시점의 세대를 기록하고 바로 끝난다. 실제 writer 처럼 탭 힌트를 쓰며,
+# 세대가 상속돼 있을 때만 3행이다.
+AGENT_HINTS = {
+    "claude": "claude --resume fresh-id",
+    "codex": "codex resume fresh-id",
+    "opencode": "opencode --session fresh-id",
+}
+AGENT_FIXTURE = (
+    '#!/bin/sh\n'
+    'printf "NAME %s gen=%s\\n" "$*" "$MAST_PROMPT_GEN" >> "$HOME/agent-log"\n'
+    'printf "FORM\\n1\\n" > "$HOME/.mast/resume/tab-$MAST_TAB"\n'
+    '[ -z "$MAST_PROMPT_GEN" ] || printf "%s\\n" "$MAST_PROMPT_GEN" >> "$HOME/.mast/resume/tab-$MAST_TAB"\n'
+)
+# 세대를 기록하지 못했을 때 셸이 한 번 내는 안내의 핵심 문구.
+UNAVAILABLE = "auto-resume unavailable"
+
+
+class AutoResumeCases:
+    """자동 재실행의 판정·실행·정상 복귀를 실제 PTY 에서 본다. 플랫폼 클래스가 launcher 와 history 파일 이름을 정한다."""
+
+    auto = ""
+    bash_history = "tab-42"
+    SHELLS = ("/bin/bash", "/bin/zsh")
+    # 중첩 셸이 상속된 세대를 지우는 경로. 루트 zsh 는 시작 뒤 ZDOTDIR 을 사용자 값으로 되돌려 중첩 zsh 가 mast 통합을
+    # 읽지 않고, macOS bashrc 는 PROMPT_COMMAND 를 export 하지 않는다. 그 둘은 ADR-0026 의 수용된 한계다.
+    NESTED_GUARDED = ()
+    HINT = "claude --resume tok-2"
+
+    def prepare(self):
+        bin_dir = self.home / ".mast/bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(AUTO_RESUME, bin_dir / "mast-auto-resume.py")
+        (bin_dir / "load_patch.py").write_text(LOAD_PATCH)
+        interpreter = bin_dir / "mast-test-python"
+        interpreter.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, bin_dir / "load_patch.py"))
+        interpreter.chmod(0o755)
+        (bin_dir / "mast-python").write_text(str(interpreter) + "\n")
+        for agent, hint in AGENT_HINTS.items():
+            (bin_dir / agent).write_text(AGENT_FIXTURE.replace("NAME", agent).replace("FORM", hint))
+            (bin_dir / agent).chmod(0o755)
+        self.zsh_profile(self.home)
+        (self.home / ".bashrc").write_text('PS1="MAST_READY> "\n')
+
+    def reset(self):
+        """이전 사례의 세대·hint·history·대기열 잠금을 지운다. 설치된 셸 자산과 대역은 그대로 둔다."""
+        for name in (".mast/prompt", ".mast/resume", ".mast/history"):
+            shutil.rmtree(self.home / name, ignore_errors=True)
+        for name in ("agent-log", ".mast/auto-resume.lock"):
+            (self.home / name).unlink(missing_ok=True)
+
+    def write_state(self, hint, prompt):
+        """hint 와 prompt 는 파일 내용이다. None 이면 그 파일을 만들지 않는다."""
+        if prompt is not None:
+            (self.home / ".mast/prompt").mkdir(parents=True, exist_ok=True)
+            (self.home / ".mast/prompt/tab-42").write_text(prompt + "\n")
+        if hint is not None:
+            (self.home / ".mast/resume").mkdir(parents=True, exist_ok=True)
+            (self.home / ".mast/resume/tab-42").write_text(hint)
+
+    def generation(self):
+        return (self.home / ".mast/prompt/tab-42").read_text().rstrip("\n")
+
+    def agent_log(self):
+        log = self.home / "agent-log"
+        return log.read_text().splitlines() if log.exists() else []
+
+    def history_text(self, shell):
+        name = "zsh-tab-42" if shell.endswith("zsh") else self.bash_history
+        return (self.home / ".mast/history" / name).read_text()
+
+    def test_auto_resume_off_offers_the_hint_and_never_runs_it(self):
+        self.prepare()
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                self.auto = ""
+                self.start(shell)
+                # 꺼져 있어도 세대는 기록한다. 나중에 켰을 때 첫 부팅부터 판정하려는 것이다.
+                self.assertRegex(self.generation(), r"^\d+-\d+-1$")
+                self.finish()
+                self.assertIn(("resume previous agent: %s" % self.HINT).encode(), self.output)
+                self.assertNotIn(b"auto-resume", self.output)
+                self.assertEqual(self.agent_log(), [])
+
+    def test_auto_resume_runs_a_matching_hint_once_and_records_new_generations(self):
+        self.prepare()
+        self.auto = "1"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                self.start(shell)
+                log = self.agent_log()
+                self.assertEqual(len(log), 1)
+                self.assertRegex(log[0], r"^claude --resume tok-2 gen=\d+-\d+-1$")
+                # 실행 뒤 G2 가 기록돼야 같은 후보가 다음 부팅에서 다시 잡히지 않는다.
+                nonce = log[0].split("gen=")[1].rsplit("-", 1)[0]
+                self.assertEqual(self.generation(), nonce + "-2")
+                self.assertIn(b"[mast] auto-resume: claude --resume tok-2", self.output)
+                self.assertNotIn(b"resume previous agent", self.output)
+                self.finish()
+                self.assertEqual(self.history_text(shell).count(self.HINT), 1)
+
+    def test_a_resumed_session_refreshing_its_hint_is_not_added_to_history_again(self):
+        # 실제 writer 는 재개한 세션의 같은 명령을 새 시각으로 다시 쓴다. 다음 프롬프트가 그것을 새 hint 로 보면
+        # 실행한 resume 명령이 history 에 두 번 남는다.
+        self.prepare()
+        (self.home / ".mast/bin/claude").write_text(
+            '#!/bin/sh\nprintf "claude %s\\n" "$*" >> "$HOME/agent-log"\n'
+            'printf "claude --resume %s\\n2\\n%s\\n" "$2" "$MAST_PROMPT_GEN" > "$HOME/.mast/resume/tab-$MAST_TAB"\n'
+        )
+        self.auto = "1"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                self.start(shell)
+                self.assertEqual(self.agent_log(), ["claude --resume tok-2"])
+                self.send("true")
+                self.finish()
+                self.assertEqual(self.history_text(shell).count(self.HINT), 1)
+
+    def test_a_late_refresh_of_the_resumed_session_is_not_added_but_a_later_run_is(self):
+        # notify 는 에이전트가 끝난 뒤에 도착할 수 있다. 실행 세대로 기록된 같은 명령은 언제 와도 다시 넣지 않고,
+        # 이후 프롬프트에서 같은 세션을 다시 띄운 기록(다른 세대)은 받아야 한다.
+        self.prepare()
+        (self.home / ".mast/bin/claude").write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$MAST_PROMPT_GEN" >> "$HOME/agent-log"\n'
+        )
+        self.auto = "1"
+        hint = self.home / ".mast/resume/tab-42"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                self.start(shell)
+                [run_generation] = self.agent_log()
+                hint.write_text("%s\n2\n%s\n" % (self.HINT, run_generation))
+                self.send("true")
+                self.send("true")
+                hint.write_text("%s\n3\n%s\n" % (self.HINT, self.generation()))
+                self.send("true")
+                self.finish()
+                # macOS bash 3.2 는 셸이 끝날 때 history 파일을 만들므로 종료 뒤 한 번 센다. 자동 실행 1회와 다른
+                # 세대의 기록 1회다. 늦은 갱신을 다시 넣었다면 3 이다.
+                self.assertEqual(self.history_text(shell).count(self.HINT), 2)
+
+    def test_a_run_that_exits_normally_is_not_offered_to_run_again(self):
+        self.prepare()
+        self.auto = "1"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                self.start(shell)
+                self.finish()
+                self.start(shell)
+                self.finish()
+                self.assertEqual(len(self.agent_log()), 1)
+                self.assertNotIn(b"auto-resume:", self.output)
+
+    def test_a_candidate_that_does_not_match_only_leaves_the_manual_hint(self):
+        self.prepare()
+        self.auto = "1"
+        cases = {
+            "two-line hint from an older writer": (self.HINT + "\n1\n", "old-1"),
+            "other generation": (self.HINT + "\n1\nother-9\n", "old-1"),
+            "no prompt file": (self.HINT + "\n1\nold-1\n", None),
+            "extra line": (self.HINT + "\n1\nold-1\nextra\n", "old-1"),
+        }
+        for case, (hint, prompt) in cases.items():
+            for shell in self.SHELLS:
+                with self.subTest(case=case, shell=shell):
+                    self.reset()
+                    self.write_state(hint, prompt)
+                    self.start(shell)
+                    self.finish()
+                    self.assertEqual(self.agent_log(), [])
+                    self.assertIn(("resume previous agent: %s" % self.HINT).encode(), self.output)
+
+    def test_forbidden_or_oversized_candidates_are_never_run(self):
+        self.prepare()
+        self.auto = "1"
+        cases = {
+            "metacharacter token": "claude --resume bad;touch PWNED\n1\nold-1\n",
+            "command outside the three forms": "touch PWNED\n1\nold-1\n",
+            "control character in token": "claude --resume ok\x07id\n1\nold-1\n",
+            "token of 97 characters": "claude --resume %s\n1\nold-1\n" % ("a" * 97),
+            "stamp that is not digits": self.HINT + "\nnow\nold-1\n",
+        }
+        for case, hint in cases.items():
+            for shell in self.SHELLS:
+                with self.subTest(case=case, shell=shell):
+                    self.reset()
+                    self.write_state(hint, "old-1")
+                    self.start(shell)
+                    self.finish()
+                    self.assertEqual(self.agent_log(), [])
+                    self.assertFalse((self.home / "PWNED").exists())
+        # 경계: 96 자 token 은 허용된다.
+        for shell in self.SHELLS:
+            with self.subTest(case="token of 96 characters", shell=shell):
+                self.reset()
+                self.write_state("claude --resume %s\n1\nold-1\n" % ("a" * 96), "old-1")
+                self.start(shell)
+                self.finish()
+                self.assertEqual(len(self.agent_log()), 1)
+
+    def test_a_symlinked_hint_file_is_never_run(self):
+        self.prepare()
+        self.auto = "1"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                real = self.home / "real-hint"
+                real.write_text(self.HINT + "\n1\nold-1\n")
+                (self.home / ".mast/resume").mkdir(parents=True)
+                (self.home / ".mast/resume/tab-42").symlink_to(real)
+                self.write_state(None, "old-1")
+                self.start(shell)
+                self.finish()
+                self.assertEqual(self.agent_log(), [])
+
+    def test_helper_skip_and_cancel_return_to_the_prompt(self):
+        self.prepare()
+        self.auto = "1"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell, case="skip"):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                self.start(shell, MAST_TEST_LOAD="error")
+                self.assertIn(b"[mast] auto-resume skipped: load average unavailable", self.output)
+                self.assertIn(("resume previous agent: %s" % self.HINT).encode(), self.output)
+                self.finish()
+                self.assertEqual(self.agent_log(), [])
+                self.assertNotEqual(self.generation(), "old-1")
+            with self.subTest(shell=shell, case="cancel"):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                self.begin(shell, MAST_TEST_LOAD="1000")
+                self.read_until(b"auto-resume queued")
+                os.write(self.fd, b"\x03")
+                self.read_until(PROMPT)
+                self.assertIn(b"[mast] auto-resume cancelled", self.output)
+                self.assertIn(("resume previous agent: %s" % self.HINT).encode(), self.output)
+                self.finish()
+                self.assertEqual(self.agent_log(), [])
+
+    def test_nested_shells_neither_record_a_generation_nor_run_a_hint(self):
+        self.prepare()
+        self.auto = "1"
+        for shell, nested in self.NESTED_GUARDED:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.start(shell)  # 후보가 없으므로 이 셸은 세대만 올린다.
+                root = self.generation()
+                # 루트의 현재 세대와 맞는 hint 를 두고, 중첩 셸이 그것을 실행하지 않는지 본다.
+                self.write_state("%s\n1\n%s\n" % (self.HINT, root), None)
+                self.send(nested)
+                self.send('printf "NESTED:%s|%s\\n" "${MAST_PROMPT_GEN-unset}" "$(< $HOME/.mast/prompt/tab-42)"')
+                self.send("exit")
+                # 중첩 셸은 상속된 세대를 지우고, 루트의 세대 파일은 그대로 둔다.
+                self.assertIn(("NESTED:unset|%s" % root).encode(), self.output)
+                self.assertNotIn(b"[mast] auto-resume:", self.output)
+                self.assertEqual(self.agent_log(), [])
+                self.finish()
+
+    def test_an_agent_that_ends_in_a_nested_shell_is_not_resumed_at_the_next_boot(self):
+        self.prepare()
+        self.auto = "1"
+        for shell, nested in self.NESTED_GUARDED:
+            with self.subTest(shell=shell):
+                self.reset()
+                (self.home / ".mast/resume").mkdir(parents=True)
+                self.start(shell)  # 루트 세대 G1
+                self.send(nested)
+                self.send("claude")  # 중첩 셸의 에이전트는 세대 없는 두 줄 힌트만 남긴다.
+                self.kill()  # 탭(루트)을 닫는다. 중첩 셸은 프롬프트에 머문 채 끊긴다.
+                self.start(shell)
+                self.finish()
+                self.assertEqual(len(self.agent_log()), 1)
+                self.assertNotIn(b"[mast] auto-resume:", self.output)
+                self.assertIn(("resume previous agent: %s" % AGENT_HINTS["claude"]).encode(), self.output)
+
+    def test_auto_resume_off_offers_the_hint_once_and_records_it_once(self):
+        self.prepare()
+        self.auto = ""
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                self.start(shell)
+                self.send("true")
+                self.finish()
+                self.assertEqual(self.output.count(("resume previous agent: %s" % self.HINT).encode()), 1)
+                self.assertEqual(self.history_text(shell).count(self.HINT), 1)
+                self.assertEqual(self.agent_log(), [])
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes a 0444 file, so the write failure cannot be produced")
+    def test_an_unwritable_generation_file_is_removed_so_its_hint_is_not_run_later(self):
+        self.prepare()
+        self.auto = "1"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                (self.home / ".mast/resume").mkdir(parents=True)
+                self.start(shell)  # 세대 G1 을 기록한다.
+                (self.home / ".mast/prompt/tab-42").chmod(0o444)
+                # 에이전트는 G1 으로 3행 힌트를 쓰고, 끝난 뒤의 G2 기록이 실패해 세대 파일이 지워진다.
+                self.send("claude")
+                self.assertFalse((self.home / ".mast/prompt/tab-42").exists())
+                self.assertEqual(self.output.count(UNAVAILABLE.encode()), 1)
+                self.finish()
+                self.assertEqual(len(self.agent_log()), 1)
+                self.start(shell)  # 세대 파일이 없으니 3행 힌트가 있어도 후보가 아니다.
+                self.finish()
+                self.assertEqual(len(self.agent_log()), 1)
+                self.assertNotIn(b"[mast] auto-resume:", self.output)
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes a 0444 file, so the write failure cannot be produced")
+    def test_a_first_prompt_that_cannot_record_its_generation_offers_only_the_hint(self):
+        self.prepare()
+        self.auto = "1"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                (self.home / ".mast/prompt/tab-42").chmod(0o444)
+                self.start(shell)
+                self.finish()
+                self.assertEqual(self.agent_log(), [])
+                self.assertNotIn(b"[mast] auto-resume:", self.output)
+                self.assertIn(("resume previous agent: %s" % self.HINT).encode(), self.output)
+                self.assertEqual(self.output.count(UNAVAILABLE.encode()), 1)
+
+    def test_the_unavailable_notice_is_printed_once_per_shell(self):
+        self.prepare()
+        self.auto = "1"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                # 세대 파일 자리에 디렉터리를 두면 쓰기와 제거가 모두 실패한다. root 에서도 같은 실패가 난다.
+                (self.home / ".mast/prompt/tab-42").mkdir(parents=True)
+                self.start(shell)
+                self.send("true")
+                self.send("true")
+                self.finish()
+                self.assertEqual(self.output.count(UNAVAILABLE.encode()), 1)
+                self.assertEqual(self.agent_log(), [])
+
+
 @unittest.skipUnless(sys.platform == "darwin", "requires native macOS startup files and zsh")
-class ShellStartup(PtyShell):
+class ShellStartup(AutoResumeCases, PtyShell):
+    bash_history = "bash-tab-42"
+
     def setUp(self):
         super().setUp()
         self.shell_dir.mkdir(parents=True)
@@ -189,7 +564,8 @@ class ShellStartup(PtyShell):
             shutil.copyfile(ROOT / "scripts/macos" / name, self.shell_dir / "zsh" / ("." + name))
 
     def command(self, shell, tab, cwd):
-        argv = ["/bin/bash", str(self.shell_dir / "launch.sh"), shell, tab, cwd, str(self.home / "settings.json")]
+        argv = ["/bin/bash", str(self.shell_dir / "launch.sh"), shell, tab, cwd, str(self.home / "settings.json"),
+                self.auto]
         return argv, {}
 
     def test_zsh_loads_user_startup_once_and_restores_custom_zdotdir(self):
@@ -412,7 +788,10 @@ print -rN -- "$original" "${seen[@]}"
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the WSL launcher runs on Linux")
-class WslShellStartup(PtyShell):
+class WslShellStartup(AutoResumeCases, PtyShell):
+    bash_history = "tab-42"
+    NESTED_GUARDED = (("/bin/bash", "bash"),)
+
     @classmethod
     def setUpClass(cls):
         missing = [tool for tool in ("bash", "zsh", "python3") if shutil.which(tool) is None]
@@ -432,7 +811,7 @@ class WslShellStartup(PtyShell):
         body = (ROOT / "scripts/wsl/launch.sh").read_text(encoding="utf-8")
         # wsl.exe 가 $SHELL 을 물려주는 것과 같다. PS1 은 물려주지 않는다. Ubuntu 의 /etc/zsh/zshrc 전역
         # compinit 은 CI 러너의 fpath 권한 때문에 y/n 질문에서 멈추고 래퍼와 무관하므로 끈다.
-        return (["/bin/bash", "-c", body, "mast-wsl", tab, cwd],
+        return (["/bin/bash", "-c", body, "mast-wsl", tab, cwd, self.auto],
                 {"SHELL": shell, "PS1": None, "skip_global_compinit": "1"})
 
     def test_bash_login_shell_reports_cwd_and_keeps_tab_env_and_theme_hook(self):
@@ -456,6 +835,25 @@ class WslShellStartup(PtyShell):
         self.assertEqual((self.home / "loaded").read_text().splitlines(), ["profile", "rc"])
         self.assertFalse((self.home / ".bash_history").exists())
         self.assertTrue(self.output.startswith(START_MARK))
+
+    def test_bash_with_a_stale_integration_keeps_the_previous_prompt_and_hint(self):
+        # 앱의 launch.sh 는 업데이트 즉시 바뀌지만 ~/.mast/shell 자산은 프로비저닝이 끝나야 바뀐다. 그 사이의 셸은
+        # _mast_prompt 가 없는 옛 integration.sh 를 만나므로, 이전 방식으로 힌트와 cwd 보고를 해야 한다.
+        (self.shell_dir / "integration.sh").write_text(
+            "export MAST=1\n_mast_cwd() { :; }\n_mast_resume() { :; }\n"
+        )
+        resume = self.home / ".mast/resume"
+        resume.mkdir(parents=True)
+        (resume / "tab-42").write_text("codex resume stale-id\n1\nany-gen\n")
+        self.auto = "1"
+        self.start("/bin/bash")
+        self.send('printf "GEN:[%s]\\n" "${MAST_PROMPT_GEN-unset}"')
+        self.finish()
+        self.assertNotIn(b"command not found", self.output)
+        self.assertIn(b"resume previous agent: codex resume stale-id", self.output)
+        self.assertIn(b"GEN:[unset]", self.output)
+        self.assertEqual(self.cwd_reports()[0], str(self.cwd))
+        self.assertIn("codex resume stale-id", (self.home / ".mast/history/tab-42").read_text())
 
     def test_zsh_login_shell_reports_cwd_and_exports_the_tab_environment(self):
         self.zsh_profile(self.home)
@@ -542,6 +940,274 @@ class WslShellStartup(PtyShell):
                 else:
                     self.assertNotIn(b"is not zsh or bash", self.output)
                 self.assertNotIn(b"\x1b[31m", self.output)
+
+
+AUTO_RESUME = ROOT / "scripts/wsl/mast-auto-resume.py"
+QUEUE_MIN_INTERVAL = 3.0
+# 허가 기록과 래퍼가 찍는 시각 사이의 수 ms 만큼 여유를 둔다.
+PERMIT_SLACK = 0.05
+LOAD_IDLE = 0
+LOAD_BUSY = 1000
+# 부하만 바꾼다. 래퍼가 os.getloadavg 를 덮고, 허가가 나면 종료 직전 시각을 파일로 남긴다.
+LOAD_WRAPPER = """
+import os, runpy, sys, time
+load, helper, stamp = sys.argv[1], sys.argv[2], sys.argv[3]
+os.getloadavg = lambda: (float(load),) * 3
+sys.argv = [helper] + sys.argv[4:]
+try:
+    runpy.run_path(helper, run_name="__main__")
+except SystemExit as done:
+    if done.code == 0:
+        with open(stamp, "w") as out:
+            out.write(repr(time.monotonic()))
+    raise
+"""
+QUEUED = "\033[2m[mast] auto-resume queued: claude --resume x (Ctrl+C to cancel)\033[0m\n"
+
+
+def notice(message):
+    return "\033[2m[mast] auto-resume %s\033[0m\n" % message
+
+
+def load_auto_resume():
+    spec = importlib.util.spec_from_file_location("mast_auto_resume", AUTO_RESUME)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class AutoResumeQueueUnit(unittest.TestCase):
+    """시계·sleep·부하를 패치해 대기열 계약을 짧게 검증한다."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="mast-resume-queue-")
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        self.lock = self.home / ".mast/auto-resume.lock"
+        self.queue = load_auto_resume()
+        self.now = 1000.0
+        self.patch(mock.patch.dict(os.environ, {"HOME": str(self.home)}))
+        self.sleep = self.patch(mock.patch.object(self.queue.time, "sleep", side_effect=self.advance))
+        self.patch(mock.patch.object(self.queue.time, "monotonic", side_effect=lambda: self.now))
+        self.loadavg = self.patch(mock.patch.object(self.queue.os, "getloadavg", return_value=(0.0, 0.0, 0.0)))
+        self.patch(mock.patch.object(self.queue.os, "cpu_count", return_value=4))
+
+    def patch(self, patcher):
+        self.addCleanup(patcher.stop)
+        return patcher.start()
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    def write_lock(self, content):
+        self.lock.parent.mkdir(exist_ok=True)
+        self.lock.write_text(content)
+
+    def sleeps(self):
+        return [call.args[0] for call in self.sleep.call_args_list]
+
+    def run_main(self, argv):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = self.queue.main(argv)
+        return code, stderr.getvalue()
+
+    def admit(self):
+        return self.run_main(["mast-auto-resume.py", "wait", "claude --resume x"])
+
+    def test_first_permit_is_immediate_and_silent(self):
+        self.assertEqual(self.admit(), (0, ""))
+        self.assertEqual(self.sleeps(), [])
+        self.assertEqual(self.lock.read_text(), "1000.0")
+
+    def test_permit_waits_out_the_rest_of_the_interval(self):
+        self.write_lock("1000.0")
+        self.now = 1001.0
+        self.assertEqual(self.admit(), (0, QUEUED))
+        self.assertEqual(self.sleeps(), [2.0])
+        self.assertEqual(self.lock.read_text(), "1003.0")
+
+    def test_interval_that_has_already_elapsed_is_not_waited(self):
+        self.write_lock("1000.0")
+        self.now = 1003.0
+        self.assertEqual(self.admit(), (0, ""))
+        self.assertEqual(self.sleeps(), [])
+
+    def test_corrupt_or_future_record_means_no_previous_permit(self):
+        self.now = 1001.0
+        for content in ("", "garbage", "nan", "inf", "5000.0"):
+            with self.subTest(content=content):
+                self.write_lock(content)
+                self.assertEqual(self.admit(), (0, ""))
+                self.assertEqual(self.sleeps(), [])
+
+    def test_high_load_waits_until_it_drops_below_the_cpu_count(self):
+        self.loadavg.side_effect = [(4.0, 0.0, 0.0), (4.0, 0.0, 0.0), (0.5, 0.0, 0.0)]
+        self.assertEqual(self.admit(), (0, QUEUED))
+        self.assertEqual(self.sleeps(), [1.0, 1.0])
+        self.assertEqual(self.lock.read_text(), "1002.0")
+
+    def test_load_query_failure_skips_without_treating_load_as_zero(self):
+        self.loadavg.side_effect = OSError("no loadavg")
+        self.assertEqual(self.admit(), (1, notice("skipped: load average unavailable")))
+        self.assertEqual(self.lock.read_text(), "")
+
+    def test_load_wait_gives_up_at_the_120_second_cap(self):
+        self.loadavg.return_value = (LOAD_BUSY, 0.0, 0.0)
+        self.assertEqual(self.admit(), (1, QUEUED + notice("skipped: timed out")))
+        self.assertEqual(self.sleeps(), [1.0] * 120)
+        self.assertEqual(self.lock.read_text(), "")
+
+    def test_lock_wait_gives_up_at_the_120_second_cap(self):
+        self.write_lock("")
+        holder = os.open(self.lock, os.O_RDWR)
+        self.addCleanup(os.close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        self.assertEqual(self.admit(), (1, QUEUED + notice("skipped: timed out")))
+        self.assertGreater(self.now, 1119.0)
+        self.assertLessEqual(self.now, 1120.0 + 1e-6)
+        self.assertEqual(self.lock.read_text(), "")
+
+    def test_cancel_during_the_wait_releases_the_lock(self):
+        self.loadavg.return_value = (LOAD_BUSY, 0.0, 0.0)
+        self.sleep.side_effect = KeyboardInterrupt
+        self.assertEqual(self.admit(), (130, QUEUED + notice("cancelled")))
+        fd = os.open(self.lock, os.O_RDWR)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_bad_arguments_skip(self):
+        for argv in (["mast-auto-resume.py"], ["mast-auto-resume.py", "start", "claude"]):
+            with self.subTest(argv=argv):
+                self.assertEqual(
+                    self.run_main(argv),
+                    (1, notice("skipped: invalid arguments; expected: wait <display-command>")),
+                )
+
+    def test_unusable_queue_directory_skips(self):
+        (self.home / ".mast").write_text("not a directory")
+        code, err = self.admit()
+        self.assertEqual(code, 1)
+        self.assertIn("skipped: queue state unavailable", err)
+        self.assertEqual(err.count("\n"), 1)
+
+
+class PtyProcess:
+    """PTY 에 helper 를 띄운다. 대기자가 여럿이라 PtyShell 의 단일 세션 상태와 떼어 둔다."""
+
+    def __init__(self, argv, env):
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            try:
+                os.execve(argv[0], argv, env)
+            finally:
+                os._exit(127)
+        self.output = b""
+
+    def text(self):
+        return self.output.decode("utf-8", "replace")
+
+    def write(self, data):
+        os.write(self.fd, data)
+
+    def read_until(self, token):
+        deadline = time.monotonic() + 10
+        while token not in self.output:
+            if time.monotonic() > deadline or not self.pump(0.05):
+                raise AssertionError("no %r in output: %s" % (token, self.text()))
+
+    def pump(self, timeout):
+        """timeout 안에 쓰인 출력을 모은다. PTY 가 닫혔으면 False 를 돌려준다."""
+        if not select.select([self.fd], [], [], timeout)[0]:
+            return True
+        try:
+            chunk = os.read(self.fd, 65536)
+        except OSError as error:
+            if error.errno != errno.EIO:
+                raise
+            return False
+        self.output += chunk
+        return bool(chunk)
+
+    def exit_code(self, timeout=10):
+        deadline = time.monotonic() + timeout
+        while True:
+            pid, status = os.waitpid(self.pid, os.WNOHANG)
+            if pid:
+                break
+            if time.monotonic() > deadline:
+                raise AssertionError("helper did not exit: %s" % self.text())
+            self.pump(0.05)
+        self.pid = None
+        while self.pump(0.05):
+            pass
+        return os.waitstatus_to_exitcode(status)
+
+    def kill(self):
+        if self.pid is not None:
+            try:
+                os.kill(self.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.waitpid(self.pid, 0)
+            self.pid = None
+        os.close(self.fd)
+
+
+class AutoResumeQueueProcess(unittest.TestCase):
+    """실제 프로세스와 실제 flock 으로 여러 대기자의 간격과 취소를 검증한다."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="mast-resume-queue-")
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        self.lock = self.home / ".mast/auto-resume.lock"
+        self.env = dict(os.environ, HOME=str(self.home))
+
+    def helper_argv(self, load, stamp):
+        return [sys.executable, "-c", LOAD_WRAPPER, str(load), str(AUTO_RESUME), str(stamp),
+                "wait", "claude --resume x"]
+
+    def spawn(self, load, stamp):
+        process = PtyProcess(self.helper_argv(load, stamp), self.env)
+        self.addCleanup(process.kill)
+        return process
+
+    def test_helpers_sharing_a_home_are_admitted_one_at_a_time(self):
+        stamps = [self.home / ("stamp-%d" % index) for index in range(3)]
+        procs = [subprocess.Popen(self.helper_argv(LOAD_IDLE, stamp), env=self.env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                 for stamp in stamps]
+        for proc in procs:
+            out, err = proc.communicate(timeout=30)
+            self.assertEqual((proc.returncode, out), (0, b""), err.decode("utf-8", "replace"))
+        permits = sorted(float(stamp.read_text()) for stamp in stamps)
+        for earlier, later in zip(permits, permits[1:]):
+            self.assertGreaterEqual(later - earlier, QUEUE_MIN_INTERVAL - PERMIT_SLACK)
+
+    def test_ctrl_c_cancels_the_holder_and_hands_the_lock_to_the_next_helper(self):
+        holder = self.spawn(LOAD_BUSY, self.home / "holder-stamp")
+        holder.read_until(b"auto-resume queued")
+        waiter = self.spawn(LOAD_IDLE, self.home / "waiter-stamp")
+        waiter.read_until(b"auto-resume queued")
+        holder.write(b"\x03")
+        self.assertEqual(holder.exit_code(), 130, holder.text())
+        self.assertIn(b"auto-resume cancelled", holder.output)
+        self.assertEqual(waiter.exit_code(), 0, waiter.text())
+        self.assertFalse((self.home / "holder-stamp").exists())
+        self.assertTrue((self.home / "waiter-stamp").exists())
+
+    def test_sighup_ends_a_queued_helper_without_a_permit(self):
+        holder = self.spawn(LOAD_BUSY, self.home / "holder-stamp")
+        holder.read_until(b"auto-resume queued")
+        os.kill(holder.pid, signal.SIGHUP)
+        self.assertEqual(holder.exit_code(), -signal.SIGHUP, holder.text())
+        self.assertNotIn(b"skipped", holder.output)
+        self.assertNotIn(b"cancelled", holder.output)
+        self.assertFalse((self.home / "holder-stamp").exists())
+        self.assertEqual(self.lock.read_bytes(), b"")
+        successor = self.spawn(LOAD_IDLE, self.home / "successor-stamp")
+        self.assertEqual(successor.exit_code(), 0, successor.text())
 
 
 if __name__ == "__main__":

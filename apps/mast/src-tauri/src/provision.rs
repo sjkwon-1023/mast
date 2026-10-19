@@ -38,7 +38,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 23;
+const SETUP_VERSION: u32 = 24;
 
 /// 설치 스크립트 heredoc 에 통째로 들어가는 레포 파일들: (자리표시자, heredoc 종결 줄, 내용).
 ///
@@ -46,12 +46,17 @@ const SETUP_VERSION: u32 = 23;
 /// (`setup_script`). 그래서 설치된 파일은 레포 파일과 바이트 단위로 같다. 순서대로 치환하므로
 /// 앞서 넣은 파일에 뒤 자리표시자나 자기 종결 줄이 들어 있으면 스크립트가 조용히 깨진다 —
 /// 아래 `const _` 가 그 경우를 빌드 실패로 만든다.
-const EMBEDDED_FILES: [(&str, &str, &str); 16] = [
+const EMBEDDED_FILES: [(&str, &str, &str); 17] = [
     ("@BROWSER_HELPER@", "MAST_BROWSER_EOF", include_str!("../../../../scripts/wsl/mast-browser.py")),
     (
         "@CONFIG_HELPER@",
         "MAST_CONFIG_EOF",
         include_str!("../../../../scripts/wsl/mast-config.py"),
+    ),
+    (
+        "@AUTO_RESUME_HELPER@",
+        "MAST_AUTO_RESUME_EOF",
+        include_str!("../../../../scripts/wsl/mast-auto-resume.py"),
     ),
     (
         "@HOOKS_MERGE@",
@@ -893,19 +898,21 @@ MAST_ZSHRC_EOF
 MAST_ZLOGIN_EOF
 fi
 
-if [ -f "$MARKER" ] && [ "$CODEX_PENDING" = no ] && [ "$AGY_PENDING" = no ]; then
+# 자동 재실행 helper 가 빠졌으면 마커가 있어도 아래 누락 검사까지 가서 설치를 다시 돈다.
+if [ -f "$MARKER" ] && [ "$CODEX_PENDING" = no ] && [ "$AGY_PENDING" = no ] \
+  && [ -f "$MAST_HOME/bin/mast-auto-resume.py" ]; then
   exit 0
 fi
 
 # --- agent steps only ---------------------------------------------------------------------
 # 마커가 있으면 나머지 단계는 이미 끝났다. 다시 돌리면 사용자가 opt-out 으로 지운 Codex notify 줄·AGENTS.md 블록·
 # 훅 행이 버전이 바뀌지 않았는데도 되살아나므로, 남은 에이전트 단계만 설치된 파일로 돈다. 그 파일이 없으면 전체
-# 설치로 간다. 목록은 두 단계가 실행하는 파일과 설치한 훅이 실행하는 파일 전부다. 빠진 채 이 경로를 돌면 병합이
-# 매 실행 실패하거나 없는 파일을 가리키는 훅이 끝난 단계로 기록된다.
+# 설치로 간다. 목록은 두 단계가 실행하는 파일, 설치한 훅이 실행하는 파일, 셸이 실행하는 자동 재실행 helper 전부다.
+# 빠진 채 이 경로를 돌면 병합이 매 실행 실패하거나 없는 파일을 가리키는 훅이 끝난 단계로 기록된다.
 if [ -f "$MARKER" ]; then
   missing=""
   for file in "$HOOKS_MERGE" "$MAST_HOME/bin/mast-agent-hook.py" "$MAST_HOME/bin/mast-codex-hook.sh" \
-      "$MAST_HOME/bin/mast-agy-hook.sh" "$NOTIFY"; do
+      "$MAST_HOME/bin/mast-agy-hook.sh" "$NOTIFY" "$MAST_HOME/bin/mast-auto-resume.py"; do
     [ -f "$file" ] || missing="$file"
   done
   if [ -z "$missing" ]; then
@@ -997,18 +1004,22 @@ fi
 
 # Resume hint. mast respawns a tab's shell on restart, so the agent session that ran in it
 # is gone from the screen; recording how to re-enter it lets the fresh shell offer the command
-# (scripts/wsl/launch.sh for a bash tab, integration.sh for a zsh tab; neither runs it). Rewritten
+# (scripts/wsl/launch.sh for a bash tab, integration.sh for a zsh tab; only autoResume runs it,
+# and only when line 3 matches the shell's last prompt generation). Rewritten
 # on every hook call, so the tab's most recent session wins. Line 1 is the command, line 2 the
-# epoch seconds it was recorded at. tmp+mv makes the replacement atomic for a concurrent
-# reader, and every failure here is swallowed: a notification must not break on it.
+# epoch seconds it was recorded at, and line 3 the prompt generation, present only when
+# MAST_PROMPT_GEN is well-formed, so a fresh shell can tell a current hint from a stale one.
+# tmp+mv makes the replacement atomic for a concurrent reader, and every failure here is
+# swallowed: a notification must not break on it.
 # The id is required to be a plain token: the spawn wrapper echoes line 1 into the terminal
 # and into shell history and checks nothing itself, so this is where that is guarded. A
 # session id is a uuid, so the check rejects nothing real.
 if [[ -n "${MAST_TAB:-}" && "$SESSION_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
   RESUME_FILE="$HOME/.mast/resume/tab-$MAST_TAB"
+  RESUME_LINES=("claude --resume $SESSION_ID" "$(date +%s 2>/dev/null || echo 0)")
+  if [[ "${MAST_PROMPT_GEN:-}" =~ ^[A-Za-z0-9_-]{1,128}$ ]]; then RESUME_LINES+=("$MAST_PROMPT_GEN"); fi
   if mkdir -p "$HOME/.mast/resume" 2>/dev/null; then
-    if printf 'claude --resume %s\n%s\n' "$SESSION_ID" "$(date +%s 2>/dev/null || echo 0)" \
-         > "$RESUME_FILE.tmp.$$" 2>/dev/null; then
+    if printf '%s\n' "${RESUME_LINES[@]}" > "$RESUME_FILE.tmp.$$" 2>/dev/null; then
       mv -f "$RESUME_FILE.tmp.$$" "$RESUME_FILE" 2>/dev/null || true
     fi
     rm -f "$RESUME_FILE.tmp.$$" 2>/dev/null || true
@@ -1087,9 +1098,11 @@ fi
 # Codex 0.154의 임시 catch-up 턴도 같은 MAST_TAB으로 notify를 호출한다. payload에는 임시 세션 여부가 없으므로
 # 저장된 transcript 의 첫 레코드로 판정한다. transcript 형식은 Codex의 내부 계약이라 확인하지 못하면 기존
 # 힌트를 보존한다. DB 스키마나 cwd로 다른 세션을 추측하지 않는다.
-# - resumable: id 가 맞고 source 가 cli·exec. mast 탭에서 `codex resume` 으로 이어 갈 수 있어 힌트를 쓴다.
-# - confirmed: id 가 맞고 서브에이전트·내부 세션이 아닌 나머지 최상위 세션. vscode·custom 이나 source 가 없는 옛
-#   rollout(Codex 는 없는 값을 vscode 로 읽는다)을 탭에서 resume 한 경우다. idle 은 이 탭 것이지만 힌트는 쓰지 않는다.
+# - resumable: id 가 맞고 source 가 cli·exec·vscode. mast 탭에서 `codex resume` 으로 이어 갈 수 있어 힌트를 쓴다.
+#   vscode 는 TUI 로 띄운 세션에도 붙는다(codex-cli 0.163.0 의 originator codex-tui 세션이 source vscode 로
+#   기록됐고, 그 id 를 탭에서 그대로 resume 했다).
+# - confirmed: id 가 맞고 서브에이전트·내부 세션이 아닌 나머지 최상위 세션. custom 이나 source 가 없는 옛
+#   rollout 을 탭에서 resume 한 경우다. idle 은 이 탭 것이지만 힌트는 쓰지 않는다.
 # - rejected: source 가 {"subagent": …} 나 {"internal": …} 인 경우만. Codex 의 is_non_root_agent 와 같은 기준이고,
 #   dispatcher 는 이 판정으로 idle 을 생략하므로 좁게 둔다.
 # - unknown: 읽지 못했거나 잘렸거나 시간이 넘은 경우.
@@ -1105,7 +1118,7 @@ for transcript in "$1"/sessions/*/*/*/rollout-*-"$2".jsonl; do
   found="$(printf '%s\n' "$metadata" | jq -r --arg id "$2" '
     if .type == "session_meta" and .payload.id == $id then
       .payload.source as $source
-      | if $source == "cli" or $source == "exec" then "resumable"
+      | if $source == "cli" or $source == "exec" or $source == "vscode" then "resumable"
         elif ($source | type) == "object" and ($source | has("subagent") or has("internal")) then "rejected"
         else "confirmed" end
     else "unknown" end' 2> /dev/null)"
@@ -1130,11 +1143,13 @@ fi
 
 # Claude와 같은 형식으로 원자 교체한다. 마지막 사용자 세션이 이기며 내부 턴은
 # 힌트를 바꾸지 않는다. 실패하더라도 아래의 idle 판정은 계속 한다.
+# 셋째 줄(프롬프트 세대)은 MAST_PROMPT_GEN 이 형식에 맞을 때만 쓴다. 없으면 두 줄 힌트로 남는다.
 if [[ "$RESUMABLE" == yes ]]; then
   RESUME_FILE="$HOME/.mast/resume/tab-$MAST_TAB"
+  RESUME_LINES=("codex resume $THREAD_ID" "$(date +%s 2>/dev/null || echo 0)")
+  if [[ "${MAST_PROMPT_GEN:-}" =~ ^[A-Za-z0-9_-]{1,128}$ ]]; then RESUME_LINES+=("$MAST_PROMPT_GEN"); fi
   if mkdir -p "$HOME/.mast/resume" 2>/dev/null; then
-    if printf 'codex resume %s\n%s\n' "$THREAD_ID" "$(date +%s 2>/dev/null || echo 0)" \
-         > "$RESUME_FILE.tmp.$$" 2>/dev/null; then
+    if printf '%s\n' "${RESUME_LINES[@]}" > "$RESUME_FILE.tmp.$$" 2>/dev/null; then
       mv -f "$RESUME_FILE.tmp.$$" "$RESUME_FILE" 2>/dev/null || true
     fi
     rm -f "$RESUME_FILE.tmp.$$" 2>/dev/null || true
@@ -1739,6 +1754,9 @@ MAST_HOOKS_MERGE_EOF
 install_embedded "$MAST_HOME/bin/mast-agent-hook.py" data <<'MAST_AGENT_HOOK_EOF'
 @AGENT_HOOK@
 MAST_AGENT_HOOK_EOF
+install_embedded "$MAST_HOME/bin/mast-auto-resume.py" data <<'MAST_AUTO_RESUME_EOF'
+@AUTO_RESUME_HELPER@
+MAST_AUTO_RESUME_EOF
 install_embedded "$MAST_HOME/bin/mast-claude-hook.sh" exec <<'MAST_CLAUDE_HOOK_EOF'
 @CLAUDE_HOOK@
 MAST_CLAUDE_HOOK_EOF

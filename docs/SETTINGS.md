@@ -27,12 +27,14 @@ mast config set fontSize 15
 mast config set highlightLanguages '["python","rust"]'
 mast config set log true
 mast config set showTabIds false         # hide the #id badges on tab titles
+mast config set autoResume true          # run restored agents' resume commands on their own
 mast config set remote                    # enable on 7331
 mast config set remote true --port 7441   # enable on 7441
 mast config set remote --port 7441        # same, true is optional
 mast config set remote false              # remove remote, disabling it after restart
 mast config reset fontSize                # remove this override
 mast config reset showTabIds              # back to the default (shown)
+mast config reset autoResume              # back to the default (off)
 mast config reset remote                  # disable phone access
 mast config set browser.enabled false     # 브라우저 비활성화
 mast config reset browser.enabled         # 기본값 true로 복원
@@ -143,6 +145,20 @@ not invented for the badge: it is the tab's model id, assigned when the tab is c
 across a restart, a rename and changes to the tab strip, so an address stays valid. `true` and
 `false` are the only values; JSON `null` counts as unset, as it does for the other keys, and any
 other type is an error. Read once at boot.
+
+## `autoResume`
+
+Default **false**. `true` lets a restored terminal tab run its saved agent resume command by itself,
+once, at its first prompt, when the agent was still running when Mast quit. `false` only offers the
+command as the manual `↑` hint, as before. `true` and `false` are the only values; JSON `null` counts as
+unset, and any other type is an error. Read once at boot, so restart Mast after changing it.
+
+The command is always the one Mast saved: `claude --resume <id>`, `codex resume <id>` or
+`opencode --session <id>`. Auto-runs are queued across tabs: at least 3 seconds between starts, a wait
+while the machine is busy, and a 120-second cap after which the tab keeps the manual hint. Ctrl+C cancels
+a waiting run. A normal agent exit is never auto-run. See
+[ADR-0026](adr/0026-tab-agent-state-and-hook-signals.md) and
+[the hook contract](../scripts/wsl/claude-hook-example.md#automatic-run--autoresume).
 
 ## `browser.enabled`
 

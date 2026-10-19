@@ -55,6 +55,8 @@ notifies you when one starts waiting, and lets you answer from your phone even w
 - **Resume with Up** — after restarting mast, press `Up` in a restored bash or zsh pane to recall
   its saved Claude Code or Codex resume command, then `Enter` to continue the conversation.
   This resumes the agent's saved session; the old process does not stay running after exit.
+  With `autoResume` on (`mast config set autoResume true`, off by default), a tab whose agent was
+  still running at quit runs that command itself at its first prompt, one tab at a time.
 - **Portable** — a single executable. No installer, no setup wizard.
 - **Reload any time** — `Ctrl+Shift+R` rebuilds the window; the shells and agents keep running.
 
@@ -180,6 +182,7 @@ Run these commands in a mast Bash pane:
 ```sh
 mast config
 mast config set fontSize 15
+mast config set autoResume true         # run restored agents' resume commands on their own
 mast config set remote                  # enable Local HTTP phone access on port 7331
 mast config set remote --port 7441      # enable it on a different port
 mast config set remote false            # disable Local HTTP phone access

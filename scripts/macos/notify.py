@@ -23,12 +23,15 @@ def save_resume(command, session):
         return
     if not re.fullmatch(r"[A-Za-z0-9_-]+", session):
         return
+    # 셋째 줄(프롬프트 세대)은 형식이 맞을 때만 쓴다. 틀리면 두 줄 힌트로 남아 자동 실행 자격이 없다.
+    generation = os.environ.get("MAST_PROMPT_GEN", "")
+    generation_line = "%s\n" % generation if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", generation) else ""
     directory = Path.home() / ".mast" / "resume"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix="tab-%s.tmp." % tab, dir=str(directory))
     try:
         with os.fdopen(fd, "w") as handle:
-            handle.write("%s %s\n%d\n" % (command, session, time.time()))
+            handle.write("%s %s\n%d\n%s" % (command, session, time.time(), generation_line))
         os.replace(temporary, directory / ("tab-" + tab))
     finally:
         if os.path.exists(temporary):
@@ -58,7 +61,7 @@ def ownership(thread):
             if isinstance(source, dict) and ("subagent" in source or "internal" in source):
                 verdict = "rejected"
                 continue
-            return "confirmed", source in ("cli", "exec")
+            return "confirmed", source in ("cli", "exec", "vscode")
     return verdict, False
 
 
