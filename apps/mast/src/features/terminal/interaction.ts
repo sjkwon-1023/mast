@@ -31,39 +31,6 @@ export function shouldOpenLink(
   }
 }
 
-// Alt+방향키의 실제 시퀀스. xterm 5.5 의 `evaluateKeyboardEvent` 는 non-Mac 에서 Alt+방향키를
-// Ctrl+방향키(`ESC[1;5A` 등)로 바꿔 보내는 HACK 을 갖고 있어(셸 단어 이동 관례),
-// 그대로 두면 TUI 앱은 Alt 대신 Ctrl 을 받는다. 터미널 뷰가 이 판정으로 직접 보낸다.
-// Alt 단독일 때만 값이 있고 수식이 더 붙으면 null 이다 (Ctrl+Alt 는 xterm 이 1;7x 로
-// 정확히 보내고, Alt+Shift 는 window capture 의 pane 이동이 먼저 소비한다).
-// IME 조합 중의 keydown 은 조합기 소유다 (ADR-0007 결정 6).
-//
-// macOS 에서는 null 이다 — xterm 의 Mac 기본이 Terminal.app 과 같다: Option+←/→ 는
-// `ESC b`/`ESC f`(셸 단어 이동), Option+↑/↓ 는 `ESC[1;3A/B` 그대로다. 여기서 덮으면
-// Mac 사용자가 기대하는 단어 이동이 깨진다.
-export function altArrowSequence(
-  ev: Pick<
-    KeyboardEvent,
-    "key" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey" | "isComposing"
-  >,
-  mac = IS_MAC,
-): string | null {
-  if (mac) return null;
-  if (ev.isComposing || !ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return null;
-  switch (ev.key) {
-    case "ArrowUp":
-      return "\x1b[1;3A";
-    case "ArrowDown":
-      return "\x1b[1;3B";
-    case "ArrowRight":
-      return "\x1b[1;3C";
-    case "ArrowLeft":
-      return "\x1b[1;3D";
-    default:
-      return null;
-  }
-}
-
 /** macOS 터미널 키가 읽는 화면 상태 — 일반 버퍼인지, 앱이 마우스를 추적 중인지. */
 export interface TerminalScreenMode {
   normalBuffer: boolean;
@@ -92,7 +59,15 @@ const MAC_COMMAND_EDIT_KEYS: Record<string, string | undefined> = {
   Backspace: "\x15",
 };
 
-/** macOS 터미널의 ⌘ 줄 편집·⌘K·Fn 스크롤 키 판정 (Windows 는 항상 null — 기존 동작 그대로).
+// Option+←/→ 는 Terminal.app 처럼 셸 단어 이동(`ESC b`/`ESC f`)이다. xterm 5.5 는 이 변환을
+// macOptionIsMeta 와 무관하게 갖고 있었고, 6.0 은 삭제했다. Option 만 눌렸을 때만 보내고,
+// Shift 나 ⌘ 가 붙으면 가로채지 않는다 (xterm 기본 처리·pane 이동 몫).
+const MAC_OPTION_WORD_KEYS: Record<string, string | undefined> = {
+  ArrowLeft: "\x1bb",
+  ArrowRight: "\x1bf",
+};
+
+/** macOS 터미널의 Option+←/→ 단어 이동·⌘ 줄 편집·⌘K·Fn 스크롤 키 판정 (Windows 는 항상 null — 기존 동작 그대로).
  *
  *  Fn+↑/↓/←/→ 는 PageUp/PageDown/Home/End 로 온다. Terminal.app 처럼 수식키 없이 누르면
  *  스크롤백을 움직이는데, 스크롤백이 없는 alt 버퍼(vim·less)나 마우스를 추적하는 TUI 에서는
@@ -111,7 +86,12 @@ export function macTerminalKeyAction(
   screen: TerminalScreenMode,
   mac = IS_MAC,
 ): MacTerminalKey | null {
-  if (!mac || ev.isComposing || ev.altKey || ev.ctrlKey) return null;
+  if (!mac || ev.isComposing || ev.ctrlKey) return null;
+  if (ev.altKey) {
+    if (ev.metaKey || ev.shiftKey) return null;
+    const data = MAC_OPTION_WORD_KEYS[ev.key];
+    return data === undefined ? null : { type: "send", data };
+  }
   if (ev.metaKey) {
     if (ev.shiftKey) return null;
     // 한글 입력 소스에서는 ⌘K 의 key 가 자모로 올 수 있어 물리 키(code)도 본다 (리로드 키와 같은 판단).

@@ -376,3 +376,65 @@ between windows or app runs; nothing here persists into `state.json` or across a
 검증: 브라우저 xterm에서 재인쇄 중 래치 고착, 사용자 휠 취소, 기존 위치 복원 테스트.
 Windows에서 앱 종료 → 저장된 resume 명령 실행 → 초기 하단과 이후 수동 스크롤은
 추가 실기 확인 대상이다.
+
+## Amendment (2026-10-18) — xterm 6.0 browser viewport: observations and the cancel target
+
+xterm 6.0's browser `Viewport` is pixel-based: it syncs `scrollTop` to `ydisp × cell.height`
+(`src/browser/Viewport.ts` in the `@xterm/xterm` package). Decisions 2–5 were written against 5.5's line-based viewport. This
+amendment records what 6.0.0 does, which decisions still hold, and the one selector that changed.
+
+**Measurement conditions.** The browser build of `@xterm/xterm` 6.0.0 under happy-dom 20.11.2, 80×24,
+DPR 1. happy-dom has no layout, so `installCharMeasureGeometry()` (`src/test-helpers.ts`) fixes the two
+character-measurement getters at 9×17 CSS px. Nothing else is replaced: `Viewport`, scrolling and the
+buffer run as shipped. **This is not a real-browser measurement.** The real-browser checks are F2 and
+F3 in WINDOWS-BUILD §10.
+
+| Probe | Observed on the 6.0 browser build |
+|---|---|
+| M1 normal buffer | `scrollToLine(baseY − 20)`, then 50 lines: `viewportY` stays put, offset 20 → 70 |
+| M2 bottom follow | `scrollToBottom()`, then 2,000 lines: `viewportY == baseY` (2177) |
+| M3 ED 3 | `ESC[3J` leaves `baseY` at 0 with the latch set. `scrollToBottom()` at `baseY` 0 does nothing; after 30 lines `viewportY` is still 0 |
+| M3′ deferred release | Releasing at the first chunk (`baseY` 30) works: the view follows the next 2,000 lines |
+| M4 scrollbar DOM | The custom bars are `.xterm-scrollable-element > .scrollbar` (vertical and horizontal), each with a `.slider`. They sit outside `.xterm-viewport` |
+| M5 boundary | A rejected reprint (`baseY` 5 < 20) falls to the bottom with no memory. Offset == `baseY` restores line 0 and remembers it. Leaving mid-reprint returns the pending value. The alternate buffer remembers nothing. Output after the restore ends is not re-applied |
+
+The probe numbers came from temporary probe files that were deleted after the run. The durable
+assertions are the tests in `scroll-restore.test.ts` under `xterm 6 브라우저 빌드의 래치·스크롤바 관찰`
+and `리로드 스크롤 복원`.
+
+**Latch release is kept.** M3 and M3′ show that `scrollToBottom()` at `baseY` 0 still does not clear the
+latch on 6.0, so decision 2's deferred release (`releaseLatchOnNextChunk`) stays. It uses only the public
+API. The tests read `_core` for dimensions and buffer state, never to change scroll state.
+
+**Cancel target changed.** Decision 5 names `.xterm-viewport` as the scrollbar target. On 6.0 the bar is
+not inside `.xterm-viewport`, so that selector never matches it. The view now matches
+`XTERM_SCROLLBAR = ".xterm-scrollable-element > .scrollbar"` (`src/features/terminal/view.ts`). A press on a
+track or slider cancels the restore. A click on text (`.xterm-screen`) and input in other panes do not. The
+listener scope and the three signals of decision 5 are otherwise unchanged. The C3 mutation check put the
+old `.xterm-viewport` selector back, and a slider `mousedown` test failed.
+
+**Cancel signal changed from `mousedown` to `pointerdown`.** xterm 6.0's track and slider call
+`preventDefault()` on the primary `pointerdown` (`abstractScrollbar.ts`). A canceled primary `pointerdown`
+suppresses the compatibility `mousedown` (W3C Pointer Events), so a `mousedown` listener never sees a bar
+press. The root now listens for `pointerdown` in the capture phase, which runs before xterm's target
+listener, and keeps the same selector check. The `mousedown` listener is removed. The F1 mutation check put
+the `mousedown` judgment back: the track and slider tests failed with `expected 280 to be 250`.
+
+**Bar visibility.** xterm 6's visibility controller hides a bar with `invisible` once scrolling stops, and
+`fade` does not say whether scrollback exists: `_hide` returns early when the bar is already hidden, so
+`fade` survives a wipe that removes the scrollback, and a bar never revealed stays plain `invisible` after
+scrollback appears. `TerminalView` therefore sets `data-scrollback` on the pane root while the normal buffer
+has `baseY > 0`. It checks on `onWriteParsed` (ED 3 fires only xterm's internal scroll event, which the
+public `onScroll` does not forward), on `onScroll` (`clear()` and buffer switches) and on `onResize` (a
+resize moves lines into or out of scrollback without an event). `src/app/styles.css` shows a vertical
+`.invisible` bar, with pointer events, only under that marker. Without the marker xterm's own hiding applies,
+so an empty pane and an alternate-screen TUI show no bar. Showing a bar on an empty pane would be a product
+change; it has not been checked visually (F2, F3). The native `.xterm-viewport` scrollbar is set to width
+and height 0, because its full-height thumb would overlap the custom bar.
+
+**fit.** No code change. Fit 0.11 reserves `overviewRuler?.width || 14` for the bar unless `scrollback` is 0,
+and 6.0's Viewport uses the same 14 px default (`DEFAULT_SCROLL_BAR_WIDTH`), so the two agree in the source. Real cols and rows at real DPI were not
+measured. `TerminalView.fit()` skips when the root has no width, which is always the case in happy-dom. → F3.
+
+**Still open.** F2 (real WebView2 bar targets, drag and wheel, the restore checklist) and F3 (DPI, real
+glyph metrics, load). Nothing in this amendment is a field result.

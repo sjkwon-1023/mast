@@ -38,7 +38,14 @@ import { SwitchTracer } from "./switch-trace";
 import { WorkspaceView } from "./workspace-view";
 import type { TerminalView } from "../terminal/view";
 import type { Pane, StateSnapshot, Tab, TabId, Workspace } from "../../shared/types";
-import { attachBody, termOf } from "../../test-helpers";
+import {
+  attachBody,
+  cssDimensionsOf,
+  installCharMeasureGeometry,
+  termOf,
+} from "../../test-helpers";
+
+installCharMeasureGeometry();
 
 const TAB = 7;
 const SESSION = 42;
@@ -106,7 +113,10 @@ describe("리로드를 넘는 스크롤 기억", () => {
     const before = newWorkspaceView();
     before.render(snapshot());
     await sleep(50);
-    termOf(liveView(before, TAB)).scrollLines(-20);
+    const live = termOf(liveView(before, TAB));
+    expect(cssDimensionsOf(live).cell.height).toBeGreaterThan(0);
+    expect(live.buffer.active.baseY).toBeGreaterThan(0);
+    live.scrollLines(-20);
 
     window.dispatchEvent(new Event("pagehide"));
     const stored = window.sessionStorage.getItem(SCROLL_MEMORY_KEY);

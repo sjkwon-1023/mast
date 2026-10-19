@@ -32,7 +32,6 @@ import {
   isImageOnlyPaste,
   copyTerminalSelection,
   clipboardHasImage,
-  altArrowSequence,
   macTerminalKeyAction,
 } from "./interaction";
 import type { MacTerminalKey } from "./interaction";
@@ -45,7 +44,11 @@ import { log } from "../../infrastructure/logging";
 import type { SettlePoll } from "./scroll";
 import "@xterm/xterm/css/xterm.css";
 
-const RESTORE_CANCEL_EVENTS = ["keydown", "wheel", "mousedown"] as const;
+// 막대의 트랙·슬라이더는 pointerdown 을 preventDefault 하므로 호환 mousedown 이 오지 않는다.
+const RESTORE_CANCEL_EVENTS = ["keydown", "wheel", "pointerdown"] as const;
+
+// xterm 6 의 스크롤바는 .xterm-viewport 밖의 SmoothScrollableElement 막대다.
+const XTERM_SCROLLBAR = ".xterm-scrollable-element > .scrollbar";
 
 // 뷰만 소유한다. PTY 세션 수명은 Dispatcher가 관리한다 (ADR-0004, ADR-0019).
 export class TerminalView {
@@ -79,6 +82,8 @@ export class TerminalView {
   private latchedByRestore = false;
 
   private releaseLatchOnNextChunk = false;
+
+  private hasScrollback = false;
 
   private enqueueWrite(data: string): void {
     this.writeQueue = this.writeQueue
@@ -120,6 +125,11 @@ export class TerminalView {
       if (params[0] === 3) this.onScrollbackWipe();
       return false;
     });
+
+    // ED 3 은 xterm 내부 onScroll 만 내고 공개 onScroll 로 넘어오지 않아 파싱 완료 시점에 맞춘다.
+    // clear() 같은 write 밖의 변경은 onScroll 이, resize 의 reflow 는 onResize 가 맡는다.
+    this.term.onWriteParsed(() => this.syncScrollbackMarker());
+    this.term.onScroll(() => this.syncScrollbackMarker());
 
     this.batcher = new AckBatcher((n) => {
       this.sendAck(n);
@@ -235,6 +245,7 @@ export class TerminalView {
     // replay는 ack 대상이 아니다. 채널 출력은 dedup으로 버린 바이트까지 전부 ack한다.
     this.applyGateResult(this.gate.onSnapshot(endOffset));
     this.onResizeSub = this.term.onResize(({ cols, rows }) => {
+      this.syncScrollbackMarker();
       resizeTerminal(this.session, cols, rows).catch((err) =>
         console.error("resize failed", err),
       );
@@ -352,15 +363,6 @@ export class TerminalView {
       if (macKey !== null) {
         ev.preventDefault();
         this.runMacTerminalKey(macKey);
-        return false;
-      }
-      // xterm 의 Alt+방향키→Ctrl+방향키 재작성을 우회해 진짜 Alt 시퀀스를 보낸다 —
-      // Codex 질문 UI 등 Alt+방향키를 쓰는 TUI 가 Ctrl+방향키를 받던 원인이다
-      // (interaction.ts::altArrowSequence 참조). IME 조합 중에는 조합기 소유다.
-      const altArrow = altArrowSequence(ev);
-      if (altArrow !== null) {
-        ev.preventDefault();
-        this.enqueueWrite(altArrow);
         return false;
       }
       if (isCopySelectionKey(ev, this.term.hasSelection())) {
@@ -494,7 +496,7 @@ export class TerminalView {
     if (line < baseY) this.latchedByRestore = true;
   }
 
-  // 브라우저 xterm 5.5는 이동량 0에서 래치를 풀지 않는다. baseY가 생긴 다음 chunk로 미룬다.
+  // 브라우저 xterm 6.0은 이동량 0인 scrollToBottom()으로 래치를 풀지 못한다. baseY가 생긴 다음 chunk로 미룬다.
   private releaseScrollLatch(): void {
     if (this.term.buffer.active.baseY === 0) {
       this.releaseLatchOnNextChunk = true;
@@ -529,11 +531,10 @@ export class TerminalView {
   }
 
   private readonly onUserInterrupt = (ev: Event): void => {
-    // pane 포커스·텍스트 선택 클릭은 복원을 취소하지 않는다.
-    if (ev.type === "mousedown") {
+    // pane 포커스·텍스트 선택 클릭은 복원을 취소하지 않는다. 막대의 트랙·슬라이더만 조작이다.
+    if (ev.type === "pointerdown") {
       const target = ev.target;
-      if (!(target instanceof Element) || target.closest(".xterm-viewport") === null)
-        return;
+      if (!(target instanceof Element) || target.closest(XTERM_SCROLLBAR) === null) return;
     }
 
     // 키 입력은 래치를 해제한다. 휠·스크롤바는 사용자가 고른 위치이므로 지연 해제도 버린다.
@@ -555,6 +556,16 @@ export class TerminalView {
         passive: true,
       });
     }
+  }
+
+  // styles.css 가 세로 막대를 드러내는 기준이다. 스크롤백이 있는 normal buffer 에서만 표식을 단다.
+  private syncScrollbackMarker(): void {
+    const buffer = this.term.buffer.active;
+    const hasScrollback = buffer.type === "normal" && buffer.baseY > 0;
+    if (hasScrollback === this.hasScrollback) return;
+    this.hasScrollback = hasScrollback;
+    if (hasScrollback) this.root.dataset.scrollback = "";
+    else delete this.root.dataset.scrollback;
   }
 
   private fit(): void {

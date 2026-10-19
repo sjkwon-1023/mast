@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
 //
-// 회귀 잠금 — 실제 `@xterm/xterm` 배포 번들을 패치 전후로 띄워 같은 IME 이벤트 열을
-// 넣는다 (ADR-0020). 순수 판정으로는 잡을 수 없는 결함이다: 고장은 xterm 내부의
-// zero-delay 타이머와 브라우저가 키 이벤트를 넣는 순서 사이에 있다.
+// 회귀 잠금 — 실제 `@xterm/xterm` 6.0 배포 번들 두 벌(CJS `lib/xterm.js`, ESM `lib/xterm.mjs`)에
+// 같은 IME 이벤트 열을 넣고 `onData` 로 나가는 문자열을 본다 (ADR-0020). 순수 판정으로는 잡을 수
+// 없는 결함이다: 고장은 xterm 내부의 zero-delay 타이머와 브라우저가 키 이벤트를 넣는 순서 사이에
+// 있다. 이 잠금은 지연 조합 전송 경로만 본다. 6.0에 남은 업스트림 IME 문제(#6089 등)를 해결했다는
+// 증거가 아니다.
 //
 // 이벤트 열은 두벌식으로 "테스트 문장"을 치는 것이다. `테` 뒤에 `ㅅ` 이 받침으로
 // 붙었다가(`텟`) `ㅡ` 가 오면 다음 글자로 넘어가므로 compositionend 와 다음
@@ -11,33 +13,22 @@
 // 브라우저가 처리하는 키 수: 1 이면 한가한 메인 스레드, 그 이상은 출력이 쏟아지는
 // pane 옆에서 치는 상황의 모델이다.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type { Terminal as XtermTerminal } from "@xterm/xterm";
-import { afterAll, describe, expect, it } from "vitest";
-
-import { patchXtermComposition } from "./xterm-composition-patch";
+import { describe, expect, it } from "vitest";
 
 type TerminalCtor = new (options: { cols: number; rows: number }) => XtermTerminal;
 
+// 패키지 이름으로 import 하면 테스트 러너가 CJS 를 고르므로 두 파일을 경로로 직접 연다.
+const XTERM_LIB = resolve(dirname(fileURLToPath(import.meta.url)), "../node_modules/@xterm/xterm/lib");
 const require = createRequire(import.meta.url);
-const BUNDLE_PATH = require.resolve("@xterm/xterm");
-// 워커 스레드는 pid 를 공유하므로 이름은 mkdtemp 가 정한다.
-const PATCHED_DIR = mkdtempSync(join(tmpdir(), "mast-xterm-patched-"));
-const PATCHED_PATH = join(PATCHED_DIR, "xterm.cjs");
-
-// UMD 번들이라 `module.exports` 로 나온다 — 패치본은 임시 파일에 써서 같은 방식으로
-// 읽는다. 원본의 sourcemap 주석은 파일 옆에 map 이 없어 무시된다.
-writeFileSync(PATCHED_PATH, patchXtermComposition(readFileSync(BUNDLE_PATH, "utf8")));
-const Stock = (require(BUNDLE_PATH) as { Terminal: TerminalCtor }).Terminal;
-const Patched = (require(PATCHED_PATH) as { Terminal: TerminalCtor }).Terminal;
-
-afterAll(() => {
-  rmSync(PATCHED_DIR, { recursive: true, force: true });
-});
+const Cjs = (require(resolve(XTERM_LIB, "xterm.js")) as { Terminal: TerminalCtor }).Terminal;
+const Esm = ((await import(pathToFileURL(resolve(XTERM_LIB, "xterm.mjs")).href)) as {
+  Terminal: TerminalCtor;
+}).Terminal;
 
 type Op =
   | { t: "compose"; text: string }
@@ -122,26 +113,18 @@ async function typeSentence(Terminal: TerminalCtor, flushEvery: number): Promise
   return sent.join("");
 }
 
-describe("xterm composition patch", () => {
-  it("한가한 메인 스레드에서는 패치 전에도 온전하다 — 그래서 가끔만 난다", async () => {
-    expect(await typeSentence(Stock, 1)).toBe("테스트 문장");
-  });
+const BUNDLES: [string, TerminalCtor][] = [
+  ["lib/xterm.js (CJS)", Cjs],
+  ["lib/xterm.mjs (ESM)", Esm],
+];
+const FLUSH_EVERY = [1, 2, 3, 4, SENTENCE.length];
 
-  it("바쁜 메인 스레드에서 5.5.0 은 음절과 공백을 잃는다 (패치가 존재하는 이유)", async () => {
-    expect(await typeSentence(Stock, 3)).toBe("테트문장");
-  });
-
-  it("패치본은 flush 간격과 무관하게 친 그대로 보낸다", async () => {
-    for (const flushEvery of [1, 2, 3, 4, SENTENCE.length]) {
-      expect(await typeSentence(Patched, flushEvery), `flushEvery=${flushEvery}`).toBe(
+describe.each(BUNDLES)("@xterm/xterm 6.0 %s", (_bundle, Terminal) => {
+  it("flush 간격과 무관하게 친 그대로 보낸다", async () => {
+    for (const flushEvery of FLUSH_EVERY) {
+      expect(await typeSentence(Terminal, flushEvery), `flushEvery=${flushEvery}`).toBe(
         "테스트 문장",
       );
     }
-  });
-
-  it("표현식이 정확히 한 번이 아니면 빌드를 세운다", () => {
-    expect(() => patchXtermComposition("nothing here")).toThrow(/found 0/);
-    const twice = readFileSync(BUNDLE_PATH, "utf8").repeat(2);
-    expect(() => patchXtermComposition(twice)).toThrow(/found 2/);
   });
 });

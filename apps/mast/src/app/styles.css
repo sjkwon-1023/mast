@@ -45,10 +45,10 @@
    Chromium 이 그 요소를 자리를 차지하는 고전 막대로 되돌리므로 OS 설정과 무관하게
    항상 보인다.
 
-   터미널에도 그대로 걸린다: xterm 의 `.xterm-viewport` 는 `overflow-y: scroll` 이라
-   막대 자리가 늘 잡혀 있고(스크롤백이 없어도 폭이 일정해 리사이즈로 흔들리지
-   않는다), 트랙을 투명으로 두면 xterm 이 런타임에 뷰포트에 칠하는 테마 배경이
-   그대로 비친다. */
+   터미널은 이 규칙을 따르지 않는다. xterm 6 은 스크롤을 자체 커스텀 막대
+   (`.xterm-scrollable-element > .scrollbar`)로 그리고, `.xterm-viewport` 는 내용 없는
+   빈 컨테이너로 남는다. 그 빈 컨테이너에 native 막대가 남으면 전체 높이 엄지가 커스텀
+   막대 밑에 겹쳐 그려지므로 아래에서 폭을 0으로 끈다. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -69,6 +69,21 @@
 
 ::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* xterm 6 의 커스텀 세로 막대는 Auto 가시성이라 스크롤 뒤 `invisible`(투명, pointer-events none)로
+   사라진다. 막대가 숨는 상태는 upstream 의 fade 여부로 구분되지 않으므로, 스크롤백 유무는 view.ts 가
+   `data-scrollback` 표식으로 알려 준다. 표식이 있으면(스크롤백이 있는 normal buffer) 위치 표시가 정보이므로
+   숨은 상태에서도 드러내고 잡을 수 있게 둔다. 표식이 없으면 xterm 기본 숨김을 따른다.
+   폭과 색은 xterm 기본값을 쓴다. fit 이 그 폭만큼 빼고 열 수를 계산하므로 여기서 폭을 바꾸지 않는다. */
+.term-host[data-scrollback] .xterm-scrollable-element > .scrollbar.vertical.invisible {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 html,
