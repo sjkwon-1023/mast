@@ -20,6 +20,7 @@ printf '\033]10;#cccccc\033\\\033]11;#1e1e1e\033\\'
 
 tab=${1-}
 cwd=${2-}
+auto=${3-}
 
 # 탭 id 는 파일 경로에 들어가므로 파일을 건드리기 전에 10진수인지 확인한다.
 case $tab in
@@ -75,6 +76,9 @@ export PATH="$HOME/.mast/bin:$PATH"
 # MAST=1: 탭 안의 에이전트·스크립트가 mast 안에서 도는지 스스로 알아야 send 채널·알림 계약을 쓸지
 # 판단할 수 있다 (mast-send 스킬의 자가 인지 조건). COLORTERM 은 위 테마 동기화의 짝이다.
 export COLORTERM=truecolor MAST=1
+# 자동 재실행 opt-in. 정확한 1 만 켜고, 상속된 값은 지운다. 루트 셸 판정용 PID 는 exec 뒤에도 같다.
+if [ "$auto" = 1 ]; then export MAST_AUTO_RESUME=1; else unset MAST_AUTO_RESUME; fi
+export MAST_SHELL_PID=$$
 
 if [ "$shell_name" = zsh ]; then
   # zsh 의 history·resume·cwd 보고는 zsh-integration.zsh 가 맡는다. bash 로그인 프로필은 읽지 않으므로
@@ -87,18 +91,29 @@ if [ "$shell_name" = zsh ]; then
   exec "$shell" -il
 fi
 
+# 설치된 통합 자산이 이 래퍼와 짝인 판(_mast_prompt 를 정의)인지 한 번만 본다. 이 래퍼는 앱에 내장돼 업데이트
+# 즉시 바뀌지만 ~/.mast/shell 자산은 부팅 재스폰 뒤의 프로비저닝이 갱신하므로, 그 사이에 뜬 셸은 옛 자산을
+# 만난다. 그때는 이전 방식(launch 시점 힌트 + OSC 7 PROMPT_COMMAND)을 그대로 쓴다 — 옛 파일을 읽어도
+# _mast_prompt 가 생기지 않아 프롬프트마다 command not found 가 나고, 힌트도 어디서도 나오지 않는다.
+integration="$HOME/.mast/shell/integration.sh"
+integrated=
+if [ -r "$integration" ] && grep -q '^_mast_prompt()' "$integration" 2>/dev/null; then integrated=1; fi
+
 # bash 탭의 history 와 resume 힌트. 탭 id 가 없으면 MAST_TAB·HISTFILE 을 쓰지 않고, 상속된 다른 탭의 값이
 # 남아 엉뚱한 history 를 읽지 않도록 지운다.
 if [ -n "$tab" ]; then
   # 재시작 직전 세션의 resume 힌트 1행을 HISTFILE 끝에 덧붙여 ↑ 한 번에 나오게 한다. 자동 실행은
-  # 하지 않는다. 2행은 기록 시각이며 신선도 판단에는 쓰지 않는다 (의도된 단순화).
+  # 하지 않는다. 자동 재실행이 켜져 있고 짝인 통합 자산이 있으면 힌트는 첫 프롬프트(integration.sh)가 판정해
+  # 실행하거나 안내하므로 여기서는 읽지 않는다. 2행은 기록 시각이며 신선도 판단에는 쓰지 않는다 (의도된 단순화).
   # 형태는 쓰는 쪽(mast-notify.sh, mast-codex-notify.sh)과 짝인 화이트리스트로 검증한다. 같은 uid 가
   # 파일을 바꿔치기해도 ↑+Enter 로 임의 명령을 띄우는 표면이 되지 않게 하는 오발 방지이며 권한 경계는
   # 아니다. 새 에이전트를 붙이려면 여기 패턴에도 형태를 추가해야 한다 — 쓰는 쪽만 고치면 힌트가 조용히 버려진다.
   # 힌트 파일의 부재·읽기 실패·append 실패 어느 것도 셸 시작을 막지 않는다.
   resume="$HOME/.mast/resume/tab-$tab"
   cmd=
-  if [ -s "$resume" ]; then IFS= read -r cmd < "$resume" || true; fi
+  if [ -s "$resume" ] && { [ "${MAST_AUTO_RESUME-}" != 1 ] || [ -z "$integrated" ]; }; then
+    IFS= read -r cmd < "$resume" || true
+  fi
   hint_re='^(claude --resume|codex resume|opencode --session) [A-Za-z0-9_-]+$'
   [[ $cmd =~ $hint_re ]] || cmd=
   if [ -n "$cmd" ]; then
@@ -119,7 +134,13 @@ fi
 # 왕복이 무손실이다. 매 프롬프트에 도는 코드라 서브셸 없이 파라미터 확장으로 끝낸다.
 # OSC 0(제목)은 절대 같이 내지 않는다 — 에이전트가 세운 탭 제목을 디렉터리 이름으로 덮어써 지운다.
 # zsh 는 위에서 exec 로 빠지므로 이 값은 bash 에만 간다. zsh 의 보고는 zsh-integration.zsh 의 _mast_cwd 가 한다.
-export PROMPT_COMMAND='printf "\033]7;file://%s\007" "${PWD//%/%25}"'
+# 짝인 통합 자산이 있으면 첫 호출에서 integration.sh 를 한 번 읽어 그 _mast_prompt 가 세대·hint·cwd 를 맡는다.
+# 사용자 rc 가 이 값 앞뒤에 훅을 붙여도 상속된 PROMPT_COMMAND 가 남는다. 자산이 없거나 옛 판이면 OSC 7 만 낸다.
+if [ -n "$integrated" ]; then
+  export PROMPT_COMMAND='declare -F _mast_prompt >/dev/null || . "$HOME/.mast/shell/integration.sh"; _mast_prompt'
+else
+  export PROMPT_COMMAND='printf "\033]7;file://%s\007" "${PWD//%/%25}"'
+fi
 
 # export 한 값만 새 셸의 환경으로 넘어가고, 위의 일반 셸 변수(cmd·resume)는 exec 와 함께 사라진다.
 exec "$shell" -l

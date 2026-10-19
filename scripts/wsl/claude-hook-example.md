@@ -64,7 +64,9 @@ A full run, in order:
    Claude Code and Codex [dispatcher](#the-hook-dispatcher--mast-agent-hookpy), Python 3.8+),
    and the entry points `mast-claude-hook.sh`, `mast-codex-hook.sh` and `mast-agy-hook.sh`. The
    commands written into agent config files name only these paths, so replacing the files
-   never changes a Codex trust hash.
+   never changes a Codex trust hash. `mast-auto-resume.py` (Python 3.8+, standard library only)
+   is copied in the same step. It is not an agent hook: it is the queue for
+   [Automatic run](#automatic-run--autoresume).
 7. 에이전트 스킬. `mast-send`는 `~/.claude/skills/mast-send/SKILL.md`에 설치한다(아래의
    에이전트 send·query 채널; 원본: `scripts/wsl/skills/mast-send/SKILL.md`). `mast` 사용법
    스킬은 `~/.claude/skills/mast/SKILL.md`에 설치한다 — CLI, send 채널, 상태 토큰을 담아
@@ -676,18 +678,22 @@ fi
 
 # Resume hint. mast respawns a tab's shell on restart, so the agent session that ran in it
 # is gone from the screen; recording how to re-enter it lets the fresh shell offer the command
-# (scripts/wsl/launch.sh for a bash tab, integration.sh for a zsh tab; neither runs it). Rewritten
+# (scripts/wsl/launch.sh for a bash tab, integration.sh for a zsh tab; only autoResume runs it,
+# and only when line 3 matches the shell's last prompt generation). Rewritten
 # on every hook call, so the tab's most recent session wins. Line 1 is the command, line 2 the
-# epoch seconds it was recorded at. tmp+mv makes the replacement atomic for a concurrent
-# reader, and every failure here is swallowed: a notification must not break on it.
+# epoch seconds it was recorded at, and line 3 the prompt generation, present only when
+# MAST_PROMPT_GEN is well-formed, so a fresh shell can tell a current hint from a stale one.
+# tmp+mv makes the replacement atomic for a concurrent reader, and every failure here is
+# swallowed: a notification must not break on it.
 # The id is required to be a plain token: the spawn wrapper echoes line 1 into the terminal
 # and into shell history and checks nothing itself, so this is where that is guarded. A
 # session id is a uuid, so the check rejects nothing real.
 if [[ -n "${MAST_TAB:-}" && "$SESSION_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
   RESUME_FILE="$HOME/.mast/resume/tab-$MAST_TAB"
+  RESUME_LINES=("claude --resume $SESSION_ID" "$(date +%s 2>/dev/null || echo 0)")
+  if [[ "${MAST_PROMPT_GEN:-}" =~ ^[A-Za-z0-9_-]{1,128}$ ]]; then RESUME_LINES+=("$MAST_PROMPT_GEN"); fi
   if mkdir -p "$HOME/.mast/resume" 2>/dev/null; then
-    if printf 'claude --resume %s\n%s\n' "$SESSION_ID" "$(date +%s 2>/dev/null || echo 0)" \
-         > "$RESUME_FILE.tmp.$$" 2>/dev/null; then
+    if printf '%s\n' "${RESUME_LINES[@]}" > "$RESUME_FILE.tmp.$$" 2>/dev/null; then
       mv -f "$RESUME_FILE.tmp.$$" "$RESUME_FILE" 2>/dev/null || true
     fi
     rm -f "$RESUME_FILE.tmp.$$" 2>/dev/null || true
@@ -1011,14 +1017,16 @@ events. The writers are `mast-notify.sh` (on every Claude Code status hook),
 that tab offers it back. **The hook dispatcher never writes or reads a hint**, and Antigravity
 CLI records none — the reader below has no form for it.
 
-**This is a hint, never an action.** The recorded command is put in front of the user in two
-places and run by neither of them.
+**This is a hint, never an action** unless you opt in. With `autoResume` off (the default), the recorded
+command is put in front of the user in two places and run by neither of them. With `autoResume` on, the
+first prompt of a restored root shell may run it; see [Automatic run](#automatic-run--autoresume).
 
 | Field | Contract |
 |---|---|
 | Path | `~/.mast/resume/tab-<id>`, where `<id>` is the writer's `MAST_TAB` — the tab's stable id, which survives a restart, so the file and the tab that gets the hint are the same tab. |
-| Line 1 | The resume command: `claude --resume <id>`, `codex resume <id>`, or `opencode --session <id>`. The bash reader takes **only this line**; the zsh reader also reads line 2 (see below). |
-| Line 2 | Epoch seconds at the time of writing. The zsh reader uses it only to tell a changed hint from one it already offered in the same shell. Bash never reads it, and freshness is not judged by it — see below. |
+| Line 1 | The resume command: `claude --resume <id>`, `codex resume <id>`, or `opencode --session <id>`. The manual readers take **only this line** from the bash launcher, and the zsh reader also reads line 2 (see below). |
+| Line 2 | Epoch seconds at the time of writing. The zsh reader uses it only to tell a changed hint from one it already offered in the same shell. Freshness is not judged by it. Automatic run only checks that it is digits — see below. |
+| Line 3 | The prompt generation `<nonce>-<counter>` of the root shell that ran the agent. Written only when `MAST_PROMPT_GEN` matches `^[A-Za-z0-9_-]{1,128}$`. Without it the hint is still offered by hand but is never run automatically. Read only by [Automatic run](#automatic-run--autoresume). |
 | Written when | An invocation has both a non-empty `MAST_TAB` and an id matching `^[A-Za-z0-9_-]+$` — Claude Code's `.session_id`, Codex's `thread-id` (`thread_id` is accepted too), or OpenCode's confirmed root session id. Codex additionally requires its saved session metadata to show a resumable top-level session (`resumable` below). OpenCode records a root at creation or its first observed activity, before idle. |
 | Not written when | The tab has no `MAST_TAB` (a tab without per-tab history), the payload does not parse or carries no id, or the id is not a plain token. Claude Code additionally needs parsable hook JSON and `jq`, and writes nothing when stdin is a TTY (the script run by hand, so no JSON is read at all). For Codex, also for every ownership other than `resumable` — a top-level session from another source, a temporary thread, a subagent or internal session, metadata that cannot be read — and for a `codex exec` nested in another agent's turn. For OpenCode, sessions with `parentID` are rejected, and the prior hint is preserved when the session lookup fails. |
 | Atomicity | Written to `<path>.tmp.<pid>` and `mv`d into place, so a concurrent reader sees either the old file or the new one, never a half-written line. The pid suffix keeps two writers firing at once in the same tab from sharing a temp name. |
@@ -1031,7 +1039,7 @@ hint per tab; Codex's internal temporary turns and subagents must not replace it
 
 There are two readers, one per shell. The bash reader is `scripts/wsl/launch.sh`, the wrapper
 that sets `MAST_TAB` and `HISTFILE`. Before it execs the login shell it reads line 1 and, if it
-is non-empty:
+is non-empty and `autoResume` is off:
 
 1. **appends it to the tab's `HISTFILE`**, so a single press of ↑ at the fresh prompt puts the
    command on the command line, and
@@ -1040,8 +1048,9 @@ is non-empty:
 The zsh reader is `_mast_resume` in `scripts/macos/integration.sh`, which `zsh-integration.zsh`
 sources. It runs at the first prompt, adds the command to the shell history with `print -s`, and
 prints the same dimmed line. At later prompts it adds a hint that changed since the last check,
-and does so quietly. Both readers accept only the three exact forms below and never run the
-command.
+and does so quietly. Both readers accept only the three exact forms below. Neither runs the
+command, except that with `autoResume` on the first prompt of a root shell may run it; see
+[Automatic run](#automatic-run--autoresume).
 
 If the file does not exist the reader prints nothing at all — a tab that never ran an agent
 looks exactly as it did before. A failed read or append is ignored and the wrapper still execs the
@@ -1067,6 +1076,55 @@ is. An age cutoff would have to guess at a threshold, and being wrong in the str
 hides the one thing the user was looking for; the timestamp is on line 2 for anyone who wants
 to check by hand. Nothing prunes these files by age; closing the tab deletes its file, as it
 deletes the tab's history ([ADR-0013](../../docs/adr/0013-retiring-a-closed-tab.md)).
+
+### Automatic run — `autoResume`
+
+Off by default. `mast config set autoResume true`, then restart Mast: the app reads the setting at boot and
+passes it to every shell it spawns, as the third argument of the WSL launcher and the fifth of the macOS
+one. With it off, nothing in this section happens.
+
+With it on, a restored root shell may run its tab's line-1 command once, at its first prompt. A root shell
+is one whose `MAST_SHELL_PID` is its own PID, so nested shells never run anything and never write a
+generation. The command runs only when all of these hold:
+
+- line 3 of the hint equals the generation in `~/.mast/prompt/tab-<id>`, which the previous root shell wrote
+  at its last prompt;
+- line 1 is one of the three exact forms, and its token is `[A-Za-z0-9_-]` up to 96 characters;
+- the hint has exactly three lines, each well formed.
+
+Every root shell rewrites `prompt/tab-<id>` with a new generation `<nonce>-<counter>` before each prompt, and
+exports it as `MAST_PROMPT_GEN`. The hint writers copy that value into line 3. A normal exit draws a prompt
+after the agent's last hint, so the generation moves on and that hint is no longer eligible. A `notify` that
+arrives late from a finished agent carries the old generation and is excluded the same way. Timestamps are
+not compared: a late `notify` can carry a time later than the exit, and two events within one second tie.
+
+When the hint is eligible, the shell:
+
+1. records the new generation for this prompt, so a later shell cannot pick the same hint again;
+2. prints `[mast] auto-resume: <command>` and adds the command to the tab's history, once;
+3. waits in the queue (below). If admitted, it runs `claude --resume <token>`, `codex resume <token>` or
+   `opencode --session <token>` with a fixed argument list, through `command` so an alias cannot change it.
+   The text is never `eval`ed, passed to `sh -c`, or typed into the PTY;
+4. records a new generation again after the run ends.
+
+Each shell tries once. If the queue skips or cancels the run, the command stays in the tab's history and the
+shell prints the manual `[mast] resume previous agent: <command>` line instead.
+
+**Queue.** `mast-auto-resume.py` admits runs one at a time through `fcntl.flock` on `~/.mast/auto-resume.lock`.
+The lock is held only until a run is admitted, and the file is never deleted or replaced, so every waiter
+locks the same inode. Admissions are at least 3 s apart, and the first one is immediate. While the 1-minute
+load average is at or above the CPU count, the helper rechecks every second. A run that would wait past 120 s
+is skipped with `[mast] auto-resume skipped: timed out`, followed by the manual hint. `[mast] auto-resume
+queued: <command> (Ctrl+C to cancel)` is printed once. Ctrl+C prints `[mast] auto-resume cancelled` and leaves
+the manual hint. The queue is per distro (per `HOME`), so runs in two distros are not serialized against each
+other. Exit codes: 0 admitted, 1 skipped with a reason, 130 cancelled. Any other failure prints
+`[mast] auto-resume helper failed (exit N)` before the manual hint.
+
+**Limits.** A session with no hint is not restored, because the hint is written only from the agent's own
+reports; a Codex session quit before its first turn completes is one example. A bash shell started while the
+previous `integration.sh` is still installed (setup refreshes it after the boot respawn) does not get this
+section's behavior: `launch.sh` sees that the file does not define `_mast_prompt` and keeps the previous
+launch-time manual hint and OSC 7 prompt, without an automatic run.
 
 ### The Codex half — `mast-codex-notify.sh`
 

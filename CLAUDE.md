@@ -110,6 +110,11 @@ MVP.
   files, and the zsh `PATH` has not been compared
   with a plain `wsl.exe` zsh login. The checklist is WINDOWS-BUILD §10 "Unreleased — WSL zsh login
   shell field verification".
+- **Agent auto-resume is not field-verified** (ADR-0026 amendment 2026-10-19; WINDOWS-BUILD §10 "agent
+  auto-resume field verification"). `autoResume` ships default off with no device run recorded. Accepted:
+  a session with no written hint is not restored; a bash tab that starts before setup refreshes
+  `integration.sh` shows only the manual hint; the dead-tab case (`0x40010004`) and Windows shutdown are out
+  of scope.
 
 #### Phone remote surface
 

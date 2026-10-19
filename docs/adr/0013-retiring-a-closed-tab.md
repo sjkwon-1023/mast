@@ -13,6 +13,11 @@ state or diagnostic file when it has something to record), and nothing sweeps th
 **Amended by [ADR-0011](0011-tab-cwd-tracking.md)'s WSL zsh amendment** (2026-10-14): a zsh tab's
 `history/zsh-tab-<id>` file is removed by the same batched `rm` as `history/tab-<id>`.
 
+**Amended by [ADR-0026](0026-tab-agent-state-and-hook-signals.md)'s auto-resume amendment** (2026-10-19):
+the same batched `rm` also removes `~/.mast/prompt/tab-<id>`, the shell prompt-generation file that a root
+shell rewrites before every prompt. The global `~/.mast/auto-resume.lock` is not per tab and is never
+removed. A force-quit leaves these files behind, as it does the others.
+
 ## Context
 
 Every mast terminal tab gets private state inside WSL. The spawn wrapper (`scripts/wsl/launch.sh`)

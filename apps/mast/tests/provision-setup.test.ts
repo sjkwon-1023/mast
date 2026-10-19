@@ -92,6 +92,7 @@ const INSTALLED_FROM_REPO: [name: string, executable: boolean][] = [
   ["mast-browser.py", false],
   ["mast-hooks-merge.py", false],
   ["mast-agent-hook.py", false],
+  ["mast-auto-resume.py", false],
   ["mast-claude-hook.sh", true],
   ["mast-codex-hook.sh", true],
   ["mast-agy-hook.sh", true],
@@ -505,6 +506,21 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
   it("fails without the marker when a zsh integration destination is a directory, and moves nothing into it", () => {
     const distro = new Distro().withAgents();
     const target = distro.path(".mast", "shell", "zsh", ".zshrc");
+    mkdirSync(target, { recursive: true });
+
+    expect(distro.run()).toEqual({
+      status: 1,
+      stdout: "",
+      stderr: [`[mast] setup: cannot install ${target}: a directory is in the way`],
+    });
+    expect(readdirSync(target)).toEqual([]);
+    expect(existsSync(`${target}.tmp`)).toBe(false);
+    expect(distro.marker()).toBe(false);
+  });
+
+  it("fails without the marker when the auto-resume helper destination is a directory", () => {
+    const distro = new Distro().withAgents();
+    const target = distro.path(".mast", "bin", "mast-auto-resume.py");
     mkdirSync(target, { recursive: true });
 
     expect(distro.run()).toEqual({
@@ -1054,7 +1070,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
   });
 
-  it.each(["mast-hooks-merge.py", "mast-agent-hook.py", "mast-codex-hook.sh", "mast-agy-hook.sh", "mast-notify.sh"])(
+  it.each(["mast-hooks-merge.py", "mast-agent-hook.py", "mast-codex-hook.sh", "mast-agy-hook.sh", "mast-notify.sh", "mast-auto-resume.py"])(
     "runs every step again, once, when %s is missing from ~/.mast/bin",
     (name) => {
       const distro = new Distro();
@@ -1081,6 +1097,21 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
       expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
     },
   );
+
+  it("reinstalls the auto-resume helper behind a current marker when it is the only file missing", () => {
+    const distro = new Distro().withAgents();
+    expect(distro.run().status).toBe(0);
+    const helper = distro.path(".mast", "bin", "mast-auto-resume.py");
+    rmSync(helper);
+    const before = distro.log();
+
+    expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
+    expect(readFileSync(helper, "utf8")).toBe(readFileSync(join(WSL_SCRIPTS, "mast-auto-resume.py"), "utf8"));
+    const rerunLog = distro.log().slice(before.length);
+    expect(rerunLog).toContain(`setup v${VERSION} exists but ${helper} is missing; running every step`);
+    expect(rerunLog).toContain(FULL_RUN_LOG);
+    expect(rerunLog).toContain(`setup v${VERSION} complete`);
+  });
 
   const LATER_AGENTS = {
     codex: { install: (distro: Distro) => distro.withCodex(), file: (distro: Distro) => distro.codexHooks(), hooks: FRESH_CODEX },

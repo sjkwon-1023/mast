@@ -735,3 +735,61 @@ the session came from VS Code, and the same id was resumed in that tab with `cod
 and `unknown` are unchanged. `SETUP_VERSION` goes to 24 so existing WSL installs pick up the hook.
 Automated tests cover the classification; a real Codex turn writing the hint in a mast tab is a
 field check.
+
+## Amendment (2026-10-19) — opt-in auto-resume
+
+`mast config set autoResume true` (default off, read at boot) lets a restored root shell run its
+tab's saved resume command itself, once, at its first prompt. The app passes the value as a spawn
+argument: `$3` of `scripts/wsl/launch.sh`, `$5` of `scripts/macos/launch.sh`. `ShellSpawnReq` is
+unchanged.
+
+**Eligibility is a generation match, not a clock.** A root shell (`MAST_SHELL_PID == $$`) writes
+`<nonce>-<counter>` to `~/.mast/prompt/tab-<id>` before every prompt, with `>|`, and exports it as
+`MAST_PROMPT_GEN`. The nonce is chosen once per shell. The hint writers (`mast-notify.sh`,
+`mast-codex-notify.sh`, the OpenCode plugin, macOS `notify.py`) copy the generation into a third hint
+line, and only when it matches `[A-Za-z0-9_-]{1,128}`. A new root shell runs a hint only when its line 3
+equals the generation the previous root shell left in the prompt file. A normal exit draws a prompt after
+the agent's last hint, so the generation moves on and that hint is no longer eligible. A late `notify`
+carries the old generation and is excluded the same way. A wall-clock comparison was dropped: a late
+`notify` can arrive after a normal exit with a newer timestamp, and events within one second tie. A
+process-tree ownership check was not added either. The existing writer guards already decide which
+session owns a tab's hint, and an automatic run uses that hint unchanged.
+
+**Execution.** Only `claude --resume <token>`, `codex resume <token>` and `opencode --session <token>`
+run, with tokens of `[A-Za-z0-9_-]` up to 96 characters, through `command` and a fixed argv. There is no
+`eval`, no `sh -c` and no PTY input injection. Each shell tries once. The command enters the tab's
+history once, before the queue, so a skipped or cancelled run still leaves the manual hint. After the
+run the shell records a new generation. Nested shells record nothing and never auto-run.
+
+**Queue.** `scripts/wsl/mast-auto-resume.py` (installed as `~/.mast/bin/mast-auto-resume.py`; macOS
+through ASSETS) admits runs through `fcntl.flock` on `~/.mast/auto-resume.lock`. The lock is held only
+until admission, and the file is never removed or replaced. Admissions are at least 3 s apart; the first
+is immediate. While the 1-minute load average is at or above the CPU count, the helper rechecks every
+second. A run that would wait past 120 s is skipped with `[mast] auto-resume skipped: timed out`, then
+the manual hint. `queued` is printed once. Ctrl+C exits 130 and leaves the manual hint. Each distro (HOME)
+has its own queue, so runs in two distros are not serialized against each other.
+
+**Tab close.** `~/.mast/prompt/tab-<id>` joins the per-tab files removed on close: `release_script` on
+WSL and `release_tab_files` on macOS ([ADR-0013](0013-retiring-a-closed-tab.md)).
+
+**Install.** The WSL helper is one of the Python files in setup step 3c and is overwritten on every full
+run. A missing helper fails the marker check and triggers a full run. `SETUP_VERSION` stays 24, the value
+this unreleased branch first set; it is not raised again for this change.
+
+**Accepted limits.** No hint is written early (no SessionStart or UserPromptSubmit writer), so a session
+with no written hint is not restored, for example a Codex session quit before its first turn completes.
+The dead-tab case (`0x40010004`) and Windows shutdown handling are outside this change.
+
+**Assets older than the launcher.** `launch.sh` ships inside the app and changes on update, while
+`~/.mast/shell` is refreshed by setup, which runs after the boot respawn. A bash tab started in between
+meets an `integration.sh` that does not define `_mast_prompt`. `launch.sh` therefore checks once, with
+`grep`, whether the installed file defines `_mast_prompt`, and that one answer picks both the prompt hook
+and who shows the hint: with a matching file the first prompt decides as above; with an older or absent
+file the tab keeps the previous behavior (launch-time manual hint, OSC 7-only `PROMPT_COMMAND`) and does
+not auto-run. Checking only that the file exists printed `_mast_prompt: command not found` at every prompt
+and dropped the hint; `test_bash_with_a_stale_integration_keeps_the_previous_prompt_and_hint` locks this.
+
+Automated: `scripts/macos/tests/test_shells.py` (the shared `integration.sh` paths and the helper as real
+processes; macOS-only cases skip on Linux), `apps/mast` vitest for the writers and provisioning, and
+`tests/config-cli.test.ts`. Field: WINDOWS-BUILD §10 "Unreleased — agent auto-resume field verification".
+**Not yet run**; no item is recorded as passed.

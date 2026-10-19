@@ -235,14 +235,21 @@ Detached agent hooks use the inherited `MAST_TTY` instead of Linux `/proc`.
 The fallback accepts only a non-symlink, same-user `/dev/ttysNNN` character device;
 it does not open arbitrary paths supplied by an agent.
 
-Resume is **a hint, never automatic execution**. Eligible root agent events save
+Resume is **a hint, never automatic execution**, unless you opt in with `autoResume` (see below).
+Eligible root agent events save
 `claude --resume <id>`, `codex resume <id>` or `opencode --session <id>` for that
 tab. The next shell displays the command and adds it to that tab's history: use
 Up/Enter when you are ready. A shell that is already running adds a newly saved
 hint to its history at the next prompt, silently, so Up right after an agent exits
 offers its resume command. IDs are strictly validated before saving or loading
-hints. Closing a tab deletes its owned history/resume files; quitting the app
+hints. Closing a tab deletes its owned history, resume and prompt-generation files; quitting the app
 keeps them for restoration.
+
+With `mast config set autoResume true` and a restart, a restored root shell may run the saved command
+itself at its first prompt, but only when the agent was still running at quit. Runs are queued one tab at
+a time, and the manual hint stays as the fallback. The rules are in
+[`scripts/wsl/claude-hook-example.md`](../scripts/wsl/claude-hook-example.md#automatic-run--autoresume);
+the setting is described in [SETTINGS.md](SETTINGS.md#autoresume).
 
 `mast send` reports a nonzero exit status when it cannot write to the terminal.
 A failed payload is never followed by Enter or automatically retried: delivery

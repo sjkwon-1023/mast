@@ -15,8 +15,9 @@ import tempfile
 MAX_BYTES = 1024 * 1024
 DEFAULT_PORT = 7331
 LANGUAGES = ["css", "html", "javascript", "json", "python", "rust", "toml", "typescript"]
-KEYS = {"fontFamily", "fontSize", "highlightLanguages", "log", "remote", "remote.port", "showTabIds", "browser", "browser.enabled", "browser.agentEval"}
+KEYS = {"autoResume", "fontFamily", "fontSize", "highlightLanguages", "log", "remote", "remote.port", "showTabIds", "browser", "browser.enabled", "browser.agentEval"}
 DEFAULTS = {
+    "autoResume": False,
     "fontFamily": "terminal: Consolas, 'Cascadia Mono', monospace; viewers: monospace",
     "fontSize": "terminal: 13px; viewers: 12px",
     "highlightLanguages": LANGUAGES,
@@ -37,6 +38,7 @@ HELP = """usage:
   mast config set fontSize <6-72>
   mast config set highlightLanguages '["python","rust"]'
   mast config set log <true|false>
+  mast config set autoResume <true|false>
   mast config set showTabIds <true|false>
   mast config set remote [true|false] [--port <1024-65535>]
   mast config set remote.port <1024-65535>
@@ -45,6 +47,7 @@ HELP = """usage:
 
 set remote enables port 7331 unless --port is given. false cannot take a port.
 showTabIds defaults to true; set it to false to hide the #id badges on tab titles.
+autoResume defaults to false; set it to true to turn on agent auto-resume. Applied after app restart.
 Changes require a full mast restart, which ends running terminal processes.
 Ctrl+Shift+R only reloads the window. No command restarts mast automatically.
 """
@@ -81,6 +84,8 @@ def validate(data):
         raise ValueError("log must be true or false")
     if data.get("showTabIds") is not None and type(data["showTabIds"]) is not bool:
         raise ValueError("showTabIds must be true or false")
+    if data.get("autoResume") is not None and type(data["autoResume"]) is not bool:
+        raise ValueError("autoResume must be true or false")
     # 앱(Rust UiSettings)은 모든 플랫폼에서 이 키의 타입을 검사하므로 읽기 검증도 플랫폼과 무관하다.
     if data.get("macOptionIsMeta") is not None and type(data["macOptionIsMeta"]) is not bool:
         raise ValueError("macOptionIsMeta must be true or false")
@@ -194,7 +199,7 @@ def mutation(args):
         raise ValueError(f"set {key} requires exactly one value")
     text = values[0]
     value = (number(text) if key in ("fontSize", "remote.port") else
-             boolean(text) if key in ("log", "showTabIds", "macOptionIsMeta") else
+             boolean(text) if key in ("log", "showTabIds", "macOptionIsMeta", "autoResume") else
              parse(text) if key == "highlightLanguages" else text)
     # null은 파일에서는 미설정으로 읽지만, CLI는 reset으로 의도를 명시한다.
     if key == "highlightLanguages" and not isinstance(value, list):

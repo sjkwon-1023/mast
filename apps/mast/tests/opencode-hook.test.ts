@@ -31,6 +31,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   delete process.env.MAST;
   delete process.env.MAST_TAB;
+  delete process.env.MAST_PROMPT_GEN;
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
 });
@@ -56,10 +57,10 @@ function event(type: string, sessionID: string, extra = {}) {
   return { event: { type, properties: { sessionID, ...extra } } };
 }
 
-function hostHistory(home: string, command: string): string {
+function hostHistory(home: string, command: string, generation = ""): string {
   const resume = join(home, ".mast/resume/tab-41");
   mkdirSync(dirname(resume), { recursive: true });
-  writeFileSync(resume, `${command}\n123\n`);
+  writeFileSync(resume, `${command}\n123\n${generation ? `${generation}\n` : ""}`);
   rmSync(join(home, ".mast/history/tab-41"), { force: true });
   // 로그인 셸 자리에는 history 만 보여 주는 bash 스텁을 세운다 (SHELL 은 bash 절대경로여야 고른다).
   const shell = join(home, "bin", "bash");
@@ -192,6 +193,32 @@ describe("OpenCode plugin and setup", () => {
     expect(hostHistory(home, "opencode --session ses_new;echo-pwned")).not.toContain("echo-pwned");
     expect(hostHistory(home, "opencode --session ")).not.toContain("opencode --session");
   });
+
+  it("writes the prompt generation as line 3 and the WSL launcher still offers line 1", async () => {
+    process.env.MAST_PROMPT_GEN = "gen-opencode-1";
+    const root = fixture();
+    const home = join(root, "home");
+    const { hook } = await createHook(home, {});
+    hook.event(event("session.created", "ses_gen", { info: { id: "ses_gen" } }));
+    const hint = join(home, ".mast/resume/tab-41");
+    await vi.waitFor(() => expect(existsSync(hint)).toBe(true));
+    expect(readFileSync(hint, "utf8")).toMatch(/^opencode --session ses_gen\n\d+\ngen-opencode-1\n$/);
+    expect(hostHistory(home, "opencode --session ses_gen", "gen-opencode-1")).toMatch(/\bopencode --session ses_gen\s*$/);
+  });
+
+  it.each(["", "gen 1", "gen;1", "gen$1", "g".repeat(129)])(
+    "writes two lines when the prompt generation is %j",
+    async (generation) => {
+      process.env.MAST_PROMPT_GEN = generation;
+      const root = fixture();
+      const home = join(root, "home");
+      const { hook } = await createHook(home, {});
+      hook.event(event("session.created", "ses_plain", { info: { id: "ses_plain" } }));
+      const hint = join(home, ".mast/resume/tab-41");
+      await vi.waitFor(() => expect(existsSync(hint)).toBe(true));
+      expect(readFileSync(hint, "utf8")).toMatch(/^opencode --session ses_plain\n\d+\n$/);
+    },
+  );
 
   it("does not write an invalid session id or tab id", async () => {
     const root = fixture();

@@ -4,6 +4,10 @@ import { join } from "node:path";
 const token = /^[A-Za-z0-9_-]+$/;
 const tab = process.env.MAST_TAB;
 const enabled = process.env.MAST === "1" && /^[0-9]+$/.test(tab ?? "");
+// 셋째 줄(프롬프트 세대)은 형식이 맞을 때만 쓴다. 틀리면 두 줄 힌트로 남아 자동 실행 자격이 없다.
+const generationLine = /^[A-Za-z0-9_-]{1,128}$/.test(process.env.MAST_PROMPT_GEN ?? "")
+  ? `${process.env.MAST_PROMPT_GEN}\n`
+  : "";
 
 export const Mast = async ({ client, directory, $ }) => {
   if (!enabled) return {};
@@ -47,7 +51,7 @@ export const Mast = async ({ client, directory, $ }) => {
     const temporary = `${target}.tmp.${process.pid}`;
     try {
       await mkdir(folder, { recursive: true });
-      await writeFile(temporary, `opencode --session ${id}\n${Math.floor(Date.now() / 1000)}\n`);
+      await writeFile(temporary, `opencode --session ${id}\n${Math.floor(Date.now() / 1000)}\n${generationLine}`);
       await rename(temporary, target);
       activeRoot = id;
     } catch {

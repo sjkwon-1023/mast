@@ -423,6 +423,22 @@ class NativeResume(unittest.TestCase):
             with patch.dict(os.environ, {"CODEX_HOME": str(self.root / ".codex")}):
                 self.assertEqual(self.notify.ownership("thread"), expected)
 
+    def test_prompt_generation_is_the_third_line_only_when_well_formed(self):
+        path = self.root / ".mast/resume/tab-42"
+        for generation, lines in [(None, 2), ("", 2), ("gen_1-A", 3), ("g" * 128, 3), ("g" * 129, 2),
+                                  ("gen 1", 2), ("gen;1", 2), ("gen$1", 2), ("gen\n1", 2)]:
+            with patch.dict(os.environ):
+                os.environ.pop("MAST_PROMPT_GEN", None)
+                if generation is not None:
+                    os.environ["MAST_PROMPT_GEN"] = generation
+                self.notify.save_resume("claude --resume", "safe-id")
+            with self.subTest(generation=generation):
+                written = path.read_text().splitlines()
+                self.assertEqual(len(written), lines)
+                self.assertEqual(written[0], "claude --resume safe-id")
+                if lines == 3:
+                    self.assertEqual(written[2], generation)
+
 
 if __name__ == "__main__":
     unittest.main()

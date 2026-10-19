@@ -46,6 +46,7 @@ const ASSETS: &[(&str, &str)] = &[
     asset!("bin/mast-notify.py", "macos/notify.py"),
     asset!("bin/mast-setup.py", "macos/setup.py"),
     asset!("bin/mast-agent-hook.py", "wsl/mast-agent-hook.py"),
+    asset!("bin/mast-auto-resume.py", "wsl/mast-auto-resume.py"),
     asset!("bin/mast-hooks-merge.py", "wsl/mast-hooks-merge.py"),
     asset!("bin/mast-agy-hook.sh", "wsl/mast-agy-hook.sh"),
     asset!("bin/mast-config.py", "wsl/mast-config.py"),
@@ -397,7 +398,7 @@ fn provision_now(config: &ShellConfig) {
     let _ = install(&config.home.join(".mast/setup.log"), &text);
 }
 
-pub(crate) fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
+pub(crate) fn spawn_spec(req: &ShellSpawnReq, auto_resume: bool) -> SpawnSpec {
     let config = CONFIG
         .get()
         .expect("native shell assets installed before spawning tabs");
@@ -413,6 +414,8 @@ pub(crate) fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
             req.history_tab.map(|n| n.to_string()).unwrap_or_default(),
             req.cwd.clone().unwrap_or_default(),
             config.config_path.to_string_lossy().into_owned(),
+            // `$5` 은 자동 실행 opt-in 이다 — WSL 의 `$3` 과 같은 규칙(켜졌을 때만 `1`).
+            if auto_resume { "1" } else { "" }.to_string(),
         ],
         cwd: None,
         cols: req.cols,
@@ -429,7 +432,7 @@ pub(crate) fn release_tab_files(tabs: &[TabId]) {
     let _ = std::thread::Builder::new()
         .name("mast-release-native-tabs".into())
         .spawn(move || {
-            for dir in ["history", "resume", "agent-hooks"] {
+            for dir in ["history", "resume", "agent-hooks", "prompt"] {
                 let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
                     continue;
                 };

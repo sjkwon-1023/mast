@@ -74,6 +74,9 @@ _mast_cwd() {
 # 에이전트 hook 은 셸이 살아 있는 동안에도 힌트를 다시 쓴다. 시작 때뿐 아니라 프롬프트마다
 # (명령, 기록 시각)이 바뀌었는지 보고, 바뀐 힌트만 한 번 히스토리에 넣는다.
 _mast_resume_seen=''
+_mast_history_add() {
+  if [[ -n ${ZSH_VERSION:-} ]]; then print -s -- "$1"; else history -s "$1"; history -a; fi
+}
 _mast_resume() {
   local cmd='' stamp='' token=''
   [[ $MAST_TAB != *[!0-9]* && -n $MAST_TAB ]] || return 0
@@ -89,7 +92,116 @@ _mast_resume() {
   esac
   case "$token" in ''|*[!A-Za-z0-9_-]*) return 0 ;; esac
   # 힌트일 뿐이다: 저장된 명령을 eval 하거나 실행하지 않는다.
-  if [[ -n ${ZSH_VERSION:-} ]]; then print -s -- "$cmd"; else history -s "$cmd"; history -a; fi
+  _mast_history_add "$cmd"
   # 프롬프트 훅(quiet)에서는 에이전트가 방금 자기 resume 안내를 출력했으므로 한 줄을 더하지 않는다.
   [[ ${1-} == quiet ]] || printf '\033[2m[mast] resume previous agent: %s\033[0m\n' "$cmd"
+}
+
+# 루트 셸만 세대를 기록하고 자동 실행을 판정한다. launch 가 MAST_SHELL_PID 로 넘긴 PID 가 이 셸의 PID 와
+# 같을 때만 루트다. exec 는 PID 를 유지하고, 안에서 띄운 중첩 셸은 PID 가 달라 여기서 빠진다.
+_mast_root_shell() {
+  [[ ${MAST_SHELL_PID-} == "$$" && -n ${MAST_TAB-} && ${MAST_TAB} != *[!0-9]* ]]
+}
+_mast_first_prompt=${_mast_first_prompt-1}
+_mast_gen_re='^[A-Za-z0-9_-]{1,128}$'
+_mast_stamp_re='^[0-9]{1,20}$'
+_mast_token_re='^[A-Za-z0-9_-]{1,96}$'
+
+# 프롬프트 세대 `<nonce>-<counter>` 를 기록하고 export 한다. nonce 는 셸 시작 때 한 번 만든다.
+# 짧은 단일 write 라 tmp+mv 원자 교체는 하지 않는다. 쓰다 끊긴 파일은 reader 의 형식 검사에서 거부된다.
+_mast_prompt_generation() {
+  _mast_root_shell || return 0
+  if [[ -z ${_mast_prompt_nonce-} ]]; then _mast_prompt_nonce="$$-$RANDOM$RANDOM"; fi
+  _mast_prompt_count=$(( ${_mast_prompt_count:-0} + 1 ))
+  MAST_PROMPT_GEN="$_mast_prompt_nonce-$_mast_prompt_count"
+  export MAST_PROMPT_GEN
+  [[ -d $HOME/.mast/prompt ]] || mkdir -p "$HOME/.mast/prompt" 2>/dev/null
+  { printf '%s\n' "$MAST_PROMPT_GEN" >| "$HOME/.mast/prompt/tab-$MAST_TAB"; } 2>/dev/null
+  return 0
+}
+
+# 일반 파일만 상한 안에서 읽어 _mast_blob 에 둔다. symlink, 디렉터리, 줄바꿈으로 끝나지 않는 내용,
+# 상한 초과는 모두 실패다.
+_mast_read_bounded() {
+  _mast_blob=
+  [[ -f $1 && ! -L $1 ]] || return 1
+  _mast_blob=$(head -c "$(( $2 + 1 ))" -- "$1" 2>/dev/null; printf x)
+  _mast_blob=${_mast_blob%x}
+  [[ $_mast_blob == *$'\n' ]] && (( ${#_mast_blob} <= $2 ))
+}
+
+# 이전 셸이 마지막으로 남긴 세대와 hint 를 비교해 자동 실행 후보를 고른다. 세 줄이 모두 맞고 명령이
+# 허용된 세 형태 가운데 하나일 때만 후보다. 후보가 없으면 _mast_auto_cmd 는 빈 값이다.
+_mast_auto_candidate() {
+  _mast_auto_cmd= _mast_auto_kind= _mast_auto_token= _mast_auto_seen=
+  [[ ${MAST_AUTO_RESUME-} == 1 ]] || return 0
+  _mast_read_bounded "$HOME/.mast/prompt/tab-$MAST_TAB" 256 || return 0
+  local gen=${_mast_blob%$'\n'}
+  [[ $gen =~ $_mast_gen_re ]] || return 0
+  _mast_read_bounded "$HOME/.mast/resume/tab-$MAST_TAB" 1024 || return 0
+  local hint=${_mast_blob%$'\n'} cmd stamp hint_gen extra token
+  { IFS= read -r cmd && IFS= read -r stamp && IFS= read -r hint_gen && ! IFS= read -r extra; } <<< "$hint" || return 0
+  [[ $hint_gen == "$gen" && $stamp =~ $_mast_stamp_re ]] || return 0
+  case $cmd in
+    'claude --resume '*) _mast_auto_kind=claude; token=${cmd#'claude --resume '} ;;
+    'codex resume '*) _mast_auto_kind=codex; token=${cmd#'codex resume '} ;;
+    'opencode --session '*) _mast_auto_kind=opencode; token=${cmd#'opencode --session '} ;;
+    *) return 0 ;;
+  esac
+  [[ $token =~ $_mast_token_re ]] || { _mast_auto_kind=; return 0; }
+  _mast_auto_cmd=$cmd _mast_auto_token=$token _mast_auto_seen=$cmd$'\n'$stamp
+}
+
+# 후보 하나를 한 번만 시도한다. 명령은 대기 전에 탭 history 에 넣어, 대기 중 취소하거나 건너뛰어도 수동
+# hint 로 남는다. 허가는 대기열 helper 만 내리고, 허가받은 뒤에만 고정 argv 로 CLI 를 실행한다.
+_mast_auto_run() {
+  local interp rc
+  printf '\033[2m[mast] auto-resume: %s\033[0m\n' "$_mast_auto_cmd"
+  _mast_history_add "$_mast_auto_cmd"
+  _mast_resume_seen=$_mast_auto_seen
+  { interp=$(< "$HOME/.mast/bin/mast-python"); } 2>/dev/null
+  if [[ -n ${interp-} && -f $HOME/.mast/bin/mast-auto-resume.py ]]; then
+    "$interp" -I "$HOME/.mast/bin/mast-auto-resume.py" wait "$_mast_auto_cmd"
+    rc=$?
+  else
+    rc=127
+  fi
+  if (( rc == 0 )); then
+    case $_mast_auto_kind in
+      claude) command claude --resume "$_mast_auto_token" ;;
+      codex) command codex resume "$_mast_auto_token" ;;
+      opencode) command opencode --session "$_mast_auto_token" ;;
+    esac
+  else
+    (( rc == 1 || rc == 130 )) || printf '\033[2m[mast] auto-resume helper failed (exit %s)\033[0m\n' "$rc"
+    printf '\033[2m[mast] resume previous agent: %s\033[0m\n' "$_mast_auto_cmd"
+  fi
+  _mast_prompt_generation
+}
+
+# 첫 프롬프트의 판정. 실행까지 맡았으면 0, 아니면 1 이고 호출자가 수동 hint 를 안내한다. 자동 실행은
+# 셸당 한 번이며, 판정 전에 세대를 올리면 같은 후보가 다음 부팅에서 다시 잡히지 않는다.
+_mast_auto_resume_first() {
+  _mast_root_shell || return 1
+  _mast_auto_candidate
+  _mast_prompt_generation
+  [[ -n $_mast_auto_cmd ]] || return 1
+  _mast_auto_run
+  return 0
+}
+
+# bash 프롬프트 훅. 루트 셸만 세대와 hint 를 다룬다. 중첩 셸은 상속된 PROMPT_COMMAND 로 여기 와도
+# 탭 history 나 세대를 건드리지 않는다.
+_mast_prompt() {
+  if _mast_root_shell; then
+    history -a
+    if (( _mast_first_prompt )); then
+      _mast_first_prompt=0
+      _mast_auto_resume_first || { [[ ${MAST_AUTO_RESUME-} == 1 ]] && _mast_resume; }
+    else
+      _mast_prompt_generation
+      _mast_resume quiet
+    fi
+  fi
+  _mast_cwd
 }

@@ -170,6 +170,7 @@ fn main() {
                 Arc::clone(&router),
                 Arc::clone(&records),
                 Arc::clone(&wsl),
+                ui.auto_resume == Some(true),
             );
 
             let (dispatcher, needs_dogfood) = match persist::load(&state_path) {

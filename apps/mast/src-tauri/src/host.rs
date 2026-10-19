@@ -33,6 +33,9 @@ pub struct TauriHost {
     /// WSL 준비 상태 진단기 — **모든 셸 스폰의 마지막 게이트**다. 진단이 끝나기
     /// 전(`Probing`)이나 준비되지 않은 상태에서는 스폰을 거부한다.
     wsl: Arc<WslHealth>,
+    /// 부팅 때 읽은 `autoResume` 설정. 모든 셸 spawn(부팅·새 탭·Restart)이 같은 값을 쓰도록
+    /// 여기서 한 번만 보관하며, 바꾸려면 앱을 다시 시작해야 한다.
+    auto_resume: bool,
 }
 
 impl TauriHost {
@@ -43,6 +46,7 @@ impl TauriHost {
         router: Arc<OscRouter>,
         records: Arc<RecordStore>,
         wsl: Arc<WslHealth>,
+        auto_resume: bool,
     ) -> Self {
         Self {
             app,
@@ -51,6 +55,7 @@ impl TauriHost {
             router,
             records,
             wsl,
+            auto_resume,
         }
     }
 }
@@ -82,7 +87,7 @@ pub(crate) fn resolve_distro(_requested: Option<String>) -> Option<String> { Non
 /// **주의: `req.cwd` 는 Linux(WSL) 경로다.** Windows 에서 `SpawnSpec.cwd`(Windows
 /// 프로세스의 cwd)에 넣으면 안 되고 `wsl.exe --cd` 인자로 넘겨 WSL 안에서
 /// 해석되게 한다. unix(개발 실행)에서는 프로세스 cwd 그대로가 맞다.
-fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
+fn spawn_spec(req: &ShellSpawnReq, auto_resume: bool) -> SpawnSpec {
     #[cfg(windows)]
     {
         let mut args: Vec<String> = Vec::new();
@@ -106,7 +111,7 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
         // 그대로 실행한다 (평가 1회) — 기본 셸이 zsh/fish 인 배포판에서 스크립트가
         // 다른 문법으로 파싱되는 잠재 버그 계열도 함께 제거된다.
         args.push("--exec".to_string());
-        args.extend(bash_argv(req.history_tab, req.cwd.as_deref()));
+        args.extend(bash_argv(req.history_tab, req.cwd.as_deref(), auto_resume));
         SpawnSpec {
             program: "wsl.exe".to_string(),
             args,
@@ -116,9 +121,11 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
         }
     }
     #[cfg(target_os = "macos")]
-    { crate::platform::macos::spawn_spec(req) }
+    { crate::platform::macos::spawn_spec(req, auto_resume) }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
+        // 직접 실행하는 `$SHELL -l` 에는 자동 실행 인자를 넘길 자리가 없다.
+        let _ = auto_resume;
         // unix(개발): $SHELL -l ($SHELL 없으면 bash -l), cwd 는 직접 사용.
         // 탭별 HISTFILE 은 여기서 적용하지 않는다 — $SHELL 이 bash 라는 보장이
         // 없어(zsh·fish 는 HISTFILE 시맨틱이 다르다) 셸 기본 history 를 그대로
@@ -144,10 +151,13 @@ fn spawn_spec(req: &ShellSpawnReq) -> SpawnSpec {
 /// <탭 id> <cwd>` 순서이며 `$0` 은 고정 이름, `$1`·`$2` 가 위치 인자다. `None` 은 빈
 /// 문자열이다. 본문이 bash 문법이므로 전송 셸도 bash 를 명시한다.
 ///
+/// `$3` 은 자동 실행 opt-in 이다 — 켜졌을 때만 `1` 이고 나머지는 빈 값이다. 셸은 정확한
+/// `1` 만 켜짐으로 읽으며, 이 값은 데이터 인자로만 넘어간다.
+///
 /// 본문의 OSC 10/11 값은 3자 색 동기화 계약의 한 자리다. 같은 값이 `sink.rs` 의
 /// `COLOR_REPLY_*` 와 `TERMINAL_THEME` 에도 있으므로 셋을 함께 바꾼다.
 #[cfg(windows)]
-fn bash_argv(history_tab: Option<u64>, cwd: Option<&str>) -> Vec<String> {
+fn bash_argv(history_tab: Option<u64>, cwd: Option<&str>, auto_resume: bool) -> Vec<String> {
     vec![
         "bash".to_string(),
         "-c".to_string(),
@@ -155,6 +165,7 @@ fn bash_argv(history_tab: Option<u64>, cwd: Option<&str>) -> Vec<String> {
         "mast-wsl".to_string(),
         history_tab.map(|tab| tab.to_string()).unwrap_or_default(),
         cwd.unwrap_or_default().to_string(),
+        if auto_resume { "1" } else { "" }.to_string(),
     ]
 }
 
@@ -297,7 +308,7 @@ impl TauriHost {
         // sink 가 들고 갈 탭 id — exit 이 기록 파일 이름을 여기서만 얻는다
         // (`history_tab` 은 이 세션이 실릴 탭의 안정 ID 다, 코어 rustdoc).
         let tab = req.history_tab.map(TabId);
-        let spec = spawn_spec(&req);
+        let spec = spawn_spec(&req, self.auto_resume);
         let opts = SessionOptions {
             startup_deadline: startup_deadline(),
             ..SessionOptions::default()
@@ -426,7 +437,7 @@ fn release_tab_files(tabs: &[TabId], distro: Option<&str>) {
     }
 }
 
-/// 삭제 스크립트 본문. 탭 하나가 남기는 파일은 탭별 `HISTFILE`(`tab-<id>`, `zsh-tab-<id>`), resume 힌트, 에이전트 훅
+/// 삭제 스크립트 본문. 탭 하나가 남기는 파일은 탭별 `HISTFILE`(`tab-<id>`, `zsh-tab-<id>`), 셸 프롬프트 세대(`prompt/tab-<id>`), resume 힌트, 에이전트 훅
 /// 디스패처의 상태·lock·진단 파일(`~/.mast/agent-hooks/`), 그리고 쓰다 죽은 프로세스가 남긴
 /// 임시 파일(`<파일>.tmp.<pid>`)이다.
 ///
@@ -439,7 +450,7 @@ fn release_script(tabs: &[TabId]) -> String {
     for tab in tabs {
         let id = tab.0;
         script.push_str(&format!(
-            r#" "$HOME/.mast/history/tab-{id}" "$HOME/.mast/history/zsh-tab-{id}" "$HOME/.mast/resume/tab-{id}" "$HOME/.mast/resume/tab-{id}".tmp.*"#
+            r#" "$HOME/.mast/history/tab-{id}" "$HOME/.mast/history/zsh-tab-{id}" "$HOME/.mast/prompt/tab-{id}" "$HOME/.mast/resume/tab-{id}" "$HOME/.mast/resume/tab-{id}".tmp.*"#
         ));
         script.push_str(&format!(
             r#" "$HOME/.mast/agent-hooks/tab-{id}.json" "$HOME/.mast/agent-hooks/tab-{id}.lock" "$HOME/.mast/agent-hooks/tab-{id}.diag" "$HOME/.mast/agent-hooks/tab-{id}.json".tmp.* "$HOME/.mast/agent-hooks/tab-{id}.diag".tmp.*"#
@@ -478,7 +489,7 @@ mod tests {
             history_tab: Some(7),
             ..ShellSpawnReq::default()
         };
-        let spec = spawn_spec(&req);
+        let spec = spawn_spec(&req, false);
         assert_eq!(spec.program, "wsl.exe");
         // distro 는 `-d`, cwd 는 **`--cd ~`** 로 가고 목적지는 본문이 옮긴다 (spawn_spec 주석).
         assert_eq!(
@@ -496,17 +507,51 @@ mod tests {
         assert_eq!(spec.args[7], include_str!("../../../../scripts/wsl/launch.sh"));
         assert_eq!(
             &spec.args[8..],
-            &["mast-wsl".to_string(), "7".to_string(), "/home/me/proj".to_string()]
+            &[
+                "mast-wsl".to_string(),
+                "7".to_string(),
+                "/home/me/proj".to_string(),
+                String::new(),
+            ]
         );
+    }
+
+    /// `$3` 은 자동 실행 opt-in 이다 — 켜졌을 때만 `1` 이고 꺼짐은 빈 값이다. 위치 인자 `$1`·`$2`
+    /// 의 자리는 바뀌지 않는다.
+    #[test]
+    fn auto_resume_is_the_third_positional_arg_and_only_enabled_passes_one() {
+        let req = ShellSpawnReq {
+            cwd: Some("/home/me/proj".to_string()),
+            history_tab: Some(7),
+            ..ShellSpawnReq::default()
+        };
+        for (enabled, flag) in [(true, "1"), (false, "")] {
+            let spec = spawn_spec(&req, enabled);
+            assert_eq!(
+                &spec.args[spec.args.len() - 4..],
+                &[
+                    "mast-wsl".to_string(),
+                    "7".to_string(),
+                    "/home/me/proj".to_string(),
+                    flag.to_string(),
+                ],
+                "autoResume={enabled}"
+            );
+        }
     }
 
     /// `None` 은 빈 위치 인자 두 칸이다 — 본문이 빈 값을 보고 탭 전용 경로와 cd 를 건너뛴다.
     #[test]
     fn missing_tab_and_cwd_are_empty_positional_args() {
-        let spec = spawn_spec(&ShellSpawnReq::default());
+        let spec = spawn_spec(&ShellSpawnReq::default(), false);
         assert_eq!(
-            &spec.args[spec.args.len() - 3..],
-            &["mast-wsl".to_string(), String::new(), String::new()]
+            &spec.args[spec.args.len() - 4..],
+            &[
+                "mast-wsl".to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ]
         );
     }
 
@@ -520,9 +565,9 @@ mod tests {
             history_tab: Some(3),
             ..ShellSpawnReq::default()
         };
-        let spec = spawn_spec(&req);
-        assert_eq!(spec.args.last().map(String::as_str), Some(cwd));
-        assert!(!spec.args[spec.args.len() - 4].contains(cwd));
+        let spec = spawn_spec(&req, false);
+        assert_eq!(spec.args[spec.args.len() - 2], cwd);
+        assert!(!spec.args[spec.args.len() - 5].contains(cwd));
     }
 
     /// 닫힌 탭 정리 스크립트 — 탭마다 history·resume·에이전트 훅 파일과 그 임시 파일을 지우고,
@@ -538,10 +583,10 @@ mod tests {
             release_script(&[TabId(7), TabId(12)]),
             concat!(
                 r#"rm -f --"#,
-                r#" "$HOME/.mast/history/tab-7" "$HOME/.mast/history/zsh-tab-7" "$HOME/.mast/resume/tab-7" "$HOME/.mast/resume/tab-7".tmp.*"#,
+                r#" "$HOME/.mast/history/tab-7" "$HOME/.mast/history/zsh-tab-7" "$HOME/.mast/prompt/tab-7" "$HOME/.mast/resume/tab-7" "$HOME/.mast/resume/tab-7".tmp.*"#,
                 r#" "$HOME/.mast/agent-hooks/tab-7.json" "$HOME/.mast/agent-hooks/tab-7.lock" "$HOME/.mast/agent-hooks/tab-7.diag""#,
                 r#" "$HOME/.mast/agent-hooks/tab-7.json".tmp.* "$HOME/.mast/agent-hooks/tab-7.diag".tmp.*"#,
-                r#" "$HOME/.mast/history/tab-12" "$HOME/.mast/history/zsh-tab-12" "$HOME/.mast/resume/tab-12" "$HOME/.mast/resume/tab-12".tmp.*"#,
+                r#" "$HOME/.mast/history/tab-12" "$HOME/.mast/history/zsh-tab-12" "$HOME/.mast/prompt/tab-12" "$HOME/.mast/resume/tab-12" "$HOME/.mast/resume/tab-12".tmp.*"#,
                 r#" "$HOME/.mast/agent-hooks/tab-12.json" "$HOME/.mast/agent-hooks/tab-12.lock" "$HOME/.mast/agent-hooks/tab-12.diag""#,
                 r#" "$HOME/.mast/agent-hooks/tab-12.json".tmp.* "$HOME/.mast/agent-hooks/tab-12.diag".tmp.*"#,
             )

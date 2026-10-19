@@ -2946,6 +2946,39 @@ Claude trust prompt. For each result, record the app build, the distro, the logi
    replacing `<id>` with the recorded number. Other open tabs' history and the user's own history
    must remain. A Restart is not a deletion condition.
 
+### Unreleased — agent auto-resume field verification (ADR-0026 amendment 2026-10-19)
+
+Pending Windows/WSL field verification. None of the items below is recorded as passed. For each result,
+record the app build, the distro, the login shell (bash, or zsh with starship) and the agent CLI versions.
+Do not delete files from a distro in use to create a failure. Items 3–8 and 10–11 run in both a bash tab and
+a zsh tab.
+
+1. **Default off.** With no `autoResume` key in `settings.json`, a restored tab shows only the manual
+   `[mast] resume previous agent:` line. No `[mast] auto-resume` line appears.
+2. **Turn on, then restart.** Run `mast config set autoResume true`. Tabs spawned before a full quit and
+   relaunch are unaffected; the setting applies only to shells spawned after the relaunch.
+3. **Each agent.** With `autoResume` on, start a Claude Code, a Codex and an OpenCode session, one per tab, and
+   quit Mast while all three are running. After relaunch, each tab prints `[mast] auto-resume: <command>` and
+   resumes the same session id, once.
+4. **Normal exit is not run.** Exit an agent normally, wait for the prompt, then quit and relaunch. The tab
+   must not run the command; it prints only the manual `[mast] resume previous agent:` line.
+5. **Several tabs.** With three or more eligible tabs, the second and later tabs print `queued:` once, and each
+   run starts at least 3 s after the previous one.
+6. **Ctrl+C.** While a tab shows `queued:`, press Ctrl+C. It must print `[mast] auto-resume cancelled`, then the
+   manual hint, and the agent must not start.
+7. **Missing session or executable.** Remove the session, or run in a shell where the CLI is not on `PATH`. The
+   command fails visibly, the normal prompt returns, and nothing is retried.
+8. **Nested shell.** Start `bash` or `zsh` inside a restored tab. `~/.mast/prompt/tab-<id>` must keep its value,
+   and no `[mast] auto-resume` line may appear.
+9. **Codex before its first turn.** Quit while a new Codex session has not completed its first turn. Nothing is
+   restored; this is the accepted limit.
+10. **Upgrade, first shell.** Upgrade from the previous build with `autoResume` on, then open the first bash tab.
+    Record the exact output. While the previous `integration.sh` is still on disk, the tab must show the
+    manual `resume previous agent:` hint and a normal prompt with no `_mast_prompt: command not found`, and must
+    not auto-run; after setup finishes, a newly opened tab follows items 3–4.
+11. **Tab close.** Close one tab, then check `test ! -e "$HOME/.mast/prompt/tab-<id>"`. If
+    `~/.mast/auto-resume.lock` exists, it must still exist.
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy

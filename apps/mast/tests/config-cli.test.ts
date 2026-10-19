@@ -193,6 +193,8 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
     expect(result.stdout).toContain("mast config set remote");
     expect(result.stdout).toContain("mast config set showTabIds");
     expect(result.stdout).toContain("mast config set browser.agentEval");
+    expect(result.stdout).toContain("mast config set autoResume <true|false>");
+    expect(result.stdout).toContain("Applied after app restart.");
     expect(result.stdout).toContain("enabled and agentEval default to true");
     expect(result.stdout).toContain("reset <key>");
     expect(result.stdout).not.toMatch(/\x1b/);
@@ -252,6 +254,36 @@ describe.skipIf(process.platform !== "linux")("mast config helper", () => {
 
     expectSuccess(invoke(["reset", "showTabIds"], path));
     expect(readSettings(path)).toEqual({ future: "keep" });
+  });
+
+  it("round-trips autoResume as a strict boolean without touching other keys", () => {
+    const path = fixture();
+    writeSettings(path, { future: "keep", showTabIds: true });
+    const defaulted = invoke(["get", "autoResume"], path);
+    expectSuccess(defaulted);
+    expect(defaulted.stdout).toContain('"default": false');
+    expectSuccess(invoke(["set", "autoResume", "true"], path));
+    expect(readSettings(path)).toEqual({ future: "keep", showTabIds: true, autoResume: true });
+    expect(invoke(["get", "autoResume"], path).stdout).toContain('"saved": true');
+    expectSuccess(invoke(["set", "autoResume", "false"], path));
+    expect(readSettings(path)).toEqual({ future: "keep", showTabIds: true, autoResume: false });
+    expectSuccess(invoke(["reset", "autoResume"], path));
+    expect(readSettings(path)).toEqual({ future: "keep", showTabIds: true });
+  });
+
+  it("treats a null autoResume as unset and rejects other values without replacing the file", () => {
+    const path = fixture();
+    writeSettings(path, { autoResume: null, future: "keep" });
+    expect(invoke(["get", "autoResume"], path).stdout).toContain('"saved": null');
+    for (const value of ["yes", "1", "True", "null"]) {
+      expectFailure(invoke(["set", "autoResume", value], path));
+    }
+    expect(readSettings(path)).toEqual({ autoResume: null, future: "keep" });
+
+    writeFileSync(path, '{"autoResume": "true"}');
+    const before = readFileSync(path);
+    expectFailure(invoke(["get", "autoResume"], path));
+    expect(readFileSync(path)).toEqual(before);
   });
 
   it("uses explicit remote default, custom ports, remote.port, and false removal", () => {

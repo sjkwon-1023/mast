@@ -23,7 +23,7 @@ const integration = onLinux ? describe : describe.skip;
 
 // 러너가 mast 탭 안의 Claude Code·Codex 에서 돌면 이 값들이 이미 있다. CODEX_THREAD_ID 가 새면
 // 중첩 codex exec 게이트에 걸려 모든 notify 가 조용히 끝난다.
-const AGENT_ENV = ["CLAUDECODE", "CODEX_THREAD_ID", "CODEX_HOME", "MAST", "MAST_TAB", "BASH_ENV"];
+const AGENT_ENV = ["CLAUDECODE", "CODEX_THREAD_ID", "CODEX_HOME", "MAST", "MAST_TAB", "MAST_PROMPT_GEN", "BASH_ENV"];
 
 function scrubbedEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -73,6 +73,7 @@ const SHELL_PROBE = [
   'printf "MAST=%s MAST_TAB=%s COLORTERM=%s\\n" "${MAST-}" "${MAST_TAB-}" "${COLORTERM-}"',
   'printf "HISTFILE=%s\\n" "${HISTFILE-}"',
   'printf "PROMPT_COMMAND=%s\\n" "${PROMPT_COMMAND-}"',
+  'printf "AUTO=%s\\n" "${MAST_AUTO_RESUME-}"',
   "history -r; history 1",
 ].join("; ");
 
@@ -124,9 +125,9 @@ class Harness {
     });
   }
 
-  // Rust 가 넘기는 것과 같은 인자 계약(`bash -c <본문> mast-wsl <tab> <cwd>`)으로 배포 본문을 실행한다.
-  launch(tab: string, cwd: string, env: NodeJS.ProcessEnv = {}): SpawnSyncReturns<string> {
-    return spawnSync("bash", ["-c", launchScript, "mast-wsl", tab, cwd], {
+  // Rust 가 넘기는 것과 같은 인자 계약(`bash -c <본문> mast-wsl <tab> <cwd> <autoResume>`)으로 배포 본문을 실행한다.
+  launch(tab: string, cwd: string, env: NodeJS.ProcessEnv = {}, autoResume = ""): SpawnSyncReturns<string> {
+    return spawnSync("bash", ["-c", launchScript, "mast-wsl", tab, cwd, autoResume], {
       cwd: this.home,
       env: { ...scrubbedEnv(), HOME: this.home, SHELL: this.shellStub, ...env },
       encoding: "utf8",
@@ -326,6 +327,55 @@ integration("Codex resume notify integration", () => {
       harness.transcript(customHome, root, metadata(root, "cli"));
       harness.run(payload(root), { codexHome: customHome });
       expect(harness.resume()).toMatch(/^codex resume custom-root\n/);
+    });
+  });
+
+  it("writes the prompt generation as line 3 and the WSL launcher still offers line 1", () => {
+    withHarness((harness) => {
+      const root = "root-generation";
+      harness.transcript(codex(harness), root, metadata(root, "cli"));
+      harness.run(payload(root), { env: { MAST_PROMPT_GEN: "gen-7_A" } });
+      expect(harness.resume()).toMatch(/^codex resume root-generation\n\d+\ngen-7_A\n$/);
+      expect(lastHistoryEntry(harness.runFreshWrapper())).toBe("codex resume root-generation");
+    });
+  });
+
+  it.each([
+    ["unset", undefined],
+    ["empty", ""],
+    ["129 characters", "g".repeat(129)],
+    ["containing a space", "gen 7"],
+    ["containing a semicolon", "gen;7"],
+    ["containing a dollar sign", "gen$7"],
+    ["containing a newline", "gen\n7"],
+  ])("writes two lines when the prompt generation is %s", (_name, generation) => {
+    withHarness((harness) => {
+      const root = "root-no-generation";
+      harness.transcript(codex(harness), root, metadata(root, "cli"));
+      harness.run(payload(root), { env: generation === undefined ? {} : { MAST_PROMPT_GEN: generation } });
+      expect(harness.resume()).toMatch(/^codex resume root-no-generation\n\d+\n$/);
+    });
+  });
+
+  it("accepts a prompt generation of exactly 128 characters", () => {
+    withHarness((harness) => {
+      const root = "root-long-generation";
+      const generation = "g".repeat(128);
+      harness.transcript(codex(harness), root, metadata(root, "cli"));
+      harness.run(payload(root), { env: { MAST_PROMPT_GEN: generation } });
+      expect(harness.resume()).toMatch(new RegExp(`^codex resume root-long-generation\\n\\d+\\n${generation}\\n$`));
+    });
+  });
+
+  it("keeps the prior hint for a rejected subagent or unknown thread even with a prompt generation", () => {
+    withHarness((harness) => {
+      const original = harness.seedResume("codex resume original");
+      const scout = "generation-scout";
+      harness.transcript(codex(harness), scout, metadata(scout, { subagent: { other: "guardian" } }));
+      harness.run(payload(scout), { env: { MAST_PROMPT_GEN: "gen-9" } });
+      expect(harness.resume()).toBe(original);
+      harness.run(payload("generation-unknown"), { env: { MAST_PROMPT_GEN: "gen-9" } });
+      expect(harness.resume()).toBe(original);
     });
   });
 
@@ -575,6 +625,16 @@ integration("Codex notify hands the idle decision to the dispatcher", () => {
     });
   });
 
+  it("keeps the prior hint for a codex exec nested in another Codex thread even with a prompt generation", () => {
+    withHarness((harness) => {
+      const original = harness.seedResume("codex resume outer-thread");
+      const inner = "inner-exec-generation";
+      harness.transcript(codex(harness), inner, metadata(inner, "exec"));
+      harness.run(payload(inner), { env: { CODEX_THREAD_ID: "outer-thread", MAST_PROMPT_GEN: "gen-nested" } });
+      expect(harness.resume()).toBe(original);
+    });
+  });
+
   it("skips the hint and every emission for a codex exec nested in another Codex thread", () => {
     withHarness((harness) => {
       const original = harness.seedResume("codex resume outer-thread");
@@ -733,4 +793,54 @@ integration("WSL tab launcher", () => {
       expect(existsSync(join(harness.home, ".mast", "history"))).toBe(false);
     });
   });
+
+  it.each([
+    ["1", "1"],
+    ["empty", ""],
+    ["another value", "2"],
+  ])("switches auto-resume on only for the third argument 1 (%s)", (_name, flag) => {
+    withHarness((harness) => {
+      harness.seedResume("claude --resume earlier");
+      installIntegration(harness, "_mast_prompt() { :; }\n");
+      // 상속된 값은 인자가 정확히 1 일 때만 살아남는다.
+      const result = harness.launch("6", "", { MAST_AUTO_RESUME: "1" }, flag);
+      expect(result.status, result.stderr).toBe(0);
+      const on = flag === "1";
+      expect(result.stdout).toContain(`AUTO=${on ? "1" : ""}\n`);
+      // 켜짐이면 launch 는 힌트를 건드리지 않는다. 첫 프롬프트가 판정하거나 수동 안내를 한다.
+      expect(result.stdout.includes("claude --resume earlier")).toBe(!on);
+      expect(result.stdout.includes("resume previous agent")).toBe(!on);
+    });
+  });
+
+  it("hands the prompt hook to the shared integration when it is installed", () => {
+    withHarness((harness) => {
+      installIntegration(harness, "_mast_prompt() { :; }\n");
+      const result = harness.launch("6", "", {}, "1");
+      expect(result.stdout).toContain(
+        'PROMPT_COMMAND=declare -F _mast_prompt >/dev/null || . "$HOME/.mast/shell/integration.sh"; _mast_prompt\n',
+      );
+    });
+  });
+
+  // 앱의 launch.sh 는 업데이트 즉시 바뀌지만 ~/.mast/shell 은 부팅 재스폰 뒤 setup 이 갱신한다. 그 사이의 옛
+  // integration.sh(또는 파일 없음)에서는 _mast_prompt 를 부르지 않고, 자동 실행이 켜져 있어도 launch 가 힌트를 보인다.
+  it.each([
+    ["an older integration.sh", "_mast_cwd() { :; }\n"],
+    ["no integration.sh", null],
+  ])("keeps the OSC 7 prompt and the launch-time hint with %s", (_name, body) => {
+    withHarness((harness) => {
+      harness.seedResume("claude --resume earlier");
+      if (body !== null) installIntegration(harness, body);
+      const result = harness.launch("6", "", {}, "1");
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("_mast_prompt");
+      expect(result.stdout).toContain("resume previous agent: claude --resume earlier");
+    });
+  });
 });
+
+function installIntegration(harness: Harness, body: string): void {
+  mkdirSync(join(harness.home, ".mast", "shell"), { recursive: true });
+  writeFileSync(join(harness.home, ".mast", "shell", "integration.sh"), body);
+}

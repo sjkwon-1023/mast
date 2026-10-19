@@ -538,6 +538,9 @@ pub struct UiSettings {
     /// `false` 는 macOS 기본(Option 은 문자 입력)이다. 프론트가 macOS 에서만 적용하고
     /// Windows 는 읽지 않는다. `log` 와 같은 규율로 부팅 때 한 번만 읽는다.
     pub mac_option_is_meta: Option<bool>,
+    /// 에이전트 세션 자동 재실행을 켤지. 미설정·`null`·`false` 는 꺼짐이다. 부팅 때 한 번만
+    /// 읽어 [`crate::host`] 가 셸 spawn 인자로 넘기므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
+    pub auto_resume: Option<bool>,
     /// 원격 표면(LAN 폴링, [`crate::remote`]). **키가 있으면 켜짐**이고 없으면
     /// 리스너도 스레드도 토큰 파일도 생기지 않는다. `log` 와 같은 규율으로 부팅 때
     /// 한 번만 읽으므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
@@ -1359,6 +1362,28 @@ mod tests {
         assert_eq!(off.mac_option_is_meta, Some(false));
         assert_eq!(parse_ui_settings("{}", path()).unwrap().mac_option_is_meta, None);
         for text in [r#"{"macOptionIsMeta": "yes"}"#, r#"{"macOptionIsMeta": 1}"#] {
+            assert!(parse_ui_settings(text, path()).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn auto_resume_reads_a_boolean_and_leaves_null_or_missing_as_unset() {
+        let on = parse_ui_settings(r#"{"autoResume": true}"#, path()).unwrap();
+        assert_eq!(on.auto_resume, Some(true));
+        let off = parse_ui_settings(r#"{"autoResume": false}"#, path()).unwrap();
+        assert_eq!(off.auto_resume, Some(false));
+        assert_eq!(parse_ui_settings("{}", path()).unwrap().auto_resume, None);
+        let null = parse_ui_settings(r#"{"autoResume": null}"#, path()).unwrap();
+        assert_eq!(null.auto_resume, None);
+    }
+
+    #[test]
+    fn auto_resume_rejects_other_types_instead_of_enabling() {
+        for text in [
+            r#"{"autoResume": "yes"}"#,
+            r#"{"autoResume": "true"}"#,
+            r#"{"autoResume": 1}"#,
+        ] {
             assert!(parse_ui_settings(text, path()).is_err(), "{text}");
         }
     }
