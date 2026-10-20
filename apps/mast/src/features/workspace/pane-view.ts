@@ -10,6 +10,8 @@ import { IS_MAC } from "../../shared/platform";
 //
 // fit 은 pane 당 ResizeObserver 1개(콘텐츠 영역 관찰)가 표시 중인 뷰의
 // scheduleFit 만 부른다. 뷰당 observer 는 없다 (terminal-view 참조).
+// 같은 발화에서 pane 크기 보고도 예약한다 (pane-geometry.ts). 표시 터미널의 xterm 격자 변화,
+// 표시 탭 전환, 글꼴 변경도 보고를 예약한다.
 //
 // 클릭 포커스: 컨테이너 mousedown 을 capture 단계에서 받아 비활성
 // pane 이면 FocusPane 을 dispatch 한다. preventDefault 는 하지 않는다 — xterm 의
@@ -32,9 +34,16 @@ import { IS_MAC } from "../../shared/platform";
 // 둘 중 하나를 shown 으로 삼는다 — **shownTab = 표시 중인 탭**(터미널이든 뷰어든)
 // 이고, placeholder 는 둘 다 없을 때만 뜬다 (동시 표시 금지).
 
-import { respawnTab } from "../../infrastructure/backend";
+import { reportPaneGeometry, respawnTab } from "../../infrastructure/backend";
 import { paneTerminalCwd, shortcutBadge, shortcutLabel } from "../../shared/keys";
 import type { ShortcutId } from "../../shared/keys";
+import {
+  currentTerminalFont,
+  registerTerminalFontTarget,
+  unregisterTerminalFontTarget,
+} from "../terminal/settings";
+import { CellCache, fitGrid, PaneGeometryReporter, TERMINAL_SCROLLBAR_WIDTH } from "./pane-geometry";
+import type { Grid } from "./pane-geometry";
 import {
   paneNeedsInput,
   paneUnread,
@@ -269,6 +278,11 @@ export class PaneView {
    *  스폰 데드라인(5s) 동안 B 의 버튼까지 잠그면 안 된다. */
   private readonly retryInFlight = new Set<TabId>();
   private readonly resizeObserver: ResizeObserver;
+  private readonly geometry: PaneGeometryReporter;
+  private readonly cells = new CellCache();
+  /** 격자 변화를 듣고 있는 표시 터미널 뷰와 그 구독 — 표시 대상이 바뀔 때만 갈아 끼운다. */
+  private gridSource: TerminalView | undefined = undefined;
+  private gridSub: { dispose(): void } | undefined = undefined;
   private isActive = false;
   private shown: TabId | null = null;
   /** 마지막 update 의 pane 스냅샷 — 헤더 버튼이 클릭 시점의 표시 탭 cwd 를 읽는다. */
@@ -322,10 +336,50 @@ export class PaneView {
     );
 
     // pane 당 observer 1개 (D7) — 표시 중인 뷰에만 fit 을 전달한다.
+    // ResizeObserver 는 관찰을 시작할 때도 한 번 발화하므로, 새 프런트는 마운트 직후 보고한다.
+    this.geometry = new PaneGeometryReporter(
+      () => this.measureGrid(),
+      (grid) => reportPaneGeometry(this.paneId, grid.cols, grid.rows),
+    );
     this.resizeObserver = new ResizeObserver(() => {
       if (this.shown !== null) this.views.get(this.shown)?.scheduleFit();
+      this.geometry.schedule();
     });
     this.resizeObserver.observe(this.contentEl);
+    registerTerminalFontTarget(this);
+  }
+
+  /** 글꼴이 바뀌면 셀 환산 칸 수를 다시 잰다. 터미널은 xterm 이 격자를 바꾸며 따로 알리므로 여기서는 뷰어·빈 pane 을 위한 것이다. */
+  setFontSize(): void {
+    this.geometry.schedule();
+  }
+
+  /** 지금 pane 의 표시 칸 수. 콘텐츠가 0×0 이면(숨김·최소화) null 이라 마지막 보고가 남는다.
+   *  터미널이 표시 중이면 fit 이 정한 xterm 칸 수를 그대로 쓰고, 뷰어와 빈 pane 은 콘텐츠 상자에서
+   *  패딩을 빼고(폭은 터미널과 같은 스크롤바 폭도) 셀로 나눈다. */
+  private measureGrid(): Grid | null {
+    const { clientWidth, clientHeight } = this.contentEl;
+    if (clientWidth === 0 || clientHeight === 0) return null;
+    const terminal = this.shown === null ? undefined : this.views.get(this.shown);
+    if (terminal !== undefined) return terminal.grid;
+    const cell = this.cells.get(currentTerminalFont(), window.devicePixelRatio);
+    if (cell === null) return null;
+    const style = getComputedStyle(this.contentEl);
+    const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    return fitGrid(
+      Math.max(0, clientWidth - padX - TERMINAL_SCROLLBAR_WIDTH),
+      Math.max(0, clientHeight - padY),
+      cell,
+    );
+  }
+
+  /** 표시 터미널의 xterm 격자 변화(fit·글꼴)를 pane 보고에 잇는다. 뷰어·빈 pane 이면 구독하지 않는다. */
+  private followGrid(terminal: TerminalView | undefined): void {
+    if (terminal === this.gridSource) return;
+    this.gridSub?.dispose();
+    this.gridSource = terminal;
+    this.gridSub = terminal?.onGridChange(() => this.geometry.schedule());
   }
 
   /** 현재 표시 중인 탭 — 터미널 뷰든 뷰어 뷰든 지금 콘텐츠 영역을 차지한 탭이다
@@ -497,6 +551,7 @@ export class PaneView {
     this.root.classList.toggle("active", active);
     this.renderTabStrip(pane);
 
+    const shownBefore = this.shown;
     if (visible !== null) {
       // 첫 가시화 때 lazy attach — 이미 있으면 레지스트리의 기존 뷰 그대로.
       this.views.ensure(visible.tab, visible.session, this.contentEl, (message) =>
@@ -514,6 +569,9 @@ export class PaneView {
     } else {
       this.shown = null;
     }
+    // 표시 탭이 바뀌면 측정 대상이 달라지므로(터미널 격자 ↔ 셀 환산) 크기가 그대로여도 다시 잰다.
+    if (this.shown !== shownBefore) this.geometry.schedule();
+    this.followGrid(this.shown === null ? undefined : this.views.get(this.shown));
 
     // 이 pane 탭들의 keep-alive 뷰 가시성 동기화 — 표시 1개, 나머지 숨김.
     for (const tab of pane.tabs) {
@@ -750,6 +808,8 @@ export class PaneView {
   private showAttachError(tab: TabId, message: string): void {
     if (this.shown !== tab) return;
     this.shown = null;
+    this.followGrid(undefined);
+    this.geometry.schedule();
     this.placeholderEl.textContent = message;
     this.placeholderEl.style.display = "";
   }
@@ -758,7 +818,12 @@ export class PaneView {
    *  여기서 dispose 하지 않는다 — pane 이 닫히면 그 탭들이 스냅샷에서 사라져
    *  view-reconcile 의 dispose 목록으로 정리된다. */
   dispose(): void {
+    unregisterTerminalFontTarget(this);
+    this.gridSub?.dispose();
+    this.gridSub = undefined;
+    this.gridSource = undefined;
     this.resizeObserver.disconnect();
+    this.geometry.dispose();
     this.root.remove();
   }
 }

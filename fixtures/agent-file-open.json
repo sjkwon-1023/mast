@@ -1,0 +1,72 @@
+{
+  "presentViewer": {
+    "type": "presentViewer",
+    "source": 4,
+    "viewer": { "type": "markdownViewer", "path": "/home/dev/code/mast/README.md" },
+    "placement": { "type": "default" }
+  },
+  "placements": [
+    { "type": "default" },
+    { "type": "pane", "pane": 9 },
+    { "type": "split", "pane": 2, "direction": "vertical" }
+  ],
+  "viewers": [
+    { "type": "folderBrowser", "path": "/home/dev/code/mast/src" },
+    { "type": "changesViewer", "path": "/home/dev/code/mast" },
+    { "type": "textViewer", "path": "/home/dev/code/mast/notes.txt" },
+    { "type": "markdownViewer", "path": "/home/dev/code/mast/README.md" }
+  ],
+  "viewerPresented": {
+    "type": "viewerPresented",
+    "workspace": 1,
+    "pane": 9,
+    "tab": 16,
+    "active": true
+  },
+  "layout": {
+    "workspace": 1,
+    "revision": 7,
+    "self": 2,
+    "focused": 3,
+    "viewerPane": 9,
+    "tree": {
+      "type": "split",
+      "id": 12,
+      "direction": "horizontal",
+      "ratio": 0.6,
+      "first": { "type": "leaf", "pane": 2 },
+      "second": {
+        "type": "split",
+        "id": 13,
+        "direction": "vertical",
+        "ratio": 0.4,
+        "first": { "type": "leaf", "pane": 3 },
+        "second": { "type": "leaf", "pane": 9 }
+      }
+    },
+    "panes": [
+      {
+        "id": 2,
+        "activeTab": 4,
+        "tabs": [
+          { "id": 4, "kind": "terminal", "title": "Terminal", "path": "/home/dev/code/mast", "url": null }
+        ]
+      },
+      {
+        "id": 3,
+        "activeTab": 6,
+        "tabs": [
+          { "id": 5, "kind": "browser", "title": "Docs", "path": null, "url": "https://example.com/docs" },
+          { "id": 6, "kind": "textViewer", "title": "notes.txt", "path": "/home/dev/code/mast/notes.txt", "url": null }
+        ]
+      },
+      {
+        "id": 9,
+        "activeTab": 16,
+        "tabs": [
+          { "id": 16, "kind": "markdownViewer", "title": "README.md", "path": "/home/dev/code/mast/README.md", "url": null }
+        ]
+      }
+    ]
+  }
+}

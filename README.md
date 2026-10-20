@@ -25,7 +25,8 @@ it from your desk or your phone. A native Apple Silicon build is available too.
   Claude Code, Codex or OpenCode session, or turn on `autoResume` to have agents that were still
   running relaunch by themselves, one tab at a time.
 - **Agents can work together.** Inside a mast terminal, `mast ls` lists the tabs in the workspace
-  and `mast send` types into another one, so one agent can hand work to another.
+  and `mast send` types into another one, so one agent can hand work to another. `mast open` and
+  `mast diff` show a file or a Git diff in a viewer pane, and `mast layout` reports the panes.
 - **One executable.** No installer, no setup wizard. `Ctrl+Shift+R` reloads the window without
   stopping your shells or agents.
 
@@ -98,7 +99,8 @@ the line above, because a zip downloaded in a browser is blocked by Gatekeeper. 
   message on the workspace card, and a Windows notification when a tab starts waiting.
   Antigravity CLI reports running and done only.
 - **Viewers** — a folder browser, text and Markdown viewers for your WSL files, and a read-only
-  **Changes** view of your Git working tree and staged changes (needs Git in WSL).
+  **Changes** view of your Git working tree and staged changes (needs Git in WSL). Ctrl+click
+  (`⌘`+click on macOS) a file path in terminal output to open it in a viewer.
 - **Phone remote (opt-in)** — *Pair phone* shows a QR code. **Secure Remote** needs no setup and
   encrypts the connection; **Local HTTP** is a plain-HTTP mode you turn on in settings. Both work
   only on your own network — mast has no cloud relay, so mobile data or another Wi-Fi reaches your

@@ -66,6 +66,7 @@ function snapshot(): StateSnapshot {
     layout: { type: "leaf", pane: 1 },
     panes: { "1": pane },
     activePane: 1,
+    viewerPane: null,
     agentStatus: "idle",
     lastAgentMessage: null,
   };

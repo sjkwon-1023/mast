@@ -2,10 +2,10 @@
 
 use super::events::recompute_agent_summary;
 use super::tabs::{path_title, validate_viewer_path, PreparedTab};
-use super::{unknown, Command, CommandError, CommandOutput, Dispatcher};
+use super::{unknown, Command, CommandError, CommandOutput, Dispatcher, Placement, ViewerSpec};
 use crate::model::{
-    AgentStatus, NotificationState, Pane, PaneId, SplitId, SplitTree, TabId, TabKind, Workspace,
-    WorkspaceId,
+    AgentStatus, NotificationState, Pane, PaneId, SplitDirection, SplitId, SplitTree, TabId,
+    TabKind, Workspace, WorkspaceId,
 };
 
 impl Dispatcher {
@@ -65,6 +65,7 @@ impl Dispatcher {
                     layout: SplitTree::Leaf { pane },
                     panes: [(pane, initial)].into(),
                     active_pane: pane,
+                    viewer_pane: None,
                     agent_status: AgentStatus::Idle,
                     last_agent_message: None,
                 });
@@ -412,8 +413,109 @@ impl Dispatcher {
                 *current = scroll_top;
                 Ok(CommandOutput::Done)
             }
+
+            Command::PresentViewer {
+                source,
+                viewer,
+                placement,
+            } => self.present_viewer(source, viewer, placement),
         }
     }
+
+    /// [`Command::PresentViewer`] 본체. 소스·경로·대상 검사를 모두 마친 뒤에만 id 를 발급하고
+    /// 트리·탭을 바꾼다. 그래서 어느 실패에서도 nextId·revision·상태가 그대로다.
+    fn present_viewer(
+        &mut self,
+        source: TabId,
+        viewer: ViewerSpec,
+        placement: Placement,
+    ) -> Result<CommandOutput, CommandError> {
+        let (wi, source_pane, source_index) = self.locate_tab(source)?;
+        if !matches!(
+            self.state.workspaces[wi].panes[&source_pane].tabs[source_index].kind,
+            TabKind::Terminal { .. }
+        ) {
+            return Err(CommandError::KindMismatch { tab: source });
+        }
+        // 뷰어는 스폰하지 않으므로 history id 예약은 필요 없다.
+        let prepared = self.prepare_tab(wi, viewer.into_new_tab(), self.state.peek_id(0))?;
+
+        let ws = &self.state.workspaces[wi];
+        let site = match placement {
+            Placement::Default => match ws.viewer_pane {
+                Some(pane) => ViewerSite::Existing(pane),
+                None => ViewerSite::Split {
+                    anchor: source_pane,
+                    direction: SplitDirection::Horizontal,
+                },
+            },
+            Placement::Pane { pane } => ViewerSite::Existing(pane),
+            Placement::Split { pane, direction } => ViewerSite::Split {
+                anchor: pane,
+                direction,
+            },
+        };
+        // 다른 워크스페이스의 pane 과 사라진 pane 은 같은 UnknownTarget 이다.
+        let anchor = match site {
+            ViewerSite::Existing(pane) | ViewerSite::Split { anchor: pane, .. } => pane,
+        };
+        if !ws.panes.contains_key(&anchor) {
+            return Err(unknown("pane", anchor.0));
+        }
+
+        match site {
+            ViewerSite::Existing(pane) => {
+                let tab = TabId(self.state.alloc_id());
+                let ws = &mut self.state.workspaces[wi];
+                let workspace = ws.id;
+                // 사용자가 보고 있는 활성 pane 의 활성 탭은 가리지 않고 새 탭을 뒤에 쌓는다.
+                let keep_active_tab =
+                    ws.active_pane == pane && ws.panes[&pane].active_tab.is_some();
+                let target = ws.panes.get_mut(&pane).expect("위에서 존재를 확인했다");
+                target.tabs.push(prepared.into_tab(tab));
+                if !keep_active_tab {
+                    target.active_tab = Some(tab);
+                }
+                Ok(CommandOutput::ViewerPresented {
+                    workspace,
+                    pane,
+                    tab,
+                    active: !keep_active_tab,
+                })
+            }
+            ViewerSite::Split { anchor, direction } => {
+                let new_pane = PaneId(self.state.alloc_id());
+                let split_id = SplitId(self.state.alloc_id());
+                let tab = TabId(self.state.alloc_id());
+                let ws = &mut self.state.workspaces[wi];
+                let split_ok = ws.layout.split(anchor, direction, new_pane, split_id);
+                debug_assert!(split_ok, "불변식: panes 의 pane 은 layout leaf 로 존재");
+                let mut created = empty_pane(new_pane);
+                created.tabs.push(prepared.into_tab(tab));
+                created.active_tab = Some(tab);
+                ws.panes.insert(new_pane, created);
+                // 자리는 옵션 없는 호출만 정한다. 명시한 split 은 자리를 바꾸지 않는다.
+                if matches!(placement, Placement::Default) {
+                    ws.viewer_pane = Some(new_pane);
+                }
+                Ok(CommandOutput::ViewerPresented {
+                    workspace: ws.id,
+                    pane: new_pane,
+                    tab,
+                    active: true,
+                })
+            }
+        }
+    }
+}
+
+/// 뷰어 탭이 놓일 자리 — 기존 pane 에 더할지, 어느 pane 을 어느 방향으로 나눌지.
+enum ViewerSite {
+    Existing(PaneId),
+    Split {
+        anchor: PaneId,
+        direction: SplitDirection,
+    },
 }
 
 fn empty_pane(id: PaneId) -> Pane {
@@ -424,7 +526,7 @@ fn empty_pane(id: PaneId) -> Pane {
     }
 }
 
-/// pane 제거·트리 collapse·active_pane 보정을 수행한다. 새 활성 pane은 leaf 순서의 첫 pane이다.
+/// pane 제거·트리 collapse·active_pane 보정·뷰어 자리 해제를 수행한다. 새 활성 pane은 leaf 순서의 첫 pane이다.
 /// 호출자는 pane의 존재와 마지막 pane이 아님을 보장하고, 반환된 탭들의 세션을 종료해야 한다.
 fn collapse_pane(ws: &mut Workspace, pane: PaneId) -> Pane {
     let removed = ws.panes.remove(&pane).expect("호출자가 pane 존재를 보장");
@@ -432,6 +534,9 @@ fn collapse_pane(ws: &mut Workspace, pane: PaneId) -> Pane {
     debug_assert!(collapse_ok, "불변식: panes 의 pane 은 layout leaf 로 존재");
     if ws.active_pane == pane {
         ws.active_pane = ws.layout.leaves()[0];
+    }
+    if ws.viewer_pane == Some(pane) {
+        ws.viewer_pane = None;
     }
     removed
 }

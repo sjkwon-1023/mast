@@ -6,7 +6,9 @@
 //! (fixture 파일이 기준).
 
 use serde::{Deserialize, Serialize};
-use mast_core::command::{Command, CommandError, CommandOutput, NewTab};
+use mast_core::command::{
+    Command, CommandError, CommandOutput, LayoutInfo, NewTab, Placement, ViewerSpec,
+};
 use mast_core::model::{AppState, PaneId, SplitId, TabId, WorkspaceId};
 
 fn read_fixture(name: &str) -> String {
@@ -225,4 +227,44 @@ fn commands_fixture_round_trips() {
         .insert("tab".to_string(), serde_json::Value::Null);
     let reserialized = serde_json::to_value(&parsed).unwrap();
     assert_eq!(expected, reserialized);
+}
+
+#[test]
+fn agent_file_open_fixture_round_trips() {
+    // 뷰어 표시 계약(PresentViewer·ViewerSpec·Placement·응답·layout)을 잠근다.
+    // 명령·자리·뷰어 명세·layout 은 역직렬화 후 같은 JSON 이 나와야 한다. 응답
+    // (CommandOutput)은 Serialize 전용이라 만든 값의 직렬화를 fixture 와 비교한다.
+    let text = read_fixture("agent-file-open.json");
+    let fixture: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+    let command: Command = serde_json::from_value(fixture["presentViewer"].clone()).unwrap();
+    assert!(matches!(
+        command,
+        Command::PresentViewer {
+            placement: Placement::Default,
+            ..
+        }
+    ));
+    assert_eq!(serde_json::to_value(&command).unwrap(), fixture["presentViewer"]);
+
+    let placements: Vec<Placement> = serde_json::from_value(fixture["placements"].clone()).unwrap();
+    assert_eq!(placements.len(), 3);
+    assert_eq!(serde_json::to_value(&placements).unwrap(), fixture["placements"]);
+
+    let viewers: Vec<ViewerSpec> = serde_json::from_value(fixture["viewers"].clone()).unwrap();
+    assert_eq!(viewers.len(), 4);
+    assert_eq!(serde_json::to_value(&viewers).unwrap(), fixture["viewers"]);
+
+    let presented = CommandOutput::ViewerPresented {
+        workspace: WorkspaceId(1),
+        pane: PaneId(9),
+        tab: TabId(16),
+        active: true,
+    };
+    assert_eq!(serde_json::to_value(&presented).unwrap(), fixture["viewerPresented"]);
+
+    let layout: LayoutInfo = serde_json::from_value(fixture["layout"].clone()).unwrap();
+    assert_eq!(serde_json::to_value(&layout).unwrap(), fixture["layout"]);
+    assert_eq!(layout.focused, Some(PaneId(3)));
+    assert_ne!(Some(layout.self_pane), layout.focused);
 }

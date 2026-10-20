@@ -112,6 +112,7 @@ class App {
     this.viewEl,
     (cmd) => this.dispatchUI(cmd),
     this.tracer,
+    (message) => this.showError(message),
   );
   private readonly sidebar = new Sidebar(
     requireElement("sidebar"),

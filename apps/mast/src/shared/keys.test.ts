@@ -434,6 +434,7 @@ describe("activeTerminalCwd / pathBasename", () => {
         },
       },
       activePane: 1,
+      viewerPane: null,
       agentStatus: "idle",
       lastAgentMessage: null,
     };

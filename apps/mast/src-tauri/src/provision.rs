@@ -38,7 +38,7 @@ use crate::winlog;
 /// 설치 스크립트 버전. 마커 파일명(`~/.mast/.setup-v<N>`)에 들어가므로, 스크립트
 /// 내용을 바꿔 기존 사용자에게도 다시 깔아야 할 때 이 값을 올리면 된다 (마커가
 /// 달라져 전원 재실행). 스크립트 본문의 `@SETUP_VERSION@` 자리에 치환된다.
-const SETUP_VERSION: u32 = 24;
+const SETUP_VERSION: u32 = 25;
 
 /// 설치 스크립트 heredoc 에 통째로 들어가는 레포 파일들: (자리표시자, heredoc 종결 줄, 내용).
 ///
@@ -46,8 +46,13 @@ const SETUP_VERSION: u32 = 24;
 /// (`setup_script`). 그래서 설치된 파일은 레포 파일과 바이트 단위로 같다. 순서대로 치환하므로
 /// 앞서 넣은 파일에 뒤 자리표시자나 자기 종결 줄이 들어 있으면 스크립트가 조용히 깨진다 —
 /// 아래 `const _` 가 그 경우를 빌드 실패로 만든다.
-const EMBEDDED_FILES: [(&str, &str, &str); 17] = [
+const EMBEDDED_FILES: [(&str, &str, &str); 18] = [
     ("@BROWSER_HELPER@", "MAST_BROWSER_EOF", include_str!("../../../../scripts/wsl/mast-browser.py")),
+    (
+        "@PRESENTATION_HELPER@",
+        "MAST_PRESENTATION_EOF",
+        include_str!("../../../../scripts/wsl/mast-presentation.py"),
+    ),
     (
         "@CONFIG_HELPER@",
         "MAST_CONFIG_EOF",
@@ -907,12 +912,13 @@ fi
 # --- agent steps only ---------------------------------------------------------------------
 # 마커가 있으면 나머지 단계는 이미 끝났다. 다시 돌리면 사용자가 opt-out 으로 지운 Codex notify 줄·AGENTS.md 블록·
 # 훅 행이 버전이 바뀌지 않았는데도 되살아나므로, 남은 에이전트 단계만 설치된 파일로 돈다. 그 파일이 없으면 전체
-# 설치로 간다. 목록은 두 단계가 실행하는 파일, 설치한 훅이 실행하는 파일, 셸이 실행하는 자동 재실행 helper 전부다.
+# 설치로 간다. 목록은 두 단계가 실행하는 파일, 설치한 훅이 실행하는 파일, 셸이 실행하는 helper(자동 재실행, mast open/diff/layout) 전부다.
 # 빠진 채 이 경로를 돌면 병합이 매 실행 실패하거나 없는 파일을 가리키는 훅이 끝난 단계로 기록된다.
 if [ -f "$MARKER" ]; then
   missing=""
   for file in "$HOOKS_MERGE" "$MAST_HOME/bin/mast-agent-hook.py" "$MAST_HOME/bin/mast-codex-hook.sh" \
-      "$MAST_HOME/bin/mast-agy-hook.sh" "$NOTIFY" "$MAST_HOME/bin/mast-auto-resume.py"; do
+      "$MAST_HOME/bin/mast-agy-hook.sh" "$NOTIFY" "$MAST_HOME/bin/mast-auto-resume.py" \
+      "$MAST_HOME/bin/mast-presentation.py"; do
     [ -f "$file" ] || missing="$file"
   done
   if [ -z "$missing" ]; then
@@ -1214,6 +1220,11 @@ usage() {
   cat <<'MAST_USAGE_EOF'
 usage:
   mast browser --help                inspect and control browser tabs
+  mast layout                        print this workspace's panes and their sizes as JSON
+  mast open [--pane ID | --split ID right|down] [--] <path>
+                                     show a file in a Mast viewer pane (mast-open opens Windows apps instead)
+  mast diff [--pane ID | --split ID right|down] [--] [path]
+                                     show the Git changes of a repository in a Mast viewer pane
   mast ls                            list tabs in this workspace: TAB, TITLE, WORKSPACE, STATUS, COMMAND
   mast send [-l] <target> <text...>  type text into another pane (-l: pre-fill, do not submit)
   mast id                            print this tab's id ($MAST_TAB)
@@ -1589,6 +1600,7 @@ case "${1:-}" in
     exec python3 "$HOME/.mast/bin/mast-config.py" "$@"
     ;;
   browser) shift; exec python3 "$HOME/.mast/bin/mast-browser.py" "$@" ;;
+  layout|open|diff) exec python3 "$HOME/.mast/bin/mast-presentation.py" "$@" ;;
   ls) shift; cmd_ls "$@" ;;
   send) shift; cmd_send "$@" ;;
   id) shift; cmd_id "$@" ;;
@@ -1612,6 +1624,16 @@ cat > "$MAST_HOME/bin/mast-browser.py.tmp" <<'MAST_BROWSER_EOF'
 MAST_BROWSER_EOF
 if [ "$?" -ne 0 ] || ! mv -f "$MAST_HOME/bin/mast-browser.py.tmp" "$MAST_HOME/bin/mast-browser.py"; then
   echo "[mast] setup: cannot install browser CLI" >&2
+  exit 1
+fi
+
+cat > "$MAST_HOME/bin/mast-presentation.py.tmp" <<'MAST_PRESENTATION_EOF'
+@PRESENTATION_HELPER@
+MAST_PRESENTATION_EOF
+status=$?
+if [ "$status" -ne 0 ] || ! mv -f "$MAST_HOME/bin/mast-presentation.py.tmp" "$MAST_HOME/bin/mast-presentation.py"; then
+  rm -f "$MAST_HOME/bin/mast-presentation.py.tmp"
+  echo "[mast] setup: cannot install presentation CLI" >&2
   exit 1
 fi
 

@@ -6,9 +6,9 @@ state; the frontend receives revisioned snapshots and renders disposable views.
 | Location | Responsibility |
 | --- | --- |
 | `app/` | Desktop bootstrap, snapshot store, keyboard action wiring, activity reporting, update notice, quit/reload note flushing (`lifecycle.ts`) and app stylesheet. `app/main.ts` connects the features. |
-| `features/workspace/` | Sidebar, panes, tabs, split layout, view reconciliation and workspace switching. `workspace-view.ts` owns the terminal/viewer registries. |
+| `features/workspace/` | Sidebar, panes, tabs, split layout, view reconciliation and workspace switching. `workspace-view.ts` owns the terminal/viewer registries and restores DOM focus that a structural change moved out. `pane-geometry.ts` reports each pane's size for `mast layout`. |
 | `features/notepad/` | Right-side note drawer (`view.ts`, loaded on the first toggle) and the DOM-free save, draft-backup and boot-recovery state machine (`state.ts`), with tests beside them. |
-| `features/terminal/` | Live xterm view, shared terminal settings, attach framing, acknowledgements, scroll restoration, the macOS WebKit Hangul input adapter (`webkit-ime*.ts`) and the macOS Finder file drop (`file-drop.ts`). |
+| `features/terminal/` | Live xterm view, shared terminal settings, attach framing, acknowledgements, scroll restoration, the macOS WebKit Hangul input adapter (`webkit-ime*.ts`), the macOS Finder file drop (`file-drop.ts`) and the Ctrl/⌘+click file-path links in terminal output (`file-links.ts`). |
 | `features/viewers/` | Common viewer lifetime/font/scroll contracts; `text/`, `markdown/`, `folder/` and `record/` own their respective views. |
 | `features/changes/` | Git change selection and diff presentation. |
 | `features/pairing/` | Desktop phone-pairing dialog and firewall feedback. |

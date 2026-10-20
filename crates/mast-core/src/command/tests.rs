@@ -2517,6 +2517,7 @@ fn adopted_state() -> AppState {
             ]
             .into(),
             active_pane: PaneId(2),
+            viewer_pane: None,
             agent_status: AgentStatus::Idle,
             last_agent_message: None,
         }],
@@ -3932,4 +3933,454 @@ fn a_tab_moved_in_a_background_workspace_stays_unread() {
     })
     .unwrap();
     assert_eq!(tab_view(&d, a).notification, NotificationState::Unread);
+}
+
+// ---- 뷰어 자리·PresentViewer (C1) ----
+
+fn text_viewer(path: &str) -> ViewerSpec {
+    ViewerSpec::TextViewer { path: path.into() }
+}
+
+/// PresentViewer 를 보내고 (workspace, pane, tab, active) 를 돌려준다.
+fn present(
+    d: &mut Dispatcher,
+    source: TabId,
+    viewer: ViewerSpec,
+    placement: Placement,
+) -> (WorkspaceId, PaneId, TabId, bool) {
+    match d
+        .dispatch(Command::PresentViewer {
+            source,
+            viewer,
+            placement,
+        })
+        .unwrap()
+    {
+        CommandOutput::ViewerPresented {
+            workspace,
+            pane,
+            tab,
+            active,
+        } => (workspace, pane, tab, active),
+        other => panic!("unexpected output: {other:?}"),
+    }
+}
+
+/// 실패한 명령이 상태 전체(트리·탭·자리·활성·nextId·revision)를 그대로 두었는지 확인하고
+/// 오류를 돌려준다.
+fn failed_unchanged(d: &mut Dispatcher, cmd: Command) -> CommandError {
+    let before = d.state().clone();
+    let err = d.dispatch(cmd).unwrap_err();
+    assert_eq!(*d.state(), before, "실패한 PresentViewer 가 상태를 바꿨다");
+    err
+}
+
+fn pane_of(d: &Dispatcher, ws: WorkspaceId, pane: PaneId) -> &Pane {
+    &d.state().workspace(ws).unwrap().panes[&pane]
+}
+
+#[test]
+fn present_viewer_default_creates_one_right_split_and_reuses_it() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "w");
+    let (source, _) = create_terminal_tab(&mut d, pane);
+
+    let revision = d.state().revision;
+    let (got_ws, viewer_pane, first, active) =
+        present(&mut d, source, text_viewer("/a.txt"), Placement::Default);
+    assert_eq!(d.state().revision, revision + 1, "성공은 revision 을 한 번 올린다");
+    assert_eq!(got_ws, ws);
+    assert!(active, "새 pane 의 새 탭은 활성이다");
+    let w = d.state().workspace(ws).unwrap();
+    assert_eq!(w.viewer_pane, Some(viewer_pane));
+    assert_eq!(w.layout.leaves(), vec![pane, viewer_pane]);
+    assert!(matches!(
+        w.layout,
+        SplitTree::Split {
+            direction: SplitDirection::Horizontal,
+            ..
+        }
+    ));
+    // 분할은 활성 pane 을 옮기지 않는다.
+    assert_eq!(w.active_pane, pane);
+    assert_eq!(d.state().active_workspace, Some(ws));
+    assert_eq!(pane_of(&d, ws, viewer_pane).active_tab, Some(first));
+
+    // 두 번째 호출은 같은 자리에 탭을 더한다 — 자리는 하나뿐이다.
+    let revision = d.state().revision;
+    let (_, second_pane, second, second_active) =
+        present(&mut d, source, text_viewer("/b.txt"), Placement::Default);
+    assert_eq!(d.state().revision, revision + 1);
+    assert_eq!(second_pane, viewer_pane);
+    assert!(second_active, "활성 pane 이 아닌 자리의 새 탭은 표시된다");
+    assert_eq!(d.state().workspace(ws).unwrap().panes.len(), 2);
+    assert_eq!(pane_of(&d, ws, viewer_pane).tabs.len(), 2);
+    assert_eq!(pane_of(&d, ws, viewer_pane).active_tab, Some(second));
+}
+
+#[test]
+fn present_viewer_explicit_placements_do_not_move_the_slot() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "w");
+    let (source, _) = create_terminal_tab(&mut d, pane);
+    let (_, slot, _, _) = present(&mut d, source, text_viewer("/a.txt"), Placement::Default);
+
+    // 기존 pane 에 탭만 더한다.
+    let (_, pane_target, _, _) = present(
+        &mut d,
+        source,
+        text_viewer("/b.txt"),
+        Placement::Pane { pane },
+    );
+    assert_eq!(pane_target, pane);
+    assert_eq!(d.state().workspace(ws).unwrap().viewer_pane, Some(slot));
+
+    // 명시적 split 은 right 와 down 모두 자리를 바꾸지 않는다.
+    let (_, right, _, _) = present(
+        &mut d,
+        source,
+        text_viewer("/c.txt"),
+        Placement::Split {
+            pane,
+            direction: SplitDirection::Horizontal,
+        },
+    );
+    let (_, down, _, _) = present(
+        &mut d,
+        source,
+        text_viewer("/d.txt"),
+        Placement::Split {
+            pane,
+            direction: SplitDirection::Vertical,
+        },
+    );
+    let w = d.state().workspace(ws).unwrap();
+    assert_eq!(w.viewer_pane, Some(slot));
+    assert_eq!(w.layout.leaves().len(), 4);
+    assert_eq!(split_direction_into(&w.layout, right), Some(SplitDirection::Horizontal));
+    assert_eq!(split_direction_into(&w.layout, down), Some(SplitDirection::Vertical));
+    assert_eq!(w.active_pane, pane, "명시적 split 도 활성 pane 을 옮기지 않는다");
+}
+
+/// `new_pane` 을 second 자식으로 붙인 split 노드의 방향 (없으면 None).
+fn split_direction_into(tree: &SplitTree, new_pane: PaneId) -> Option<SplitDirection> {
+    match tree {
+        SplitTree::Leaf { .. } => None,
+        SplitTree::Split {
+            direction,
+            first,
+            second,
+            ..
+        } => {
+            if matches!(**second, SplitTree::Leaf { pane } if pane == new_pane) {
+                Some(*direction)
+            } else {
+                split_direction_into(first, new_pane).or_else(|| split_direction_into(second, new_pane))
+            }
+        }
+    }
+}
+
+#[test]
+fn explicit_split_on_a_workspace_without_a_slot_leaves_it_empty() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "w");
+    let (source, _) = create_terminal_tab(&mut d, pane);
+    present(
+        &mut d,
+        source,
+        text_viewer("/a.txt"),
+        Placement::Split {
+            pane,
+            direction: SplitDirection::Vertical,
+        },
+    );
+    assert_eq!(d.state().workspace(ws).unwrap().viewer_pane, None);
+}
+
+#[test]
+fn present_viewer_failures_leave_every_field_untouched() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "a");
+    let (source, _) = create_terminal_tab(&mut d, pane);
+    let (other_ws, other_pane) = create_ws(&mut d, "b");
+    let (viewer_tab, _) = match d
+        .dispatch(Command::CreateTab {
+            pane,
+            tab: NewTab::TextViewer {
+                path: "/v.txt".into(),
+            },
+        })
+        .unwrap()
+    {
+        CommandOutput::TabCreated { tab, session } => (tab, session),
+        other => panic!("unexpected output: {other:?}"),
+    };
+    let (split_pane, _) = split_empty(&mut d, pane, SplitDirection::Horizontal);
+    d.dispatch(Command::ClosePane { pane: split_pane }).unwrap();
+    d.dispatch(Command::SwitchWorkspace { workspace: ws }).unwrap();
+
+    let present_cmd = |source: TabId, placement: Placement| Command::PresentViewer {
+        source,
+        viewer: text_viewer("/x.txt"),
+        placement,
+    };
+
+    // 없는 source.
+    let err = failed_unchanged(&mut d, present_cmd(TabId(9_999), Placement::Default));
+    assert!(matches!(err, CommandError::UnknownTarget { .. }), "{err:?}");
+    // 터미널이 아닌 source.
+    let err = failed_unchanged(&mut d, present_cmd(viewer_tab, Placement::Default));
+    assert!(matches!(err, CommandError::KindMismatch { .. }), "{err:?}");
+    // 다른 워크스페이스의 pane.
+    let err = failed_unchanged(
+        &mut d,
+        present_cmd(source, Placement::Pane { pane: other_pane }),
+    );
+    assert!(matches!(err, CommandError::UnknownTarget { .. }), "{err:?}");
+    // 사라진 pane (닫힌 뒤 낡은 ID).
+    let err = failed_unchanged(
+        &mut d,
+        present_cmd(
+            source,
+            Placement::Split {
+                pane: split_pane,
+                direction: SplitDirection::Horizontal,
+            },
+        ),
+    );
+    assert!(matches!(err, CommandError::UnknownTarget { .. }), "{err:?}");
+    // 상대 경로는 준비 단계에서 거부된다 — 자리도 id 도 만들지 않는다.
+    let err = failed_unchanged(
+        &mut d,
+        Command::PresentViewer {
+            source,
+            viewer: text_viewer("relative.txt"),
+            placement: Placement::Default,
+        },
+    );
+    assert!(matches!(err, CommandError::InvalidPath { .. }), "{err:?}");
+    assert_eq!(d.state().workspace(ws).unwrap().viewer_pane, None);
+    assert_eq!(d.state().workspace(other_ws).unwrap().viewer_pane, None);
+}
+
+#[test]
+fn present_viewer_keeps_the_active_tab_of_the_active_pane() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "w");
+    let (source, _) = create_terminal_tab(&mut d, pane);
+    let (split_pane, _) = split_empty(&mut d, pane, SplitDirection::Horizontal);
+    d.dispatch(Command::FocusPane { pane }).unwrap();
+
+    // 활성 pane 의 활성 탭은 그대로 두고 새 탭은 뒤에 쌓인다.
+    let active_before = pane_of(&d, ws, pane).active_tab;
+    let (_, _, tab, active) = present(&mut d, source, text_viewer("/a.txt"), Placement::Pane { pane });
+    assert!(!active);
+    assert_eq!(pane_of(&d, ws, pane).active_tab, active_before);
+    assert!(pane_of(&d, ws, pane).tabs.iter().any(|t| t.id == tab));
+
+    // 비활성 pane 이 대상이면 새 탭이 그 pane 에서 표시되고, 활성 pane 은 그대로다.
+    let (_, _, tab2, active2) =
+        present(&mut d, source, text_viewer("/b.txt"), Placement::Pane { pane: split_pane });
+    assert!(active2);
+    assert_eq!(pane_of(&d, ws, split_pane).active_tab, Some(tab2));
+    assert_eq!(d.state().workspace(ws).unwrap().active_pane, pane);
+}
+
+#[test]
+fn present_viewer_leaves_the_active_workspace_alone() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "a");
+    let (source, _) = create_terminal_tab(&mut d, pane);
+    let (other, _) = create_ws(&mut d, "b");
+    assert_eq!(d.state().active_workspace, Some(other));
+
+    let (got, _, _, _) = present(&mut d, source, text_viewer("/a.txt"), Placement::Default);
+    assert_eq!(got, ws);
+    assert_eq!(d.state().active_workspace, Some(other));
+    assert!(d.state().workspace(ws).unwrap().viewer_pane.is_some());
+}
+
+#[test]
+fn viewer_slot_is_released_when_its_pane_collapses() {
+    // CloseTab 으로 자리 pane 이 접힌 뒤 다음 default 호출은 새 자리를 만든다.
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "w");
+    let (source, _) = create_terminal_tab(&mut d, pane);
+    let (_, slot, tab, _) = present(&mut d, source, text_viewer("/a.txt"), Placement::Default);
+    d.dispatch(Command::CloseTab { tab }).unwrap();
+    assert_eq!(d.state().workspace(ws).unwrap().viewer_pane, None);
+    let (_, fresh, _, _) = present(&mut d, source, text_viewer("/b.txt"), Placement::Default);
+    assert_ne!(fresh, slot);
+    assert_eq!(d.state().workspace(ws).unwrap().viewer_pane, Some(fresh));
+
+    // ClosePane 도 자리를 푼다.
+    d.dispatch(Command::ClosePane { pane: fresh }).unwrap();
+    assert_eq!(d.state().workspace(ws).unwrap().viewer_pane, None);
+
+    // MoveTab 으로 자리 pane 이 비어 접혀도 풀린다.
+    let (_, slot3, tab3, _) = present(&mut d, source, text_viewer("/c.txt"), Placement::Default);
+    d.dispatch(Command::MoveTab {
+        tab: tab3,
+        pane,
+        before: None,
+    })
+    .unwrap();
+    assert!(!d.state().workspace(ws).unwrap().panes.contains_key(&slot3));
+    assert_eq!(d.state().workspace(ws).unwrap().viewer_pane, None);
+}
+
+#[test]
+fn viewer_slot_survives_as_the_empty_last_pane() {
+    // 자리 pane 이 워크스페이스의 마지막 pane 으로 비어 남으면 자리는 유효하고, 다음 호출이 그 pane 을 재사용한다.
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "w");
+    let (source, _) = create_terminal_tab(&mut d, pane);
+    let (_, slot, viewer_tab, _) =
+        present(&mut d, source, text_viewer("/a.txt"), Placement::Default);
+
+    // 원래 pane 이 접히고 자리 pane 만 남는다 — 자리는 그대로다.
+    d.dispatch(Command::CloseTab { tab: source }).unwrap();
+    assert_eq!(d.state().workspace(ws).unwrap().panes.len(), 1);
+    assert_eq!(d.state().workspace(ws).unwrap().viewer_pane, Some(slot));
+
+    // 마지막 pane 의 마지막 탭을 닫아도 pane 은 빈 채 남고 자리로 유지된다.
+    d.dispatch(Command::CloseTab { tab: viewer_tab }).unwrap();
+    assert_eq!(d.state().workspace(ws).unwrap().viewer_pane, Some(slot));
+    assert!(pane_of(&d, ws, slot).tabs.is_empty());
+
+    // 다음 호출은 새 split 없이 그 pane 을 재사용한다. 활성 pane 의 활성 탭이 생겼으므로 뒤에 쌓인다.
+    let (source2, _) = create_terminal_tab(&mut d, slot);
+    let (_, reused, _, active) = present(&mut d, source2, text_viewer("/b.txt"), Placement::Default);
+    assert_eq!(reused, slot);
+    assert!(!active);
+    assert_eq!(d.state().workspace(ws).unwrap().panes.len(), 1);
+}
+
+#[test]
+fn layout_for_session_reports_the_nested_tree_tabs_and_focus() {
+    let (mut d, _host) = dispatcher();
+    let (ws, p1) = create_ws(&mut d, "w");
+    let (t1, s1) = match d
+        .dispatch(Command::CreateTab {
+            pane: p1,
+            tab: NewTab::Terminal {
+                cwd: Some("/work".into()),
+            },
+        })
+        .unwrap()
+    {
+        CommandOutput::TabCreated {
+            tab,
+            session: Some(s),
+        } => (tab, s),
+        other => panic!("unexpected output: {other:?}"),
+    };
+    let (p2, split_a) = match d
+        .dispatch(Command::SplitPane {
+            pane: p1,
+            direction: SplitDirection::Horizontal,
+            tab: Some(NewTab::Browser {
+                url: "https://example.com/docs".into(),
+            }),
+        })
+        .unwrap()
+    {
+        CommandOutput::PaneCreated { pane, split, .. } => (pane, split),
+        other => panic!("unexpected output: {other:?}"),
+    };
+    let (p3, split_b) = match d
+        .dispatch(Command::SplitPane {
+            pane: p2,
+            direction: SplitDirection::Vertical,
+            tab: Some(NewTab::Terminal { cwd: None }),
+        })
+        .unwrap()
+    {
+        CommandOutput::PaneCreated { pane, split, .. } => (pane, split),
+        other => panic!("unexpected output: {other:?}"),
+    };
+    d.dispatch(Command::ResizeSplit {
+        split: split_b,
+        ratio: 0.3,
+    })
+    .unwrap();
+    let folder = match d
+        .dispatch(Command::CreateTab {
+            pane: p1,
+            tab: NewTab::FolderBrowser {
+                path: Some("/work".into()),
+            },
+        })
+        .unwrap()
+    {
+        CommandOutput::TabCreated { tab, .. } => tab,
+        other => panic!("unexpected output: {other:?}"),
+    };
+    // 활성 pane 은 마지막 분할로 p3 이다. self(p1)와 focused(p3)가 달라야 한다.
+    let before = d.state().clone();
+
+    let info = d.layout_for_session(s1).expect("호출자 세션은 조회된다");
+    assert_eq!(*d.state(), before, "조회는 상태를 바꾸지 않는다");
+    assert_eq!(info.workspace, ws);
+    assert_eq!(info.revision, before.revision);
+    assert_eq!(info.self_pane, p1);
+    assert_eq!(info.focused, Some(p3));
+    assert_eq!(info.viewer_pane, None);
+    assert_eq!(
+        info.tree,
+        SplitTree::Split {
+            id: split_a,
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(SplitTree::Leaf { pane: p1 }),
+            second: Box::new(SplitTree::Split {
+                id: split_b,
+                direction: SplitDirection::Vertical,
+                ratio: 0.3,
+                first: Box::new(SplitTree::Leaf { pane: p2 }),
+                second: Box::new(SplitTree::Leaf { pane: p3 }),
+            }),
+        }
+    );
+    assert_eq!(
+        info.panes.iter().map(|p| p.id).collect::<Vec<_>>(),
+        vec![p1, p2, p3]
+    );
+    let p1_info = &info.panes[0];
+    assert_eq!(p1_info.active_tab, Some(folder));
+    assert_eq!(p1_info.tabs[0].id, t1);
+    let tabs: Vec<(&str, Option<&str>, Option<&str>)> = info
+        .panes
+        .iter()
+        .flat_map(|p| &p.tabs)
+        .map(|t| (t.kind.as_str(), t.path.as_deref(), t.url.as_deref()))
+        .collect();
+    assert_eq!(
+        tabs,
+        vec![
+            ("terminal", Some("/work"), None),
+            ("folderBrowser", Some("/work"), None),
+            ("browser", None, Some("https://example.com/docs")),
+            ("terminal", None, None),
+        ]
+    );
+}
+
+#[test]
+fn layout_for_session_nulls_focus_for_an_inactive_workspace() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "a");
+    let (source, s1) = create_terminal_tab(&mut d, pane);
+    let (_, slot, _, _) = present(&mut d, source, text_viewer("/a.txt"), Placement::Default);
+    assert_eq!(d.layout_for_session(s1).unwrap().focused, Some(pane));
+    assert_eq!(d.layout_for_session(s1).unwrap().viewer_pane, Some(slot));
+
+    create_ws(&mut d, "b");
+    let info = d.layout_for_session(s1).unwrap();
+    assert_eq!(info.focused, None, "다른 워크스페이스가 활성이면 focused 는 null");
+    assert_eq!(info.viewer_pane, Some(slot));
+    assert_eq!(info.workspace, ws);
+
+    assert_eq!(d.layout_for_session(9_999), None, "알 수 없는 세션은 None");
 }

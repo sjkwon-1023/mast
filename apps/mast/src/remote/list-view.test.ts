@@ -70,6 +70,7 @@ function ws(
     layout: { type: "leaf", pane: id },
     panes: { [String(id)]: pane },
     activePane: id,
+    viewerPane: null,
     agentStatus: opts.agentStatus ?? "idle",
     lastAgentMessage: null,
   };

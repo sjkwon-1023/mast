@@ -34,6 +34,7 @@ use mast_core::session::{SessionId, SessionManager};
 use mast_core::wsl::WslHealth;
 
 use crate::boot::BootWork;
+use crate::presentation::PaneGeometry;
 use crate::reset_supervisor::ResetSupervisor;
 use crate::router::OscRouter;
 use crate::sink::TerminalSink;
@@ -118,6 +119,9 @@ pub struct AppState {
     /// 패닉 하나가 표식을 영원히 세워 둔 채 되감기고, 그 뒤의 검사는 전부 조용히
     /// 판정을 버린다.
     pub exits_in_flight: Mutex<HashSet<SessionId>>,
+    /// 뷰어 표시의 pane 크기 보고 — 디스크에 쓰지 않고 pane 수에 묶여 정리된다
+    /// ([`crate::presentation`]).
+    pub pane_geometry: PaneGeometry,
 }
 
 /// 진행 중인 exit 표식의 RAII 가드 — 살아 있는 동안 그 세션 id 가

@@ -90,6 +90,17 @@ class NativeCli(unittest.TestCase):
             sys.executable,
             [sys.executable, str(cli.BIN / "mast-browser.py"), "snapshot", "#42"])
 
+    def test_presentation_commands_hand_their_name_and_arguments_to_the_shared_helper(self):
+        with patch.object(cli.os, "execv") as execv:
+            cli.main(["open", "--pane", "3", "/x"])
+        execv.assert_called_once_with(
+            sys.executable,
+            [sys.executable, str(cli.BIN / "mast-presentation.py"), "open", "--pane", "3", "/x"])
+
+    def test_the_macos_bundle_ships_the_presentation_helper(self):
+        source = (ROOT / "apps/mast/src-tauri/src/platform/macos.rs").read_text(encoding="utf-8")
+        self.assertIn('asset!("bin/mast-presentation.py", "wsl/mast-presentation.py"),', source)
+
 
 class NativeUpdate(unittest.TestCase):
     URL = "https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos/install.sh"

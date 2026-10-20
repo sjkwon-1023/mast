@@ -89,6 +89,7 @@ function workspace(id: number): Workspace {
     layout: { type: "leaf", pane: id },
     panes: { [String(id)]: { id, tabs: [], activeTab: null } },
     activePane: id,
+    viewerPane: null,
     agentStatus: "idle",
     lastAgentMessage: null,
   };

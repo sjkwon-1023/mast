@@ -5,10 +5,10 @@ use mast_core::git::{GitDiff, GitDiffRequest, GitStatus};
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 const MAX_IN_FLIGHT: usize = 4;
 
-struct GitSlot;
+pub(crate) struct GitSlot;
 
 impl GitSlot {
-    fn acquire() -> Result<Self, String> {
+    pub(crate) fn acquire() -> Result<Self, String> {
         IN_FLIGHT
             .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < MAX_IN_FLIGHT).then_some(n + 1)
@@ -24,7 +24,7 @@ impl Drop for GitSlot {
     }
 }
 
-fn distro(distro: Option<String>) -> Option<String> {
+pub(crate) fn distro(distro: Option<String>) -> Option<String> {
     distro
         .filter(|s| !s.is_empty())
         .or_else(|| std::env::var("MAST_DISTRO").ok().filter(|s| !s.is_empty()))

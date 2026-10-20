@@ -895,6 +895,7 @@ mod tests {
                 },
             )]),
             active_pane: pane_id,
+            viewer_pane: None,
             agent_status: AgentStatus::Idle,
             last_agent_message: None,
         }

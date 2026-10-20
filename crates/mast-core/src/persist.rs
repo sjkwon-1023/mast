@@ -33,6 +33,8 @@
 //!   읽히고, 되살릴 길은 pane 배너의 Restart 다 — ADR-0010 의 되돌림은 그 버튼이 없던
 //!   시절 "되살릴 길이 아예 없다"를 푸는 장치였다. 되돌리면 사용자가 의도적으로 끝낸
 //!   셸까지 앱을 켤 때마다 되살아난다.
+//! - `viewerPane` 이 그 워크스페이스의 pane 이 아니면 null 로 비우고 사유를 남긴다.
+//!   뷰어 자리는 다음 옵션 없는 `PresentViewer` 가 다시 정하므로 복구할 값이 아니다.
 //! - `next_id` 가 사용 중인 최대 안정 id(워크스페이스·pane·탭·**split** 포함 —
 //!   split 노드도 같은 단일 카운터 발급, ADR-0003) 이하면 `max+1` 로 수리하고
 //!   사유를 [`LoadOutcome::Restored`] 의 `repairs` 로 보고한다.
@@ -382,6 +384,15 @@ fn sanitize(state: &mut AppState, reserved_max_id: Option<u64>) -> Result<Vec<St
     for ws in &mut state.workspaces {
         ws.agent_status = AgentStatus::Idle;
         ws.last_agent_message = None;
+        if let Some(viewer) = ws.viewer_pane {
+            if !ws.panes.contains_key(&viewer) {
+                ws.viewer_pane = None;
+                repairs.push(format!(
+                    "viewer pane {viewer:?} of workspace {:?} is not one of its panes — cleared",
+                    ws.id
+                ));
+            }
+        }
         for pane in ws.panes.values_mut() {
             for tab in &mut pane.tabs {
                 if let TabKind::Terminal {
@@ -770,6 +781,7 @@ mod tests {
                 ]
                 .into(),
                 active_pane: PaneId(2),
+                viewer_pane: None,
                 agent_status: AgentStatus::Idle,
                 last_agent_message: None,
             }],
@@ -953,6 +965,54 @@ mod tests {
             .unwrap()
             .remove("3");
         assert_corrupt_value(value);
+    }
+
+    #[test]
+    fn viewer_pane_roundtrips_and_a_dangling_one_is_repaired() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        let mut state = sample_state(None, 100);
+        state.workspaces[0].viewer_pane = Some(PaneId(3));
+        save_atomic(&path, &state).unwrap();
+        let LoadOutcome::Restored {
+            state: restored,
+            repairs,
+        } = load(&path)
+        else {
+            panic!("a valid viewer pane must restore");
+        };
+        assert_eq!(restored.workspaces[0].viewer_pane, Some(PaneId(3)));
+        assert!(repairs.is_empty(), "round-trip repairs: {repairs:?}");
+
+        // 워크스페이스에 없는 pane 을 가리키면 자리만 비우고 사유를 남긴다.
+        let mut value = raw_persisted_value(sample_state(None, 100));
+        value["state"]["workspaces"][0]["viewerPane"] = serde_json::json!(99);
+        write_raw(&path, &value);
+        let LoadOutcome::Restored { state, repairs } = load(&path) else {
+            panic!("a dangling viewer pane is repaired, not corrupt");
+        };
+        assert_eq!(state.workspaces[0].viewer_pane, None);
+        assert_eq!(
+            repairs,
+            vec!["viewer pane PaneId(99) of workspace WorkspaceId(1) is not one of its panes — cleared"]
+        );
+    }
+
+    #[test]
+    fn legacy_state_without_viewer_pane_loads_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        let mut value = raw_persisted_value(sample_state(None, 100));
+        value["state"]["workspaces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("viewerPane");
+        write_raw(&path, &value);
+        let LoadOutcome::Restored { state, repairs } = load(&path) else {
+            panic!("a state from before the viewer slot must restore");
+        };
+        assert_eq!(state.workspaces[0].viewer_pane, None);
+        assert!(repairs.is_empty(), "legacy repairs: {repairs:?}");
     }
 
     #[test]

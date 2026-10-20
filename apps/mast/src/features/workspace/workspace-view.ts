@@ -86,6 +86,12 @@ function collectLeaves(tree: SplitTree, out: Set<PaneId>): void {
   collectLeaves(tree.second, out);
 }
 
+/** root 안에서 현재 포커스된 요소. root 밖(사이드바·메모장 등)의 포커스는 재구축과 무관하다. */
+function focusedWithin(root: HTMLElement): HTMLElement | null {
+  const active = document.activeElement;
+  return active instanceof HTMLElement && root.contains(active) ? active : null;
+}
+
 export class WorkspaceView {
   private readonly paneViews = new Map<PaneId, PaneView>();
   private readonly splitContainers = new Map<SplitId, HTMLElement>();
@@ -147,6 +153,8 @@ export class WorkspaceView {
     /** 전환 지연 tracer — ensureView 의 새 attach 를 계측 대상으로
      *  등록한다. trace 미진행 시 markAttachStart 가 즉시 false 라 오버헤드 없음. */
     private readonly tracer: SwitchTracer,
+    /** 터미널 파일 링크 실패를 상태 라인에 보이는 경로. 없으면 콘솔에만 남긴다. */
+    private readonly showError?: (message: string) => void,
   ) {
     window.addEventListener("pagehide", this.captureLiveScroll);
   }
@@ -239,13 +247,17 @@ export class WorkspaceView {
     }
 
     const key = structureKey(ws.layout);
-    if (key !== this.lastKey) {
+    const structural = key !== this.lastKey;
+    // 재구축은 pane DOM 을 옮기며, 옮겨진 요소는 포커스를 잃는다. 그 요소를 먼저 기억한다.
+    const focusedBeforeMove = structural ? focusedWithin(this.rootEl) : null;
+    if (structural) {
       this.rebuild(ws.layout);
       this.lastKey = key;
     } else {
       this.syncRatios(ws.layout);
     }
     this.updatePanes(ws, plan.visible, viewerPlan.mount);
+    this.restoreMovedFocus(focusedBeforeMove);
 
     // 부트/리로드 보상 focus (D7) — 첫 리컨실 후 활성 pane 의 뷰 1곳.
     if (!this.booted) {
@@ -390,6 +402,7 @@ export class WorkspaceView {
       session,
       onTraceReplayDone,
       this.scrollMemory.take(tab, session),
+      this.showError,
     );
     this.views.set(tab, created);
     created.attach().catch((err) => {
@@ -471,6 +484,16 @@ export class WorkspaceView {
     // inline flex 를 확정값으로 덮는다.
     built.style.flex = "1 1 0px";
     this.rootEl.replaceChildren(built);
+  }
+
+  /** 구조 변경 뒤 포커스가 DOM 이동 때문에 body 로 떨어졌으면 기억한 요소에 한 번 되돌린다 (D02 불변식 6).
+   *  사용자가 다른 요소로 포커스를 옮겼거나 요소가 사라졌다면 손대지 않는다. UI dispatch 의 포커스 보상은
+   *  이 뒤에 requestFocus 로 처리되므로 여기서 우선권을 다투지 않는다. */
+  private restoreMovedFocus(element: HTMLElement | null): void {
+    if (element === null || !element.isConnected || !this.rootEl.contains(element)) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    element.focus();
   }
 
   private buildNode(tree: SplitTree): HTMLElement {

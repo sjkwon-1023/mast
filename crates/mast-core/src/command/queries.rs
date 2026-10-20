@@ -1,7 +1,7 @@
 //! 탭·세션 위치와 워크스페이스 안의 에이전트 전송 대상을 조회한다.
 
-use super::{unknown, CommandError, Dispatcher, TabInfo};
-use crate::model::{PaneId, TabId, TabKind, TerminalStatus};
+use super::{unknown, CommandError, Dispatcher, LayoutInfo, LayoutPane, LayoutTab, TabInfo};
+use crate::model::{PaneId, Tab, TabId, TabKind, TerminalStatus};
 use crate::send::SendTargetError;
 use crate::session::SessionId;
 
@@ -129,6 +129,36 @@ impl Dispatcher {
         out
     }
 
+    /// 요청자 세션이 속한 워크스페이스의 배치를 상태·revision을 바꾸지 않고 돌려준다.
+    /// 알 수 없는 세션은 None이다. `focused`는 그 워크스페이스가 활성일 때만 activePane이다.
+    /// pane 크기는 여기 없다 (글루가 보고된 값을 합친다).
+    pub fn layout_for_session(&self, requester: SessionId) -> Option<LayoutInfo> {
+        let (wi, self_pane, _) = self.locate_session(requester)?;
+        let ws = &self.state.workspaces[wi];
+        let panes = ws
+            .layout
+            .leaves()
+            .into_iter()
+            .map(|pane_id| {
+                let pane = &ws.panes[&pane_id];
+                LayoutPane {
+                    id: pane.id,
+                    active_tab: pane.active_tab,
+                    tabs: pane.tabs.iter().map(layout_tab).collect(),
+                }
+            })
+            .collect();
+        Some(LayoutInfo {
+            workspace: ws.id,
+            revision: self.state.revision,
+            self_pane,
+            focused: (self.state.active_workspace == Some(ws.id)).then_some(ws.active_pane),
+            viewer_pane: ws.viewer_pane,
+            tree: ws.layout.clone(),
+            panes,
+        })
+    }
+
     /// `pane` 을 소유한 워크스페이스의 인덱스 (전 워크스페이스 범위 탐색).
     pub(super) fn ws_index_of_pane(&self, pane: PaneId) -> Result<usize, CommandError> {
         self.state
@@ -188,6 +218,25 @@ impl Dispatcher {
             }
         }
         Err(unknown("tab", tab.0))
+    }
+}
+
+/// 배치 응답의 탭 한 개. 터미널은 cwd, 뷰어는 경로, 브라우저는 URL을 싣는다.
+fn layout_tab(tab: &Tab) -> LayoutTab {
+    let (kind, path, url) = match &tab.kind {
+        TabKind::Terminal { cwd, .. } => ("terminal", cwd.clone(), None),
+        TabKind::FolderBrowser { path } => ("folderBrowser", Some(path.clone()), None),
+        TabKind::ChangesViewer { path } => ("changesViewer", Some(path.clone()), None),
+        TabKind::TextViewer { path, .. } => ("textViewer", Some(path.clone()), None),
+        TabKind::MarkdownViewer { path, .. } => ("markdownViewer", Some(path.clone()), None),
+        TabKind::Browser { url } => ("browser", None, Some(url.clone())),
+    };
+    LayoutTab {
+        id: tab.id,
+        kind: kind.to_owned(),
+        title: tab.title.clone(),
+        path,
+        url,
     }
 }
 

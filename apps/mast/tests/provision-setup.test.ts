@@ -90,6 +90,7 @@ afterAll(() => {
 const INSTALLED_FROM_REPO: [name: string, executable: boolean][] = [
   ["mast-config.py", false],
   ["mast-browser.py", false],
+  ["mast-presentation.py", false],
   ["mast-hooks-merge.py", false],
   ["mast-agent-hook.py", false],
   ["mast-auto-resume.py", false],
@@ -797,6 +798,23 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(log).not.toContain(AGENT_ONLY_LOG);
   });
 
+  it("installs the presentation helper on an upgrade from a v24 install that had no helper", () => {
+    const distro = new Distro().withAgents();
+    expect(distro.run().status).toBe(0);
+    const helper = distro.path(".mast", "bin", "mast-presentation.py");
+    rmSync(helper);
+    for (const suffix of ["", "-codex", "-agy"]) {
+      renameSync(distro.path(".mast", `.setup-v${VERSION}${suffix}`), distro.path(".mast", `.setup-v24${suffix}`));
+    }
+    const before = distro.log();
+
+    expect(distro.run()).toEqual({ status: 0, stdout: "", stderr: [] });
+    expect(readFileSync(helper, "utf8")).toBe(readFileSync(join(WSL_SCRIPTS, "mast-presentation.py"), "utf8"));
+    expect(distro.marker()).toBe(true);
+    expect(existsSync(distro.path(".mast", ".setup-v24"))).toBe(true);
+    expect(distro.log().slice(before.length)).toContain(FULL_RUN_LOG);
+  });
+
   it("skips the Codex and Antigravity CLI hooks behind their opt-out markers and records both steps as done", () => {
     const distro = new Distro().withAgents();
     distro.write(distro.path(".mast", "no-codex-hooks"), "");
@@ -1070,7 +1088,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
   });
 
-  it.each(["mast-hooks-merge.py", "mast-agent-hook.py", "mast-codex-hook.sh", "mast-agy-hook.sh", "mast-notify.sh", "mast-auto-resume.py"])(
+  it.each(["mast-hooks-merge.py", "mast-agent-hook.py", "mast-codex-hook.sh", "mast-agy-hook.sh", "mast-notify.sh", "mast-auto-resume.py", "mast-presentation.py"])(
     "runs every step again, once, when %s is missing from ~/.mast/bin",
     (name) => {
       const distro = new Distro();
@@ -1895,6 +1913,19 @@ linuxSuite("mast update (WSL CLI and the Windows PowerShell handoff)", { timeout
 
     expect(help.status).toBe(0);
     expect(help.stdout).toContain("\n  mast update                        update mast on Windows via its installer script\n");
+  });
+
+  it("routes layout, open and diff in the installed CLI to the installed helper", () => {
+    const cli = installed.path(".mast", "bin", "mast");
+    const env = { HOME: installed.home, PATH: installed.tools };
+
+    const outside = spawnSync(tools.bash, [cli, "open", "/x"], { env, encoding: "utf8", timeout: 10_000 });
+    expect(outside.status).toBe(1);
+    expect(JSON.parse(outside.stderr)).toEqual({ error: { code: "io_error", message: "run inside a Mast terminal" } });
+
+    const usage = spawnSync(tools.bash, [cli, "diff", "--pane", "0"], { env, encoding: "utf8", timeout: 10_000 });
+    expect(usage.status).toBe(2);
+    expect(usage.stderr).toContain("usage: mast diff [--pane ID | --split ID right|down] [--] [path]");
   });
 
   it("replaces a v22 CLI without update, writes the v23 marker, and keeps both on a rerun", () => {
