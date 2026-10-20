@@ -7,6 +7,11 @@ item 4
 **Amended by [ADR-0018](0018-exited-tab-as-terminal-record.md)** (2026-09-12): restore keeps
 `Exited` and reverts only `NotStarted`; the forensics below are left as they were observed.
 
+**Amended again by [ADR-0018](0018-exited-tab-as-terminal-record.md)** (2026-10-20): restore now
+also revives `Exited { code: Some(0x40010004) }`, the code a Windows restart
+records when WSL goes down before mast. The 2026-08-20 forensics below stay as observed —
+`1073807364` is still the code that incident produced, and this new policy does not reinterpret it.
+
 ## Context
 
 A user reported that every terminal tab came back dead after closing and reopening the app on

@@ -67,7 +67,8 @@ MVP.
 - **Terminal modes after reattach** (ADR-0015): the alt screen is deliberately not
   re-asserted, so a TUI whose `?1049h` was evicted returns on the normal buffer; a paste
   during the replay gate is logged, not buffered.
-- **Korean input on Windows still drops or overwrites syllables** (ADR-0020, amended 2026-10-18).
+- **Korean input on Windows still drops or overwrites syllables — diagnostics added 2026-10-20,
+  waiting for the next reproduction** (ADR-0020, amended 2026-10-20). The cause is not confirmed.
   `@xterm/xterm` 6.0.0 ships the upstream composition fix and the 5.5 build-time patch is gone, but
   the field reports continue on 6.0: `수준이야` → `주주ㅇ야` (2026-10-18) and `이미지` → `미미지`
   (2026-10-19), each an earlier syllable overwritten by the next one, rarely. Once it happens it
@@ -75,13 +76,18 @@ MVP.
   22:15:31 holds the only out-of-order sequence among 809 composition events in that window: a
   `compositionstart` before the open composition ended, then an `update` and a second `end` after it
   closed — Microsoft IME overlapping compositions, which xterm's composition helper does not handle
-  (upstream #6049 family; #6089 and #5778/#6140 also remain). Unconfirmed: whether those bytes reached
-  the PTY (mast) or only the agent's input box — capture with `cat > /tmp/ime.txt` and `xxd` while the
-  bad state persists, from another pane reached with `Alt+Shift+arrows` (WINDOWS-BUILD §10 F1).
-  Candidates, smallest first: detect the overlapping sequence and blur/refocus xterm's textarea, the
-  reset an app switch performs; otherwise a Windows input adapter that commits from the textarea
-  value, like the macOS `webkit-ime.ts`. The `shared/keys.ts` `isComposing` guard and the composition
-  log lines (ADR-0014) stay.
+  (upstream #6049 family; #6089 and #5778/#6140 also remain). The user remembers that in the bad state
+  a neighbouring pane's ordinary shell also received the wrong characters, so the bytes likely reach
+  the PTY and the stuck state is shared across panes (each pane has its own xterm and textarea) —
+  confirm with `cat > /tmp/ime.txt` and `xxd` from another pane reached with `Alt+Shift+arrows` while
+  the bad state persists (WINDOWS-BUILD §10 F1). The opt-in log now writes `ime: commit match=…` (or
+  `match=unknown reason=…`) per terminal bundle — whether the committed text equals xterm's `onData`,
+  with bounds and no content — and `pane: focus from=… to=…` from the same install (ADR-0020
+  amendment). The next reproduction picks the fix: `match=true` with wrong text points at the IME or
+  WebView2 side, where a per-textarea blur/refocus is unlikely to help (a pane switch already moves
+  focus between textareas); `match=false` points at xterm, where a Windows input adapter that commits
+  from the textarea value, like the macOS `webkit-ime.ts`, is the candidate. The `shared/keys.ts` `isComposing` guard and the
+  composition log lines (ADR-0014) stay.
 - **Splitter resize is mouse-drag only.**
 - **Per-pane split-button affordance** (ADR-0004): a first-time user read the header
   buttons as "split the selected pane".
@@ -126,8 +132,9 @@ MVP.
   auto-resume field verification"). `autoResume` ships default off with no device run recorded. Accepted:
   a session with no written hint is not restored; a bash tab that starts before setup refreshes
   `integration.sh` shows only the manual hint; an agent exited inside a nested shell left open at quit runs once
-  at the next boot (only a bash nested under a WSL bash root is protected); the dead-tab case (`0x40010004`) and Windows shutdown are out
-  of scope.
+  at the next boot (only a bash nested under a WSL bash root is protected). The dead-tab case
+  (`0x40010004`) and Windows shutdown were out of scope of that amendment; ADR-0018's 2026-10-20
+  amendment now revives that code at boot, so those tabs reach the resume rules above.
 
 #### Phone remote surface
 
@@ -167,15 +174,19 @@ MVP.
   killing `wsl.exe` reaps the Linux-side relay (WINDOWS-BUILD §10 v0.3.9 item 2).
 - **The records directory has no total-size cap** (ADR-0018); a total cap or age sweep
   belongs in the existing boot sweep.
-- **Tabs killed by a Windows shutdown, restart or sleep stay dead** (ADR-0010, ADR-0018). With mast
-  open, WSL goes down first and mast records every shell as exited with `0x40010004`
-  (`DBG_TERMINATE_PROCESS`); field 2026-10-19 07:33, a restart from the Start menu. Those tabs come
-  back as dead records with a Restart button, so `autoResume` never sees them. Candidates: handle
-  `WM_QUERYENDSESSION` so mast saves and quits before WSL is torn down, keeping the tabs `Running`
-  for the next boot's respawn and auto-resume; and, for deaths while mast stays up (sleep,
-  `wsl --shutdown`), an opt-in restart of `0x40010004` tabs when their workspace is opened, paced by
-  the boot wave rather than all at once — which also covers the missing bulk Restart. Restarting
-  replaces the dead tab's record view (ADR-0018), so it needs an amendment there.
+- **Tabs killed by a Windows shutdown, restart or sleep** (ADR-0010, ADR-0018; amended 2026-10-20).
+  With mast open, a Windows restart takes WSL down first and mast records every shell as exited with `0x40010004`
+  (`DBG_TERMINATE_PROCESS`); field 2026-10-19 07:33, a restart from the Start menu, and field
+  2026-10-20 07:36, where 14 sessions recorded that code and the diagnostics line in the same log
+  read `running=8 exited=10`. The two are separate events. **The next boot now revives them:** load
+  normalizes exactly that code to `Running`, and the existing respawn wave brings the tab back with
+  its id, cwd, distro and `autoResume` rules (ADR-0018 amendment). Only tabs saved with that code
+  revive; code 0 and 1 stay records. A successful respawn replaces the previous screen, and a failed
+  one leaves `Exited` without code or time — both accepted. Remaining follow-ups, separate from this
+  fix: restart a dead tab while the app stays up when its workspace is opened (a sleep or
+  `wsl --shutdown`; a bulk Restart is the same work), paced by the boot wave rather than all at
+  once; and handle `WM_QUERYENDSESSION` so mast saves and quits before WSL is torn down, keeping the
+  tabs `Running` without relying on the exit code.
 - **ConPTY shutdown audit**: the soak test (WINDOWS-BUILD §13) covers normal exit, kill
   and rapid respawn; failed spawn is uncovered. Dropping the PTY writer while the child is
   alive makes conhost end it with `0xC000013A`, so keep the drop order in `session.rs`.

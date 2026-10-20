@@ -2971,9 +2971,11 @@ passed only after running it on that platform.
    cmp /tmp/mast-ime-level.expected /tmp/mast-ime-level.txt
    ```
 
-   Repeat for `테스트 문장` with `/tmp/mast-ime-sentence.*`. `cmp` must exit 0. The UTF-8 bytes of
-   `수준이야` are `ec 88 98 ec a4 80 ec 9d b4 ec 95 bc`, followed by one `0a`. `테스트 문장` is
-   `ed 85 8c ec 8a a4 ed 8a b8 20 eb ac b8 ec 9e a5`, followed by one `0a`. If a mismatch remains, keep
+   Repeat for `테스트 문장` with `/tmp/mast-ime-sentence.*`. Repeat for `이미지` with
+   `/tmp/mast-ime-image.*`. `cmp` must exit 0. The UTF-8 bytes of `수준이야` are
+   `ec 88 98 ec a4 80 ec 9d b4 ec 95 bc`, followed by one `0a`. `테스트 문장` is
+   `ed 85 8c ec 8a a4 ed 8a b8 20 eb ac b8 ec 9e a5`, followed by one `0a`. `이미지` is
+   `ec 9d b4 eb af b8 ec a7 80`, followed by one `0a`. If a mismatch remains, keep
    the input file, the `xxd` output, the composition log lines and the load and switch conditions, and
    record "6.0 upgraded, IME symptom not resolved". Do not work around the upstream issues in this step.
 
@@ -3054,6 +3056,55 @@ a zsh tab.
 12. **Unwritable generation file.** Run an agent to normal exit with `~/.mast/prompt/tab-<id>` made read-only
     (`chmod 0444`), then quit and relaunch. The tab must not run the agent. The shell must print
     `[mast] auto-resume unavailable: cannot write ~/.mast/prompt/tab-<id>` once, and the file must be gone.
+
+### Unreleased — shutdown-exit restore and IME diagnostics (ADR-0018/0020 amendments 2026-10-20)
+
+**Not yet run — no item below is recorded as passed.** This build adds one boot-restore exception for
+`0x40010004` and opt-in IME/pane diagnostics; it does not fix the IME. The Linux gates
+(`cargo test -p mast-core`, `apps/mast` vitest, `npm run build`) cover the saved-state policy and the
+diagnostics in happy-dom, but not WebView2, ConPTY, a real Windows shutdown or a real IME. For every
+item record the Windows version, the WebView2 runtime version, the keyboard and IME, the app commit,
+`@xterm/xterm` 6.0.0, and whether `"log"` is true in `settings.json`.
+
+1. **IME diagnostics with the log on.** Start with `"log": true` and a window restart. In an idle WSL
+   pane and in a pane next to one running `bash scripts/wsl/flood.sh 10 --random-lines`, type two
+   consecutive 두벌식 words (the F1 sentences), move between panes with the mouse and with
+   `Alt+Shift+arrows`, and focus away to another app and back. `mast.log` must contain
+   `ime: commit match=true|false …` or `ime: commit match=unknown reason=…` lines and
+   `pane: focus from=… to=…` lines. Each line may carry only session/pane ids, `ends`/`onData`
+   counts and lengths — no typed text, hash, character codes, title or cwd. Record several lines and
+   which of them matched. An `unknown` line is an observation, not a failure by itself.
+2. **Log off and F1 bytes.** With `"log": false`, restart and repeat the typing: no `ime: commit` and
+   no `pane: focus` line may appear, and input must behave as before. Then run F1 in the xterm 6.0
+   section above, including `이미지`, in an idle pane and next to a flooding pane. When the bad state
+   appears, capture from another pane's ordinary shell **before** changing window focus, as F1 says.
+   `match=true` does not mean the IME delivered what was intended; only `cmp` on the file decides what
+   the PTY received.
+3. **Boot restore after a system restart.** In a test session with work saved and nothing important
+   running, leave one tab intentionally exited with code 0 (and note another with code 1 if useful)
+   and keep normal `Running` tabs. Restart Windows from the Start menu, reopen mast, and record the
+   saved statuses. Only tabs saved with `0x40010004` become shells again, with the same tab id, cwd
+   and distro; the intentionally exited tab comes back as a record with its Restart banner.
+4. **Death while the app stays up.** With mast open, run `wsl --shutdown` (or let the machine sleep)
+   so tabs exit, and record the exit code mast logs for each (`session <n> exited (code=…)`); which
+   code these paths leave is not known yet. Switching workspaces must not restart them in this run;
+   they stay records. Quit and relaunch: tabs saved with `0x40010004` now follow item 3, and any
+   other code stays a record. Confirm `records/tab-<id>.bin` exists
+   while they are records, without making a failure by damaging a distro in use.
+5. **Records, WSL and autoResume.** On the boot after item 3, record for each revived tab whether the
+   record was deleted and the new shell appeared, and for a WSL hold or spawn failure whether the
+   record remained and the banner came back. A failed respawn is expected to show `Exited` without a
+   code or time; do not report the old metadata as preserved. With `autoResume` off the revived tabs
+   get new shells only; with it on, eligible Claude Code, Codex and OpenCode sessions resume once
+   through the existing queue, while a normal exit or a session with no hint does not (items 1–12 of
+   the auto-resume list above). Run the shell checks in bash and zsh as that list says.
+6. **Exit log.** Collect `mast.log` for a normal app quit and for a system restart. Compare the shell
+   `exited` lines with `exit: router and saver flush returned` in time order. The line marks the
+   return of the router flush and the saver flush, not a successful disk write; its absence does not
+   prove that `RunEvent::Exit` did not run, and its presence does not prove the state was saved.
+
+These are Windows field checks only. ARM64 and macOS are not run by this list and are not covered by
+the Linux gates.
 
 ## 11. ARM64 cross-build notes
 
