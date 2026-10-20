@@ -55,6 +55,14 @@ pub(super) fn configure(
                 if !is_mast_shortcut(&name, ctrl, alt, shift) {
                     return Ok(());
                 }
+                // 반복 keydown 은 메모장 토글 키만 소비한다 — 서랍이 열렸다 닫히는 흔들림을 막는다.
+                if is_notepad_toggle_key(&name, ctrl, alt, shift) {
+                    let mut physical = Default::default();
+                    if args.PhysicalKeyStatus(&mut physical).is_ok() && physical.WasKeyDown.as_bool() {
+                        args.SetHandled(true)?;
+                        return Ok(());
+                    }
+                }
                 args.SetHandled(true)?;
                 let _ = ui.set_focus();
                 let _ = ui.eval(format!(
@@ -380,6 +388,12 @@ fn key_name(key: u32) -> Option<String> {
     })
 }
 
+/// 반복 keydown 을 페이지로 넘기지 않고 소비만 하는 유일한 단축키 — 메모장 토글.
+/// `shared/keys.ts` 의 `Ctrl+Shift+M` / `Alt+Shift+M` 판정과 같은 조합이다.
+fn is_notepad_toggle_key(key: &str, ctrl: bool, alt: bool, shift: bool) -> bool {
+    ctrl != alt && shift && key.eq_ignore_ascii_case("m")
+}
+
 /// `shared/keys.ts::keyAction` 의 Windows 분기가 가로채는 조합 중 페이지 밖을 다루는 것 —
 /// `Ctrl+Tab` 탭 순환, `Alt+Shift+방향키` pane 이동, `Ctrl`/`Alt`+`Shift`+문자 표
 /// (`CTRL_SHIFT_KEYS`·분할 `D`), `Ctrl`/`Alt`+숫자 워크스페이스 전환. 확대(`Ctrl+=/-/0`)는
@@ -395,7 +409,7 @@ fn is_mast_shortcut(key: &str, ctrl: bool, alt: bool, shift: bool) -> bool {
         if key.starts_with("Arrow") {
             return alt;
         }
-        matches!(key, "d" | "w" | "t" | "b" | "n" | "[" | "]" | "q")
+        matches!(key, "d" | "w" | "t" | "b" | "n" | "[" | "]" | "q" | "m")
     } else {
         matches!(key.as_bytes(), [b'1'..=b'9'])
     }
@@ -416,6 +430,17 @@ mod tests {
     }
 
     #[test]
+    fn only_the_notepad_toggle_blocks_key_repeat() {
+        assert!(is_notepad_toggle_key("m", true, false, true));
+        assert!(is_notepad_toggle_key("m", false, true, true));
+        assert!(!is_notepad_toggle_key("m", true, false, false));
+        assert!(!is_notepad_toggle_key("m", false, true, false));
+        assert!(!is_notepad_toggle_key("m", true, true, true));
+        assert!(!is_notepad_toggle_key("t", true, false, true));
+        assert!(!is_notepad_toggle_key("ArrowLeft", false, true, true));
+    }
+
+    #[test]
     fn only_mast_navigation_shortcuts_leave_the_page() {
         assert!(is_mast_shortcut("Tab", true, false, false));
         assert!(is_mast_shortcut("Tab", true, false, true));
@@ -424,12 +449,16 @@ mod tests {
         assert!(is_mast_shortcut("d", true, false, true));
         assert!(is_mast_shortcut("t", false, true, true));
         assert!(is_mast_shortcut("]", true, false, true));
+        assert!(is_mast_shortcut("m", true, false, true));
+        assert!(is_mast_shortcut("m", false, true, true));
         assert!(is_mast_shortcut("2", false, true, false));
         assert!(is_mast_shortcut("2", true, false, false));
 
         assert!(!is_mast_shortcut("ArrowLeft", true, false, true));
         assert!(!is_mast_shortcut("c", true, false, true));
         assert!(!is_mast_shortcut("v", true, false, false));
+        assert!(!is_mast_shortcut("m", true, false, false));
+        assert!(!is_mast_shortcut("m", false, true, false));
         assert!(!is_mast_shortcut("d", true, true, true));
         assert!(!is_mast_shortcut("2", false, false, false));
         assert!(!is_mast_shortcut("Tab", false, true, false));

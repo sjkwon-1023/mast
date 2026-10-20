@@ -106,6 +106,9 @@ the line above, because a zip downloaded in a browser is blocked by Gatekeeper. 
   [Details](docs/SETTINGS.md#remote-local-http).
 - **Built-in browser tab** — open it with the `◎` button; agents can inspect and click it with
   `mast browser`. [Browser guide](docs/BROWSER.md).
+- **Notepad** — a right-side note drawer over the pane, with one note per workspace and a global
+  note. Notes save as you type and never resize your terminals. Toggle it with `Ctrl+Shift+M` /
+  `Alt+Shift+M` (`⌘⇧M` on macOS).
 - **Resume and auto-resume** — see *Pick up where you left off* above. `autoResume` runs only
   agents that were still open when mast quit, never one you exited yourself.
 
@@ -142,6 +145,7 @@ App shortcuts use `Ctrl+Shift` or `Alt+Shift`; every other key goes to the termi
 | `Alt+Shift+D` | Split along the pane's longer side |
 | `Ctrl+Shift+N` / `Alt+Shift+N` | New workspace |
 | `Ctrl+Shift+Q` / `Alt+Shift+Q` | Close the workspace |
+| `Ctrl+Shift+M` / `Alt+Shift+M` | Toggle the notepad drawer |
 | `Ctrl+Shift+R` | Reload the window |
 | `Ctrl+V` / `Ctrl+Shift+V` / `Shift+Insert` | Paste |
 | `Ctrl+C` / `Ctrl+Shift+C` | Copy the selection (with nothing selected, `Ctrl+C` interrupts as usual) |

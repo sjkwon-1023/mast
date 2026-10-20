@@ -34,14 +34,14 @@ it("부팅 seed 는 draft 가 없으면 clean 을, 리로드 전 draft 가 남�
   const stopFresh = fresh.reportMarkdownDraftState(send);
   expect(backend).toBe("clean");
   fresh.keepMarkdownDraft(1, draft("# 수정\n"));
-  stopFresh();
+  stopFresh.dispose();
 
   vi.resetModules();
   const reloaded = await import("./drafts");
   backend = null;
   const stop = reloaded.reportMarkdownDraftState(send);
   expect(backend).toBe("dirty");
-  stop();
+  stop.dispose();
 });
 
 it("draft 가 생기면 dirty, 마지막 draft 가 사라져야 clean 을 알린다", async () => {
@@ -54,7 +54,7 @@ it("draft 가 생기면 dirty, 마지막 draft 가 사라져야 clean 을 알린
   expect(backend).toBe("dirty");
   drafts.discardMarkdownDraft(2);
   expect(backend).toBe("clean");
-  stop();
+  stop.dispose();
 });
 
 it("저장 성공으로 draft 가 정리되면 clean 을 알린다", async () => {
@@ -64,7 +64,7 @@ it("저장 성공으로 draft 가 정리되면 clean 을 알린다", async () =>
   expect(backend).toBe("dirty");
   drafts.markdownSaved(1, "# 수정\n", "# 수정\n");
   expect(backend).toBe("clean");
-  stop();
+  stop.dispose();
 });
 
 it("페이지가 내려가면(WebView 리로드 시작) unknown 으로 되돌린다", async () => {
@@ -73,7 +73,7 @@ it("페이지가 내려가면(WebView 리로드 시작) unknown 으로 되돌린
   expect(backend).toBe("clean");
   window.dispatchEvent(new Event("pagehide"));
   expect(backend).toBe("unknown");
-  stop();
+  stop.dispose();
 });
 
 it("첫 dirty 통지가 실패해도 추가 변화 없이 결국 backend 가 dirty 를 받는다", async () => {
@@ -93,7 +93,7 @@ it("첫 dirty 통지가 실패해도 추가 변화 없이 결국 backend 가 dir
   drafts.keepMarkdownDraft(1, draft("# 수정\n"));
   await vi.advanceTimersByTimeAsync(30_000);
   expect(backend).toBe("dirty");
-  stop();
+  stop.dispose();
   error.mockRestore();
 });
 
@@ -115,7 +115,7 @@ it("통지가 한동안 실패하면 재시도는 실패한 값이 아니라 그
   down = false;
   await vi.advanceTimersByTimeAsync(30_000);
   expect(backend).toBe("dirty");
-  stop();
+  stop.dispose();
   error.mockRestore();
 });
 
@@ -130,7 +130,7 @@ it("구독을 해제하면 대기 중인 재시도도 보내지 않는다", asyn
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
   const stop = drafts.reportMarkdownDraftState(failing);
   await vi.advanceTimersByTimeAsync(0);
-  stop();
+  stop.dispose();
   const attempts = sent.length;
   await vi.advanceTimersByTimeAsync(30_000);
   expect(sent.length).toBe(attempts);
@@ -140,8 +140,83 @@ it("구독을 해제하면 대기 중인 재시도도 보내지 않는다", asyn
 it("구독을 해제하면 더 이상 알리지 않는다", async () => {
   const drafts = await import("./drafts");
   const stop = drafts.reportMarkdownDraftState(send);
-  stop();
+  stop.dispose();
   drafts.keepMarkdownDraft(1, draft("# 수정\n"));
   window.dispatchEvent(new Event("pagehide"));
   expect(backend).toBe("clean");
+});
+
+it("메모장 active 를 Markdown dirty 와 합성하고 refresh 로 Clean 을 되돌린다", async () => {
+  const drafts = await import("./drafts");
+  let active = false;
+  const reporter = drafts.reportMarkdownDraftState(send, window, {
+    isExtraDirty: () => active,
+  });
+  expect(backend).toBe("clean");
+
+  active = true;
+  reporter.refresh();
+  await reporter.waitForDelivery();
+  expect(backend).toBe("dirty");
+
+  active = false;
+  reporter.refresh();
+  await reporter.waitForDelivery();
+  expect(backend).toBe("clean");
+  reporter.dispose();
+});
+
+it("전달 대기는 진행 중인 보고가 끝날 때까지 기다린다", async () => {
+  const drafts = await import("./drafts");
+  const sent: MarkdownDraftState[] = [];
+  let resolveDirty!: (value: unknown) => void;
+  const slow = (state: MarkdownDraftState) => {
+    sent.push(state);
+    if (state === "clean") return Promise.resolve(undefined);
+    return new Promise<unknown>((resolve) => {
+      resolveDirty = resolve;
+    });
+  };
+  let active = false;
+  const reporter = drafts.reportMarkdownDraftState(slow, window, {
+    isExtraDirty: () => active,
+  });
+  active = true;
+  let delivered = false;
+  const waiting = reporter.waitForDelivery().then(() => {
+    delivered = true;
+  });
+  await Promise.resolve();
+  expect(sent).toEqual(["clean", "dirty"]);
+  expect(delivered).toBe(false);
+
+  resolveDirty(undefined);
+  await waiting;
+  expect(delivered).toBe(true);
+  reporter.dispose();
+});
+
+it("전달 대기는 첫 실패를 reject 하고 백오프 재시도는 계속한다", async () => {
+  vi.useFakeTimers();
+  const drafts = await import("./drafts");
+  let down = false;
+  const flaky = async (state: MarkdownDraftState) => {
+    if (down) throw new Error("ipc down");
+    backend = state;
+  };
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  let active = false;
+  const reporter = drafts.reportMarkdownDraftState(flaky, window, {
+    isExtraDirty: () => active,
+  });
+  down = true;
+  active = true;
+
+  await expect(reporter.waitForDelivery()).rejects.toThrow("ipc down");
+
+  down = false;
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(backend).toBe("dirty");
+  reporter.dispose();
+  error.mockRestore();
 });

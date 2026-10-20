@@ -60,6 +60,18 @@ describe("formatCommandError", () => {
     ).toBe("Invalid name: workspace name must not be empty or whitespace only");
   });
 
+  it("formats noteStorage and collapses the reason to one line", () => {
+    expect(
+      formatCommandError({
+        type: "noteStorage",
+        message: "note is not a regular file",
+      }),
+    ).toBe("Note storage failed: note is not a regular file");
+    expect(
+      formatCommandError({ type: "noteStorage", message: "cannot delete\n  the note" }),
+    ).toBe("Note storage failed: cannot delete the note");
+  });
+
   it("passes through non-contract string payloads", () => {
     expect(formatCommandError("ipc timeout")).toBe("Command failed: ipc timeout");
   });

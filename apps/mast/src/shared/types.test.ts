@@ -234,6 +234,9 @@ function errorTag(entry: CommandError): string {
     case "invalidName":
       expect(typeof entry.message).toBe("string");
       return entry.type;
+    case "noteStorage":
+      expect(typeof entry.message).toBe("string");
+      return entry.type;
     default:
       return assertNever(entry);
   }

@@ -1,5 +1,9 @@
-import { IS_MAC, primaryModifier } from "../shared/platform";
+import { IS_MAC } from "../shared/platform";
 import { closingMarkdownDrafts, discardMarkdownDraft, hasMarkdownDrafts, reportMarkdownDraftState } from "../features/viewers/markdown/drafts";
+import type { MarkdownDraftReporter } from "../features/viewers/markdown/drafts";
+import { createNotepadLifecycle } from "./lifecycle";
+import type { NotepadLifecycle } from "./lifecycle";
+import type { NotepadHost } from "../features/notepad/view";
 import { installNavKeys } from "./navigation/actions";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -15,6 +19,7 @@ import {
   getUpdateInfo,
   getUiSettings,
   getWslStatus,
+  notesWorkspaceHasContent,
   notifyToast,
   onUpdateChecked,
   onWslStatusChanged,
@@ -80,27 +85,7 @@ declare global {
 }
 
 // F5는 터미널 앱에 전달하고 Ctrl+Shift+R만 WebView 리로드로 가로챈다.
-function installReloadKey(onError: (err: unknown) => void): void {
-  window.addEventListener(
-    "keydown",
-    (ev) => {
-      if (!ev.isComposing && primaryModifier(ev) && ev.shiftKey && ev.code === "KeyR") {
-        ev.preventDefault();
-        if (!hasMarkdownDrafts()) {
-          location.reload();
-          return;
-        }
-        confirmAction("Reload with unsaved Markdown edits? Drafts will be restored from this session.").then(
-          (ok) => {
-            if (ok) location.reload();
-          },
-          onError,
-        );
-      }
-    },
-    { capture: true },
-  );
-}
+// 메모 flush 는 app/lifecycle.ts 가 리로드 직전에 수행한다 (C5).
 
 const ERROR_TTL_MS = 5000;
 
@@ -140,6 +125,10 @@ class App {
       });
     },
     (err) => this.showError(formatCommandError(err)),
+    {
+      hasContent: (workspace) => this.notepadHasContent(workspace),
+      afterClosed: (workspace) => this.notepadAfterClosed(workspace),
+    },
   );
 
   // WSL 준비 안내 배너 — 상태 판정은 백엔드 진단(`get_wsl_status`)이 하고 여기는
@@ -179,11 +168,59 @@ class App {
 
   private picking = false;
 
+  /** 첫 토글에서 dynamic import 로 읽는 메모장 view 모듈 (이후 재사용). */
+  private notepadModule: Promise<typeof import("../features/notepad/view")> | null = null;
+  /** 정상 종료·수동 리로드·부팅 복구의 메모 수명 경계 (C5). */
+  private lifecycle: NotepadLifecycle | null = null;
+  private draftReporter: MarkdownDraftReporter | null = null;
+
+  private notepadHost(): NotepadHost {
+    return {
+      getSnapshot: () => this.store.snapshot,
+      focusActivePane: () => {
+        this.wsView.requestFocus({ kind: "activePane" });
+        // requestFocus(activePane)는 다음 렌더에서 해소된다 — 서랍이 닫힌 직후
+        // 포커스가 body 에 남지 않도록 같은 스냅샷을 한 번 반영한다 (구조·크기 불변).
+        const snapshot = this.store.snapshot;
+        if (snapshot !== null) this.wsView.render(snapshot);
+      },
+      awaitBootRecovery: () => this.lifecycle?.awaitRecovery() ?? Promise.resolve(),
+      awaitDirtyReport: IS_MAC
+        ? () => this.lifecycle?.awaitDirtyReport() ?? Promise.resolve()
+        : undefined,
+      refreshDirtyReport: IS_MAC ? () => this.draftReporter?.refresh() : undefined,
+    };
+  }
+
+  private notepadHasContent(workspace: number): Promise<boolean> {
+    return (
+      this.lifecycle?.notepadHasContent(workspace, notesWorkspaceHasContent) ??
+      notesWorkspaceHasContent(workspace)
+    );
+  }
+
+  private async notepadAfterClosed(workspace: number): Promise<void> {
+    await this.lifecycle?.discardClosedWorkspace(workspace);
+    if (this.notepadModule === null) return;
+    const module = await this.notepadModule;
+    module.closeNotepadAt(workspace);
+  }
+
   async init(): Promise<void> {
+    const lifecycle = createNotepadLifecycle({
+      confirm: confirmAction,
+      hasMarkdownDrafts,
+      showError: (err) => this.showError(formatCommandError(err)),
+      reload: () => location.reload(),
+    });
+    this.lifecycle = lifecycle;
+
     window.__mast = {
       dispatch,
       getState,
-      reload: () => location.reload(),
+      reload: () => {
+        void lifecycle.reload();
+      },
       resetUi,
       diagnostics: getDiagnostics,
       lastSwitch: null,
@@ -193,44 +230,37 @@ class App {
     // 창 close 확인 가드는 한 번만 등록한다. 등록은 여기서 시작하고 완료는 아래에서 기다린다 —
     // 그 사이의 초기화 순서와 동작은 바꾸지 않는다.
     // 핸들러는 async 다 — @tauri-apps/api 의 onCloseRequested 는 핸들러를 await 한 뒤
-    // preventDefault 가 없을 때만 창을 destroy 하므로, 확인을 기다리는 동안 창은 닫히지 않는다.
-    // 확인 중에 다시 온 close(⌘Q 연타, Dock Quit)는 같은 질문을 겹쳐 띄우지 않고 막는다.
-    let closeConfirming = false;
-    const closeGuard = getCurrentWindow().onCloseRequested(async (event) => {
-      if (!hasMarkdownDrafts()) return;
-      if (closeConfirming) {
-        event.preventDefault();
-        return;
-      }
-      closeConfirming = true;
-      try {
-        if (!(await confirmAction("Quit mast and discard unsaved Markdown edits?"))) event.preventDefault();
-      } catch (err) {
-        // 확인을 못 했으면 닫지 않는다 — draft 를 묻지 않고 버리는 쪽으로 넘어가지 않는다.
-        event.preventDefault();
-        console.error("quit confirmation failed", err);
-        this.showError(formatCommandError(err));
-      } finally {
-        closeConfirming = false;
-      }
-    });
+    // preventDefault 가 없을 때만 창을 destroy 하므로, flush·확인을 기다리는 동안 창은 닫히지 않는다.
+    // 메모 flush 는 Markdown draft 유무와 무관하게 먼저 수행하고, flush 실패·재진입은
+    // lifecycle 이 preventDefault 로 막는다 (C5 §1).
+    const closeGuard = getCurrentWindow().onCloseRequested((event) => lifecycle.handleClose(event));
     // macOS 의 Dock Quit·로그아웃은 창 close 를 거치지 않고 백엔드의 종료 판정으로 간다.
     // 판정은 Clean 일 때만 확인 없이 끝내고, 그 밖에는 창 close 로 위 가드를 태운다. 그래서
     // 보고는 가드 등록이 끝난 **뒤에만** 시작한다(순서가 계약이다): 백엔드가 Clean·Dirty 를
     // 받은 시점에는 JS 가드가 이미 있다. 등록이 끝나기 전의 짧은 구간에는 백엔드가 Unknown 이라
     // 창 close 를 요청하지만 그 close 를 막을 가드가 아직 없어 확인 없이 끝날 수 있다 —
     // docs/MACOS.md 에 적은 한계다. 등록 실패는 아래의 await 가 드러내며, 그때 보고는
-    // 시작하지 않는다.
+    // 시작하지 않는다. 보고 값은 Markdown dirty 와 메모장 active 의 합성이다 (M1).
     if (IS_MAC) {
       closeGuard.then(
-        () => reportMarkdownDraftState((state) => invoke("set_markdown_draft_state", { state })),
+        () => {
+          this.draftReporter = reportMarkdownDraftState(
+            (state) => invoke("set_markdown_draft_state", { state }),
+            window,
+            { isExtraDirty: () => lifecycle.isNotepadActive() },
+          );
+          lifecycle.attachReporter(this.draftReporter);
+        },
         () => {},
       );
     }
     this.initUpdateNotice();
-    installReloadKey((err) => {
-      console.error("reload confirmation failed", err);
-      this.showError(formatCommandError(err));
+    lifecycle.installReloadKey();
+    // 부팅 복구 — 백업이 있을 때만 state 모듈을 읽는다. 첫 snapshot 전에 시작해도
+    // workspace 생존 확인은 백엔드가 판단한다 (C2). 실패하면 백업을 보존하고
+    // 다음 서랍 열기에서 그 scope 로 다시 시도한다.
+    void lifecycle.recover().catch((err: unknown) => {
+      console.error("notepad recovery failed", err);
     });
     installShortcutGuide();
     try {
@@ -256,6 +286,7 @@ class App {
       createWorkspaceHere: () => this.createWorkspaceHere(),
       renameWorkspace: () => this.sidebar.beginRename(),
       closeWorkspace: () => void this.sidebar.closeActive(),
+      toggleNotepad: () => this.toggleNotepad(),
     });
 
     try {
@@ -362,6 +393,25 @@ class App {
         console.error("window focus query failed", err);
       }
     })();
+  }
+
+  // 메모장 서랍은 첫 토글에서만 읽는다 — 진입 청크에 view·DOM·timer 가 실리지 않는다.
+  private toggleNotepad(): void {
+    this.notepadModule ??= import("../features/notepad/view").then(async (module) => {
+      // view 가 쓰는 state singleton 을 수명 경계에도 연결한다 (dirty 합성·flush).
+      const state = await import("../features/notepad/state");
+      this.lifecycle?.attachState(state.notepadState);
+      this.draftReporter?.refresh();
+      return module;
+    });
+    void this.notepadModule
+      .then((module) => module.toggleNotepad(this.notepadHost()))
+      .catch((err: unknown) => {
+        // 모듈 로드 실패는 다음 토글에서 다시 시도한다.
+        this.notepadModule = null;
+        console.error("notepad toggle failed", err);
+        this.showError(formatCommandError(err));
+      });
   }
 
   // Finder 에서 터미널로 끌어 놓은 파일 경로를 그 pane 에 붙여넣는다 (features/terminal/file-drop.ts).
@@ -536,6 +586,18 @@ class App {
     this.notifyNeedsInput(snapshot);
     this.sidebar.render(snapshot);
     this.wsView.render(snapshot);
+    if (this.lifecycle !== null) {
+      // snapshot 에서 사라진 워크스페이스의 초안은 저장하지 않고 버린다 (D05).
+      void this.lifecycle
+        .discardClosedDrafts(snapshot.state.workspaces.map((workspace) => workspace.id))
+        .catch((err: unknown) => console.error("notepad draft cleanup failed", err));
+    }
+    if (this.notepadModule !== null) {
+      // 서랍이 열려 있을 때만 모듈이 워크스페이스 전환을 따라간다.
+      void this.notepadModule
+        .then((module) => module.syncNotepad(snapshot))
+        .catch((err: unknown) => console.error("notepad sync failed", err));
+    }
 
     this.tracer.settle();
   }

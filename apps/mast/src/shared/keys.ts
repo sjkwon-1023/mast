@@ -2,7 +2,7 @@ import { IS_MAC } from "./platform";
 // macOS 가로채기: ⌘1–9 workspace, ⌘⌥방향키 pane, Ctrl(+Shift)+Tab 탭,
 // ⌘T 터미널, ⌘⇧B 폴더, ⌘D 자동 분할 / ⌘⇧D 세로 분할, ⌘N workspace,
 // ⌘⇧[ / ] 이전/다음 workspace, ⌘W 탭 닫기 / ⌘⇧W workspace 닫기,
-// ⌘+ / - / 0 확대·축소, F2(Fn+F2) 이름 바꾸기. ⌘C/V 편집, ⌘⇧R 새로고침, ⌘Q 종료는
+// ⌘⇧M 메모장 토글, ⌘+ / - / 0 확대·축소, F2(Fn+F2) 이름 바꾸기. ⌘C/V 편집, ⌘⇧R 새로고침, ⌘Q 종료는
 // 담당이 따로 있다. 터미널 안의 ⌘←/→/⌫ 줄 편집, ⌘K 지우기, Fn+↑/↓/←/→ 스크롤,
 // ⇧Fn+↑/↓ 는 아래 표의 macOS 행(features/terminal/view.ts 소유)이다. 목록에 없는
 // Ctrl/Option 조합은 계속 PTY 몫이다 (Option+←/→ 의 `ESC b`/`ESC f` 는
@@ -34,6 +34,7 @@ import { IS_MAC } from "./platform";
 // | `Ctrl+Shift+N` / `Alt+Shift+N` | 새 워크스페이스 — 활성 터미널의 현재 경로로 즉시 생성 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+Shift+[` / `]`, `Alt+Shift+[` / `]` | 이전/다음 워크스페이스 (사이드바 순서, 끝에서 순환) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+Shift+Q` / `Alt+Shift+Q` | 활성 워크스페이스 닫기 (실행 중인 터미널 세션이 있으면 confirm) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
+// | `Ctrl+Shift+M` / `Alt+Shift+M` | 메모장 서랍 토글 (macOS 는 `⌘⇧M`) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+=` / `Ctrl++` | 터미널 **+ 뷰어** 글꼴 확대 (세션 한정 — settings.json 은 그대로) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+-` | 터미널 **+ 뷰어** 글꼴 축소 (세션 한정) | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
 // | `Ctrl+0` | 터미널·뷰어 글꼴 크기를 각자의 settings.json 기준값으로 리셋 | shared/keys.ts 판정 + app/navigation/actions.ts window keydown capture |
@@ -132,7 +133,9 @@ export type KeyAction =
   | { type: "zoom"; delta: 1 | -1 }
   /** 터미널·뷰어 글꼴 크기를 각자의 settings.json 기준값으로 되돌린다 (`Ctrl+0`).
    *  두 표면의 기준값은 서로 다를 수 있다 (터미널 기본 13px · 뷰어 12px). */
-  | { type: "zoomReset" };
+  | { type: "zoomReset" }
+  /** 오른쪽 메모장 서랍 토글 — snapshot 유무와 무관하게 키를 소비한다. */
+  | { type: "toggleNotepad" };
 
 const ARROW_DIRS: Record<string, PaneDirection | undefined> = {
   ArrowUp: "up",
@@ -153,7 +156,8 @@ export type ShortcutId =
   | "newWorkspace"
   | "prevWorkspace"
   | "nextWorkspace"
-  | "closeWorkspace";
+  | "closeWorkspace"
+  | "toggleNotepad";
 
 /** 문자 단축키 표 (canonical) — 판정(keyAction)과 표시
  *  (shortcutLabel)가 같은 표를 읽으므로 버튼 툴팁이 실제 키와 어긋날 수 없다.
@@ -185,6 +189,7 @@ const CTRL_SHIFT_KEYS: Record<
     action: () => ({ type: "cycleWorkspace", delta: 1 }),
   },
   closeWorkspace: { letter: "q", action: () => ({ type: "closeWorkspace" }) },
+  toggleNotepad: { letter: "m", action: () => ({ type: "toggleNotepad" }) },
 };
 
 // 네이티브 Mac 명령 표. Cmd+Q 는 네이티브 quit/close guard 몫이고,
@@ -198,6 +203,7 @@ const MAC_KEYS: Record<ShortcutId, { letter: string; shift: boolean; shifted?: s
   prevWorkspace: { ...CTRL_SHIFT_KEYS.prevWorkspace, shift: true },
   nextWorkspace: { ...CTRL_SHIFT_KEYS.nextWorkspace, shift: true },
   closeWorkspace: { letter: "w", shift: true, action: () => ({ type: "closeWorkspace" }) },
+  toggleNotepad: { ...CTRL_SHIFT_KEYS.toggleNotepad, shift: true },
 };
 
 function macKeyAction(spec: KeySpec): KeyAction | null {
@@ -285,7 +291,10 @@ export function pathBasename(path: string): string {
 /** keydown → 액션. 가로채기 목록에 없는 조합은 전부 null 이고, 그때 글루는
  *  이벤트에 손대지 않는다 (터미널로 그대로 흘려보낸다). */
 export function keyAction(spec: KeySpec, mac = IS_MAC): KeyAction | null {
-  if (mac) return macKeyAction(spec);
+  return mac ? macKeyAction(spec) : windowsKeyAction(spec);
+}
+
+function windowsKeyAction(spec: KeySpec): KeyAction | null {
   if (spec.meta) return null;
   // 한글 입력 중의 조합 키가 이동으로 오판돼 조합을 깨뜨리면 안 된다.
   if (spec.isComposing) return null;

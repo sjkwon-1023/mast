@@ -1682,3 +1682,131 @@ body {
 .browser-disabled .new-browser-tab, .browser-disabled [title="New browser tab"] { display: none; }
 .new-browser-tab { align-self: flex-start; padding: 4px 10px; background: var(--bg-panel); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
 .new-browser-tab:hover { background: var(--border); }
+
+/* ── 메모장 서랍 ─────────────────────────────────────────────────────
+   비모달 <dialog> 를 오른쪽에 고정한다. pane 레이아웃·컨테이너 크기·PTY 크기를
+   건드리지 않도록 body 기준 fixed 로 띄우고, 높이는 보이는 앱 영역 안에 둔다.
+   폭은 좁은 창에서도 닫을 수 있게 viewport - 16px 로 제한한다. */
+.notepad-drawer {
+  position: fixed;
+  inset: 8px 8px 8px auto;
+  width: min(420px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  margin: 0;
+  padding: 12px;
+  color: var(--fg);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+  font-size: 13px;
+  z-index: 30;
+}
+
+/* 닫힌 dialog 는 UA 의 display:none 을 유지한다 — author display 를 덮지 않는다. */
+.notepad-drawer:not([open]) {
+  display: none;
+}
+
+.notepad-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.notepad-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.notepad-workspace {
+  flex: 1 1 auto;
+  margin-left: 8px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.notepad-close,
+.notepad-scope {
+  padding: 3px 8px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.notepad-close:hover:not(:disabled),
+.notepad-scope:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.notepad-close:disabled,
+.notepad-scope:disabled {
+  color: var(--fg-muted);
+  cursor: default;
+}
+
+.notepad-scopes {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.notepad-scope[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: rgb(0 122 204 / 18%);
+}
+
+.notepad-note {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.notepad-text {
+  flex: 1 1 auto;
+  min-height: 160px;
+  padding: 8px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: 13px/1.45 monospace;
+  resize: none;
+  white-space: pre-wrap;
+}
+
+.notepad-text:disabled {
+  opacity: 0.6;
+}
+
+/* dialog 자체는 flex 가 아니므로 본문 높이를 채우는 flex 는 label 이 맡는다. */
+.notepad-drawer[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.notepad-status {
+  min-height: 16px;
+  margin-top: 6px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.notepad-error {
+  margin-top: 2px;
+  color: var(--error);
+  font-size: 11px;
+}
+
+.notepad-error[hidden] {
+  display: none;
+}

@@ -21,6 +21,7 @@ const COMMAND_ERROR_TYPES: Record<CommandError["type"], true> = {
   invalidPath: true,
   invalidScroll: true,
   invalidName: true,
+  noteStorage: true,
 };
 
 function isCommandError(e: unknown): e is CommandError {
@@ -70,6 +71,8 @@ export function formatCommandError(e: unknown): string {
         return `Invalid scroll position ${e.value} (must be finite and >= 0)`;
       case "invalidName":
         return `Invalid name: ${e.message.replace(/\s+/g, " ").trim()}`;
+      case "noteStorage":
+        return `Note storage failed: ${e.message.replace(/\s+/g, " ").trim()}`;
       default:
         return assertNever(e);
     }

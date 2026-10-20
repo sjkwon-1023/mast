@@ -102,6 +102,9 @@ MVP.
 #### Viewers
 
 - **Changes viewer** (ADR-0022): Windows field verification pending.
+- **Notepad drawer** (ADR-0034): Windows and macOS field checks (WINDOWS-BUILD §10 "notepad field
+  verification") not yet run; the macOS target was neither compiled nor tested for this change.
+  Accepted: no merge UI for an unknown on-disk note.
 - **Reload while minimized** resumes Markdown polling until the next minimize/restore
   cycle — accepted narrow window.
 
@@ -118,9 +121,9 @@ MVP.
 - **`mast send`/`mast ls`**: reading a pane's scrollback needs an opt-in design;
   `mast ls` shows `?` in `COMMAND` for tabs in another distro. Reaching another workspace
   would need an explicit opt-in (ADR-0005 addendum).
-- **Agent-facing file and diff presentation commands** (user request 2026-09-20): define
-  the target pane, workspace confinement, path validation and read-only diff contract
-  first.
+- **Agent-facing file and diff presentation commands** (user request 2026-09-20): direction
+  agreed 2026-10-20, not started — terminal path Ctrl+click, `mast layout`, `mast open`/`mast diff`
+  (`docs/plans/agent-file-open-plan.md`).
 - **Query-reply `/tmp` confinement is string-level only** — a pre-planted symlink routes
   the reply outside; the canonicalize-at-write fix is unverified on 9P.
 - **WSL zsh tabs are not yet field-verified** (ADR-0011 amendment 2026-10-14): cwd tracking is

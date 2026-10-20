@@ -27,6 +27,16 @@ describe("native Mac shortcuts", () => {
     expect(shortcutBadge("newTerminalTab", true)).toBe("T");
     expect(shortcutLabel("closeTab", false)).toBe("Alt+Shift+W");
   });
+  it("toggles the notepad on Cmd+Shift+M and leaves Cmd+M to window minimize", () => {
+    expect(keyAction(key("m", { meta: true, shift: true }), true)).toEqual({ type: "toggleNotepad" });
+    expect(keyAction(key("M", { meta: true, shift: true }), true)).toEqual({ type: "toggleNotepad" });
+    expect(keyAction(key("m", { meta: true }), true)).toBeNull();
+    expect(keyAction(key("m", { meta: true, alt: true, shift: true }), true)).toBeNull();
+    // IME 조합 중에는 조합을 탈취하지 않는다 (반복 소비는 글루 몫).
+    expect(keyAction(key("m", { meta: true, shift: true, isComposing: true }), true)).toBeNull();
+    expect(shortcutLabel("toggleNotepad", true)).toBe("⌘⇧M");
+    expect(shortcutBadge("toggleNotepad", true)).toBe("⇧M");
+  });
   it("maps the complete terminal/workspace/pane creation path", () => {
     for (const [value, extra, result] of [
       ["t", {}, { type: "newTab", kind: "terminal" }],
@@ -34,6 +44,7 @@ describe("native Mac shortcuts", () => {
       ["n", {}, { type: "newWorkspaceHere" }],
       ["d", {}, { type: "splitPaneAuto" }],
       ["D", { shift: true }, { type: "splitPane", direction: "vertical" }],
+      ["M", { shift: true }, { type: "toggleNotepad" }],
       ["{", { shift: true }, { type: "cycleWorkspace", delta: -1 }],
       ["}", { shift: true }, { type: "cycleWorkspace", delta: 1 }],
       ["9", {}, { type: "switchWorkspace", ordinal: 9 }],

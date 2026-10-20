@@ -25,6 +25,7 @@ pub mod firewall;
 pub(crate) mod flow;
 pub mod git;
 pub mod model;
+pub mod notes;
 pub mod notify;
 pub mod osc;
 pub mod persist;

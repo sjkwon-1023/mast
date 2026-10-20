@@ -54,6 +54,42 @@ describe("browser surface lifetime", () => {
     } finally { view.dispose(); }
   });
 
+  it("hides the surface for an open notepad dialog and restores the same bounds after close", async () => {
+    vi.clearAllMocks();
+    api.listen.mockResolvedValue(() => {});
+    applyBrowserSettings({browser: {enabled: true}});
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const bounds = {x: 0, y: 100, width: 800, height: 500};
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({...bounds} as DOMRect);
+    api.invoke.mockResolvedValue(null);
+    const view = new BrowserView(document.body, 42, {type: "browser", url: "http://localhost:3000"});
+    const runFrame = () => frames.shift()?.(0);
+    const dialog = document.createElement("dialog");
+    dialog.className = "notepad-drawer";
+    try {
+      runFrame();
+      await vi.waitFor(() => expect(api.invoke).toHaveBeenCalledWith("browser_surface", {tab: 42, owner: expect.any(String), bounds}));
+
+      document.body.append(dialog);
+      dialog.setAttribute("open", "");
+      // open 속성 변화는 MutationObserver 가 관측해 숨김 동기화를 예약한다.
+      await vi.waitFor(() => expect(frames.length).toBe(1));
+      runFrame();
+      await vi.waitFor(() => expect(api.invoke).toHaveBeenLastCalledWith("browser_surface", {tab: 42, owner: expect.any(String), bounds: null}));
+
+      dialog.removeAttribute("open");
+      dialog.remove();
+      await vi.waitFor(() => expect(frames.length).toBe(1));
+      runFrame();
+      await vi.waitFor(() => expect(api.invoke).toHaveBeenLastCalledWith("browser_surface", {tab: 42, owner: expect.any(String), bounds}));
+    } finally { view.dispose(); }
+  });
+
   it("sends hide before a bounds update waiting behind an earlier surface call", async () => {
     vi.clearAllMocks();
     api.listen.mockResolvedValue(() => {});

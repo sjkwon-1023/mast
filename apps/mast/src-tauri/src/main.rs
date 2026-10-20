@@ -158,6 +158,9 @@ fn main() {
             let app_data_dir = app.path().app_data_dir()?;
             let state_path = app_data_dir.join("state.json");
             let records = Arc::new(RecordStore::new(app_data_dir.join("records")));
+            // 메모는 state.json 과 같은 앱 데이터 디렉터리 아래 `notes/` 에 둔다.
+            // 디렉터리는 core 계약대로 첫 저장 때 생기므로 여기서 만들지 않는다.
+            let notes = Arc::new(mast_core::notes::NoteStore::new(app_data_dir.join("notes")));
 
             // WSL 진단기 — host 보다 먼저 만들어야 host 의 스폰 게이트가 이 하나를
             // 공유한다. 첫 진단은 Dispatcher 가 생긴 직후(아래)에 시작한다.
@@ -262,6 +265,7 @@ fn main() {
                 reset,
                 router,
                 records: Arc::clone(&records),
+                notes,
                 wsl: Arc::clone(&wsl),
                 boot: Arc::clone(&boot_work),
                 last_audit: Mutex::new(RegistryAudit::default()),
@@ -409,6 +413,11 @@ fn main() {
             commands::fs_stat,
             commands::fs_read_chunk,
             commands::fs_save_markdown,
+            // 메모장 파일 IPC (main 웹뷰 전용 — restrict_browser_ipc 가 다른 웹뷰를
+            // 거부한다). 경로·distro 는 받지 않고 범위·원문만 주고받는다.
+            commands::notes_read,
+            commands::notes_save,
+            commands::notes_workspace_has_content,
             // Markdown draft 유무 — macOS Dock Quit·로그아웃 종료 판정의 근거다.
             #[cfg(target_os = "macos")]
             commands::set_markdown_draft_state,

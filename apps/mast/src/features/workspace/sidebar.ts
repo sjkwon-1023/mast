@@ -58,6 +58,15 @@ import type { Command, CommandOutput, StateSnapshot, WorkspaceId } from "../../s
 /** UI 발 dispatch — main.ts dispatchUI 래퍼 (실패는 null, reject 없음). */
 type DispatchFn = (cmd: Command) => Promise<CommandOutput | null>;
 
+/** 메모장 결합 — 사이드바가 메모 파일·초안의 존재만 묻고, 삭제 뒤 정리는
+ *  main.ts 글루(lifecycle·view)에 맡긴다. 파일 삭제 자체는 C2 의 닫기 경계가 한다. */
+export interface NotepadCloseGuard {
+  /** 메모 파일 또는 메모리/백업 초안에 내용이 있는가. 조회 실패는 reject (닫기 중단). */
+  hasContent(workspace: WorkspaceId): Promise<boolean>;
+  /** 권위 있는 닫기 성공 뒤 초안과, 그 scope 로 열린 서랍을 정리한다. */
+  afterClosed(workspace: WorkspaceId): Promise<void>;
+}
+
 /** 포인터가 이만큼 세로로 움직여야 드래그로 친다. 카드 클릭이 워크스페이스
  *  전환이라, 손이 조금 흔들린 클릭이 순서를 바꿔 버리면 안 된다 (splitter 의
  *  드래그 판정과 같은 규율). */
@@ -141,6 +150,8 @@ export class Sidebar {
     private readonly onOpenUpdate: (url: string) => void,
     /** 사용자에게 보여야 하는 실패(닫기 확인 대화상자를 못 띄움) — main.ts 글루가 상태줄에 띄운다. */
     private readonly onError: (err: unknown) => void,
+    /** 메모장 결합 — 없으면 메모 확인·정리를 하지 않는다 (기존 테스트·글루 호환). */
+    private readonly notepad: NotepadCloseGuard | null = null,
   ) {
     this.cardsEl = document.createElement("div");
     this.cardsEl.className = "sidebar-cards";
@@ -536,17 +547,38 @@ export class Sidebar {
 
   /** 확인은 infrastructure/confirm.ts 의 confirmAction 이다 — macOS 의 window.confirm 은
    *  대화상자 없이 false 라 쓰지 않는다. 확인 자체가 실패하면 닫지 않고 사유를 onError 로
-   *  사용자에게 보인다. */
+   *  사용자에게 보인다.
+   *
+   *  실행 중 터미널이 있거나 메모 내용이 있으면 한 번만 확인한다. 문구에는 실제 사유만
+   *  넣는다. 메모 여부 조회가 실패하면 닫지 않는다 — 삭제될 내용을 모른 채 지우지 않는다.
+   *  닫기 dispatch 가 성공한 뒤에만 초안·서랍을 정리한다 (실패·noteStorage 오류 포함). */
   private async onClose(workspace: WorkspaceId): Promise<void> {
     const ws =
       this.lastSnapshot?.state.workspaces.find((w) => w.id === workspace) ?? null;
     if (ws === null) return; // 이미 닫힌 카드의 늦은 클릭 — 보낼 것이 없다
-    if (hasRunningTerminals(ws)) {
+
+    const hasSessions = hasRunningTerminals(ws);
+    let hasNote = false;
+    if (this.notepad !== null) {
+      try {
+        hasNote = await this.notepad.hasContent(workspace);
+      } catch (err) {
+        console.error("note content lookup failed", err);
+        this.onError(err);
+        return;
+      }
+    }
+    if (hasSessions || hasNote) {
+      const sessionText = `All terminal sessions in it will be killed.`;
+      const noteText = `Its note will be deleted.`;
+      const reason = hasSessions && hasNote
+        ? `${sessionText} ${noteText}`
+        : hasSessions
+          ? sessionText
+          : noteText;
       let ok: boolean;
       try {
-        ok = await confirmAction(
-          `Close workspace "${ws.name}"? All terminal sessions in it will be killed.`,
-        );
+        ok = await confirmAction(`Close workspace "${ws.name}"? ${reason}`);
       } catch (err) {
         console.error("close workspace confirmation failed", err);
         this.onError(err);
@@ -554,6 +586,14 @@ export class Sidebar {
       }
       if (!ok) return;
     }
-    await this.dispatch({ type: "closeWorkspace", workspace });
+    const out = await this.dispatch({ type: "closeWorkspace", workspace });
+    // dispatch 실패(null)는 main.ts dispatchUI 가 이미 상태줄에 알렸다 — 아무것도 버리지 않는다.
+    if (out === null || this.notepad === null) return;
+    try {
+      await this.notepad.afterClosed(workspace);
+    } catch (err) {
+      // 닫기는 이미 성공했다 — 후속 정리 실패는 닫기 실패로 되돌리지 않는다.
+      console.error("note cleanup after workspace close failed", err);
+    }
   }
 }
