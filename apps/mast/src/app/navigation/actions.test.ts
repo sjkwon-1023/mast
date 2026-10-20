@@ -20,6 +20,7 @@ function context(snapshot: StateSnapshot | null = null): NavigationContext {
     createWorkspaceHere: vi.fn(),
     renameWorkspace: vi.fn(),
     closeWorkspace: vi.fn(),
+    toggleNotepad: vi.fn(),
   };
 }
 
@@ -74,10 +75,142 @@ describe("navigation wiring", () => {
     runNavAction(host, { type: "newWorkspaceHere" });
     runNavAction(host, { type: "renameWorkspace" });
     runNavAction(host, { type: "closeWorkspace" });
+    runNavAction(host, { type: "toggleNotepad" });
     expect(host.createWorkspaceHere).toHaveBeenCalledOnce();
     expect(host.renameWorkspace).toHaveBeenCalledOnce();
     expect(host.closeWorkspace).toHaveBeenCalledOnce();
+    // 메모장 토글은 snapshot 이 없어도 키를 소비하고 뷰에 넘긴다.
+    expect(host.toggleNotepad).toHaveBeenCalledOnce();
     expect(host.dispatchUI).not.toHaveBeenCalled();
+  });
+
+  it("turns Ctrl+Shift+M and Cmd+Shift+M into a notepad toggle before a snapshot exists", () => {
+    const platforms = [
+      { mac: false, modifiers: [{ ctrlKey: true }, { altKey: true }] },
+      { mac: true, modifiers: [{ metaKey: true }] },
+    ];
+    for (const { mac, modifiers } of platforms) {
+      const add = vi.spyOn(window, "addEventListener");
+      const host = context();
+      installNavKeys(host, mac);
+      const call = add.mock.calls.find(([type]) => type === "keydown")!;
+      add.mockRestore();
+      const listener = call[1] as EventListener;
+      const terminal = document.createElement("div");
+      const received = vi.fn();
+      terminal.addEventListener("keydown", received);
+      document.body.append(terminal);
+      try {
+        for (const extra of modifiers) {
+          const toggle = new KeyboardEvent("keydown", {
+            key: "M",
+            shiftKey: true,
+            bubbles: true,
+            cancelable: true,
+            ...extra,
+          });
+          terminal.dispatchEvent(toggle);
+          expect(toggle.defaultPrevented).toBe(true);
+        }
+        expect(host.toggleNotepad).toHaveBeenCalledTimes(modifiers.length);
+        expect(received).not.toHaveBeenCalled();
+
+        // 예약 키(Ctrl+Shift+C/V)는 그대로 통과한다.
+        const copy = new KeyboardEvent("keydown", {
+          key: "C",
+          ctrlKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        terminal.dispatchEvent(copy);
+        expect(copy.defaultPrevented).toBe(false);
+        expect(received).toHaveBeenCalledOnce();
+      } finally {
+        window.removeEventListener("keydown", listener, { capture: true });
+        terminal.remove();
+      }
+    }
+  });
+
+  it("consumes repeated notepad toggles without running the toggle", () => {
+    const platforms = [
+      { mac: false, key: "M", extra: { ctrlKey: true } },
+      { mac: true, key: "m", extra: { metaKey: true } },
+    ];
+    for (const { mac, key, extra } of platforms) {
+      const add = vi.spyOn(window, "addEventListener");
+      const host = context();
+      installNavKeys(host, mac);
+      const call = add.mock.calls.find(([type]) => type === "keydown")!;
+      add.mockRestore();
+      const listener = call[1] as EventListener;
+      const terminal = document.createElement("div");
+      const received = vi.fn();
+      terminal.addEventListener("keydown", received);
+      document.body.append(terminal);
+      try {
+        const repeat = new KeyboardEvent("keydown", {
+          key,
+          shiftKey: true,
+          repeat: true,
+          bubbles: true,
+          cancelable: true,
+          ...extra,
+        });
+        terminal.dispatchEvent(repeat);
+        expect(repeat.defaultPrevented).toBe(true);
+        expect(host.toggleNotepad).not.toHaveBeenCalled();
+        expect(received).not.toHaveBeenCalled();
+
+        const first = new KeyboardEvent("keydown", {
+          key,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+          ...extra,
+        });
+        terminal.dispatchEvent(first);
+        expect(first.defaultPrevented).toBe(true);
+        expect(host.toggleNotepad).toHaveBeenCalledOnce();
+      } finally {
+        window.removeEventListener("keydown", listener, { capture: true });
+        terminal.remove();
+      }
+    }
+  });
+
+  it("keeps repeating other navigation shortcuts", () => {
+    const add = vi.spyOn(window, "addEventListener");
+    const host = context(structuredClone(snapshotJson) as unknown as StateSnapshot);
+    installNavKeys(host);
+    const call = add.mock.calls.find(([type]) => type === "keydown")!;
+    add.mockRestore();
+    const listener = call[1] as EventListener;
+    const terminal = document.createElement("div");
+    const received = vi.fn();
+    terminal.addEventListener("keydown", received);
+    document.body.append(terminal);
+    try {
+      for (let count = 0; count < 2; count += 1) {
+        const repeat = new KeyboardEvent("keydown", {
+          key: "W",
+          ctrlKey: true,
+          shiftKey: true,
+          repeat: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        terminal.dispatchEvent(repeat);
+        expect(repeat.defaultPrevented).toBe(true);
+      }
+      expect(host.dispatchUI).toHaveBeenCalledTimes(2);
+      expect(host.dispatchUI).toHaveBeenLastCalledWith({ type: "closeTab", tab: 4 });
+      expect(received).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", listener, { capture: true });
+      terminal.remove();
+    }
   });
 
   it("zooms both surfaces without a snapshot and notifies registered terminal surfaces", () => {

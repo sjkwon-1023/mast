@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tauri::{AppHandle, Emitter, Manager};
 use mast_core::command::{Dispatcher, RegistryAudit};
+use mast_core::notes::NoteStore;
 use mast_core::persist::Saver;
 use mast_core::record::RecordStore;
 use mast_core::session::{SessionId, SessionManager};
@@ -91,6 +92,10 @@ pub struct AppState {
     /// 끝난 탭의 마지막 화면 기록 (ADR-0018) — 디렉터리 경로만 드는 값이라 자체
     /// lock 이 없다. `TauriHost` 도 같은 `Arc` 를 들어 탭 닫기 경로에서 지운다.
     pub records: Arc<RecordStore>,
+    /// 메모 파일 저장소 — 본문과 존재 여부는 이 파일들에만 있고 스냅샷·`AppState`
+    /// 모델·state.json 에는 들어가지 않는다. 파일 I/O 는 Dispatcher lock 밖에서
+    /// 하고, 잠금 순서는 notes → Dispatcher 다 (`commands::dispatch_with_notes`).
+    pub notes: Arc<NoteStore>,
     /// WSL 준비 상태 진단기 — 부팅에 한 번 비동기로 돌고 명시적
     /// 재검사로만 갱신된다. `TauriHost` 의 스폰 게이트와 프로비저닝, 안내 커맨드가
     /// 이 하나를 공유한다.

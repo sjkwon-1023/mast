@@ -8,6 +8,7 @@ import {
   workspaceAtOrdinal,
 } from "../../shared/keys";
 import type { KeyAction, PaneRect } from "../../shared/keys";
+import { IS_MAC } from "../../shared/platform";
 import { logSwallowedShortcut } from "../../infrastructure/logging";
 import { adjustFontSize, resetFontSize } from "../../features/terminal/settings";
 import { adjustViewerFontSize, resetViewerFontSize } from "../../features/viewers/viewer-font";
@@ -20,27 +21,32 @@ export interface NavigationContext {
   createWorkspaceHere(): void;
   renameWorkspace(): void;
   closeWorkspace(): void;
+  /** 메모장 서랍 토글 — snapshot 이 없어도 키를 소비하고 호출된다.
+   *  생략하면 키만 소비하고 동작하지 않는다 (메모장을 배선하지 않은 테스트·부트 경로). */
+  toggleNotepad?(): void;
 }
 
 // 가로채기 목록의 키는 대상이 없어도 소비한다. capture로 xterm보다 먼저 처리한다.
-export function installNavKeys(context: NavigationContext): void {
+export function installNavKeys(context: NavigationContext, mac = IS_MAC): void {
   window.addEventListener(
     "keydown",
     (ev) => {
       const action = keyAction({
         key: ev.key,
         ctrl: ev.ctrlKey,
-      meta: ev.metaKey,
+        meta: ev.metaKey,
         alt: ev.altKey,
         shift: ev.shiftKey,
         isComposing: ev.isComposing,
-      });
+      }, mac);
       if (action === null) {
         if (ev.isComposing && (ev.ctrlKey || ev.altKey)) logSwallowedShortcut(ev);
         return;
       }
       ev.preventDefault();
       ev.stopPropagation();
+      // 반복 keydown 은 토글 키로 소비만 한다 — 서랍이 열렸다 닫히는 흔들림을 막는다.
+      if (action.type === "toggleNotepad" && ev.repeat) return;
       runNavAction(context, action);
     },
     { capture: true },
@@ -49,6 +55,11 @@ export function installNavKeys(context: NavigationContext): void {
 
 // 매 입력마다 최신 스냅샷을 읽고, 실제 명령은 UI의 오류 표시·포커스 보상 경로를 탄다.
 export function runNavAction(context: NavigationContext, action: KeyAction): void {
+  // 메모장 토글은 snapshot 유무와 무관하게 키를 소비한다 — 범위 확정은 뷰가 한다.
+  if (action.type === "toggleNotepad") {
+    context.toggleNotepad?.();
+    return;
+  }
   // 생성·사이드바 동작·전체 줌은 스냅샷이 없어도 처리한다.
   if (action.type === "newWorkspaceHere") {
     context.createWorkspaceHere();

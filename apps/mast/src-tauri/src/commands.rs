@@ -16,13 +16,14 @@
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
 use tauri::ipc::{Channel, InvokeResponseBody, Response};
 use tauri::{AppHandle, Manager, State};
-use mast_core::command::{Command, CommandError, CommandOutput, NewTab};
-use mast_core::model::TabId;
+use mast_core::command::{Command, CommandError, CommandOutput, Dispatcher, NewTab};
+use mast_core::model::{TabId, WorkspaceId};
+use mast_core::notes::{NoteAccess, NoteScope, NoteStore, SaveOutcome};
 use mast_core::record::RecordStore;
 use mast_core::session::{PtySession, SessionId};
 #[cfg(not(target_os = "macos"))]
@@ -66,6 +67,109 @@ fn creates_terminal(cmd: &Command) -> bool {
     }
 }
 
+/// 이미 닫혔거나 없는 워크스페이스를 범위로 준 메모 요청의 거절 사유.
+const UNKNOWN_WORKSPACE: &str = "unknown workspace";
+
+/// notes 작업 잠금을 잡고, workspace 범위면 그 ID 가 지금 상태에 있는지 Dispatcher
+/// 잠금을 **짧게** 빌려 확인한다. 파일 I/O 는 이 함수 밖에서 Dispatcher 잠금 없이
+/// 일어나고, 잠금 순서는 항상 notes → Dispatcher 다 (역순 금지 — `state.rs`).
+fn notes_access<'a>(
+    notes: &'a NoteStore,
+    dispatcher: &Mutex<Dispatcher>,
+    scope: NoteScope,
+) -> Result<NoteAccess<'a>, String> {
+    let access = notes.lock()?;
+    if let NoteScope::Workspace { workspace } = scope {
+        let live = dispatcher
+            .lock()
+            .unwrap()
+            .state()
+            .workspaces
+            .iter()
+            .any(|ws| ws.id == workspace);
+        if !live {
+            return Err(UNKNOWN_WORKSPACE.to_owned());
+        }
+    }
+    Ok(access)
+}
+
+fn read_note(
+    notes: &NoteStore,
+    dispatcher: &Mutex<Dispatcher>,
+    scope: NoteScope,
+) -> Result<String, String> {
+    notes_access(notes, dispatcher, scope)?.read(scope)
+}
+
+fn save_note(
+    notes: &NoteStore,
+    dispatcher: &Mutex<Dispatcher>,
+    scope: NoteScope,
+    expected: &str,
+    content: &str,
+) -> Result<SaveOutcome, String> {
+    notes_access(notes, dispatcher, scope)?.save(scope, expected, content)
+}
+
+fn workspace_has_note(
+    notes: &NoteStore,
+    dispatcher: &Mutex<Dispatcher>,
+    workspace: WorkspaceId,
+) -> Result<bool, String> {
+    notes_access(notes, dispatcher, NoteScope::Workspace { workspace })?.has_content(workspace)
+}
+
+/// 구조 변이의 실제 실행부 — CloseWorkspace 만 메모 파일 경계를 함께 통과한다.
+///
+/// 닫기는 notes 잠금을 **dispatch 가 끝날 때까지** 쥔다. 삭제와 구조 닫기 사이에
+/// 저장이 끼어들면 이미 지운 파일이 되살아나고, 반대로 닫기가 먼저 끝나면 늦은
+/// 저장은 [`UNKNOWN_WORKSPACE`] 로 거부되어 되살아나지 않는다. 다른 명령은 notes
+/// 잠금을 타지 않는다.
+///
+/// 기존 CloseWorkspace 의 실패 조건은 대상 부재뿐이다
+/// (`command/mutations.rs`). 메모를 지운 뒤 닫기가 실패하는 창을 만들지 않으려고
+/// 그 조건을 삭제 전에 확인한다. `publish` 는 성공했을 때만 Dispatcher 잠금
+/// 안에서 부른다 — 실패 경로는 emit 도 저장 예약도 하지 않는다.
+fn dispatch_with_notes(
+    notes: &NoteStore,
+    dispatcher: &Mutex<Dispatcher>,
+    cmd: Command,
+    publish: impl FnOnce(&Dispatcher),
+) -> Result<CommandOutput, CommandError> {
+    let _close_access = match &cmd {
+        Command::CloseWorkspace { workspace } => {
+            let workspace = *workspace;
+            let access = notes
+                .lock()
+                .map_err(|message| CommandError::NoteStorage { message })?;
+            {
+                let live = dispatcher
+                    .lock()
+                    .unwrap()
+                    .state()
+                    .workspaces
+                    .iter()
+                    .any(|ws| ws.id == workspace);
+                if !live {
+                    return Err(CommandError::UnknownTarget {
+                        target: format!("workspace {}", workspace.0),
+                    });
+                }
+            }
+            access
+                .delete_workspace(workspace)
+                .map_err(|message| CommandError::NoteStorage { message })?;
+            Some(access)
+        }
+        _ => None,
+    };
+    let mut d = dispatcher.lock().unwrap();
+    let out = d.dispatch(cmd)?;
+    publish(&d);
+    Ok(out)
+}
+
 /// 구조 변이 단일 진입점 — 커맨드 bus. 성공 시 `state-changed` 로 새 스냅샷을
 /// emit + 저장 예약하고(`publish_state`) `CommandOutput` 을 돌려준다 (dev 훅·
 /// MCP 가 생성 id 를 후속 조작에 쓴다). 실패(`CommandError`)는 상태 불변이
@@ -96,6 +200,7 @@ pub async fn dispatch(
     // 블로킹)이 Dispatcher lock 아래에서 일어난다 (출력 핫패스와 무관해 수용한다).
     // 메인(이벤트 루프) 스레드는 잡지 않는다.
     let dispatcher = Arc::clone(&state.dispatcher);
+    let notes = Arc::clone(&state.notes);
     let wsl_for_dispatch = Arc::clone(&state.wsl);
     let wsl_for_provision = Arc::clone(&state.wsl);
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -114,12 +219,9 @@ pub async fn dispatch(
             };
             wsl_health::ensure_target(&wsl_for_dispatch, crate::host::resolve_distro(distro));
         }
-        let mut d = dispatcher.lock().unwrap();
-        let out = d.dispatch(cmd)?;
         // emit + 저장 예약은 lock 안에서 — revision 과 상태가 일관된 스냅샷만
         // 나가고, 같은 상태가 디스크 저장으로도 예약된다.
-        publish_state(&app, &d);
-        Ok(out)
+        dispatch_with_notes(&notes, &dispatcher, cmd, |d| publish_state(&app, d))
     })
     .await
     // join 실패 = 위 클로저의 패닉(락 poison 등 프로그램 결함) — 가려서 ok 로
@@ -160,6 +262,56 @@ pub async fn dispatch(
         }
     }
     result
+}
+
+/// 메모 읽기 — 범위 파일의 UTF-8 원문. 파일이 없을 때만 빈 문자열이고, 잘못된
+/// UTF-8·비정규 파일·2 MiB 초과는 오류다. workspace 범위는 살아 있는 ID 만 받는다.
+/// 경로·distro 인자는 없고 크기 검증은 core 가 다시 한다.
+#[tauri::command]
+pub async fn notes_read(
+    state: State<'_, AppState>,
+    scope: NoteScope,
+) -> Result<String, String> {
+    let notes = Arc::clone(&state.notes);
+    let dispatcher = Arc::clone(&state.dispatcher);
+    tauri::async_runtime::spawn_blocking(move || read_note(&notes, &dispatcher, scope))
+        .await
+        .map_err(|err| format!("notes_read task join failed: {err}"))?
+}
+
+/// 메모 저장 — `expected` 가 디스크 원문과 같을 때만 원자 교체한다. 충돌은 오류가
+/// 아니라 현재 원문을 실은 [`SaveOutcome::Conflict`] 로 돌려주고 파일을 건드리지
+/// 않는다 (프런트가 기준만 갱신해 이어 저장한다).
+#[tauri::command]
+pub async fn notes_save(
+    state: State<'_, AppState>,
+    scope: NoteScope,
+    expected: String,
+    content: String,
+) -> Result<SaveOutcome, String> {
+    let notes = Arc::clone(&state.notes);
+    let dispatcher = Arc::clone(&state.dispatcher);
+    tauri::async_runtime::spawn_blocking(move || {
+        save_note(&notes, &dispatcher, scope, &expected, &content)
+    })
+    .await
+    .map_err(|err| format!("notes_save task join failed: {err}"))?
+}
+
+/// 워크스페이스 메모가 비어 있지 않은지 — 본문을 프런트로 가져오지 않고 길이만
+/// 판정한다 (닫기 확인 문구용). 파일 없음만 false, 확인 불능은 오류다.
+#[tauri::command]
+pub async fn notes_workspace_has_content(
+    state: State<'_, AppState>,
+    workspace: WorkspaceId,
+) -> Result<bool, String> {
+    let notes = Arc::clone(&state.notes);
+    let dispatcher = Arc::clone(&state.dispatcher);
+    tauri::async_runtime::spawn_blocking(move || {
+        workspace_has_note(&notes, &dispatcher, workspace)
+    })
+    .await
+    .map_err(|err| format!("notes_workspace_has_content task join failed: {err}"))?
 }
 
 /// 셸이 없는 탭에 셸을 다시 띄운다 — `NotStarted`(시작 못 함)와 `Exited`(죽음) 양쪽이
@@ -1435,6 +1587,328 @@ mod tests {
         let serialized = serde_json::to_value(settings).unwrap();
         assert_eq!(serialized["browser"]["enabled"], true);
         assert!(serialized["browser"].get("agentEval").is_none());
+    }
+
+    // --- 메모장 파일 경계 (C2) -------------------------------------------------
+    //
+    // 실제 Dispatcher 와 실제 임시 디렉터리 NoteStore 를 쓴다 — 파일 I/O 를 대체하지
+    // 않는다. mast-app 은 Windows 에서만 컴파일되므로 이 테스트는 Windows native
+    // 게이트(`cargo test -p mast-app --target x86_64-pc-windows-msvc commands::tests`)
+    // 에서 돈다.
+
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+    use mast_core::command::{SessionHost, ShellSpawnReq};
+    use mast_core::session::SessionId;
+
+    #[derive(Clone, Default)]
+    struct TestHost {
+        next_session: Arc<AtomicU32>,
+        kills: Arc<Mutex<Vec<SessionId>>>,
+    }
+
+    impl SessionHost for TestHost {
+        fn spawn_shell(&self, _req: ShellSpawnReq) -> anyhow::Result<SessionId> {
+            Ok(self.next_session.fetch_add(1, Ordering::SeqCst) + 1)
+        }
+
+        fn kill(&self, id: SessionId) {
+            self.kills.lock().unwrap().push(id);
+        }
+    }
+
+    /// Windows 테스트에서 쓸 임시 디렉터리 — tempfile 은 mast-app 의 Windows
+    /// 의존이 아니라(추가하면 Cargo.lock 이 바뀐다) 직접 만들고 지운다.
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            static NEXT: AtomicU32 = AtomicU32::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "mast-commands-test-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::SeqCst)
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn notes_fixture() -> (TestDir, NoteStore, Mutex<Dispatcher>, TestHost) {
+        let dir = TestDir::new();
+        let notes = NoteStore::new(dir.path().join("notes"));
+        let host = TestHost::default();
+        let dispatcher = Mutex::new(Dispatcher::new(Box::new(host.clone())));
+        (dir, notes, dispatcher, host)
+    }
+
+    fn create_workspace(
+        notes: &NoteStore,
+        dispatcher: &Mutex<Dispatcher>,
+        with_terminal: bool,
+    ) -> (WorkspaceId, Option<SessionId>) {
+        let out = dispatch_with_notes(
+            notes,
+            dispatcher,
+            Command::CreateWorkspace {
+                name: "api".to_owned(),
+                root_path: None,
+                distro: None,
+                tab: with_terminal.then_some(NewTab::Terminal { cwd: None }),
+            },
+            |_| {},
+        )
+        .unwrap();
+        let CommandOutput::WorkspaceCreated {
+            workspace,
+            session,
+            ..
+        } = out
+        else {
+            panic!("createWorkspace must return workspaceCreated");
+        };
+        (workspace, session)
+    }
+
+    fn note_file(dir: &TestDir, name: &str) -> PathBuf {
+        dir.path().join("notes").join(name)
+    }
+
+    #[test]
+    fn notes_helpers_use_the_real_store_and_keep_scopes_apart() {
+        let (dir, notes, dispatcher, _host) = notes_fixture();
+        let (workspace, _) = create_workspace(&notes, &dispatcher, false);
+        let scope = NoteScope::Workspace { workspace };
+
+        // setup 은 디렉터리를 만들지 않는다 — 첫 저장에서 생긴다.
+        assert!(!dir.path().join("notes").exists());
+        assert_eq!(read_note(&notes, &dispatcher, NoteScope::Global).unwrap(), "");
+        assert_eq!(
+            save_note(&notes, &dispatcher, NoteScope::Global, "", "전역 메모").unwrap(),
+            SaveOutcome::Saved
+        );
+        assert_eq!(
+            save_note(&notes, &dispatcher, scope, "", "워크스페이스 메모").unwrap(),
+            SaveOutcome::Saved
+        );
+        assert_eq!(read_note(&notes, &dispatcher, scope).unwrap(), "워크스페이스 메모");
+        assert!(workspace_has_note(&notes, &dispatcher, workspace).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(note_file(
+                &dir,
+                &format!("workspace-{}.txt", workspace.0)
+            ))
+            .unwrap(),
+            "워크스페이스 메모"
+        );
+
+        // 늦은 기준의 저장은 파일을 덮어쓰지 않고 현재 원문을 돌려준다.
+        assert_eq!(
+            save_note(&notes, &dispatcher, scope, "stale", "덮어쓰기").unwrap(),
+            SaveOutcome::Conflict {
+                current: "워크스페이스 메모".into()
+            }
+        );
+        assert_eq!(read_note(&notes, &dispatcher, scope).unwrap(), "워크스페이스 메모");
+        assert_eq!(read_note(&notes, &dispatcher, NoteScope::Global).unwrap(), "전역 메모");
+    }
+
+    #[test]
+    fn workspace_note_helpers_reject_unknown_workspaces_without_touching_files() {
+        let (dir, notes, dispatcher, _host) = notes_fixture();
+        let unknown = NoteScope::Workspace {
+            workspace: WorkspaceId(99),
+        };
+        assert_eq!(
+            read_note(&notes, &dispatcher, unknown).unwrap_err(),
+            UNKNOWN_WORKSPACE
+        );
+        assert_eq!(
+            save_note(&notes, &dispatcher, unknown, "", "x").unwrap_err(),
+            UNKNOWN_WORKSPACE
+        );
+        assert_eq!(
+            workspace_has_note(&notes, &dispatcher, WorkspaceId(99)).unwrap_err(),
+            UNKNOWN_WORKSPACE
+        );
+        assert!(!dir.path().join("notes").exists());
+    }
+
+    #[test]
+    fn closing_a_workspace_deletes_only_its_note_and_publishes_once() {
+        let (dir, notes, dispatcher, host) = notes_fixture();
+        let (workspace, session) = create_workspace(&notes, &dispatcher, true);
+        let scope = NoteScope::Workspace { workspace };
+        save_note(&notes, &dispatcher, scope, "", "workspace note").unwrap();
+        save_note(&notes, &dispatcher, NoteScope::Global, "", "global note").unwrap();
+        let before = dispatcher.lock().unwrap().state().revision;
+
+        let published = AtomicBool::new(false);
+        let out = dispatch_with_notes(
+            &notes,
+            &dispatcher,
+            Command::CloseWorkspace { workspace },
+            |_| published.store(true, Ordering::SeqCst),
+        )
+        .unwrap();
+
+        assert_eq!(out, CommandOutput::Done);
+        assert!(published.load(Ordering::SeqCst));
+        assert!(!note_file(&dir, &format!("workspace-{}.txt", workspace.0)).exists());
+        assert_eq!(
+            std::fs::read_to_string(note_file(&dir, "global.txt")).unwrap(),
+            "global note"
+        );
+        let d = dispatcher.lock().unwrap();
+        assert!(d.state().workspaces.is_empty());
+        assert_eq!(d.state().revision, before + 1);
+        drop(d);
+        assert_eq!(*host.kills.lock().unwrap(), vec![session.unwrap()]);
+    }
+
+    #[test]
+    fn a_late_save_after_close_cannot_recreate_the_note() {
+        let (dir, notes, dispatcher, _host) = notes_fixture();
+        let (workspace, _) = create_workspace(&notes, &dispatcher, false);
+        let scope = NoteScope::Workspace { workspace };
+        let file = note_file(&dir, &format!("workspace-{}.txt", workspace.0));
+        save_note(&notes, &dispatcher, scope, "", "saved before close").unwrap();
+        dispatch_with_notes(
+            &notes,
+            &dispatcher,
+            Command::CloseWorkspace { workspace },
+            |_| {},
+        )
+        .unwrap();
+        assert!(!file.exists());
+
+        assert_eq!(
+            save_note(&notes, &dispatcher, scope, "", "late save").unwrap_err(),
+            UNKNOWN_WORKSPACE
+        );
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn closing_twice_reports_unknown_target_and_keeps_the_file_deleted() {
+        let (dir, notes, dispatcher, _host) = notes_fixture();
+        let (workspace, _) = create_workspace(&notes, &dispatcher, false);
+        save_note(
+            &notes,
+            &dispatcher,
+            NoteScope::Workspace { workspace },
+            "",
+            "note",
+        )
+        .unwrap();
+        dispatch_with_notes(
+            &notes,
+            &dispatcher,
+            Command::CloseWorkspace { workspace },
+            |_| {},
+        )
+        .unwrap();
+        let file = note_file(&dir, &format!("workspace-{}.txt", workspace.0));
+        let revision = dispatcher.lock().unwrap().state().revision;
+
+        let published = AtomicBool::new(false);
+        let err = dispatch_with_notes(
+            &notes,
+            &dispatcher,
+            Command::CloseWorkspace { workspace },
+            |_| published.store(true, Ordering::SeqCst),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, CommandError::UnknownTarget { .. }), "{err:?}");
+        assert!(!published.load(Ordering::SeqCst));
+        assert_eq!(dispatcher.lock().unwrap().state().revision, revision);
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn a_failed_note_delete_keeps_the_workspace_session_and_revision() {
+        let (dir, notes, dispatcher, host) = notes_fixture();
+        let (workspace, session) = create_workspace(&notes, &dispatcher, true);
+        // 삭제가 불가능한 대상 — 같은 이름의 디렉터리.
+        let file = note_file(&dir, &format!("workspace-{}.txt", workspace.0));
+        std::fs::create_dir_all(&file).unwrap();
+        let before = dispatcher.lock().unwrap();
+        let before_state = serde_json::to_value(before.state()).unwrap();
+        let before_revision = before.state().revision;
+        drop(before);
+
+        let published = AtomicBool::new(false);
+        let err = dispatch_with_notes(
+            &notes,
+            &dispatcher,
+            Command::CloseWorkspace { workspace },
+            |_| published.store(true, Ordering::SeqCst),
+        )
+        .unwrap_err();
+
+        let CommandError::NoteStorage { message } = err else {
+            panic!("expected a note storage error, got {err:?}");
+        };
+        assert!(message.contains("regular file"), "{message}");
+        assert!(!published.load(Ordering::SeqCst));
+        let after = dispatcher.lock().unwrap();
+        assert_eq!(serde_json::to_value(after.state()).unwrap(), before_state);
+        assert_eq!(after.state().revision, before_revision);
+        assert!(after.state().workspaces.iter().any(|ws| ws.id == workspace));
+        drop(after);
+        assert!(host.kills.lock().unwrap().is_empty());
+        assert_eq!(session, Some(1));
+        assert!(file.is_dir());
+    }
+
+    #[test]
+    fn note_storage_error_serializes_as_the_ts_mirror() {
+        assert_eq!(
+            serde_json::to_value(CommandError::NoteStorage {
+                message: "note is not a regular file".into()
+            })
+            .unwrap(),
+            serde_json::json!({ "type": "noteStorage", "message": "note is not a regular file" })
+        );
+    }
+
+    #[test]
+    fn the_state_snapshot_never_carries_note_content() {
+        let (_dir, notes, dispatcher, _host) = notes_fixture();
+        let (workspace, _) = create_workspace(&notes, &dispatcher, false);
+        save_note(
+            &notes,
+            &dispatcher,
+            NoteScope::Workspace { workspace },
+            "",
+            "secret workspace body",
+        )
+        .unwrap();
+        save_note(
+            &notes,
+            &dispatcher,
+            NoteScope::Global,
+            "",
+            "secret global body",
+        )
+        .unwrap();
+
+        let d = dispatcher.lock().unwrap();
+        let json = serde_json::to_string(&d.snapshot()).unwrap();
+        assert!(!json.contains("secret workspace body"));
+        assert!(!json.contains("secret global body"));
+        assert!(!json.contains("noteStorage"));
     }
 }
 

@@ -12,9 +12,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { shortcutBadge, shortcutLabel } from "../../shared/keys";
 import { LATEST_RELEASE_URL, Sidebar } from "./sidebar";
+import type { NotepadCloseGuard } from "./sidebar";
+import { createNotepadLifecycle } from "../../app/lifecycle";
+import { createNotepadState } from "../notepad/state";
+import { NOTEPAD_DRAFT_KEY } from "../../shared/types";
 import type {
   AgentStatus,
   Command,
+  CommandOutput,
   NotificationState,
   StateSnapshot,
   Tab,
@@ -86,7 +91,11 @@ function press(input: HTMLInputElement, key: string): void {
   input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
 }
 
-function mount(): {
+function mount(options: {
+  /** closeWorkspace dispatch 결과 — null 이면 실패(기존 기본값). */
+  output?: CommandOutput | null;
+  notepad?: NotepadCloseGuard;
+} = {}): {
   sidebar: Sidebar;
   cards: () => HTMLElement[];
   dispatched: Command[];
@@ -112,7 +121,7 @@ function mount(): {
     root,
     async (cmd) => {
       dispatched.push(cmd);
-      return null;
+      return options.output ?? null;
     },
     () => {
       newWorkspaceCalls += 1;
@@ -126,6 +135,7 @@ function mount(): {
     (err) => {
       errors.push(err);
     },
+    options.notepad ?? null,
   );
   const cardsEl = root.querySelector<HTMLElement>(".sidebar-cards");
   if (cardsEl === null) throw new Error("sidebar-cards not mounted");
@@ -482,6 +492,173 @@ describe("Sidebar close (× 버튼 · Ctrl+Shift+Q)", () => {
       `Close workspace (${shortcutLabel("closeWorkspace")})`,
     );
     expect(shortcutLabel("closeWorkspace")).toBe("Alt+Shift+Q");
+  });
+});
+
+describe("Sidebar close with the note (C5 §5)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubConfirm(answer: boolean): ReturnType<typeof vi.fn> {
+    const spy = vi.fn(() => answer);
+    vi.stubGlobal("confirm", spy);
+    return spy;
+  }
+
+  /** 세션이 없는 워크스페이스 — 메모만 있을 때의 확인 문구를 분리한다. */
+  function quietWs(id: number): Workspace {
+    return {
+      ...ws(id),
+      panes: { [String(id)]: { id, tabs: [], activeTab: null } },
+    };
+  }
+
+  function guard(hasContent: () => Promise<boolean>): {
+    notepad: NotepadCloseGuard;
+    afterClosed: ReturnType<typeof vi.fn>;
+  } {
+    const afterClosed = vi.fn(async () => undefined);
+    return { notepad: { hasContent, afterClosed }, afterClosed };
+  }
+
+  it("세션만 있으면 기존 문구만 쓴다", async () => {
+    const confirmSpy = stubConfirm(true);
+    const { notepad, afterClosed } = guard(async () => false);
+    const { sidebar, dispatched } = mount({ output: { type: "done" }, notepad });
+    sidebar.render(snapshot(1, THREE, 2));
+
+    await sidebar.closeActive();
+
+    expect(confirmSpy.mock.calls[0][0]).toBe(
+      'Close workspace "ws 2"? All terminal sessions in it will be killed.',
+    );
+    expect(dispatched).toEqual([{ type: "closeWorkspace", workspace: 2 }]);
+    expect(afterClosed).toHaveBeenCalledWith(2);
+  });
+
+  it("메모만 있으면 삭제 경고만 쓰고, 성공 뒤 초안을 정리한다", async () => {
+    const confirmSpy = stubConfirm(true);
+    const { notepad, afterClosed } = guard(async () => true);
+    const { sidebar, dispatched } = mount({ output: { type: "done" }, notepad });
+    sidebar.render(snapshot(1, [quietWs(1), quietWs(2)], 2));
+
+    await sidebar.closeActive();
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy.mock.calls[0][0]).toBe(
+      'Close workspace "ws 2"? Its note will be deleted.',
+    );
+    expect(dispatched).toEqual([{ type: "closeWorkspace", workspace: 2 }]);
+    expect(afterClosed).toHaveBeenCalledWith(2);
+  });
+
+  it("메모 여부 조회 중 수락된 입력도 확인 시점에 다시 보고 삭제 경고한다", async () => {
+    const confirmSpy = stubConfirm(true);
+    const ipc = {
+      read: vi.fn(async () => ""),
+      save: vi.fn(async () => ({ type: "saved" as const })),
+    };
+    const state = createNotepadState({ ipc });
+    let resolveLookup!: (value: boolean) => void;
+    const lookup = new Promise<boolean>((resolve) => {
+      resolveLookup = resolve;
+    });
+    const lifecycle = createNotepadLifecycle({
+      confirm: async () => true,
+      hasMarkdownDrafts: () => false,
+      showError: () => {},
+      reload: () => {},
+      loadState: async () => state,
+    });
+    lifecycle.attachState(state);
+    await state.open({ type: "workspace", workspace: 1 });
+    const notepad: NotepadCloseGuard = {
+      hasContent: (workspace) => lifecycle.notepadHasContent(workspace, () => lookup),
+      afterClosed: async () => {},
+    };
+    const { sidebar, dispatched } = mount({ output: { type: "done" }, notepad });
+    sidebar.render(snapshot(1, [quietWs(1)], 1));
+
+    const closing = sidebar.closeActive();
+    // 조회가 false 로 끝나기 전에 서랍이 받은 입력과 같은 수락 경로.
+    expect(state.acceptText("typed while waiting")).toBe(true);
+    resolveLookup(false);
+    await closing;
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy.mock.calls[0][0]).toBe('Close workspace "ws 1"? Its note will be deleted.');
+    expect(dispatched).toEqual([{ type: "closeWorkspace", workspace: 1 }]);
+    state.dispose();
+    sessionStorage.removeItem(NOTEPAD_DRAFT_KEY);
+  });
+
+  it("세션과 메모가 모두 있으면 두 사유를 한 번의 확인에 넣는다", async () => {
+    const confirmSpy = stubConfirm(true);
+    const { notepad } = guard(async () => true);
+    const { sidebar, dispatched } = mount({ output: { type: "done" }, notepad });
+    sidebar.render(snapshot(1, THREE, 2));
+
+    await sidebar.closeActive();
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy.mock.calls[0][0]).toBe(
+      'Close workspace "ws 2"? All terminal sessions in it will be killed. Its note will be deleted.',
+    );
+    expect(dispatched).toEqual([{ type: "closeWorkspace", workspace: 2 }]);
+  });
+
+  it("세션도 메모도 없으면 확인 없이 닫는다", async () => {
+    const confirmSpy = stubConfirm(true);
+    const { notepad } = guard(async () => false);
+    const { sidebar, dispatched } = mount({ output: { type: "done" }, notepad });
+    sidebar.render(snapshot(1, [quietWs(1)], 1));
+
+    await sidebar.closeActive();
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(dispatched).toEqual([{ type: "closeWorkspace", workspace: 1 }]);
+  });
+
+  it("메모 여부 조회가 실패하면 닫지 않고 사유를 보인다", async () => {
+    const confirmSpy = stubConfirm(true);
+    const failure = new Error("note lookup failed");
+    const { notepad, afterClosed } = guard(async () => {
+      throw failure;
+    });
+    const { sidebar, dispatched, errors } = mount({ output: { type: "done" }, notepad });
+    sidebar.render(snapshot(1, [quietWs(1)], 1));
+
+    await sidebar.closeActive();
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(dispatched).toEqual([]);
+    expect(afterClosed).not.toHaveBeenCalled();
+    expect(errors).toEqual([failure]);
+  });
+
+  it("취소하면 파일·초안·세션을 그대로 둔다", async () => {
+    stubConfirm(false);
+    const { notepad, afterClosed } = guard(async () => true);
+    const { sidebar, dispatched } = mount({ output: { type: "done" }, notepad });
+    sidebar.render(snapshot(1, THREE, 2));
+
+    await sidebar.closeActive();
+
+    expect(dispatched).toEqual([]);
+    expect(afterClosed).not.toHaveBeenCalled();
+  });
+
+  it("noteStorage 실패로 닫기가 실패하면 아무것도 버리지 않는다", async () => {
+    stubConfirm(true);
+    const { notepad, afterClosed } = guard(async () => true);
+    const { sidebar, dispatched } = mount({ output: null, notepad });
+    sidebar.render(snapshot(1, [quietWs(1)], 1));
+
+    await sidebar.closeActive();
+
+    expect(dispatched).toEqual([{ type: "closeWorkspace", workspace: 1 }]);
+    expect(afterClosed).not.toHaveBeenCalled();
   });
 });
 

@@ -38,6 +38,7 @@ const SHORTCUT_IDS = [
   "prevWorkspace",
   "nextWorkspace",
   "closeWorkspace",
+  "toggleNotepad",
 ] as const;
 
 describe("keyAction", () => {
@@ -134,7 +135,7 @@ describe("keyAction", () => {
   });
 
   it("Alt+Shift 는 생성·닫기·워크스페이스 순환의 별칭이며 D는 자동 분할이다", () => {
-    for (const key of ["W", "T", "B", "N", "Q", "[", "]"]) {
+    for (const key of ["W", "T", "B", "N", "Q", "[", "]", "M"]) {
       expect(keyAction(spec({ key, alt: true, shift: true }))).toEqual(
         keyAction(spec({ key, ctrl: true, shift: true })),
       );
@@ -176,6 +177,22 @@ describe("keyAction", () => {
     expect(keyAction(spec({ key: "q", ctrl: true, shift: true }))).toEqual({
       type: "closeWorkspace",
     });
+  });
+
+  it("메모장 토글은 Ctrl+Shift+M / Alt+Shift+M 이고 수식 없는 M·IME 는 통과한다", () => {
+    expect(keyAction(spec({ key: "M", ctrl: true, shift: true }))).toEqual({
+      type: "toggleNotepad",
+    });
+    expect(keyAction(spec({ key: "M", alt: true, shift: true }))).toEqual({
+      type: "toggleNotepad",
+    });
+    // Ctrl/Alt 단독 M 은 셸·TUI 몫이다.
+    expect(keyAction(spec({ key: "m", ctrl: true }))).toBeNull();
+    expect(keyAction(spec({ key: "m", alt: true }))).toBeNull();
+    expect(keyAction(spec({ key: "m", shift: true }))).toBeNull();
+    expect(keyAction(spec({ key: "m" }))).toBeNull();
+    // IME 조합 중에는 조합기 소유다.
+    expect(keyAction(spec({ key: "M", ctrl: true, shift: true, isComposing: true }))).toBeNull();
   });
 
   it("Ctrl+Shift+C / Ctrl+Shift+V 는 절대 매칭되지 않는다 — 복사·붙여넣기 관례", () => {
@@ -262,6 +279,7 @@ describe("shortcutLabel", () => {
     expect(shortcutLabel("newFolderTab")).toBe("Alt+Shift+B");
     expect(shortcutLabel("newWorkspace")).toBe("Alt+Shift+N");
     expect(shortcutLabel("closeWorkspace")).toBe("Alt+Shift+Q");
+    expect(shortcutLabel("toggleNotepad")).toBe("Alt+Shift+M");
     // 문자가 아닌 키는 대문자 변환이 항등이다 — 표기가 그대로 나간다.
     expect(shortcutLabel("prevWorkspace")).toBe("Alt+Shift+[");
     expect(shortcutLabel("nextWorkspace")).toBe("Alt+Shift+]");

@@ -3106,6 +3106,59 @@ item record the Windows version, the WebView2 runtime version, the keyboard and 
 These are Windows field checks only. ARM64 and macOS are not run by this list and are not covered by
 the Linux gates.
 
+### Unreleased — notepad field verification (ADR-0034, 2026-10-20)
+
+Pending Windows field verification. The Linux gates and the Windows native tests do not show
+WebView2 behavior. Do not mark an item passed until it has been run on the target machine. Record
+the commit, Windows version, WebView2 runtime, distro and whether the drawer was opened before the
+check.
+
+1. **Entry, keys and accessibility.** In a terminal, a Markdown textarea, a sidebar field and a
+   native browser page, toggle the drawer with `Ctrl+Shift+M` and `Alt+Shift+M`, close it with
+   Esc and the Close button, and check that held keys do not flap it. The shortcut must not reach
+   the shell or page. During Korean composition, the shortcut and Esc must not steal the
+   composition. Copy/paste reservations, `Tab` movement, the English `Notepad`, `This workspace`
+   and `Global` labels, the note label and the save-error text must be reachable and readable.
+2. **Layout is unchanged.** With a TUI and several panes, compare terminal `cols`/`rows`, pane
+   bounds and resize records before opening, while open and after closing. Nothing may resize,
+   re-attach or force a TUI redraw. The drawer must remain closable in a narrow window. Open a
+   native browser page, toggle the drawer, and confirm the page is hidden while open and returns
+   to its previous bounds after closing.
+3. **Persistence and scopes.** Write different Korean notes in workspace A, workspace B and
+   Global. Change scope before the 500 ms debounce, then close the drawer, close a workspace and
+   close the app; reopen and compare each note. A new workspace in the same folder must not
+   inherit the old workspace note. Confirm the files appear under the Windows app data directory
+   (`%AppData%\app.mast.desktop\notes`) and not in a WSL, 9P or distribution path.
+4. **Quit races.** Type into the drawer and immediately close the window with the title-bar X
+   (and from the taskbar). With a note only, Mast must flush before exiting and must not show a
+   note discard prompt when it succeeds. With unsaved Markdown, the existing Markdown
+   confirmation must still appear. Force a save failure (item 6) and confirm the **Quit anyway**
+   prompt: cancelling keeps Mast open with the draft. A close during a reload before the JS guard
+   is installed may lose the sessionStorage draft (accepted limit); text already saved to disk
+   must remain.
+5. **Reload races.** Reproduce a reload before the debounce, during a file save, and immediately
+   after another keystroke with `Ctrl+Shift+R`, `window.__mast.reload()` and
+   `window.__mast.resetUi()`. The latest text must be restored and saved, and an older request
+   must not overwrite it — except the accepted A→B→A case in ADR-0034 Accepted limits, where a
+   save of B that was already sent can land after the reload. Also check a recovery boot: the note
+   is saved while no drawer DOM is created.
+6. **Failure and limits.** Block writes or deletes in the notes directory, or hold the note file
+   with a Windows file lock. On save failure the text and sessionStorage draft must remain, and
+   closing the drawer, switching scope and quitting must stop (quit offers **Quit anyway**). On
+   delete failure the workspace and its sessions must remain, and Global must be kept. After
+   clearing the failure, retrying the transition or quit must save again. Check exactly 2 MiB and
+   an over-limit paste, a UTF-8 multi-byte note, and a backup write rejected for quota. A read
+   error must never be shown as an empty note or overwritten as empty.
+7. **Delete warning.** A workspace with no sessions but a non-empty note must show the existing
+   close confirmation with `Its note will be deleted.`; whitespace-only notes count. Cancelling
+   preserves everything; approving removes only that workspace's note file and keeps Global.
+   Empty notes and workspaces with no sessions or note must not prompt. Closing while a save is
+   in flight, or a save that lands late, must not recreate the deleted file.
+8. **Cost.** In an app that never opened the notepad, check that there is no notepad module,
+   textarea, notes read, dedicated worker or periodic task. After closing the drawer, its DOM and
+   clean text must be gone. Use the existing Windows measurement tooling only if needed; do not
+   record performance numbers that were not measured.
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy

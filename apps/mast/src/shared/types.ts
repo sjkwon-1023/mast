@@ -14,6 +14,32 @@ export type SplitId = number;
 /** 휘발성 PTY 세션 id (u32) — 안정 ID 와 별개 공간 (model.rs 참조). */
 export type SessionId = number;
 
+/** 메모 편집 범위 (notes.rs NoteScope) — internal tag "type". 경로·distro 입력은
+ *  없고, workspace 는 지금 살아 있는 WorkspaceId 여야 한다. */
+export type NoteScope =
+  | { type: "global" }
+  | { type: "workspace"; workspace: WorkspaceId };
+
+/** notes_save 결과 (notes.rs SaveOutcome). 충돌은 저장 실패가 아니라 원문 불일치라
+ *  디스크의 현재 원문을 함께 돌려주고 파일은 건드리지 않는다. */
+export type SaveOutcome =
+  | { type: "saved" }
+  | { type: "conflict"; current: string };
+
+/** 메모장 초안 sessionStorage 슬롯 — WebView 자동 리로드 안전망이다 (D03).
+ *  부팅 배선이 뷰 모듈을 import하지 않고 미완료 백업 존재만 확인할 수 있게 여기 둔다. */
+export const NOTEPAD_DRAFT_KEY = "mast.notepadDraft";
+
+/** `NOTEPAD_DRAFT_KEY` 한 슬롯의 스키마. scope별 맵을 만들지 않는다.
+ *  base = 마지막으로 확인한 디스크 원문, text = 최신 수락 입력,
+ *  inFlight = 진행 중이거나 착지 여부를 아직 모르는 요청의 content(있을 때만). */
+export interface NotepadDraftBackup {
+  scope: NoteScope;
+  base: string;
+  text: string;
+  inFlight?: string;
+}
+
 /** `get_state` 응답·`state-changed` emit 의 공통 형태 (command.rs StateSnapshot). */
 export interface StateSnapshot {
   revision: number;
@@ -207,4 +233,6 @@ export type CommandError =
   | { type: "invalidScroll"; value: number }
   /** 이름 값 불량 — renameWorkspace 의 빈/공백뿐인 이름 (경로가 아니라
    *  invalidPath 를 재사용하지 않는다). */
-  | { type: "invalidName"; message: string };
+  | { type: "invalidName"; message: string }
+  /** 메모 파일 저장소 I/O 실패 — 구조 상태·revision 은 변하지 않았다. */
+  | { type: "noteStorage"; message: string };

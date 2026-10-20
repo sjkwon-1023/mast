@@ -76,6 +76,21 @@ export function onMarkdownDraftsChanged(listener: () => void): () => void {
 const RETRY_FIRST_MS = 100;
 const RETRY_MAX_MS = 2_000;
 
+export interface MarkdownDraftReportOptions {
+  /** Markdown draft 밖의 dirty 원천 — 메모장 active 처럼 다른 모듈의 상태다.
+   *  값이 바뀌면 refresh() 로 다시 계산한다. */
+  isExtraDirty?: () => boolean;
+}
+
+export interface MarkdownDraftReporter {
+  /** 합성 dirty 값을 다시 계산해 보낸다 (같은 값이면 IPC 없음). */
+  refresh(): void;
+  /** 현재 합성 값이 백엔드에 전달될 때까지 기다린다. 첫 전송 실패는 reject 이며
+   *  백오프 재시도는 그대로 이어진다. */
+  waitForDelivery(): Promise<void>;
+  dispose(): void;
+}
+
 /**
  * draft 상태를 백엔드로 계속 보고한다 — 부팅 때 현재 값으로 한 번 seed 하고, draft 집합이
  * 바뀔 때마다 다시 보내며, 페이지가 내려갈 때(WebView 리로드 시작) "unknown" 으로 되돌린다.
@@ -85,35 +100,62 @@ const RETRY_MAX_MS = 2_000;
  * 성공할 때까지 지수 백오프(상한 RETRY_MAX_MS)로 다시 보낸다 — 백엔드는 마지막으로 받은
  * 값으로 종료를 판정하므로, 다음 변화를 기다리면 dirty 인데도 이전 clean 이 무기한 남아
  * 확인 없이 종료될 수 있다. 재시도는 실패한 값이 아니라 그 시점의 현재 값을 보낸다.
- * 반환된 해제 함수는 구독과 함께 대기 중인 재시도도 거둔다.
+ * dispose 는 구독과 함께 대기 중인 재시도도 거둔다.
  */
 export function reportMarkdownDraftState(
   send: (state: MarkdownDraftState) => Promise<unknown>,
   target: Pick<Window, "addEventListener" | "removeEventListener"> = window,
-): () => void {
-  let delivered: MarkdownDraftState | null = null;
+  options: MarkdownDraftReportOptions = {},
+): MarkdownDraftReporter {
+  /** 마지막으로 전송을 시작한 값 — 같은 값의 중복 IPC 를 막는다. */
+  let lastSent: MarkdownDraftState | null = null;
+  /** 백엔드가 마지막으로 확인해 준 값. */
+  let confirmed: MarkdownDraftState | null = null;
+  let pendingState: MarkdownDraftState | null = null;
+  let pending: Promise<void> | null = null;
+  let attemptSeq = 0;
   // 마지막으로 보고하려 한 값. 페이지가 내려간 뒤("unknown")에는 재시도도 그 값을 지킨다.
   let wanted: MarkdownDraftState = "unknown";
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retryDelay = RETRY_FIRST_MS;
   let stopped = false;
-  const draftState = (): MarkdownDraftState => (hasMarkdownDrafts() ? "dirty" : "clean");
+  const draftState = (): MarkdownDraftState =>
+    hasMarkdownDrafts() || options.isExtraDirty?.() === true ? "dirty" : "clean";
   const report = (state: MarkdownDraftState): void => {
     wanted = state;
-    if (state === delivered) return;
-    delivered = state;
-    send(state).then(
-      () => {
-        if (delivered === state) retryDelay = RETRY_FIRST_MS;
-      },
-      (err: unknown) => {
-        console.error("[mast] Markdown draft state report failed", state, err);
-        // 그 사이 다른 값을 보냈다면 그 전송이 전달을 책임진다.
-        if (stopped || delivered !== state) return;
-        delivered = null;
-        scheduleRetry();
-      },
-    );
+    if (lastSent === state && (pendingState === state || confirmed === state)) return;
+    lastSent = state;
+    pendingState = state;
+    const token = ++attemptSeq;
+    let result: Promise<unknown>;
+    try {
+      result = Promise.resolve(send(state));
+    } catch (err) {
+      result = Promise.reject(err);
+    }
+    const attempt = result
+      .then(
+        () => {
+          confirmed = state;
+          if (lastSent === state) retryDelay = RETRY_FIRST_MS;
+        },
+        (err: unknown) => {
+          console.error("[mast] Markdown draft state report failed", state, err);
+          // 그 사이 다른 값을 보냈다면 그 전송이 전달을 책임진다.
+          if (stopped || lastSent !== state) return;
+          lastSent = null;
+          scheduleRetry();
+          throw err;
+        },
+      )
+      .finally(() => {
+        if (token !== attemptSeq) return;
+        pendingState = null;
+        pending = null;
+      });
+    pending = attempt;
+    // waitForDelivery 가 관찰하지 않는 실패가 unhandled rejection 이 되지 않게 한다.
+    attempt.catch(() => {});
   };
   const scheduleRetry = (): void => {
     if (retryTimer !== null) return;
@@ -130,12 +172,28 @@ export function reportMarkdownDraftState(
   const unsubscribe = onMarkdownDraftsChanged(reportCurrent);
   target.addEventListener("pagehide", onPageHide);
   reportCurrent();
-  return () => {
-    stopped = true;
-    if (retryTimer !== null) clearTimeout(retryTimer);
-    retryTimer = null;
-    unsubscribe();
-    target.removeEventListener("pagehide", onPageHide);
+  return {
+    refresh() {
+      if (!stopped) reportCurrent();
+    },
+    async waitForDelivery() {
+      if (stopped) return;
+      reportCurrent();
+      // 전송 도중 새 값이 보고되면 그 전송까지 기다린다 — 유계 루프로 충분하다.
+      for (let i = 0; i < 4; i += 1) {
+        if (confirmed === lastSent && pendingState === null) return;
+        const current = pending;
+        if (current === null) return;
+        await current;
+      }
+    },
+    dispose() {
+      stopped = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      retryTimer = null;
+      unsubscribe();
+      target.removeEventListener("pagehide", onPageHide);
+    },
   };
 }
 

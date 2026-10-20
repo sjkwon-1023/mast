@@ -232,6 +232,10 @@ pub enum CommandError {
     /// 이름 값이 불량하다 — RenameWorkspace 의 빈/공백뿐인 이름. 경로가 아니므로
     /// InvalidPath 를 재사용하지 않는다 (사유 문자열을 그대로 싣는 형태는 동일).
     InvalidName { message: String },
+    /// 메모 파일 저장소 작업 실패 — 삭제·읽기·쓰기의 I/O 오류. 구조 상태와
+    /// revision 은 변하지 않았다 (글루의 CloseWorkspace 경계가 삭제를 먼저 한다).
+    /// 코어 Command bus 가 만드는 값이 아니라 글루가 싣는 값이다.
+    NoteStorage { message: String },
 }
 
 impl fmt::Display for CommandError {
@@ -263,6 +267,9 @@ impl fmt::Display for CommandError {
             }
             CommandError::InvalidName { message } => {
                 write!(f, "invalid name: {message}")
+            }
+            CommandError::NoteStorage { message } => {
+                write!(f, "note storage failed: {message}")
             }
         }
     }

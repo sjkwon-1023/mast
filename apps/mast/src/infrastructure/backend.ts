@@ -7,7 +7,16 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
-import type { Command, CommandOutput, SessionId, StateSnapshot, TabId } from "../shared/types";
+import type {
+  Command,
+  CommandOutput,
+  NoteScope,
+  SaveOutcome,
+  SessionId,
+  StateSnapshot,
+  TabId,
+  WorkspaceId,
+} from "../shared/types";
 
 /** 터미널 출력 채널 메시지 — raw channel 은 ArrayBuffer 를 주지만, 구현 차이에
  *  대비해 Uint8Array 도 수용한다. 소비 측(features/terminal/frame.ts)에서 정규화한다. */
@@ -573,4 +582,31 @@ export function onStateChanged(
 
 export function fsSaveMarkdown(distro: string | null, path: string, expected: string, content: string): Promise<void> {
   return invoke<void>("fs_save_markdown", { distro, path, expected, content });
+}
+
+// --- 메모장 파일 (main 웹뷰 전용) ---------------------------------------------
+//
+// 본문은 앱 데이터의 `notes/` 파일에 있고 스냅샷(AppState·state.json)에는 없다.
+// 경로·distro 를 넘기는 인자는 없다 — 범위(scope)와 원문만 주고받는다.
+
+/** 메모 읽기 — 파일이 없으면 빈 문자열이다. 잘못된 UTF-8·비정규 파일·2 MiB 초과,
+ *  닫힌 워크스페이스는 사유 문자열로 reject 된다. */
+export function notesRead(scope: NoteScope): Promise<string> {
+  return invoke<string>("notes_read", { scope });
+}
+
+/** 메모 저장 — `expected` 가 디스크 원문과 같을 때만 원자 교체한다. 원문이 다르면
+ *  reject 가 아니라 `conflict`(현재 원문 포함)로 오고 파일은 그대로다. */
+export function notesSave(
+  scope: NoteScope,
+  expected: string,
+  content: string,
+): Promise<SaveOutcome> {
+  return invoke<SaveOutcome>("notes_save", { scope, expected, content });
+}
+
+/** 워크스페이스 메모가 비어 있지 않은지 — 본문을 가져오지 않고 길이만 판정한다
+ *  (닫기 확인 문구용). 파일 없음만 false, 확인 불능은 reject 다. */
+export function notesWorkspaceHasContent(workspace: WorkspaceId): Promise<boolean> {
+  return invoke<boolean>("notes_workspace_has_content", { workspace });
 }

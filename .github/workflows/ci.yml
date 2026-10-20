@@ -128,6 +128,9 @@ jobs:
       - name: Markdown save tests (x64 Windows, native)
         run: cargo test -p mast-core --target x86_64-pc-windows-msvc document::tests
 
+      - name: Notepad storage tests (x64 Windows, native)
+        run: "cargo test -p mast-core --target x86_64-pc-windows-msvc notes::"
+
       - name: Secure remote crate tests (x64 Windows, native)
         run: cargo test -p mast-remote --target x86_64-pc-windows-msvc
 

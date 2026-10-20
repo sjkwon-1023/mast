@@ -273,6 +273,7 @@ write immediately and removes its private reply directory.
 | Zoom in/out/reset | Cmd+plus / minus / 0 |
 | Copy / paste | Cmd+C / Cmd+V |
 | Save Markdown edits | Cmd+S |
+| Toggle the notepad drawer | Cmd+Shift+M |
 | Reload the WebView, not the backend | Cmd+Shift+R |
 | Enter/exit full screen | Ctrl+Cmd+F (View menu) |
 | Quit (through the unsaved-Markdown guard) | Cmd+Q |
@@ -326,31 +327,37 @@ its existing Ctrl/Alt bindings and terminal copy/paste behavior.
 
 ## Confirmation dialogs
 
-Closing a workspace with running terminals, discarding unsaved Markdown edits,
-quitting and reloading with unsaved Markdown drafts all ask for confirmation in
-a native sheet attached to the Mast window (OK / Cancel). The WebView's own
-`window.confirm()` cannot be used on macOS: the windowing library's WebKit
-delegate does not implement the JavaScript confirm panel, so WebKit answers
-"cancel" without showing anything. If the sheet itself cannot be opened, the
-action is not performed and the error appears in the status line (or the
-Markdown banner).
+Closing a workspace with running terminals or a non-empty note, discarding unsaved Markdown
+edits, quitting and reloading with unsaved Markdown drafts, and quitting when a note cannot be
+saved all ask for confirmation in a native sheet attached to the Mast window (OK / Cancel). The
+WebView's own `window.confirm()` cannot be used on macOS: the windowing library's WebKit delegate
+does not implement the JavaScript confirm panel, so WebKit answers "cancel" without showing
+anything. If the sheet itself cannot be opened, the action is not performed and the error appears
+in the status line (or the Markdown banner).
 
-## Quit and unsaved Markdown
+## Quit, unsaved Markdown and notes
 
-Dock Quit, logout, restart and AppleScript `quit` go through the same
-unsaved-Markdown confirmation as Cmd+Q. With no Markdown drafts Mast quits
-immediately and never delays a logout. With unsaved drafts Mast cancels the
-quit, which cancels a logout or restart the way other macOS apps do, and shows
-the quit confirmation; save or discard, then quit or log out again. Mast does not
-defer termination (`NSTerminateLater`). If reporting the draft state to the app
-fails, the window keeps retrying until it succeeds.
+Dock Quit, logout, restart and AppleScript `quit` go through the same window close guard as Cmd+Q
+whenever a Markdown draft or an active note exists. A note is active while the drawer is open, a
+sessionStorage draft is unsaved, or a save is in flight. In that case Mast flushes the note first
+and quits without a note-specific prompt when the flush succeeds. With no Markdown drafts and no
+open or unsaved note, Mast quits immediately and never delays a logout. With unsaved Markdown
+drafts Mast cancels the quit, which cancels a logout or restart the way other macOS apps do, and
+shows the quit confirmation; save or discard, then quit or log out again. If the note cannot be
+saved, Mast shows a **Quit anyway** confirmation once: confirming quits and discards the unsaved
+note draft, cancelling keeps Mast open with the draft. Mast does not
+defer termination (`NSTerminateLater`). If reporting the draft state to the app fails, the window
+keeps retrying until it succeeds.
 
-Two short windows are not protected. Right after the window loads or reloads,
-until it has installed its close confirmation and reported its draft state, a
-quit is still turned into a window close, but nothing is there yet to confirm
-it, so Mast can quit without asking. And a quit that arrives within
-milliseconds of the first edit, before the window has reported it, can quit
-without the confirmation.
+The drawer enables editing only after the current dirty state has been reported to the app, so
+the first note keystroke cannot race that report.
+
+Two short windows are not protected. Right after the window loads or reloads, until it has
+installed its close confirmation and reported its draft state, a quit is still turned into a
+window close, but nothing is there yet to confirm it, so Mast can quit without asking. And a quit
+that arrives within milliseconds of the first Markdown edit, before the window has reported it,
+can quit without the confirmation. A note edit cannot hit the second window because the drawer
+waits for the report first.
 
 ## Shutdown contract
 
@@ -429,6 +436,19 @@ treating these features as field-verified:
   session's `claude --resume <id>`. `cd` in a terminal and check that the sidebar
   card path follows it (`~/…` abbreviated). With WSL not applicable, no empty
   notice band appears above the workspace.
+- Toggle the notepad with `Cmd+Shift+M` from a terminal, a WKWebView browser tab
+  and a Markdown textarea; confirm `Cmd+M` still minimizes the window and the
+  shortcut does not leak into the terminal or the page.
+- During Korean IME composition, confirm the notepad shortcut and Esc do not
+  steal the composition in the terminal, a Markdown textarea and a native
+  browser page.
+- With a note and no Markdown draft, quit from the Dock, AppleScript and logout:
+  Mast flushes the note and quits without a note confirmation. With a forced
+  save failure it shows the **Quit anyway** prompt, and cancelling keeps Mast
+  open with the draft.
+- Open the notepad drawer: editing stays disabled until the dirty report has
+  been delivered. With the drawer closed and no note backup, Dock Quit and
+  logout still take the Clean fast path without a JS round trip.
 
 Do not record any of these manual checks as complete until they have actually
 been run.
