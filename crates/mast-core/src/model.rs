@@ -115,6 +115,12 @@ pub struct Workspace {
     pub layout: SplitTree,
     pub panes: BTreeMap<PaneId, Pane>,
     pub active_pane: PaneId,
+    /// 에이전트 뷰어가 표시되는 pane (뷰어 자리). 옵션 없는 `PresentViewer` 가 처음
+    /// 성공할 때 정해지고, 그 pane 이 사라지면 [`Command`](crate::command::Command) 의
+    /// collapse 경로가 지운다. 값이 있으면 이 워크스페이스의 pane 이다.
+    /// 구 `state.json` 에는 필드가 없어 None 으로 읽는다. 쓰기는 항상 한다.
+    #[serde(default)]
+    pub viewer_pane: Option<PaneId>,
     /// 탭들의 [`Tab::agent_status`] 에서 재계산되는 **저장 파생값**이다 — 탭을
     /// 바꾸는 경로가 함께 갱신하며 직접 쓰지 않는다. 사이드바와 폰 `/api/state` 의
     /// 구 페이지가 워크스페이스 단위로 읽기 때문에 필드로 남아 있다.
@@ -173,12 +179,22 @@ impl Workspace {
         Ok(())
     }
 
-    /// 상태 불변식 검사 (debug 빌드 전용) — [`Workspace::validate`] 의 assert 래퍼.
+    /// 상태 불변식 검사 (debug 빌드 전용) — [`Workspace::validate`] 의 assert 래퍼이며,
+    /// `viewer_pane` 이 이 워크스페이스의 pane 인지도 본다. 복원 경로는 그 값을 repair 하므로
+    /// `validate` 에는 넣지 않는다.
     /// 커맨드 변이 직후처럼 "위반 = 코어 버그"인 내부 경로에서 쓴다.
     pub fn debug_assert_invariants(&self) {
         #[cfg(debug_assertions)]
-        if let Err(msg) = self.validate() {
-            panic!("불변식 위반: {msg}");
+        {
+            if let Err(msg) = self.validate() {
+                panic!("불변식 위반: {msg}");
+            }
+            if let Some(viewer) = self.viewer_pane {
+                assert!(
+                    self.panes.contains_key(&viewer),
+                    "불변식 위반: viewer_pane {viewer:?} 이 panes 에 없음"
+                );
+            }
         }
     }
 }
@@ -691,6 +707,7 @@ mod tests {
             layout: split(4, SplitDirection::Horizontal, leaf(2), leaf(3)),
             panes: [(PaneId(2), test_pane(2)), (PaneId(3), test_pane(3))].into(),
             active_pane: PaneId(2),
+            viewer_pane: None,
             agent_status: AgentStatus::Idle,
             last_agent_message: None,
         }
@@ -754,6 +771,19 @@ mod tests {
     }
 
     #[test]
+    fn viewer_pane_always_serializes_and_legacy_state_reads_none() {
+        let json = serde_json::to_value(test_workspace()).unwrap();
+        assert_eq!(json["viewerPane"], serde_json::Value::Null);
+
+        // 필드가 없는 구 state.json 은 자리가 없는 워크스페이스로 읽힌다.
+        let mut legacy = json;
+        legacy.as_object_mut().unwrap().remove("viewerPane");
+        let parsed: Workspace = serde_json::from_value(legacy).unwrap();
+        assert_eq!(parsed.viewer_pane, None);
+        assert_eq!(parsed, test_workspace());
+    }
+
+    #[test]
     fn exited_status_serializes_ended_at_ms_and_defaults_it() {
         let json = serde_json::to_value(TerminalStatus::Exited {
             code: Some(0),
@@ -791,8 +821,19 @@ mod tests {
 
     #[test]
     fn workspace_invariants_hold_for_consistent_state() {
-        let ws = test_workspace();
+        let mut ws = test_workspace();
         assert_eq!(ws.validate(), Ok(()));
+        ws.debug_assert_invariants();
+        ws.viewer_pane = Some(PaneId(2));
+        ws.debug_assert_invariants();
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "viewer_pane")]
+    fn a_viewer_pane_outside_the_workspace_violates_the_debug_invariant() {
+        let mut ws = test_workspace();
+        ws.viewer_pane = Some(PaneId(99));
         ws.debug_assert_invariants();
     }
 

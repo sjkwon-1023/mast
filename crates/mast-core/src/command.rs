@@ -10,7 +10,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{AppState, PaneId, SplitDirection, SplitId, TabId, WorkspaceId};
+use crate::model::{AppState, PaneId, SplitDirection, SplitId, SplitTree, TabId, WorkspaceId};
 use crate::session::SessionId;
 
 mod audit;
@@ -128,6 +128,63 @@ pub enum Command {
         tab: TabId,
         scroll_top: f64,
     },
+    /// `source` 터미널이 속한 워크스페이스에 뷰어 탭을 표시한다. 경로 검증과 대상 검사를
+    /// 모두 마친 뒤 한 번의 변이로 적용하므로 실패하면 상태·next_id·revision이 그대로다.
+    /// 자리 규칙은 [`Placement`] 참조. 활성 워크스페이스와 활성 pane은 바꾸지 않는다.
+    PresentViewer {
+        source: TabId,
+        viewer: ViewerSpec,
+        placement: Placement,
+    },
+}
+
+/// 표시할 뷰어 명세 — 뷰어 4종만 가진다. 터미널과 브라우저는 타입 수준에서 제외된다.
+/// 경로는 필수이며, 준비는 [`NewTab`] 과 같은 경로 검증을 거친다.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ViewerSpec {
+    FolderBrowser { path: String },
+    ChangesViewer { path: String },
+    TextViewer { path: String },
+    MarkdownViewer { path: String },
+}
+
+impl ViewerSpec {
+    pub(crate) fn into_new_tab(self) -> NewTab {
+        match self {
+            ViewerSpec::FolderBrowser { path } => NewTab::FolderBrowser { path: Some(path) },
+            ViewerSpec::ChangesViewer { path } => NewTab::ChangesViewer { path: Some(path) },
+            ViewerSpec::TextViewer { path } => NewTab::TextViewer { path },
+            ViewerSpec::MarkdownViewer { path } => NewTab::MarkdownViewer { path },
+        }
+    }
+}
+
+/// 뷰어 탭의 자리 ([`Command::PresentViewer`]).
+///
+/// - `Default`: 워크스페이스의 뷰어 자리([`crate::model::Workspace::viewer_pane`])가 있으면
+///   그 pane 에 탭을 더한다. 없으면 source 탭의 pane 을 오른쪽(horizontal)으로 나눠 새 pane 을
+///   만들고 자리로 정한다. 자리가 정해지는 것은 이 경우뿐이다.
+/// - `Pane`: 지정한 pane 에 탭을 더한다. 자리는 바꾸지 않는다.
+/// - `Split`: 지정한 pane 을 `direction` 으로 나눠 새 pane 의 탭으로 표시한다. 자리는 바꾸지 않는다.
+///   right 는 horizontal, down 은 vertical 이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum Placement {
+    Default,
+    Pane { pane: PaneId },
+    Split {
+        pane: PaneId,
+        direction: SplitDirection,
+    },
 }
 
 /// 탭 생성 명세 — CreateTab·SplitPane·CreateWorkspace 가 공유한다.
@@ -197,6 +254,14 @@ pub enum CommandOutput {
         /// terminal 탭이면 스폰된 PTY 세션 id, 뷰어 탭이면 None (스폰 없는 순수
         /// 변이).
         session: Option<SessionId>,
+    },
+    /// PresentViewer 결과. `active` 는 새 탭이 자기 pane 의 활성 탭인지다. 대상 pane 이
+    /// 워크스페이스의 활성 pane 이고 활성 탭이 있으면 뒤에 추가만 하므로 false 다.
+    ViewerPresented {
+        workspace: WorkspaceId,
+        pane: PaneId,
+        tab: TabId,
+        active: bool,
     },
     /// id 를 새로 만들지 않는 명령의 성공.
     Done,
@@ -367,6 +432,46 @@ pub struct TabInfo {
     pub kind: &'static str,
     /// `running` | `exited` (터미널) | `viewer` (프로세스가 없는 뷰어 탭).
     pub status: &'static str,
+}
+
+/// [`Dispatcher::layout_for_session`] 의 응답 — 호출자 워크스페이스의 배치 조회.
+/// pane 크기는 여기 넣지 않는다. 글루가 보고된 값을 따로 합친다.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutInfo {
+    pub workspace: WorkspaceId,
+    pub revision: u64,
+    /// 호출자가 속한 pane.
+    #[serde(rename = "self")]
+    pub self_pane: PaneId,
+    /// 워크스페이스가 활성일 때만 activePane, 아니면 None.
+    pub focused: Option<PaneId>,
+    pub viewer_pane: Option<PaneId>,
+    pub tree: SplitTree,
+    /// leaf 순서.
+    pub panes: Vec<LayoutPane>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutPane {
+    pub id: PaneId,
+    pub active_tab: Option<TabId>,
+    /// 표시 순서.
+    pub tabs: Vec<LayoutTab>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutTab {
+    pub id: TabId,
+    /// `terminal` | `folderBrowser` | `changesViewer` | `textViewer` | `markdownViewer` | `browser`.
+    pub kind: String,
+    pub title: String,
+    /// 터미널은 cwd, 뷰어는 경로, 브라우저는 None.
+    pub path: Option<String>,
+    /// 브라우저만 URL, 나머지는 None.
+    pub url: Option<String>,
 }
 
 /// 상태 소유자. 모든 구조 변이는 [`Dispatcher::dispatch`] 를 경유한다.

@@ -140,6 +140,53 @@ pub fn diff(distro: Option<&str>, request: &GitDiffRequest) -> Result<GitDiff, S
     })
 }
 
+const NOT_A_REPOSITORY: &str = "fatal: not a git repository";
+
+/// [`locate_repository_root`] 의 실패. 비저장소만 따로 둬서 호출자가 `not_repository` 로 바꿀 수 있게 한다.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RepositoryRootError {
+    NotRepository,
+    Failed(String),
+}
+
+/// `dir` 이 속한 작업 트리의 root. 비저장소를 구분해야 하면 [`locate_repository_root`] 를 쓴다.
+pub fn repository_root(distro: Option<&str>, dir: &str) -> Result<String, String> {
+    locate_repository_root(distro, dir).map_err(|error| match error {
+        RepositoryRootError::NotRepository => "not a Git repository".to_owned(),
+        RepositoryRootError::Failed(message) => message,
+    })
+}
+
+/// `dir` 이 속한 작업 트리의 root. status 와 같은 root 규칙(bare 저장소는 symbolic HEAD 의 worktree)과
+/// 같은 실행 제한을 쓴다.
+pub fn locate_repository_root(
+    distro: Option<&str>,
+    dir: &str,
+) -> Result<String, RepositoryRootError> {
+    locate_repository_root_within(distro, dir, TIMEOUT)
+}
+
+/// [`locate_repository_root`] 와 같지만 Git 실행 시간을 `budget` 으로 더 줄인다. 요청 기한이 남긴 시간을
+/// 넘기려고 쓴다. 실행 제한은 `min(TIMEOUT, budget)` 이다.
+pub fn locate_repository_root_within(
+    distro: Option<&str>,
+    dir: &str,
+    budget: Duration,
+) -> Result<String, RepositoryRootError> {
+    validate_root(dir).map_err(RepositoryRootError::Failed)?;
+    GitReader::with_budget(distro, budget)
+        .resolve_root(dir)
+        .map_err(|message| {
+            // git 은 비저장소와 경로 오류를 모두 종료 코드 128 로 끝낸다. LC_ALL=C 로 고정한 문구로만 구분하며,
+            // 이 검사는 여기 한 곳에만 둔다.
+            if message.contains(NOT_A_REPOSITORY) {
+                RepositoryRootError::NotRepository
+            } else {
+                RepositoryRootError::Failed(message)
+            }
+        })
+}
+
 struct GitReader<'a> {
     distro: Option<&'a str>,
     deadline: Instant,
@@ -147,9 +194,14 @@ struct GitReader<'a> {
 
 impl<'a> GitReader<'a> {
     fn new(distro: Option<&'a str>) -> Self {
+        Self::with_budget(distro, TIMEOUT)
+    }
+
+    /// `budget` 이 기본 제한 [`TIMEOUT`] 보다 길어도 제한을 넘기지 않는다.
+    fn with_budget(distro: Option<&'a str>, budget: Duration) -> Self {
         Self {
             distro,
-            deadline: Instant::now() + TIMEOUT,
+            deadline: Instant::now() + budget.min(TIMEOUT),
         }
     }
 
@@ -544,5 +596,144 @@ u AA N... 000000 100644 100644 100644 aaa bbb ccc conflict file\0";
             &args[args.len() - 4..],
             &["diff", "--", "-oops", ":(glob)*"]
         );
+    }
+
+    #[cfg(unix)]
+    fn fixture_dir() -> tempfile::TempDir {
+        // macOS 는 /var 를 /private/var 로 노출한다. Git 이 돌려주는 정규 경로와 맞춘다.
+        let root = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        tempfile::tempdir_in(root).unwrap()
+    }
+
+    #[cfg(unix)]
+    fn git_in(dir: &std::path::Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    fn commit_fixture(dir: &std::path::Path) {
+        git_in(
+            dir,
+            &[
+                "-c",
+                "user.name=Root test",
+                "-c",
+                "user.email=root@example.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "Fixture",
+            ],
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_root_is_the_same_from_the_root_and_from_a_subdirectory() {
+        let repo = fixture_dir();
+        git_in(repo.path(), &["init", "--quiet", "--initial-branch=main"]);
+        std::fs::create_dir(repo.path().join("nested")).unwrap();
+        let root = repo.path().to_str().unwrap();
+        assert_eq!(repository_root(None, root).unwrap(), root);
+        assert_eq!(
+            repository_root(None, repo.path().join("nested").to_str().unwrap()).unwrap(),
+            root
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_root_tells_a_non_repository_apart_from_other_failures() {
+        let dir = fixture_dir();
+        let path = dir.path().to_str().unwrap();
+        assert_eq!(
+            locate_repository_root(None, path),
+            Err(RepositoryRootError::NotRepository)
+        );
+        assert_eq!(
+            repository_root(None, path).unwrap_err(),
+            "not a Git repository"
+        );
+        let missing = dir.path().join("missing");
+        assert!(matches!(
+            locate_repository_root(None, missing.to_str().unwrap()),
+            Err(RepositoryRootError::Failed(_))
+        ));
+        assert!(matches!(
+            locate_repository_root(None, "relative"),
+            Err(RepositoryRootError::Failed(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_root_of_a_bare_repository_is_its_symbolic_head_worktree() {
+        let container = fixture_dir();
+        let source = container.path().join("source");
+        std::fs::create_dir(&source).unwrap();
+        git_in(&source, &["init", "--quiet", "--initial-branch=main"]);
+        commit_fixture(&source);
+        let bare = container.path().join("bare.git");
+        git_in(
+            container.path(),
+            &[
+                "clone",
+                "--quiet",
+                "--bare",
+                source.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+        let checkout = container.path().join("checkout");
+        git_in(
+            &bare,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                checkout.to_str().unwrap(),
+                "main",
+            ],
+        );
+        assert_eq!(
+            repository_root(None, bare.to_str().unwrap()).unwrap(),
+            checkout.to_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_budget_longer_than_the_default_timeout_is_capped_at_it() {
+        let reader = GitReader::with_budget(None, Duration::from_secs(3_600));
+        assert!(reader.deadline <= Instant::now() + TIMEOUT);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_short_budget_bounds_the_git_lookup_itself() {
+        let repo = fixture_dir();
+        git_in(repo.path(), &["init", "--quiet", "--initial-branch=main"]);
+        let root = repo.path().to_str().unwrap();
+        assert_eq!(
+            locate_repository_root_within(None, root, TIMEOUT).unwrap(),
+            root
+        );
+        // 0.5초 예산은 감독 여유 1초를 빼면 남지 않아 Git 을 띄우기 전에 끝난다. 기본 제한이었다면 성공했다.
+        assert!(matches!(
+            locate_repository_root_within(None, root, Duration::from_millis(500)),
+            Err(RepositoryRootError::Failed(message)) if message.contains("timed out")
+        ));
     }
 }

@@ -25,6 +25,7 @@ import {
 } from "./settings";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { IS_MAC } from "../../shared/platform";
+import { createFileLinkProvider } from "./file-links";
 import {
   shouldOpenLink,
   isCopySelectionKey,
@@ -103,6 +104,9 @@ export class TerminalView {
     private readonly onTraceReplayDone?: (bytes: number) => void,
 
     restoreScrollOffset?: number,
+
+    private readonly onFileOpenError: (message: string) => void = (message) =>
+      console.error("open file failed", message),
   ) {
     this.root = document.createElement("div");
     this.root.className = "term-host";
@@ -123,6 +127,8 @@ export class TerminalView {
     this.term.loadAddon(this.fitAddon);
 
     this.term.loadAddon(new WebLinksAddon(activateLink));
+    // 파일 경로는 HTTP·OSC 8 과 별도 제공자가 맡는다 — 두 링크 경로의 판정은 그대로 둔다.
+    this.term.registerLinkProvider(createFileLinkProvider(this.term, session, this.onFileOpenError));
 
     // 내장 ED 3 처리 전의 위치를 읽고, false를 반환해 실제 화면 삭제는 xterm에 맡긴다.
     this.term.parser.registerCsiHandler({ final: "J" }, (params) => {
@@ -161,6 +167,16 @@ export class TerminalView {
     }
     this.root.style.display = v ? "" : "none";
     if (v) this.scheduleFit();
+  }
+
+  /** xterm 의 현재 칸 수. fit 이 끝난 뒤의 값이라 pane 크기 보고가 이것을 그대로 보낸다. */
+  get grid(): { cols: number; rows: number } {
+    return { cols: this.term.cols, rows: this.term.rows };
+  }
+
+  /** xterm 격자(cols·rows)가 바뀔 때마다 부른다. fit 과 글꼴 변경이 모두 여기로 오며, pane 크기 보고가 듣는다. */
+  onGridChange(listener: () => void): IDisposable {
+    return this.term.onResize(listener);
   }
 
   scheduleFit(): void {

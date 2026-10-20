@@ -22,6 +22,7 @@ function workspace(): Workspace {
     layout: { type: "leaf", pane: 1 },
     panes: { "1": { id: 1, tabs: [], activeTab: null } },
     activePane: 1,
+    viewerPane: null,
     agentStatus: "idle",
     lastAgentMessage: null,
   };

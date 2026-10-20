@@ -3159,6 +3159,51 @@ check.
    clean text must be gone. Use the existing Windows measurement tooling only if needed; do not
    record performance numbers that were not measured.
 
+### Unreleased — agent file open field verification (ADR-0035, 2026-10-20)
+
+Pending Windows and WSL field verification. The Linux gates, the Windows native `presentation::`
+tests and the injected probes do not show a real agent tool shell, WebView2 focus, or 9P file
+reads. Do not mark an item passed until it has been run on the target machine. Record the commit,
+the Windows version, the WebView2 runtime, the distro names and whether the update was installed
+over a running Mast.
+
+1. **Update and agent tool shell.** Install the update, then from the real tool shell of each
+   installed agent (including one without a controlling tty) run `mast layout`, `mast open <file>`
+   and `mast diff`. Each reply must arrive through `/tmp`. With two distros running, the request
+   must reach the workspace of the calling tab, not the other one. Open a file under `/mnt/c` (9P)
+   and a file reached through the Windows UNC share, and record what each returns.
+2. **Ctrl+click.** In terminal output, Ctrl+click an absolute path, a relative path with and without
+   shell integration, a `./` and a `../` path, a quoted path with spaces, and a Korean path that wraps
+   across two rows (click either row). A `path:line:col` suffix must open the file and must not jump.
+   A path followed by `.` or `)` must open the path without the punctuation. A missing file must
+   show the app's error text. A large text file must open under the viewer's limits. An `http(s)`
+   link must not open a viewer. A plain click must open nothing. In a TUI with mouse tracking, a
+   Ctrl+click must not open a file; record what happens.
+3. **Focus during open and split.** With Korean IME composition in another terminal, a Markdown
+   textarea, the sidebar name field, the notepad and a native browser page, run `mast open` and
+   `mast diff` from a terminal. Focus and the draft must stay where they were, and the composed text
+   must not change. Record whether the focus restore ran, which is expected only when a split moved
+   the focused element.
+4. **Placement and sizes.** Run `mast layout` before and after a window resize and after a phone
+   resize. Check `sizeSource` (`measured` or `unknown`) and `reportedAt`. After a fresh app start,
+   panes that were not shown yet must report `unknown`. The first plain `open` with no viewer pane
+   always creates a right split, so in a narrow window the agent must run `mast layout` first, as the
+   skill says. An explicit `--split` creates a new pane and must report `active: true`.
+5. **Restart, reset and inactive workspaces.** Quit and relaunch. `viewerPane` must be restored, and
+   the next plain `mast open` must reuse it. Run `Ctrl+Shift+R` and an automatic WebView reset: the
+   viewer pane stays, and `mast layout` keeps the last measured sizes. Switch to a workspace whose
+   panes are not shown: its `mast layout` returns the last values and `focused: null`, and no
+   renderer or idle timer remains for it. Record only what was measured.
+6. **Diff root.** Run `mast diff` from a repository directory, from a file in the repository root, and
+   from a file in a nested folder. The changes viewer must open at the repository root. From a
+   directory outside any repository, the command must fail with `not_repository`. Record the Git version.
+7. **Targets and timeouts.** Name a pane that was closed a moment earlier, and a pane of another
+   workspace, with `--pane`: both must return `unknown_target` and create nothing. Where a timeout
+   can be produced safely (for example, against an older installed app), check that the CLI sends once,
+   and that its message names the three causes and says that the change may already have happened.
+8. **Skill and help.** After `mast skill-load`, the skill text and `mast --help` must describe the same
+   options, placement rules, error codes and exit codes as ADR-0035. Record any mismatch.
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy

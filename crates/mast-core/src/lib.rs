@@ -29,6 +29,7 @@ pub mod notes;
 pub mod notify;
 pub mod osc;
 pub mod persist;
+pub mod presentation;
 pub mod record;
 pub(crate) mod replay;
 pub mod reset;

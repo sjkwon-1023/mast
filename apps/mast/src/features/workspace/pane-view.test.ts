@@ -12,13 +12,17 @@
 // happy-dom 은 이 파일 전용 환경이다 (상단 @vitest-environment) — 나머지 프론트
 // 테스트는 계속 DOM 없는 node 환경에서 돈다.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PaneView, exitedNoticeText } from "./pane-view";
 import type { ViewRegistry, ViewerRegistry } from "./pane-view";
+import { REPORT_DEBOUNCE_MS } from "./pane-geometry";
+import type { Grid } from "./pane-geometry";
 import { applyTabIdSettings } from "./tab-id-settings";
 import type { VisibleViewer } from "./view-reconcile";
 import type { ViewerKind, ViewerView } from "../viewers/viewer-view";
+import type { TerminalView } from "../terminal/view";
+import { adjustFontSize, resetFontSize } from "../terminal/settings";
 import { shortcutBadge } from "../../shared/keys";
 import type { UiSettings } from "../../infrastructure/backend";
 import type {
@@ -30,6 +34,13 @@ import type {
   Tab,
   TerminalStatus,
 } from "../../shared/types";
+
+// 칸 수 보고만 가로챈다 — 나머지 백엔드 래퍼는 실제 모듈 그대로 둔다.
+const reportGeometry = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../../infrastructure/backend", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infrastructure/backend")>()),
+  reportPaneGeometry: reportGeometry,
+}));
 
 /** 설정 이펙트가 파일 밖으로 새지 않게 하는 최소 UiSettings — ID 표시 기본값은 true. */
 function idSettings(showTabIds: boolean | null): UiSettings {
@@ -985,5 +996,299 @@ describe("PaneView tab drag", () => {
 
     pointer(dragged, "pointerup", 10);
     expect(tabs()).toHaveLength(4);
+  });
+});
+
+describe("PaneView geometry report", () => {
+  const observers: Array<() => void> = [];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    observers.length = 0;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          observers.push(() => callback([], this as unknown as ResizeObserver));
+        }
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      },
+    );
+    // happy-dom 은 글자 지표를 재지 못한다. xterm 이 읽는 canvas 지표를 흉내 낸다: 폭은 글꼴 크기의
+    // 절반, 높이(ascent + descent)는 글꼴 크기 + 2 라서 셀 높이가 글꼴 크기에서 오면 테스트가 깨진다.
+    const glyph = {
+      font: "",
+      measureText: () => {
+        const size = parseFloat(glyph.font);
+        return { width: size * 0.5, fontBoundingBoxAscent: size + 1, fontBoundingBoxDescent: 1 };
+      },
+    };
+    vi.stubGlobal(
+      "OffscreenCanvas",
+      class {
+        getContext() {
+          return glyph;
+        }
+      },
+    );
+  });
+
+  afterEach(() => {
+    // 글꼴 레지스트리에 남은 pane 이 다음 테스트의 타이머를 세지 않도록 이 describe 의 pane 을 모두 해제한다.
+    for (const view of mounted.splice(0)) view.dispose();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    resetFontSize();
+    reportGeometry.mockClear();
+  });
+
+  const mounted: PaneView[] = [];
+
+  /** PaneView 가 쓰는 면만 흉내 낸 터미널 뷰 — 칸 수는 xterm 이 가진 값을 그대로 준다.
+   *  resizeGrid 는 xterm 이 격자를 바꿀 때(fit·글꼴 줌) onResize 구독자에게 알리는 흐름이다. */
+  class FakeTerminalView {
+    readonly listeners = new Set<() => void>();
+    constructor(public grid: Grid) {}
+    scheduleFit(): void {}
+    setVisible(_visible: boolean): void {}
+    onGridChange(listener: () => void): { dispose(): void } {
+      this.listeners.add(listener);
+      return { dispose: () => this.listeners.delete(listener) };
+    }
+    resizeGrid(grid: Grid): void {
+      this.grid = grid;
+      for (const listener of this.listeners) listener();
+    }
+  }
+
+  let terminalFake: FakeTerminalView | null = null;
+
+  function mountPane(terminal: Grid | null): PaneView {
+    terminalFake = terminal === null ? null : new FakeTerminalView(terminal);
+    const term = terminalFake as unknown as TerminalView | null;
+    const views: ViewRegistry = {
+      get: (tab) => (tab === 10 ? term ?? undefined : undefined),
+      ensure: () => term as TerminalView,
+    };
+    const viewers = new Map<number, FakeViewerView>();
+    const viewerRegistry: ViewerRegistry = {
+      get: (tab) => viewers.get(tab),
+      ensure: (target: VisibleViewer, parent) => {
+        const existing = viewers.get(target.tab);
+        if (existing !== undefined) return existing;
+        const created = new FakeViewerView(parent);
+        viewers.set(target.tab, created);
+        return created;
+      },
+    };
+    const view = new PaneView(1, async () => null, views, viewerRegistry);
+    document.body.replaceChildren(view.root);
+    mounted.push(view);
+    return view;
+  }
+
+  function setContentSize(view: PaneView, width: number, height: number): void {
+    const content = child(view.root, ".pane-content");
+    // styles.css 의 `.pane-content` 패딩 2px 을 인라인으로 준다 — 테스트는 스타일시트를 읽지 않는다.
+    content.style.padding = "2px";
+    Object.defineProperty(content, "clientWidth", { configurable: true, value: width });
+    Object.defineProperty(content, "clientHeight", { configurable: true, value: height });
+  }
+
+  function fireResize(): void {
+    for (const fire of observers) fire();
+  }
+
+  it("reports the xterm grid of a shown terminal once after resizes settle", async () => {
+    const view = mountPane({ cols: 120, rows: 40 });
+    view.update(pane([terminalTab(10)], 10), true, { pane: 1, tab: 10, session: 1000 }, null);
+    setContentSize(view, 800, 600);
+
+    fireResize();
+    await vi.advanceTimersByTimeAsync(100);
+    fireResize();
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS - 1);
+    expect(reportGeometry).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reportGeometry).toHaveBeenCalledTimes(1);
+    expect(reportGeometry).toHaveBeenCalledWith(1, 120, 40);
+  });
+
+  it("sends nothing when the measured grid is unchanged", async () => {
+    const view = mountPane({ cols: 120, rows: 40 });
+    view.update(pane([terminalTab(10)], 10), true, { pane: 1, tab: 10, session: 1000 }, null);
+    setContentSize(view, 800, 600);
+
+    fireResize();
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    fireResize();
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenCalledTimes(1);
+  });
+
+  it("measures a viewer pane in cells of the current font and re-measures after a font change", async () => {
+    const view = mountPane(null);
+    view.update(pane([folderTab(10)], 10), true, null, viewerMount(10));
+    setContentSize(view, 800, 600);
+
+    // 13px: 셀 폭 6.5, 높이 15 → (800 − 패딩 4 − 스크롤바 14) / 6.5 = 120.3, (600 − 패딩 4) / 15 = 39.7
+    fireResize();
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenLastCalledWith(1, 120, 39);
+
+    // 14px: 셀 폭 7, 높이 16 → 782 / 7 = 111.7, 596 / 16 = 37.25
+    adjustFontSize(1);
+    fireResize();
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenLastCalledWith(1, 111, 37);
+    expect(reportGeometry).toHaveBeenCalledTimes(2);
+  });
+
+  it("subtracts the padding and the terminal scrollbar width before dividing by the cell", async () => {
+    const view = mountPane(null);
+    view.update(pane([folderTab(10)], 10), true, null, viewerMount(10));
+    // 13px 셀 6.5×15. 가용 폭 668 − 4 − 14 = 650 은 정확히 100칸, 가용 높이 604 − 4 = 600 은 정확히 40행이다.
+    setContentSize(view, 668, 604);
+    fireResize();
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenLastCalledWith(1, 100, 40);
+
+    // 한 픽셀씩 좁히면 649 / 6.5 = 99.8, 599 / 15 = 39.9 라서 칸 수가 한 칸씩 줄어든다.
+    setContentSize(view, 667, 603);
+    fireResize();
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenLastCalledWith(1, 99, 39);
+  });
+
+  it("reports the FitAddon minimum of 2 columns and 1 row when the padding and the scrollbar leave no room", async () => {
+    const view = mountPane(null);
+    view.update(pane([folderTab(10)], 10), true, null, viewerMount(10));
+    setContentSize(view, 10, 10);
+    fireResize();
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenLastCalledWith(1, 2, 1);
+  });
+
+  it("reports the new xterm grid of a shown terminal when only the font changes", async () => {
+    const view = mountPane({ cols: 120, rows: 40 });
+    view.update(pane([terminalTab(10)], 10), true, { pane: 1, tab: 10, session: 1000 }, null);
+    setContentSize(view, 800, 600);
+    fireResize();
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenLastCalledWith(1, 120, 40);
+
+    // 콘텐츠 크기는 그대로 두고 글꼴 줌으로 xterm 격자만 바뀐다 — 리사이즈 알림은 오지 않는다.
+    terminalFake?.resizeGrid({ cols: 100, rows: 30 });
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenLastCalledWith(1, 100, 30);
+    expect(reportGeometry).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports again when the shown tab switches between a terminal and a viewer at the same size", async () => {
+    const view = mountPane({ cols: 120, rows: 40 });
+    view.update(pane([terminalTab(10), folderTab(11)], 10), true, { pane: 1, tab: 10, session: 1000 }, null);
+    setContentSize(view, 800, 600);
+    fireResize();
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenLastCalledWith(1, 120, 40);
+
+    view.update(pane([terminalTab(10), folderTab(11)], 11), true, null, viewerMount(11));
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenLastCalledWith(1, 120, 39);
+
+    view.update(pane([terminalTab(10), folderTab(11)], 10), true, { pane: 1, tab: 10, session: 1000 }, null);
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenLastCalledWith(1, 120, 40);
+  });
+
+  it("stops following a terminal's grid once the pane shows something else", () => {
+    const view = mountPane({ cols: 120, rows: 40 });
+    view.update(pane([terminalTab(10), folderTab(11)], 10), true, { pane: 1, tab: 10, session: 1000 }, null);
+    expect(terminalFake?.listeners.size).toBe(1);
+
+    view.update(pane([terminalTab(10), folderTab(11)], 11), true, null, viewerMount(11));
+    expect(terminalFake?.listeners.size).toBe(0);
+  });
+
+  it("schedules nothing when a render keeps the same shown tab", async () => {
+    const view = mountPane({ cols: 120, rows: 40 });
+    view.update(pane([terminalTab(10)], 10), true, { pane: 1, tab: 10, session: 1000 }, null);
+    setContentSize(view, 800, 600);
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(vi.getTimerCount()).toBe(0);
+
+    view.update(pane([terminalTab(10)], 10), true, { pane: 1, tab: 10, session: 1000 }, null);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(reportGeometry).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-measures a viewer pane after a font change even without a resize notification", async () => {
+    const view = mountPane(null);
+    view.update(pane([folderTab(10)], 10), true, null, viewerMount(10));
+    setContentSize(view, 800, 600);
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenLastCalledWith(1, 120, 39);
+
+    adjustFontSize(1);
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).toHaveBeenLastCalledWith(1, 111, 37);
+  });
+
+  it("drops its font and grid subscriptions on dispose", () => {
+    const view = mountPane({ cols: 120, rows: 40 });
+    view.update(pane([terminalTab(10)], 10), true, { pane: 1, tab: 10, session: 1000 }, null);
+    expect(terminalFake?.listeners.size).toBe(1);
+    const setFontSize = vi.spyOn(view, "setFontSize");
+
+    view.dispose();
+    expect(terminalFake?.listeners.size).toBe(0);
+    adjustFontSize(1);
+    expect(setFontSize).not.toHaveBeenCalled();
+  });
+
+  it("does not report while the content is 0x0 (hidden or minimized)", async () => {
+    const view = mountPane({ cols: 120, rows: 40 });
+    view.update(pane([terminalTab(10)], 10), true, { pane: 1, tab: 10, session: 1000 }, null);
+    setContentSize(view, 0, 0);
+
+    fireResize();
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["0x0", 0, 0],
+    ["zero width", 0, 600],
+    ["zero height", 800, 0],
+  ])("does not report a viewer pane whose content box is %s", async (_label, width, height) => {
+    const view = mountPane(null);
+    view.update(pane([folderTab(10)], 10), true, null, viewerMount(10));
+    setContentSize(view, width, height);
+
+    fireResize();
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).not.toHaveBeenCalled();
+  });
+
+  it("keeps no timer and sends nothing without a resize notification", () => {
+    mountPane({ cols: 120, rows: 40 });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(reportGeometry).not.toHaveBeenCalled();
+  });
+
+  it("clears a pending report when the pane is disposed", async () => {
+    const view = mountPane({ cols: 120, rows: 40 });
+    view.update(pane([terminalTab(10)], 10), true, { pane: 1, tab: 10, session: 1000 }, null);
+    setContentSize(view, 800, 600);
+
+    fireResize();
+    expect(vi.getTimerCount()).toBe(1);
+    view.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS);
+    expect(reportGeometry).not.toHaveBeenCalled();
   });
 });

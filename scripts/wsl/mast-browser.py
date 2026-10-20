@@ -112,13 +112,20 @@ def _write_terminal(sequence):
         os.close(fd)
 
 
-def _query_once(request, deadline):
+class ReplyError(ValueError):
+    # str() 은 예전과 같은 error 객체의 JSON 이다. 호출자가 code 를 읽도록 객체를 함께 든다.
+    def __init__(self, error):
+        super().__init__(json.dumps(error, ensure_ascii=False))
+        self.error = error
+
+
+def _query_once(request, deadline, kind="browser", max_reply=MAX_REPLY):
     if not os.environ.get("MAST"): raise ValueError("run inside a Mast terminal")
     payload = json.dumps(request, ensure_ascii=False).encode()
     if len(payload) > 32768: raise ValueError("request exceeds 32 KiB")
-    with tempfile.TemporaryDirectory(prefix="mast-browser-", dir="/tmp") as directory:
+    with tempfile.TemporaryDirectory(prefix=f"mast-{kind}-", dir="/tmp") as directory:
         reply = Path(directory) / "reply.json"
-        sequence = b"\x1b]777;mast-query;browser:" + base64.b64encode(payload) + b";" + base64.b64encode(str(reply).encode()) + b"\x07"
+        sequence = b"\x1b]777;mast-query;" + kind.encode() + b":" + base64.b64encode(payload) + b";" + base64.b64encode(str(reply).encode()) + b"\x07"
         if deadline <= time.monotonic(): raise TimeoutError("Mast did not reply before the request deadline")
         _write_terminal(sequence)
         while not reply.exists():
@@ -126,10 +133,10 @@ def _query_once(request, deadline):
             if remaining <= 0: raise TimeoutError("Mast did not reply before the request deadline")
             time.sleep(min(0.05, remaining))
         with reply.open("rb") as file:
-            raw = file.read(MAX_REPLY + 1)
-        if len(raw) > MAX_REPLY: raise ValueError("browser reply exceeds 24 MiB")
+            raw = file.read(max_reply + 1)
+        if len(raw) > max_reply: raise ValueError(f"{kind} reply exceeds {max_reply // (1024 * 1024)} MiB")
         response = json.loads(raw)
-        if "error" in response: raise ValueError(json.dumps(response["error"], ensure_ascii=False))
+        if "error" in response: raise ReplyError(response["error"])
         return response["result"]
 
 

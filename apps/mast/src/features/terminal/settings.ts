@@ -32,6 +32,9 @@ const DEFAULT_FONT_FAMILY = IS_MAC ? "Menlo, 'SFMono-Regular', monospace" : "Con
 
 const DEFAULT_FONT_SIZE = 13;
 
+// xterm 기본값과 같다. pane 셀 환산(pane-geometry.ts)이 같은 값을 읽도록 여기 한 곳에 둔다.
+const TERMINAL_LINE_HEIGHT = 1;
+
 // 줌은 세션 한정이다. baseFontSize는 설정에서 읽은 리셋 기준값을 유지한다.
 let fontFamily = DEFAULT_FONT_FAMILY;
 
@@ -47,7 +50,7 @@ export interface TerminalFontTarget {
   setFontSize(size: number): void;
 }
 
-// 살아 있는 터미널·기록 뷰만 등록하며 생성자와 dispose에서 등록/해제를 짝지운다.
+// 글꼴 변경을 받아야 하는 대상(살아 있는 터미널·기록 뷰와 pane)만 등록한다. 생성자와 dispose에서 등록/해제를 짝지운다.
 const liveViews = new Set<TerminalFontTarget>();
 
 export function registerTerminalFontTarget(view: TerminalFontTarget): void {
@@ -61,15 +64,27 @@ export function unregisterTerminalFontTarget(view: TerminalFontTarget): void {
 export function terminalViewOptions(mac = IS_MAC): {
   fontSize: number;
   fontFamily: string;
+  lineHeight: number;
   theme: ITheme;
   macOptionIsMeta?: boolean;
   macOptionClickForcesSelection?: boolean;
 } {
-  const base = { fontSize, fontFamily, theme: { ...TERMINAL_THEME } };
+  const base = { fontSize, fontFamily, lineHeight: TERMINAL_LINE_HEIGHT, theme: { ...TERMINAL_THEME } };
   if (!mac) return base;
   // 마우스를 추적하는 TUI 안에서도 Option+드래그로 텍스트를 선택할 수 있게 한다
   // (Terminal.app·iTerm2 관례). Windows 는 Shift+드래그가 같은 일을 하고 여기서 바꾸지 않는다.
   return { ...base, macOptionIsMeta, macOptionClickForcesSelection: true };
+}
+
+export interface TerminalFont {
+  family: string;
+  size: number;
+  lineHeight: number;
+}
+
+/** 지금 적용 중인 글꼴. pane 크기 보고가 viewer 칸 수를 셀 크기로 나눌 때 읽는다. */
+export function currentTerminalFont(): TerminalFont {
+  return { family: fontFamily, size: fontSize, lineHeight: TERMINAL_LINE_HEIGHT };
 }
 
 export function adjustFontSize(delta: number): void {

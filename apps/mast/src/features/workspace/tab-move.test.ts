@@ -64,6 +64,7 @@ function snapshot(revision: number, left: Pane, right: Pane): StateSnapshot {
     },
     panes: { [String(left.id)]: left, [String(right.id)]: right },
     activePane: right.id,
+    viewerPane: null,
     agentStatus: "idle",
     lastAgentMessage: null,
   };

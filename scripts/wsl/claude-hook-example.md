@@ -27,7 +27,7 @@ with the tool call it guards, happen entirely in the WSL-side scripts this docum
 
 ## Automatic provisioning
 
-**mast auto-provisions this on first run per distro (`~/.mast/.setup-v24`); this
+**mast auto-provisions this on first run per distro (`~/.mast/.setup-v25`); this
 document remains the contract and the manual path.**
 
 On launch the app streams a setup script into `wsl.exe [-d <distro>] -- bash -s` for every
@@ -108,9 +108,9 @@ A full run, in order:
 
 | Marker | Written when | To run it again |
 |---|---|---|
-| `~/.mast/.setup-v24` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v24` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
-| `~/.mast/.setup-v24-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v24-codex` reruns that step alone |
-| `~/.mast/.setup-v24-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v24-agy` reruns that step alone |
+| `~/.mast/.setup-v25` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v25` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
+| `~/.mast/.setup-v25-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v25-codex` reruns that step alone |
+| `~/.mast/.setup-v25-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v25-agy` reruns that step alone |
 
 With the main marker in place, a launch still runs an agent step whose directory exists and
 whose sub-marker does not — which is how a Codex or Antigravity CLI installed after setup v16
@@ -132,8 +132,8 @@ When a run fails:
 - A file that is not writable or is a dangling symlink, and for Codex a `config.toml` with inline
   hooks, is **skipped** with a notice and counts as finished: the sub-marker is written — for
   Claude Code, whose merge is part of steps 1–11, the main marker — so no launch retries it. Once
-  the cause is fixed, `rm ~/.mast/.setup-v24-codex` (or `-agy`; for Claude Code
-  `rm ~/.mast/.setup-v24`) wires the hooks, or add the notice's snippet by hand.
+  the cause is fixed, `rm ~/.mast/.setup-v25-codex` (or `-agy`; for Claude Code
+  `rm ~/.mast/.setup-v25`) wires the hooks, or add the notice's snippet by hand.
 - A Codex or Antigravity CLI hooks file whose **content** the merge cannot handle is refused
   with exit 3: the file is left untouched and the sub-marker **is** written, because a rerun
   would refuse it the same way. The notice names the problem and says to edit the file and
@@ -167,8 +167,8 @@ that setup could not write somewhere — `cannot install …`, `cannot create �
 | When | The notice says |
 |---|---|
 | No `python3` | Install it, or wire the hooks by hand from this document |
-| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v24` (`rm ~/.mast/.setup-v24-codex` when only the Codex step ran) |
-| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v24` |
+| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v25` (`rm ~/.mast/.setup-v25-codex` when only the Codex step ran) |
+| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v25` |
 | A Codex install older than a hook feature mast relies on | Its path, and each missing feature ([version limits](#codex-version-limits)) |
 | Codex hooks were written | How to trust them — the wording follows the Codex version |
 | `config.toml` has inline `[hooks]` tables, `features.hooks = false`, `approvals_reviewer = "auto_review"`, or a stale `[hooks.state]` entry | What mast did not do, and why |
@@ -481,7 +481,7 @@ ESC ] 777 ; mast-query ; <kind> ; <base64 reply path> BEL
 | Field | Contract |
 |---|---|
 | `mast-query` | Literal kind marker. |
-| `<kind>` | The question. `list-tabs` is the only one the app answers; any other value is ignored (so a newer CLI against an older app simply gets no reply, and vice versa). |
+| `<kind>` | The request. The app answers `list-tabs` (this section) and `presentation`, which carries the `mast layout`, `mast open` and `mast diff` requests and is specified in [ADR-0035 §5](../../docs/adr/0035-agent-file-open.md). Any other value is ignored (so a newer CLI against an older app simply gets no reply, and vice versa). |
 | `<base64 reply path>` | Standard base64 of an absolute Linux path that **must start with `/tmp/`**. Both fields are required — `777;mast-query;list-tabs` with no path is not a query at all, since there is nowhere to answer. |
 
 **`/tmp/` is enforced at the string level — a misfire guard, not a privilege boundary.** The
@@ -515,13 +515,14 @@ The reply for `list-tabs`:
   which matters because a write that crosses the 9P boundary from Windows into WSL does not
   land in one piece. The rename stays inside the same directory, so it never crosses a
   filesystem boundary.
-- **Failure is silent, exactly like send.** A bad path, an unknown kind, a serialization or
-  write failure — all of it goes to the app's stderr and **nothing** is written back to the
-  requester's terminal. The reply file never appearing is the only signal the requester gets,
-  which is why `mast ls` times out (2s) rather than waiting forever.
-- No state changes: no snapshot is published, nothing is persisted, and the query is not
-  coalesced into the 100ms notification flush window (two queries in one window must both be
-  answered).
+- **For `list-tabs`, failure is silent, exactly like send.** A bad path, an unknown kind, a
+  serialization or write failure — all of it goes to the app's stderr and **nothing** is written
+  back to the requester's terminal. The reply file never appearing is the only signal the
+  requester gets, which is why `mast ls` times out (2s) rather than waiting forever.
+- `list-tabs` and `presentation` with `layout` change no state: no snapshot is published, nothing
+  is persisted, and the query is not coalesced into the 100ms notification flush window (two
+  queries in one window must both be answered). `open` and `diff` do change state: on success
+  they add a viewer tab, may create a pane, and publish one state update like any other mutation.
 - Queries share one in-flight cap with sends (8 concurrent) — they contend for the same
   blocking thread pool, so one counter guards both.
 
@@ -1612,8 +1613,8 @@ PROMPT_COMMAND="__mast_osc${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
    therefore has a tty, so it only takes step 1 — its purpose is to see whether the delivery
    path itself is alive.
 2. Read `~/.mast/setup.log`: each merged row (`added`, `wired`, `migrated`, `narrowed`) and
-   every notice is there, and the markers `~/.mast/.setup-v24`, `.setup-v24-codex` and
-   `.setup-v24-agy` show which steps finished.
+   every notice is there, and the markers `~/.mast/.setup-v25`, `.setup-v25-codex` and
+   `.setup-v25-agy` show which steps finished.
 3. Then run each agent inside a mast terminal and confirm that its hooks update the tab's badge
    and dot, the pane badge, and the sidebar status and preview. The field checklist is
    `docs/WINDOWS-BUILD.md` §10, "v0.3.32 — Agent state signals verification (setup v16)". A

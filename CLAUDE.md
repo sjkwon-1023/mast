@@ -121,9 +121,9 @@ MVP.
 - **`mast send`/`mast ls`**: reading a pane's scrollback needs an opt-in design;
   `mast ls` shows `?` in `COMMAND` for tabs in another distro. Reaching another workspace
   would need an explicit opt-in (ADR-0005 addendum).
-- **Agent-facing file and diff presentation commands** (user request 2026-09-20): direction
-  agreed 2026-10-20, not started — terminal path Ctrl+click, `mast layout`, `mast open`/`mast diff`
-  (`docs/plans/agent-file-open-plan.md`).
+- **Agent file and diff presentation — field verification pending** (ADR-0035). Windows and WSL
+  checks are WINDOWS-BUILD §10 "Unreleased — agent file open field verification"; the macOS checks
+  are in the feature-parity list of MACOS.md. The accepted limits are recorded in ADR-0035.
 - **Query-reply `/tmp` confinement is string-level only** — a pre-planted symlink routes
   the reply outside; the canonicalize-at-write fix is unverified on 9P.
 - **WSL zsh tabs are not yet field-verified** (ADR-0011 amendment 2026-10-14): cwd tracking is

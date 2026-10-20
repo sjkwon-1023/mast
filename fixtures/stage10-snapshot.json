@@ -110,6 +110,7 @@
           }
         },
         "activePane": 2,
+        "viewerPane": null,
         "agentStatus": "idle",
         "lastAgentMessage": null
       },
@@ -156,6 +157,7 @@
           }
         },
         "activePane": 11,
+        "viewerPane": null,
         "agentStatus": "needsInput",
         "lastAgentMessage": "권한 승인이 필요합니다: rm -rf build/"
       }

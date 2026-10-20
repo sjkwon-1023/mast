@@ -449,6 +449,17 @@ treating these features as field-verified:
 - Open the notepad drawer: editing stays disabled until the dirty report has
   been delivered. With the drawer closed and no note backup, Dock Quit and
   logout still take the Clean fast path without a JS round trip.
+- ⌘+click a file path in terminal output: a file opens in the text or Markdown
+  viewer, a directory in the folder browser, and a plain click opens nothing. A
+  path in a TUI with mouse tracking, an `http(s)` link and a missing file behave as
+  described in ADR-0035.
+- WKWebView focus: `mast open` and ⌘+click leave focus where it was. A new tab
+  added to the pane the user is looking at stays in the background, and the
+  Markdown textarea, the memo and a native browser page keep their draft and
+  focus while the viewer opens or a split is made.
+- macOS CLI `mast layout`, `mast open` and `mast diff` from a mast tab, including
+  `--pane`, `--split right|down`, a path with spaces, and a relative path that
+  contains `..`. Check the exit codes (0, 1, 2) against ADR-0035.
 
 Do not record any of these manual checks as complete until they have actually
 been run.

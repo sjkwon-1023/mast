@@ -11,6 +11,7 @@ import type {
   Command,
   CommandOutput,
   NoteScope,
+  PaneId,
   SaveOutcome,
   SessionId,
   StateSnapshot,
@@ -95,6 +96,11 @@ export function resizeTerminal(id: SessionId, cols: number, rows: number): Promi
 /** flow control ack — 프론트가 소비 완료한 바이트 수를 백엔드에 알린다. */
 export function ackOutput(id: SessionId, n: number): Promise<void> {
   return invoke<void>("ack_output", { id, n });
+}
+
+/** pane 의 표시 칸 수 보고 — `mast layout` 의 측정값이 된다. 권고용이라 호출자는 실패를 로그로만 남긴다. */
+export function reportPaneGeometry(pane: PaneId, cols: number, rows: number): Promise<void> {
+  return invoke<void>("report_pane_geometry", { pane, cols, rows });
 }
 
 /** 전체 세션 stats 조회 (진단용). */
@@ -408,6 +414,22 @@ export function fsListDir(distro: string | null, path: string): Promise<DirListi
 /** 파일 크기·수정시각 조회 (윈도우 계산·mtime 폴링). */
 export function fsStat(distro: string | null, path: string): Promise<FileStat> {
   return invoke<FileStat>("fs_stat", { distro, path });
+}
+
+/** present_terminal_path 성공 응답 — 열린 탭의 위치와 종류. */
+export interface PresentedViewer {
+  workspace: number;
+  pane: number;
+  tab: number;
+  kind: "folderBrowser" | "textViewer" | "markdownViewer" | "changesViewer";
+  path: string;
+  active: boolean;
+}
+
+/** 터미널 출력의 파일 경로를 뷰어로 연다 (main 웹뷰 전용). 상대 경로는 탭 cwd 기준이다.
+ *  실패는 `{code, message}` 로 reject 된다 — 표시는 호출자가 한다. */
+export function presentTerminalPath(session: SessionId, path: string): Promise<PresentedViewer> {
+  return invoke<PresentedViewer>("present_terminal_path", { session, path });
 }
 
 /** 파일의 바이트 윈도우 읽기 (textViewer). 응답은 attachTerminal 과 같은 raw

@@ -26,6 +26,7 @@ use mast_core::osc::OscEvent;
 use mast_core::send::{decode_reply_path, decode_send_text};
 use mast_core::session::{Delivery, SessionId, SessionSink};
 
+use crate::presentation;
 use crate::router::{now_ms, OscRouter};
 use crate::state::{publish_state, AppState, ExitInFlight};
 use crate::{winlog, wintrace};
@@ -409,6 +410,27 @@ fn deliver_send(app: &AppHandle, sender: SessionId, target: &str, text_b64: &str
 /// 떨어진다 (전방 호환 — 새 kind 를 아는 CLI 가 옛 mast 를 만나도 안전하다).
 const QUERY_KIND_LIST_TABS: &str = "list-tabs";
 
+/// 질의 kind 가 가는 처리. 알 수 없는 kind 는 [`QueryRoute::Unknown`] 으로 무응답이 된다.
+#[derive(Debug, PartialEq, Eq)]
+enum QueryRoute<'a> {
+    Browser(&'a str),
+    Presentation(&'a str),
+    ListTabs,
+    Unknown,
+}
+
+fn query_route(kind: &str) -> QueryRoute<'_> {
+    if let Some(payload) = kind.strip_prefix("browser:") {
+        QueryRoute::Browser(payload)
+    } else if let Some(payload) = kind.strip_prefix(presentation::KIND_PREFIX) {
+        QueryRoute::Presentation(payload)
+    } else if kind == QUERY_KIND_LIST_TABS {
+        QueryRoute::ListTabs
+    } else {
+        QueryRoute::Unknown
+    }
+}
+
 /// 질의 회신 JSON 의 최상위 형태 — `{"tabs": [...], "self_tab": <탭 id|null>}`.
 ///
 /// `tabs` 의 원소는 코어 [`TabInfo`] 의 직렬화형이다. `self_tab` 은 **요청자
@@ -469,7 +491,7 @@ fn deliver_query(app: &AppHandle, requester: SessionId, kind: &str, reply_b64: &
                 return;
             }
         };
-        if let Some(payload) = kind.strip_prefix("browser:") {
+        if let QueryRoute::Browser(payload) = query_route(&kind) {
             let Some(state) = app.try_state::<AppState>() else { return };
             let (workspace, distro) = {
                 let d = state.dispatcher.lock().unwrap();
@@ -498,7 +520,15 @@ fn deliver_query(app: &AppHandle, requester: SessionId, kind: &str, reply_b64: &
             }
             return;
         }
-        if kind != QUERY_KIND_LIST_TABS {
+        if let QueryRoute::Presentation(payload) = query_route(&kind) {
+            let (distro, body) =
+                presentation::answer_osc(&app, requester, payload, request_received);
+            if let Err(err) = write_reply_file(distro, &reply_path, body.as_bytes()) {
+                winlog!("presentation reply for session {requester} failed: {err}");
+            }
+            return;
+        }
+        if query_route(&kind) != QueryRoute::ListTabs {
             winlog!(
                 "query: unsupported kind {kind:?} from session {requester}; ignored"
             );
@@ -697,4 +727,22 @@ fn write_reply_file(distro: Option<String>, reply_path: &str, json: &[u8]) -> Re
             final_path.display()
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_query_kind_reaches_its_own_handler() {
+        assert_eq!(query_route("list-tabs"), QueryRoute::ListTabs);
+        assert_eq!(query_route("browser:e30="), QueryRoute::Browser("e30="));
+        assert_eq!(
+            query_route("presentation:e30="),
+            QueryRoute::Presentation("e30=")
+        );
+        assert_eq!(query_route("presentation:"), QueryRoute::Presentation(""));
+        assert_eq!(query_route("presentation"), QueryRoute::Unknown);
+        assert_eq!(query_route("list-tabs2"), QueryRoute::Unknown);
+    }
 }

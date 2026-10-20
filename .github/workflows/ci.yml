@@ -69,6 +69,9 @@ jobs:
       - name: Shell PTY tests (bash + zsh)
         run: python3 scripts/macos/tests/test_shells.py -v
 
+      - name: macOS helper tests (Python, Linux-runnable cases)
+        run: python3 scripts/macos/tests/test_native.py -v
+
       # 락을 손으로 고친 뒤 조용히 어긋나는 걸 막는다 — 위 cargo 단계가 Cargo.lock 을
       # 갱신했다면 여기서 red 가 된다.
       - name: Cargo.lock is up to date
@@ -142,6 +145,12 @@ jobs:
 
       - name: Browser state tests (x64 Windows, native)
         run: cargo test -p mast-app --target x86_64-pc-windows-msvc browser
+
+      - name: Presentation tests (x64 Windows, native)
+        run: "cargo test -p mast-app --target x86_64-pc-windows-msvc presentation::"
+
+      - name: Sink tests (x64 Windows, native)
+        run: "cargo test -p mast-app --target x86_64-pc-windows-msvc sink::tests"
 
       - name: Host launch wrapper tests (x64 Windows, native)
         run: cargo test -p mast-app --target x86_64-pc-windows-msvc host::tests

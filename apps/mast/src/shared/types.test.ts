@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import agentFileOpenFixtureJson from "../../../../fixtures/agent-file-open.json";
 import commandsFixtureJson from "../../../../fixtures/stage10-commands.json";
 import changesViewerFixtureJson from "../../../../fixtures/changes-viewer.json";
 import outputsFixtureJson from "../../../../fixtures/stage10-outputs.json";
@@ -16,10 +17,13 @@ import type {
   Command,
   CommandError,
   CommandOutput,
+  LayoutInfo,
   NewTab,
+  Placement,
   SplitTree,
   StateSnapshot,
   TabKind,
+  ViewerSpec,
   Workspace,
 } from "./types";
 import { WINDOW_BYTES } from "../features/viewers/text/window";
@@ -109,6 +113,36 @@ function newTabTag(spec: NewTab): string {
   }
 }
 
+/** ViewerSpec 전 variant 를 narrowing 으로 통과시키며 태그를 돌려준다 (뷰어 4종뿐). */
+function viewerSpecTag(spec: ViewerSpec): string {
+  switch (spec.type) {
+    case "folderBrowser":
+    case "changesViewer":
+    case "textViewer":
+    case "markdownViewer":
+      expect(typeof spec.path).toBe("string");
+      return spec.type;
+    default:
+      return assertNever(spec);
+  }
+}
+
+/** Placement 전 variant 를 narrowing 으로 통과시키며 태그를 돌려준다. */
+function placementTag(placement: Placement): string {
+  switch (placement.type) {
+    case "default":
+      return placement.type;
+    case "pane":
+      expect(typeof placement.pane).toBe("number");
+      return placement.type;
+    case "split":
+      expect(["horizontal", "vertical"]).toContain(placement.direction);
+      return placement.type;
+    default:
+      return assertNever(placement);
+  }
+}
+
 /** Command 전 variant 를 narrowing 으로 통과시키며 태그를 돌려준다. */
 function commandTag(cmd: Command): string {
   switch (cmd.type) {
@@ -172,6 +206,11 @@ function commandTag(cmd: Command): string {
       expect(typeof cmd.tab).toBe("number");
       expect(typeof cmd.scrollTop).toBe("number");
       return cmd.type;
+    case "presentViewer":
+      expect(typeof cmd.source).toBe("number");
+      expect(viewerSpecTag(cmd.viewer)).not.toBe("");
+      expect(placementTag(cmd.placement)).not.toBe("");
+      return cmd.type;
     default:
       return assertNever(cmd);
   }
@@ -200,6 +239,12 @@ function outputTag(entry: CommandOutput): string {
       expect(typeof entry.tab).toBe("number");
       // session 은 nullable (뷰어 탭은 null — 21단계).
       expect(entry.session === null || typeof entry.session === "number").toBe(true);
+      return entry.type;
+    case "viewerPresented":
+      expect(typeof entry.workspace).toBe("number");
+      expect(typeof entry.pane).toBe("number");
+      expect(typeof entry.tab).toBe("number");
+      expect(typeof entry.active).toBe("boolean");
       return entry.type;
     case "done":
       return entry.type;
@@ -256,6 +301,9 @@ function checkWorkspaceShape(ws: Workspace): void {
   expect(leaves).toEqual(Object.keys(ws.panes).sort());
   expect(AGENT_STATUSES).toContain(ws.agentStatus);
   expect(ws).not.toHaveProperty("agentStatusSource");
+  // viewerPane 은 필수 키다 — 자리가 없어도 코어는 null 을 쓴다.
+  expect(ws).toHaveProperty("viewerPane");
+  expect(ws.viewerPane === null || typeof ws.viewerPane === "number").toBe(true);
   for (const pane of Object.values(ws.panes)) {
     for (const tab of pane.tabs) {
       expect(NOTIFICATIONS).toContain(tab.notification);
@@ -539,7 +587,9 @@ describe("stage10-outputs.json", () => {
     ]);
     // 뷰어 탭 생성 결과는 tab 만 non-null 이고 session 은 null 이다.
     for (const entry of fixture.outputs.slice(4)) {
-      if (entry.type === "done") throw new Error("viewer outputs must create ids");
+      if (entry.type === "done" || entry.type === "viewerPresented") {
+        throw new Error("viewer outputs must create ids");
+      }
       expect(entry.tab).not.toBeNull();
       expect(entry.session).toBeNull();
     }
@@ -553,5 +603,59 @@ describe("stage10-outputs.json", () => {
       "invalidScroll",
       "invalidName",
     ]);
+  });
+});
+
+// agent-file-open.json — 뷰어 표시 계약(presentViewer·자리·응답·layout). 같은 파일을
+// cargo test 의 tests/dispatcher.rs 가 읽어 Rust 쪽과 맞춘다.
+describe("agent-file-open.json", () => {
+  const fixture = agentFileOpenFixtureJson as unknown as {
+    presentViewer: Command;
+    placements: Placement[];
+    viewers: ViewerSpec[];
+    viewerPresented: CommandOutput;
+    layout: LayoutInfo;
+  };
+
+  it("narrows presentViewer and every viewer and placement variant", () => {
+    expect(commandTag(fixture.presentViewer)).toBe("presentViewer");
+    expect(fixture.placements.map(placementTag)).toEqual(["default", "pane", "split"]);
+    const split = fixture.placements[2];
+    if (split.type !== "split") throw new Error("third placement must be split");
+    expect(split.direction).toBe("vertical");
+    expect(fixture.viewers.map(viewerSpecTag)).toEqual([
+      "folderBrowser",
+      "changesViewer",
+      "textViewer",
+      "markdownViewer",
+    ]);
+  });
+
+  it("parses the viewerPresented output with a boolean active flag", () => {
+    expect(outputTag(fixture.viewerPresented)).toBe("viewerPresented");
+    if (fixture.viewerPresented.type !== "viewerPresented") throw new Error("unreachable");
+    expect(fixture.viewerPresented.active).toBe(true);
+  });
+
+  it("keeps layout leaves aligned with panes, nullable paths/url and the self key", () => {
+    const { layout } = fixture;
+    const leaves = collectLeaves(layout.tree);
+    expect(layout.panes.map((pane) => pane.id)).toEqual(leaves);
+    expect(layout).toHaveProperty("self", 2);
+    expect(layout.focused === null || leaves.includes(layout.focused)).toBe(true);
+    expect(layout.viewerPane === null || leaves.includes(layout.viewerPane)).toBe(true);
+    expect(layout.panes.flatMap((pane) => pane.tabs).map((tab) => tab.kind)).toEqual([
+      "terminal",
+      "browser",
+      "textViewer",
+      "markdownViewer",
+    ]);
+    expect(layout.panes[1].tabs[0]).toEqual({
+      id: 5,
+      kind: "browser",
+      title: "Docs",
+      path: null,
+      url: "https://example.com/docs",
+    });
   });
 });

@@ -60,6 +60,7 @@ function ws(
     layout: { type: "leaf", pane: id },
     panes: { [String(id)]: { id, tabs: [tab], activeTab: tab.id } },
     activePane: id,
+    viewerPane: null,
     agentStatus: opts.agentStatus ?? "idle",
     lastAgentMessage: opts.lastAgentMessage ?? null,
   };

@@ -51,4 +51,8 @@ describe("browser CLI", () => {
     const output = run(`for argv in (['screenshot','42','--width','319'], ['screenshot','42','--width','3841'], ['screenshot','42','--height','720']):\n try: b.parse_args(argv)\n except SystemExit as error: assert error.code==2\n else: raise AssertionError('accepted invalid screenshot dimensions')`);
     expect(output).toBe("");
   });
+  it("keeps the browser query prefix, the error envelope text and the 24 MiB reply cap by default", () => {
+    const output = run(`import base64\nb.os.environ['MAST']='1'\nsent=[]\ndef answer(sequence):\n sent.append(sequence)\n reply=pathlib.Path(base64.b64decode(sequence.rstrip(b'\\x07').split(b';')[-1]).decode())\n reply.write_bytes(b'{"error":{"code":"x","message":"y"}}' if len(sent)==1 else b'x'*(24*1024*1024+1))\nb._write_terminal=answer\ntry: b._query_once({'action':'list','args':{}}, b.time.monotonic()+5)\nexcept ValueError as error: assert error.error=={'code':'x','message':'y'} and str(error)=='{"code": "x", "message": "y"}', str(error)\nelse: raise AssertionError('error envelope accepted')\ntry: b._query_once({'action':'list','args':{}}, b.time.monotonic()+5)\nexcept ValueError as error: assert str(error)=='browser reply exceeds 24 MiB', str(error)\nelse: raise AssertionError('oversize reply accepted')\nassert all(s.startswith(b'\\x1b]777;mast-query;browser:') for s in sent)\nprint('ok')`);
+    expect(output).toBe("ok\n");
+  });
 });

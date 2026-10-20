@@ -58,6 +58,7 @@ function ws(
     layout: { type: "leaf", pane: 1 },
     panes: opts.panes ?? { "1": pane(1, [terminalTab(10)]) },
     activePane: 1,
+    viewerPane: null,
     agentStatus: opts.agentStatus ?? "idle",
     lastAgentMessage: opts.lastAgentMessage ?? null,
   };

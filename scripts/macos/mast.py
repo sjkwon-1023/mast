@@ -20,6 +20,11 @@ HELP = """usage:
   mast id                           print this tab's stable ID
   mast config [get|set|reset ...]     inspect or change saved settings
   mast browser --help               inspect and control browser tabs
+  mast layout                       print this workspace's panes and their sizes as JSON
+  mast open [--pane ID | --split ID right|down] [--] <path>
+                                    show a file in a Mast viewer pane
+  mast diff [--pane ID | --split ID right|down] [--] [path]
+                                    show the Git changes of a repository in a Mast viewer pane
   mast skill-load                   reinstall the bundled agent skills
   mast update                       update Mast with the macOS installer
 
@@ -169,6 +174,8 @@ def main(args):
         print(os.environ["MAST_TAB"])
     elif command == "browser":
         os.execv(sys.executable, [sys.executable, str(BIN / "mast-browser.py")] + rest)
+    elif command in ("layout", "open", "diff"):
+        os.execv(sys.executable, [sys.executable, str(BIN / "mast-presentation.py"), command] + rest)
     elif command in ("config", "skill-load"):
         script = "mast-config.py" if command == "config" else "mast-setup.py"
         if command == "skill-load":

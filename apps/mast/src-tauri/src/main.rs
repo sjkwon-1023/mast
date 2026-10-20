@@ -6,6 +6,7 @@
 //! `remote`는 HTTP 서버 조립, `firewall`·`git`·`update`·`app_identity`·`provision`은
 //! OS와 외부 환경 연동, `audit`·`diagnostics`·`logfile`은 진단을 담당하고,
 //! `wsl_health`는 WSL 준비 상태 진단과 그 프론트 계약을 맡는다.
+//! `presentation`은 터미널 경로의 파일 표시 요청(OSC·클릭)을 맡는다.
 //!
 //! # 부팅 순서
 //!
@@ -40,6 +41,7 @@ mod host;
 mod logfile;
 mod provision;
 mod platform;
+mod presentation;
 mod remote;
 mod reset_supervisor;
 mod router;
@@ -270,6 +272,7 @@ fn main() {
                 boot: Arc::clone(&boot_work),
                 last_audit: Mutex::new(RegistryAudit::default()),
                 exits_in_flight: Mutex::new(HashSet::new()),
+                pane_geometry: Default::default(),
             });
 
             // sanitize·수리 결과를 즉시 디스크에 반영한다 (ADR-0016 결정 8 초기 저장) —
@@ -426,6 +429,10 @@ fn main() {
             commands::confirm_dialog,
             git::git_status,
             git::git_diff,
+            // 터미널 출력의 파일 경로 클릭 → 뷰어 표시 (main 웹뷰 전용 — restrict_browser_ipc).
+            presentation::present_terminal_path,
+            // pane 크기 보고 — `mast layout` 이 돌려주는 측정값 (main 웹뷰 전용).
+            presentation::report_pane_geometry,
             // 끝난 터미널 탭의 기록 바이트 (ADR-0018) — 기록 뷰가 마운트 때 1회.
             commands::read_tab_record,
             // 원격 표면의 부팅 결과와 페어링 URL (ADR-0016 결정 9). 상태는 부팅당 1회,

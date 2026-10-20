@@ -67,6 +67,9 @@ export interface Workspace {
    *  조회는 String(paneId) 로 한다. */
   panes: Record<string, Pane>;
   activePane: PaneId;
+  /** 에이전트 뷰어가 표시되는 pane (뷰어 자리). null 이면 자리가 없다. 값이 있으면 이
+   *  워크스페이스의 pane 이다. 코어는 항상 이 키를 쓴다. */
+  viewerPane: PaneId | null;
   /** 탭들의 agentStatus·lastAgentMessage 에서 코어가 재계산해 저장하는 파생값이다.
    *  사이드바와 폰 목록이 워크스페이스 단위로 읽으므로 스냅샷에 남아 있다. */
   agentStatus: AgentStatus;
@@ -191,7 +194,29 @@ export type Command =
   | { type: "navigateFolder"; tab: TabId; path: string }
   /** 뷰어 스크롤 위치 기록 (unmount 복원·persist). scrollTop 은 finite·0 이상
    *  이어야 하고(아니면 invalidScroll), 값 시맨틱은 TabKind 참조. */
-  | { type: "setViewerScroll"; tab: TabId; scrollTop: number };
+  | { type: "setViewerScroll"; tab: TabId; scrollTop: number }
+  /** source 터미널이 속한 워크스페이스에 뷰어 탭을 표시한다. 자리 규칙은 Placement 참조. */
+  | {
+      type: "presentViewer";
+      source: TabId;
+      viewer: ViewerSpec;
+      placement: Placement;
+    };
+
+/** 표시할 뷰어 명세 (command.rs ViewerSpec) — 뷰어 4종만, path 필수. */
+export type ViewerSpec =
+  | { type: "folderBrowser"; path: string }
+  | { type: "changesViewer"; path: string }
+  | { type: "textViewer"; path: string }
+  | { type: "markdownViewer"; path: string };
+
+/** 뷰어 탭의 자리 (command.rs Placement). right 는 horizontal, down 은 vertical 이다. */
+export type Placement =
+  /** 워크스페이스의 뷰어 자리가 있으면 그 pane 에 더하고, 없으면 source pane 을
+   *  오른쪽으로 나눠 새 자리를 만든다. */
+  | { type: "default" }
+  | { type: "pane"; pane: PaneId }
+  | { type: "split"; pane: PaneId; direction: SplitDirection };
 
 /** dispatch 성공 결과 (command.rs CommandOutput). */
 export type CommandOutput =
@@ -216,7 +241,49 @@ export type CommandOutput =
     }
   /** session 은 terminal 탭이면 스폰된 PTY 세션 id, 뷰어 탭이면 null. */
   | { type: "tabCreated"; tab: TabId; session: SessionId | null }
+  /** presentViewer 결과. active 는 새 탭이 자기 pane 의 활성 탭인지 — 활성 pane 에
+   *  활성 탭이 있으면 뒤에 쌓기만 하므로 false 다. */
+  | {
+      type: "viewerPresented";
+      workspace: WorkspaceId;
+      pane: PaneId;
+      tab: TabId;
+      active: boolean;
+    }
   | { type: "done" };
+
+/** 배치 조회 응답 (command.rs LayoutInfo, `mast layout` 의 외부 계약). pane 크기는
+ *  이 응답에 없다 — 글루가 보고된 값을 따로 합친다. */
+export interface LayoutInfo {
+  workspace: WorkspaceId;
+  revision: number;
+  /** 호출자가 속한 pane. JSON 키는 self 다. */
+  self: PaneId;
+  /** 워크스페이스가 활성일 때만 activePane, 아니면 null. */
+  focused: PaneId | null;
+  viewerPane: PaneId | null;
+  tree: SplitTree;
+  /** leaf 순서. */
+  panes: LayoutPane[];
+}
+
+export interface LayoutPane {
+  id: PaneId;
+  activeTab: TabId | null;
+  /** 표시 순서. */
+  tabs: LayoutTab[];
+}
+
+export interface LayoutTab {
+  id: TabId;
+  /** terminal | folderBrowser | changesViewer | textViewer | markdownViewer | browser */
+  kind: string;
+  title: string;
+  /** 터미널은 cwd, 뷰어는 경로, 브라우저는 null. */
+  path: string | null;
+  /** 브라우저만 URL, 나머지는 null. */
+  url: string | null;
+}
 
 /** dispatch 실패 (command.rs CommandError) — invoke reject payload 로 도착한다. */
 export type CommandError =
