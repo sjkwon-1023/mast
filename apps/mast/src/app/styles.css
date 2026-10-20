@@ -970,6 +970,14 @@ body {
   height: 100%;
 }
 
+/* xterm 6 은 테마 배경을 행 높이만큼인 `.xterm-scrollable-element` 에만 칠하고, 호스트 전체를
+   덮는 `.xterm-viewport` 는 xterm.css 의 `#000` 으로 남긴다. fit 이 버린 한 행 미만의 바닥
+   여백이 그 검정으로 보이므로 터미널 테마 배경(settings.ts `TERMINAL_THEME.background`)과 같은
+   색으로 맞춘다. */
+.term-host .xterm .xterm-viewport {
+  background-color: var(--bg);
+}
+
 /* ── 뷰어 탭 — folderBrowser (21단계) ─────────────────────────────────
    pane 콘텐츠를 꽉 채우는 세로 스택: 상단 배너(로딩·truncated·에러) + 스크롤
    목록. 행은 <button> 이라 헤더 버튼 규칙(.pane-header button)과 겹치지 않게
