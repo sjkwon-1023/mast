@@ -14,12 +14,14 @@
 // 가린다. 로그 파일이 사용자가 친 것의 사본이 되면 안 된다는 규율이 백엔드와 같다.
 //
 // 여기서 한 가지를 더 본다 (ADR-0020, 2026-10-20 진단): Windows 두벌식에서
-// `compositionend.data` 와 xterm 이 실제로 보낸 문자열이 **같은지**. xterm 6 은
-// compositionend 직후의 zero-delay 태스크에서 textarea 값을 읽어 보내므로
-// (CompositionHelper._finalizeComposition), 한 번의 확정이 여러 onData 로 갈라지거나
-// 여러 확정이 한 onData 로 합쳐질 수 있다. 그래서 end 하나와 onData 하나를 짝지어
-// 비교하지 않고, 마지막 이벤트 뒤 두 번의 zero-delay 태스크 동안 조용해질 때까지를
-// 한 묶음으로 모아 비교한다. 값은 여기서만 쓰고 버린다 — 원문·해시·문자 코드를
+// `compositionend.data` 와 실제로 보낸 문자열(onData)이 **같은지**. 2026-10-21 부터 확정은
+// Windows 입력 어댑터(features/terminal/windows-ime.ts)가 보내므로 이 비교는 어댑터를 검증하고,
+// 판정 줄의 `xtermWindow` 는 어댑터가 막은 xterm 6 경로였다면 보냈을 textarea 구간이 확정
+// 글자와 같았는지를 따로 남긴다. xterm 6 은 compositionend 직후의 zero-delay 태스크에서
+// textarea 값을 읽어 보내므로(CompositionHelper._finalizeComposition), 한 번의 확정이 여러
+// 전송으로 갈라지거나 여러 확정이 한 전송으로 합쳐질 수 있다. 그래서 end 하나와 onData
+// 하나를 짝지어 비교하지 않고, 마지막 이벤트 뒤 두 번의 zero-delay 태스크 동안 조용해질
+// 때까지를 한 묶음으로 모아 비교한다. 값은 여기서만 쓰고 버린다 — 원문·해시·문자 코드를
 // 로그에 넣지 않고, 이벤트를 취소·재전송하거나 DOM 값을 쓰지 않는다.
 
 import { IS_MAC } from "../shared/platform";
@@ -147,6 +149,10 @@ type UnknownReason =
 interface CommitBundle {
   expected: string;
   actual: string;
+  /** xterm 6 CompositionHelper 가 읽었을 textarea 구간의 합. */
+  xtermWindow: string;
+  /** 구간 합이 상한을 넘었다 — 상한 안의 expected 와 같을 수 없다. */
+  xtermWindowOverflow: boolean;
   ends: number;
   onData: number;
   /** 첫 사유가 이긴다 — 뒤에 온 사유로 앞의 판정 불가를 덮지 않는다. */
@@ -183,23 +189,35 @@ class CommitWatch implements ImeCommitDiagnostics {
   private bundle: CommitBundle | null = null;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
   private settleGeneration = 0;
+  // xterm 6 CompositionHelper 의 `_compositionPosition.start`·`_isComposing`·
+  // `_isSendingComposition` 을 같은 규칙으로 따라간다 (xtermWindow).
+  private xtermStart = 0;
+  private xtermComposing = false;
+  private xtermSending = false;
   private closed = false;
   private readonly dataSub: { dispose(): void };
+  private readonly listeners: Array<[string, (ev: Event) => void]>;
 
   constructor(
     private readonly terminal: ImeDiagnosticsTerminal,
     private readonly session: number,
+    private readonly element: HTMLElement,
     private readonly textarea: HTMLTextAreaElement,
   ) {
     // xterm 은 공개 onData 로만 관찰한다 — private 훅이나 번들 패치 없이 replay gate
     // 뒤의 기존 전달 경로를 건드리지 않는다.
     this.dataSub = terminal.onData((data) => this.onData(data));
-    textarea.addEventListener("compositionstart", this.onCompositionStart, true);
-    textarea.addEventListener("compositionupdate", this.onCompositionUpdate, true);
-    textarea.addEventListener("compositionend", this.onCompositionEnd, true);
-    textarea.addEventListener("keydown", this.onKeyDown, true);
-    textarea.addEventListener("paste", this.onPaste, true);
-    textarea.addEventListener("blur", this.onBlur);
+    // Windows 입력 어댑터가 textarea 에 닿기 전에 조합 이벤트를 멈추므로 같은 element 의
+    // capture 에서 어댑터보다 먼저 본다.
+    this.listeners = [
+      ["compositionstart", this.onCompositionStart],
+      ["compositionupdate", this.onCompositionUpdate],
+      ["compositionend", this.onCompositionEnd],
+      ["keydown", this.onKeyDown],
+      ["paste", this.onPaste],
+      ["blur", this.onBlur],
+    ];
+    for (const [type, fn] of this.listeners) element.addEventListener(type, fn, true);
   }
 
   notePaste(): void {
@@ -225,16 +243,13 @@ class CommitWatch implements ImeCommitDiagnostics {
     this.interrupt();
     this.closed = true;
     this.dataSub.dispose();
-    this.textarea.removeEventListener("compositionstart", this.onCompositionStart, true);
-    this.textarea.removeEventListener("compositionupdate", this.onCompositionUpdate, true);
-    this.textarea.removeEventListener("compositionend", this.onCompositionEnd, true);
-    this.textarea.removeEventListener("keydown", this.onKeyDown, true);
-    this.textarea.removeEventListener("paste", this.onPaste, true);
-    this.textarea.removeEventListener("blur", this.onBlur);
+    for (const [type, fn] of this.listeners) this.element.removeEventListener(type, fn, true);
   }
 
-  private readonly onCompositionStart = (): void => {
-    if (this.closed) return;
+  private readonly onCompositionStart = (ev: Event): void => {
+    if (this.closed || ev.target !== this.textarea) return;
+    this.xtermStart = this.textarea.value.length;
+    this.xtermComposing = true;
     if (this.limited) {
       // 상한에 걸린 조합의 꼬리는 버리고 다음 조합부터 새 묶음으로 본다.
       this.limited = false;
@@ -257,13 +272,16 @@ class CommitWatch implements ImeCommitDiagnostics {
 
   /** 조합 밖의 update — 2026-10-19 현장 로그처럼 닫힌 조합 뒤에 온다. 열린 묶음이
    *  있으면 그 구간의 순서가 깨진 것이므로 판정을 보류한다. */
-  private readonly onCompositionUpdate = (): void => {
+  private readonly onCompositionUpdate = (ev: Event): void => {
+    if (ev.target !== this.textarea) return;
     if (this.closed || this.limited || this.composing) return;
     if (this.bundle !== null) this.bundle.reason ??= "event-order";
   };
 
   private readonly onCompositionEnd = (ev: Event): void => {
-    if (this.closed || this.limited) return;
+    if (this.closed || ev.target !== this.textarea) return;
+    this.traceXtermWindow();
+    if (this.limited) return;
     const data = (ev as CompositionEvent).data ?? "";
     if (!this.composing) {
       // 조합 밖에서 온 end — 어느 조합의 확정인지 귀속할 수 없다. 열린 묶음이 있으면
@@ -326,13 +344,14 @@ class CommitWatch implements ImeCommitDiagnostics {
     this.armSettle();
   };
 
-  private readonly onKeyDown = (ev: KeyboardEvent): void => {
-    if (this.closed || this.limited) return;
+  private readonly onKeyDown = (ev: Event): void => {
+    if (this.closed || this.limited || ev.target !== this.textarea) return;
+    const key = ev as KeyboardEvent;
     // IME 가 삼킨 키(229)만 일반 입력이 아니다. `isComposing` 으로 거르지 않는 것은
     // xterm 이 keyCode 로만 가르기 때문이다 — 조합 중의 비-229 Enter 는 조합을 확정하고
     // CR 도 보낸다. Tab·Escape·방향키도 onData 로 시퀀스를 보내므로, 수식키·입력 모드
     // 전환 키가 아니면 다른 입력이 섞인 것으로 보고 보류한다.
-    if (ev.keyCode === 229 || NON_INPUT_KEYS.has(ev.key)) return;
+    if (key.keyCode === 229 || NON_INPUT_KEYS.has(key.key)) return;
     this.markMixed();
   };
 
@@ -340,9 +359,33 @@ class CommitWatch implements ImeCommitDiagnostics {
     this.markMixed();
   };
 
-  private readonly onBlur = (): void => {
+  private readonly onBlur = (ev: Event): void => {
+    if (ev.target !== this.textarea) return;
     this.interrupt();
   };
+
+  /** xterm 6 `_finalizeComposition(true)` 가 zero-delay 태스크에서 읽었을 구간. 여러 end 가 한
+   *  태스크에 오면 첫 타이머만 보내는 것까지 같다 (업스트림 #6089). */
+  private traceXtermWindow(): void {
+    this.xtermComposing = false;
+    const start = this.xtermStart;
+    this.xtermSending = true;
+    setTimeout(() => {
+      if (this.closed || !this.xtermSending) return;
+      this.xtermSending = false;
+      const value = this.textarea.value;
+      const read = this.xtermComposing
+        ? value.substring(start, this.xtermStart)
+        : value.substring(start);
+      const bundle = this.bundle;
+      if (bundle === null) return;
+      if (bundle.xtermWindow.length + read.length > IME_MAX_CODE_UNITS) {
+        bundle.xtermWindowOverflow = true;
+      } else {
+        bundle.xtermWindow += read;
+      }
+    }, 0);
+  }
 
   private markMixed(): void {
     if (this.closed || this.limited) return;
@@ -356,6 +399,8 @@ class CommitWatch implements ImeCommitDiagnostics {
     const bundle: CommitBundle = {
       expected: "",
       actual: "",
+      xtermWindow: "",
+      xtermWindowOverflow: false,
       ends: 0,
       onData: 0,
       reason: null,
@@ -401,10 +446,13 @@ class CommitWatch implements ImeCommitDiagnostics {
       this.logUnknown(reason, bundle.ends, bundle.onData);
       return;
     }
+    const xtermWindow =
+      !bundle.xtermWindowOverflow && bundle.xtermWindow === bundle.expected ? "same" : "differs";
     log(
       `ime: commit match=${bundle.expected === bundle.actual} ${this.identifiers()} ` +
         `ends=${bundle.ends} onData=${bundle.onData} ` +
-        `expectedLen=${bundle.expected.length} actualLen=${bundle.actual.length}`,
+        `expectedLen=${bundle.expected.length} actualLen=${bundle.actual.length} ` +
+        `xtermWindow=${xtermWindow}`,
     );
   }
 
@@ -427,7 +475,7 @@ export function installImeCommitDiagnostics(
   session: number,
 ): ImeCommitDiagnostics | null {
   if (!enabled || IS_MAC) return null;
-  const textarea = terminal.textarea;
-  if (textarea === undefined) return null;
-  return new CommitWatch(terminal, session, textarea);
+  const { element, textarea } = terminal;
+  if (element === undefined || textarea === undefined) return null;
+  return new CommitWatch(terminal, session, element, textarea);
 }

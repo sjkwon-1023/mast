@@ -9,9 +9,10 @@
 // 확정 전송은 `term.input(data, true)` 로 한다. onData 경로를 그대로 타므로 뷰의 replay
 // 게이트·쓰기 큐·scrollOnUserInput 이 xterm 자신의 입력과 똑같이 적용된다.
 //
-// Windows(WebView2)는 composition 이벤트를 보내므로 이 배선을 설치하지 않는다 (view.ts).
+// Windows(WebView2)는 composition 이벤트를 보내므로 windows-ime-input.ts 가 맡는다 (view.ts).
 
-import type { IDisposable, Terminal } from "@xterm/xterm";
+import type { Terminal } from "@xterm/xterm";
+import { CompositionPreview } from "./composition-preview";
 import { WebKitImeState } from "./webkit-ime";
 
 type Listener = (ev: Event) => void;
@@ -27,11 +28,8 @@ export class WebKitImeInput {
   private readonly state: WebKitImeState;
   private readonly element: HTMLElement;
   private readonly textarea: HTMLTextAreaElement;
-  private readonly screen: HTMLElement;
-  // 아직 확정되지 않은 글자를 커서 위치에 보여 준다. xterm 의 조합 뷰 스타일을 그대로 쓴다.
-  private readonly preview: HTMLDivElement;
+  private readonly preview: CompositionPreview;
   private readonly listeners: Array<[string, Listener]>;
-  private readonly renderSub: IDisposable;
   private keylessTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
 
@@ -44,12 +42,8 @@ export class WebKitImeInput {
     }
     this.element = element;
     this.textarea = textarea;
-    this.screen = screen;
     this.state = new WebKitImeState((data) => term.input(data, true));
-
-    this.preview = document.createElement("div");
-    this.preview.className = "composition-view";
-    (textarea.parentElement ?? screen).appendChild(this.preview);
+    this.preview = new CompositionPreview(term, textarea, screen);
 
     this.listeners = [
       ["keydown", this.onKeyDown],
@@ -66,11 +60,6 @@ export class WebKitImeInput {
     for (const [type, fn] of this.listeners) {
       element.addEventListener(type, fn, { capture: true });
     }
-
-    // 출력으로 커서가 움직이면 미리보기도 따라간다.
-    this.renderSub = term.onRender(() => {
-      if (this.preview.textContent !== "") this.placePreview();
-    });
   }
 
   /** 남은 조합을 전부 확정한다 — 탭 숨김·붙여넣기·submit 처럼 입력창 밖에서 오는 경계. */
@@ -89,8 +78,7 @@ export class WebKitImeInput {
     for (const [type, fn] of this.listeners) {
       this.element.removeEventListener(type, fn, { capture: true });
     }
-    this.renderSub.dispose();
-    this.preview.remove();
+    this.preview.dispose();
   }
 
   private readonly onKeyDown: Listener = (ev) => {
@@ -166,35 +154,6 @@ export class WebKitImeInput {
   }
 
   private updatePreview(): void {
-    const text = this.state.pendingText(this.textarea);
-    if (text === "") {
-      this.preview.textContent = "";
-      this.preview.classList.remove("active");
-      return;
-    }
-    this.preview.textContent = text;
-    this.placePreview();
-  }
-
-  // 공개 API 만으로 커서 셀을 계산한다: 버퍼의 커서 좌표와, 렌더러가 cols×셀 크기로 맞춰
-  // 두는 화면 요소의 크기.
-  private placePreview(): void {
-    const buffer = this.term.buffer.active;
-    const row = buffer.cursorY + buffer.baseY - buffer.viewportY;
-    if (row < 0 || row >= this.term.rows) {
-      this.preview.classList.remove("active");
-      return;
-    }
-    const cellWidth = this.screen.clientWidth / this.term.cols;
-    const cellHeight = this.screen.clientHeight / this.term.rows;
-    const column = Math.min(buffer.cursorX, this.term.cols - 1);
-    const style = this.preview.style;
-    style.left = `${column * cellWidth}px`;
-    style.top = `${row * cellHeight}px`;
-    style.height = `${cellHeight}px`;
-    style.lineHeight = `${cellHeight}px`;
-    style.fontFamily = `${this.term.options.fontFamily}`;
-    style.fontSize = `${this.term.options.fontSize}px`;
-    this.preview.classList.add("active");
+    this.preview.show(this.state.pendingText(this.textarea));
   }
 }

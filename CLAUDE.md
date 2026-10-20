@@ -67,27 +67,17 @@ MVP.
 - **Terminal modes after reattach** (ADR-0015): the alt screen is deliberately not
   re-asserted, so a TUI whose `?1049h` was evicted returns on the normal buffer; a paste
   during the replay gate is logged, not buffered.
-- **Korean input on Windows still drops or overwrites syllables — diagnostics added 2026-10-20,
-  waiting for the next reproduction** (ADR-0020, amended 2026-10-20). The cause is not confirmed.
-  `@xterm/xterm` 6.0.0 ships the upstream composition fix and the 5.5 build-time patch is gone, but
-  the field reports continue on 6.0: `수준이야` → `주주ㅇ야` (2026-10-18) and `이미지` → `미미지`
-  (2026-10-19), each an earlier syllable overwritten by the next one, rarely. Once it happens it
-  persists until the window loses focus to another app and comes back. `mast.log` at 2026-10-19
-  22:15:31 holds the only out-of-order sequence among 809 composition events in that window: a
-  `compositionstart` before the open composition ended, then an `update` and a second `end` after it
-  closed — Microsoft IME overlapping compositions, which xterm's composition helper does not handle
-  (upstream #6049 family; #6089 and #5778/#6140 also remain). The user remembers that in the bad state
-  a neighbouring pane's ordinary shell also received the wrong characters, so the bytes likely reach
-  the PTY and the stuck state is shared across panes (each pane has its own xterm and textarea) —
-  confirm with `cat > /tmp/ime.txt` and `xxd` from another pane reached with `Alt+Shift+arrows` while
-  the bad state persists (WINDOWS-BUILD §10 F1). The opt-in log now writes `ime: commit match=…` (or
-  `match=unknown reason=…`) per terminal bundle — whether the committed text equals xterm's `onData`,
-  with bounds and no content — and `pane: focus from=… to=…` from the same install (ADR-0020
-  amendment). The next reproduction picks the fix: `match=true` with wrong text points at the IME or
-  WebView2 side, where a per-textarea blur/refocus is unlikely to help (a pane switch already moves
-  focus between textareas); `match=false` points at xterm, where a Windows input adapter that commits
-  from the textarea value, like the macOS `webkit-ime.ts`, is the candidate. The `shared/keys.ts` `isComposing` guard and the
-  composition log lines (ADR-0014) stay.
+- **Korean input on Windows — adapter landed 2026-10-21, not field-verified** (ADR-0020, amended
+  2026-10-20 and 2026-10-21). Field reports on xterm 6.0 (`수준이야` → `주주ㅇ야`, `이미지` → `미미지`,
+  `조작해도` → `자작`) are each an earlier syllable overwritten by the next one. The 2026-10-21
+  reproduction logged `match=false`: xterm sent a textarea window that differed from
+  `compositionend.data`. The Windows adapter (`features/terminal/windows-ime*.ts`) now sends
+  `compositionend.data` and keeps xterm's composition path out. Pending: WINDOWS-BUILD §10 "Windows IME
+  adapter". That covers the F1 byte check, the keys pressed during composition, the candidate-window
+  position, and the `xtermWindow=same|differs` field, which shows whether the old fault still occurs
+  under the adapter. The cause stays unconfirmed (TSF rewriting the textarea, upstream #6049, is the model
+  that fits). If the IME's own commit report is wrong, the adapter does not help. The `shared/keys.ts`
+  `isComposing` guard and the composition log lines (ADR-0014) stay.
 - **Splitter resize is mouse-drag only.**
 - **Per-pane split-button affordance** (ADR-0004): a first-time user read the header
   buttons as "split the selected pane".

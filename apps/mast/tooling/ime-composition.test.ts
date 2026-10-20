@@ -209,7 +209,8 @@ describe.each(BUNDLES)("@xterm/xterm 6.0 %s", (_bundle, Terminal) => {
       expect(text, `flushEvery=${flushEvery}`).toBe("테스트");
       // 확정과 전송이 실제로 관찰됐고, 어느 묶음도 unknown 으로 새지 않았다.
       expect(commits.length, `flushEvery=${flushEvery}`).toBeGreaterThan(0);
-      for (const line of commits) expect(line).toContain("match=true");
+      // 어댑터 없이 xterm 이 직접 보낸 것이므로 진단이 따라간 xterm 구간도 확정과 같아야 한다.
+      for (const line of commits) expect(line).toMatch(/match=true .* xtermWindow=same$/);
     }
   });
 
