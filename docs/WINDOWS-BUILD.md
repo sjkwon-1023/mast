@@ -2695,9 +2695,10 @@ original back with `cp -p /tmp/mast-entry.orig "$f"` before timing anything in i
      (choose *Continue without trusting* if it asks about the inline hook). Then
      `mv /tmp/mast-codex-hooks.json ~/.codex/hooks.json` and copy `config.toml` back; no rerun is
      needed.
-   - `grep app-server-control-socket ~/.mast/setup.log`: *record* the value. If you use a shared
-     app-server, submit a prompt in the attached Codex TUI and *record* which tab, if any, shows
-     running.
+   - `grep app-server-control-socket ~/.mast/setup.log`: *record* the value. `command -v codex` in a
+     mast tab prints `~/.mast/bin/codex`. Start `codex` in two tabs and submit a prompt in each: each
+     tab shows running, then idle, and `~/.mast/resume/tab-<id>` names that tab's own session with
+     the tab's current `~/.mast/prompt/tab-<id>` generation on line 3 (ADR-0026 amendment 2026-10-21).
 4. **Two tabs, two panes.**
    - A `running`, B `idle`: the workspace card shows running.
    - A and B each at needs input, with the window unfocused or another workspace active: each

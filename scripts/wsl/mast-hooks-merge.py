@@ -768,7 +768,8 @@ def parse_codex_args(args):
 def merge_codex(args):
     hooks_path, config_path, trust_notice = parse_codex_args(args)
     codex_home = os.path.dirname(os.path.abspath(hooks_path))
-    # 공유 app-server daemon 에 붙은 TUI 는 훅이 daemon 의 환경·tty 로 돈다(문서화된 한계).
+    # 공유 app-server daemon 에 붙은 TUI 는 훅이 daemon 의 환경·tty 로 돈다. mast 탭의 codex 는 래퍼
+    # (mast-codex.sh)가 --no-daemon 으로 띄우므로, 이 기록은 래퍼를 거치지 않은 실행을 진단할 때 쓴다.
     control_socket = os.path.join(codex_home, "app-server-control", "app-server-control.sock")
     report("codex", "app-server-control-socket=%s"
            % ("present" if os.path.exists(control_socket) else "absent"))

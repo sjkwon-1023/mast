@@ -54,6 +54,7 @@ const ASSETS: &[(&str, &str)] = &[
     asset!("bin/mast-presentation.py", "wsl/mast-presentation.py"),
     asset!("bin/mast-claude-hook.sh", "wsl/mast-claude-hook.sh"),
     asset!("bin/mast-codex-hook.sh", "wsl/mast-codex-hook.sh"),
+    asset!("bin/codex", "wsl/mast-codex.sh"),
     asset!("bin/mast-opencode-plugin.js", "wsl/mast-opencode-plugin.js"),
     asset!("bin/mast-skill.md", "wsl/skills/mast/SKILL.md"),
     asset!("bin/mast-send-skill.md", "wsl/skills/mast-send/SKILL.md"),

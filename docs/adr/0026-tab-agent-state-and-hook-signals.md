@@ -578,7 +578,8 @@ is `rejected` with both ids present. The body is the first line of `last-assista
   `apply_patch` heredoc intercepted by `exec_command` — never raise needs input.
 - A turn error or `/review` can leave running behind.
 - A Codex TUI attached to a shared app-server daemon runs hooks with the daemon's environment and
-  terminal, so signals are missing or land on the tab that started the daemon.
+  terminal, so signals are missing or land on the tab that started the daemon. *[Closed for mast tabs by the
+  2026-10-21 amendment: `codex` there runs with `--no-daemon`.]*
 - The trust notice follows the lowest installed version: with 0.128 and 0.154 both present no
   notice is printed, although 0.154 prompts on launch by itself. A Codex installed after v16 gets
   only `hooks.json`; its notify line and `AGENTS.md` block wait for the next setup version or
@@ -827,3 +828,52 @@ Automated: `scripts/macos/tests/test_shells.py` (the shared `integration.sh` pat
 processes; macOS-only cases skip on Linux), `apps/mast` vitest for the writers and provisioning, and
 `tests/config-cli.test.ts`. Field: WINDOWS-BUILD §10 "Unreleased — agent auto-resume field verification".
 **Not yet run**; no item is recorded as passed.
+
+## Amendment (2026-10-21) — Codex runs without the shared app-server daemon in mast tabs
+
+This amendment closes the accepted limit "A Codex TUI attached to a shared app-server daemon runs hooks
+with the daemon's environment and terminal".
+
+**What the field showed.** Codex CLI 0.163.0 starts `codex app-server --listen unix:// --managed-daemon` the
+first time a TUI runs and attaches every later TUI to it. Hooks and `notify` run inside that daemon. On
+2026-10-21 the daemon (`ppid 1`, no tty, alive across app restarts) carried `MAST_TAB=93` and
+`MAST_PROMPT_GEN=474845-2270024839-1` from the tab that started it. A Codex session in tab 90 therefore wrote
+its resume hint and hook state to `tab-93`, so tab 90 had no Codex hint; the hint's generation matched no
+shell, so autoResume never ran a Codex session; and every emit failed with `could not write mast:idle to
+the terminal`. `~/.codex/logs_2.sqlite` records the `hook/started` events under the daemon's pid.
+
+**Decision.** In mast tabs, `codex` is a wrapper that adds Codex's own `--no-daemon` flag, so the TUI runs
+its embedded app-server and the hooks inherit the tab's environment and terminal. Verified in the field the
+same day: one turn of `codex --no-daemon` in tab 90 wrote `codex resume <id>` to `tab-90` with the shell's
+current generation and emitted `mast:idle` successfully, and `tab-93` was untouched.
+
+- **A PATH wrapper, not a shell function.** `scripts/wsl/mast-codex.sh` is installed as `~/.mast/bin/codex`
+  (WSL setup step 3c, `SETUP_VERSION` 26; the macOS asset list). `~/.mast/bin` is first on `PATH` only in
+  mast shells, so Codex outside mast is unchanged, while programs that resolve `codex` from `PATH` and exec it
+  — the autoResume `command codex resume`, a pane harness — are covered too. The wrapper finds the real binary
+  by walking `PATH` and skipping `~/.mast/bin`.
+- **Where the flag goes.** In 0.163 a root `--no-daemon` makes the argument parser read a following
+  subcommand as the prompt (`codex --no-daemon features list` starts the TUI), and `resume`/`fork` accept their
+  own `--no-daemon`. The wrapper scans all arguments: `resume` or `fork` gets the flag right after it; another
+  known subcommand (`exec`, `agents`, `login`, …) passes through unchanged; an explicit `--no-daemon` or
+  `--remote` passes through; anything else is an interactive start and gets the flag first. Scanning every
+  argument rather than the first positional one keeps `codex -m <model> exec …` intact.
+- **The user's configuration stays untouched.** `-c features.daemon_auto_start=false` is not an alternative:
+  a TUI started with it still attached to the running daemon. Decision 7 also rules out `[features]` edits.
+- **macOS setup ignores the wrapper.** The app runs `mast-setup.py` with `~/.mast/bin` first on `PATH`, so
+  `candidates()` skips files in that directory; otherwise the wrapper alone would count as an installed Codex.
+
+**Accepted limits.**
+
+- A subcommand that a later Codex adds and the wrapper's list does not name is read as a prompt. The list
+  sits in one `case` in the wrapper and must follow Codex upgrades.
+- An option value that equals a subcommand name (for example a profile named `review`) makes the wrapper pass
+  the call through, so that one session attaches to the daemon as before.
+- Sessions started through the wrapper are not on the shared daemon, so `codex agents` does not list them.
+  A daemon started before this change keeps running with its old environment until Codex stops it; nothing
+  attaches to it from a mast tab.
+- `codex` started by an absolute path, or from a shell without the mast `PATH`, still uses the daemon.
+
+Automated: `apps/mast/tests/codex-wrapper.test.ts` (argument placement, `PATH` walk), `provision-setup.test.ts`
+(installed bytes and mode, the missing-file rerun), `scripts/macos/tests/test_native.py` (macOS asset entry,
+`candidates()`). Field: WINDOWS-BUILD §10 "Codex hooks" step 3 now checks that two tabs each get their own hint.

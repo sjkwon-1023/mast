@@ -115,6 +115,9 @@ MVP.
   feedbackless denial leaves a stale status until the next prompt; per-hook latency is
   unmeasured; no Python 3.6 interpreter, `wsl.exe` relay or Windows-only glue test has run
   against it.
+- **Codex `--no-daemon` wrapper** (ADR-0026 amendment 2026-10-21): verified by one manual
+  `codex --no-daemon` turn in the field, but the installed `~/.mast/bin/codex` has not run on a device
+  (WINDOWS-BUILD §10 "Codex hooks" step 3). Its subcommand list must follow Codex upgrades.
 - **Antigravity CLI** (ADR-0026 decision 8): no needs-input signal and no resume hint;
   field verification must name the CLI version.
 - **OpenCode** (ADR-0027): Windows TUI, toast and restart checks pending.

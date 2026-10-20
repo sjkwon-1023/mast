@@ -69,6 +69,9 @@ def candidates(name):
         if not path or not os.path.isfile(path) or not os.access(path, os.X_OK):
             continue
         resolved = os.path.realpath(path)
+        # setup 은 BIN 을 PATH 맨 앞에 두고 돈다. 거기 있는 codex 는 mast 래퍼라 설치 증거가 아니다.
+        if os.path.dirname(resolved) == os.path.realpath(BIN):
+            continue
         if resolved not in seen:
             seen.add(resolved)
             yield path
