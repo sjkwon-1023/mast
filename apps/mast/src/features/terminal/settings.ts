@@ -4,6 +4,7 @@ import { clampFontSize } from "../../shared/font-size";
 import type { UiSettings } from "../../infrastructure/backend";
 
 // foreground/background 변경 시 host.rs THEME_SYNC와 sink.rs COLOR_REPLY_*도 함께 맞춘다.
+// background는 styles.css `.term-host .xterm .xterm-viewport`가 쓰는 `--bg`와도 같아야 한다.
 const TERMINAL_THEME: ITheme = {
   foreground: "#cccccc",
   background: "#1e1e1e",
