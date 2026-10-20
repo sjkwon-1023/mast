@@ -766,7 +766,8 @@ user types: Claude's SessionStart is not a writer. Without the replacement, a se
 running without input until quit kept the previous boot's generation, so the boot after that skipped it.
 If the replacement fails, the shell prints `[mast] auto-resume: cannot update ~/.mast/resume/tab-<id>…`
 and runs the agent anyway. The old line 3 then makes the next boot skip the session, which is not an
-unwanted run. After the
+unwanted run. `SETUP_VERSION` goes to 27 so WSL installs that already ran setup v25 or v26 receive the new
+`integration.sh`. After the
 run the shell records a new generation. The shell remembers the command it ran and the generation it ran
 under; a hint with that command and that generation, which the resumed session keeps writing (a notify
 arriving after the agent exits included), is not added to history again, while the same session started
