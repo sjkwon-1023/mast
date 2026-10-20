@@ -74,8 +74,10 @@ _mast_cwd() {
 # 에이전트 hook 은 셸이 살아 있는 동안에도 힌트를 다시 쓴다. 시작 때뿐 아니라 프롬프트마다
 # (명령, 기록 시각)이 바뀌었는지 보고, 바뀐 힌트만 한 번 히스토리에 넣는다.
 _mast_resume_seen=''
+# zsh 의 INC_APPEND_HISTORY 는 print -s 항목을 다음 명령을 입력할 때에야 파일에 쓴다. 다음 셸의 첫 프롬프트는
+# 이전 셸이 넣은 힌트를 다시 넣지 않으므로, 입력 없이 앱을 꺼도 남도록 바로 쓴다.
 _mast_history_add() {
-  if [[ -n ${ZSH_VERSION:-} ]]; then print -s -- "$1"; else history -s "$1"; history -a; fi
+  if [[ -n ${ZSH_VERSION:-} ]]; then print -s -- "$1"; fc -AI; else history -s "$1"; history -a; fi
 }
 _mast_resume() {
   local cmd='' stamp='' gen='' token=''
@@ -87,6 +89,11 @@ _mast_resume() {
   # 자동 실행한 세션은 같은 명령을 실행 세대로 계속 다시 쓴다(늦게 오는 notify 포함). 그 갱신은 이미 history 에
   # 넣은 명령이므로 다시 넣지 않는다. 이후 프롬프트에서 같은 세션을 다시 띄운 기록은 세대가 달라 그대로 받는다.
   [[ -n ${_mast_auto_ran_gen-} && $cmd == "$_mast_auto_ran_cmd" && $gen == "$_mast_auto_ran_gen" ]] && return 0
+  # 시작 안내에서, 힌트의 세대가 이전 셸의 마지막 세대와 다르면 힌트를 쓴 뒤 프롬프트가 더 나왔다. 정상 종료한
+  # 세션이고 그 프롬프트가 이미 history 에 넣었으므로, 다시 넣으면 그 뒤에 입력한 명령보다 최신이 된다.
+  if [[ ${1-} != quiet && $gen =~ $_mast_gen_re && ${_mast_prev_gen-} =~ $_mast_gen_re && $gen != "$_mast_prev_gen" ]]; then
+    return 0
+  fi
   case "$cmd" in
     'claude --resume '*) token=${cmd#'claude --resume '} ;;
     'codex resume '*) token=${cmd#'codex resume '} ;;
@@ -147,6 +154,12 @@ _mast_read_bounded() {
   [[ $_mast_blob == *$'\n' ]] && (( ${#_mast_blob} <= $2 ))
 }
 
+# 이전 루트 셸이 마지막으로 남긴 세대. 첫 프롬프트가 새 세대를 쓰기 전인 이 시점에 기억한다.
+if (( _mast_first_prompt )) && _mast_root_shell; then
+  _mast_prev_gen=
+  _mast_read_bounded "$HOME/.mast/prompt/tab-$MAST_TAB" 256 && _mast_prev_gen=${_mast_blob%$'\n'}
+fi
+
 # 이전 셸이 마지막으로 남긴 세대와 hint 를 비교해 자동 실행 후보를 고른다. 세 줄이 모두 맞고 명령이
 # 허용된 세 형태 가운데 하나일 때만 후보다. 후보가 없으면 _mast_auto_cmd 는 빈 값이다.
 _mast_auto_candidate() {
@@ -169,6 +182,18 @@ _mast_auto_candidate() {
   _mast_auto_cmd=$cmd _mast_auto_token=$token _mast_auto_seen=$cmd$'\n'$stamp
 }
 
+# 재개한 에이전트는 사용자가 입력하기 전까지 힌트를 다시 쓰지 않을 수 있다(Claude 의 SessionStart 는 writer 가
+# 아니다). 실행 직전에 3행을 실행 세대로 바꿔 두어야, 입력 없이 실행 중인 채로 끝난 세션이 다음 부팅에서도 후보가
+# 된다. 실패해도 3행이 옛 세대로 남아 다음 부팅에서 건너뛸 뿐 원치 않는 실행은 생기지 않으므로 안내만 한다.
+_mast_auto_record_hint_generation() {
+  local hint="$HOME/.mast/resume/tab-$MAST_TAB"
+  if { printf '%s\n%s\n' "$_mast_auto_seen" "$MAST_PROMPT_GEN" >| "$hint.tmp.$$" && mv -f "$hint.tmp.$$" "$hint"; } 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$hint.tmp.$$" 2>/dev/null
+  printf '\033[2m[mast] auto-resume: cannot update ~/.mast/resume/tab-%s; the next boot resumes this session only if it writes a new hint\033[0m\n' "$MAST_TAB"
+}
+
 # 후보 하나를 한 번만 시도한다. 명령은 대기 전에 탭 history 에 넣어, 대기 중 취소하거나 건너뛰어도 수동
 # hint 로 남는다. 허가는 대기열 helper 만 내리고, 허가받은 뒤에만 고정 argv 로 CLI 를 실행한다.
 _mast_auto_run() {
@@ -185,6 +210,7 @@ _mast_auto_run() {
   fi
   if (( rc == 0 )); then
     _mast_auto_ran_cmd=$_mast_auto_cmd _mast_auto_ran_gen=${MAST_PROMPT_GEN-}
+    _mast_auto_record_hint_generation
     case $_mast_auto_kind in
       claude) command claude --resume "$_mast_auto_token" ;;
       codex) command codex resume "$_mast_auto_token" ;;

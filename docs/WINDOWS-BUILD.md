@@ -3023,7 +3023,7 @@ passed only after running it on that platform.
 
 Pending Windows/WSL field verification. None of the items below is recorded as passed. For each result,
 record the app build, the distro, the login shell (bash, or zsh with starship) and the agent CLI versions.
-Do not delete files from a distro in use to create a failure. Items 3–8 and 10–12 run in both a bash tab and
+Do not delete files from a distro in use to create a failure. Items 3–8 and 10–13 run in both a bash tab and
 a zsh tab.
 
 1. **Default off.** With no `autoResume` key in `settings.json`, a restored tab shows only the manual
@@ -3033,8 +3033,10 @@ a zsh tab.
 3. **Each agent.** With `autoResume` on, start a Claude Code, a Codex and an OpenCode session, one per tab, and
    quit Mast while all three are running. After relaunch, each tab prints `[mast] auto-resume: <command>` and
    resumes the same session id, once.
-4. **Normal exit is not run.** Exit an agent normally, wait for the prompt, then quit and relaunch. The tab
-   must not run the command; it prints only the manual `[mast] resume previous agent:` line.
+4. **Normal exit is not run.** Exit an agent normally, wait for the prompt, run `ls` and `cd ..`, then quit and
+   relaunch. The tab must not run the command and prints no `[mast] resume previous agent:` line. ↑ must show
+   `cd ..`, then `ls`, then the resume command; the resume command must not be the newest entry. Repeat
+   without typing after the agent exits: ↑ must still reach the resume command.
 5. **Several tabs.** With three or more eligible tabs, the second and later tabs print `queued:` once, and each
    run starts at least 3 s after the previous one.
 6. **Ctrl+C.** While a tab shows `queued:`, press Ctrl+C. It must print `[mast] auto-resume cancelled`, then the
@@ -3057,6 +3059,10 @@ a zsh tab.
 12. **Unwritable generation file.** Run an agent to normal exit with `~/.mast/prompt/tab-<id>` made read-only
     (`chmod 0444`), then quit and relaunch. The tab must not run the agent. The shell must print
     `[mast] auto-resume unavailable: cannot write ~/.mast/prompt/tab-<id>` once, and the file must be gone.
+13. **Resumed without input, twice.** With a Claude Code session running, quit and relaunch. Leave the resumed
+    session untouched, quit and relaunch again, then once more. Each relaunch must print `[mast] auto-resume:`
+    and resume the same session id; line 3 of `~/.mast/resume/tab-<id>` must equal the tab's
+    `~/.mast/prompt/tab-<id>` while the session runs.
 
 ### Unreleased — shutdown-exit restore and IME diagnostics (ADR-0018/0020 amendments 2026-10-20)
 
