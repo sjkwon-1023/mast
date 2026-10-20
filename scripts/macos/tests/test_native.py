@@ -101,6 +101,10 @@ class NativeCli(unittest.TestCase):
         source = (ROOT / "apps/mast/src-tauri/src/platform/macos.rs").read_text(encoding="utf-8")
         self.assertIn('asset!("bin/mast-presentation.py", "wsl/mast-presentation.py"),', source)
 
+    def test_the_macos_bundle_ships_the_codex_wrapper(self):
+        source = (ROOT / "apps/mast/src-tauri/src/platform/macos.rs").read_text(encoding="utf-8")
+        self.assertIn('asset!("bin/codex", "wsl/mast-codex.sh"),', source)
+
 
 class NativeUpdate(unittest.TestCase):
     URL = "https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/macos/install.sh"
@@ -298,6 +302,15 @@ class NativeInstaller(unittest.TestCase):
             except ValueError:
                 pass
             self.assertEqual(path.read_text(), original)
+
+    def test_the_codex_wrapper_on_path_is_not_taken_for_an_installed_codex(self):
+        # 앱은 BIN 을 PATH 맨 앞에 두고 setup 을 부른다. 래퍼만 있을 때 Codex 가 설치된 것으로 보면 안 된다.
+        setup.BIN.mkdir(parents=True)
+        wrapper = setup.BIN / "codex"
+        wrapper.write_text("#!/bin/sh\n")
+        wrapper.chmod(0o755)
+        with patch.dict(os.environ, {"PATH": "%s:/usr/bin:/bin" % setup.BIN}):
+            self.assertEqual(list(setup.candidates("codex")), [])
 
     def test_user_owned_opencode_plugin_is_not_overwritten(self):
         config = self.home / ".config"

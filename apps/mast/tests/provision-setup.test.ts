@@ -87,7 +87,8 @@ afterAll(() => {
 
 // 표에서 뽑지 않고 적어 둔다. 표에서 항목이 빠지면 heredoc 의 자리표시자 줄이 그대로 설치되는데, 표에서 뽑은
 // 목록은 그 파일을 보지 않는다.
-const INSTALLED_FROM_REPO: [name: string, executable: boolean][] = [
+// 설치 이름이 원본과 다르면 셋째 칸에 적는다.
+const INSTALLED_FROM_REPO: [name: string, executable: boolean, installedAs?: string][] = [
   ["mast-config.py", false],
   ["mast-browser.py", false],
   ["mast-presentation.py", false],
@@ -96,6 +97,7 @@ const INSTALLED_FROM_REPO: [name: string, executable: boolean][] = [
   ["mast-auto-resume.py", false],
   ["mast-claude-hook.sh", true],
   ["mast-codex-hook.sh", true],
+  ["mast-codex.sh", true, "codex"],
   ["mast-agy-hook.sh", true],
   ["mast-opencode-plugin.js", false],
 ];
@@ -407,8 +409,8 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(distro.agentMarker("codex")).toBe(true);
     expect(distro.agentMarker("agy")).toBe(true);
 
-    for (const [name, executable] of INSTALLED_FROM_REPO) {
-      const installed = distro.path(".mast", "bin", name);
+    for (const [name, executable, installedAs] of INSTALLED_FROM_REPO) {
+      const installed = distro.path(".mast", "bin", installedAs ?? name);
       expect(readFileSync(installed, "utf8")).toBe(readFileSync(join(WSL_SCRIPTS, name), "utf8"));
       if (executable) expect(statSync(installed).mode & 0o111).not.toBe(0);
     }
@@ -1088,7 +1090,7 @@ linuxSuite("provisioning script (setup_script() as streamed into bash -s)", { ti
     expect(distro.log().slice(log.length)).not.toContain(FULL_RUN_LOG);
   });
 
-  it.each(["mast-hooks-merge.py", "mast-agent-hook.py", "mast-codex-hook.sh", "mast-agy-hook.sh", "mast-notify.sh", "mast-auto-resume.py", "mast-presentation.py"])(
+  it.each(["mast-hooks-merge.py", "mast-agent-hook.py", "mast-codex-hook.sh", "mast-agy-hook.sh", "mast-notify.sh", "mast-auto-resume.py", "mast-presentation.py", "codex"])(
     "runs every step again, once, when %s is missing from ~/.mast/bin",
     (name) => {
       const distro = new Distro();
