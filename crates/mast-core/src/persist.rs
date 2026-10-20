@@ -21,15 +21,18 @@
 //!   각 워크스페이스의 `agent_status` = `Idle`, `last_agent_message` = `None`.
 //!   pty_session 과 동일한 이유 — 죽은 세션이 남긴 needsInput 이 재시작을 넘어
 //!   사이드바에 유령처럼 남는 걸 막는다.
-//! - **`NotStarted` 탭만 `Running` 으로 되돌린다**. 그 상태로 저장되면 부팅 재스폰 열거
+//! - **`NotStarted` 탭과 시스템 종료 코드(`0x40010004`)로 끝난 `Exited` 탭만
+//!   `Running` 으로 되돌린다**. 그 상태로 저장되면 부팅 재스폰 열거
 //!   ([`Dispatcher::running_terminal_tabs`](crate::command::Dispatcher::running_terminal_tabs))
 //!   에서 빠져 사용자가 탭마다 Retry 를 눌러야 한다 — 콜드 VM 에 재스폰이 몰리면 일부
-//!   탭이 이 상태로 남는다 (ADR-0010 개정).
-//! - **`Exited` 는 그대로 둔다** (ADR-0018 D3, ADR-0010 의 되돌림을 반쪽 뒤집는다).
-//!   끝난 탭의 마지막 화면은 기록 파일로 남아 있어 복원 후에도 그대로 읽히고, 되살릴
-//!   길은 pane 배너의 Restart 다 — ADR-0010 의 되돌림은 그 버튼이 없던 시절 "되살릴
-//!   길이 아예 없다"를 푸는 장치였다. 되돌리면 사용자가 의도적으로 끝낸 셸까지 앱을
-//!   켤 때마다 되살아난다.
+//!   탭이 이 상태로 남고(ADR-0010 개정), Windows 재시작·종료는 WSL 을 앱보다 먼저
+//!   내려 살아 있는 동안 전 탭을 이 코드로 끝낸다. 뒤쪽은 사용자가 끝낸 셸이 아니므로
+//!   기존 부팅 재스폰 wave 와 `autoResume` 이 처리하게 한다 (ADR-0018 개정).
+//! - **그 밖의 `Exited` 는 그대로 둔다** (ADR-0018 D3, ADR-0010 의 되돌림을 반쪽
+//!   뒤집는다). 끝난 탭의 마지막 화면은 기록 파일로 남아 있어 복원 후에도 그대로
+//!   읽히고, 되살릴 길은 pane 배너의 Restart 다 — ADR-0010 의 되돌림은 그 버튼이 없던
+//!   시절 "되살릴 길이 아예 없다"를 푸는 장치였다. 되돌리면 사용자가 의도적으로 끝낸
+//!   셸까지 앱을 켤 때마다 되살아난다.
 //! - `next_id` 가 사용 중인 최대 안정 id(워크스페이스·pane·탭·**split** 포함 —
 //!   split 노드도 같은 단일 카운터 발급, ADR-0003) 이하면 `max+1` 로 수리하고
 //!   사유를 [`LoadOutcome::Restored`] 의 `repairs` 로 보고한다.
@@ -364,10 +367,16 @@ fn validate_app(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+/// Windows 재시작·종료가 WSL 셸을 강제 종료할 때 남기는 코드
+/// (`DBG_TERMINATE_PROCESS`). 사용자가 끝낸 셸이 아니므로 복원에서 `Running` 으로
+/// 되돌려 부팅 재스폰 대상에 다시 넣는다. OS API 대신 숫자 하나만 쓴다 — 저장된
+/// 상태에 대한 복원 정책이라 Linux 호스트 테스트에서도 같은 의미다.
+const SHUTDOWN_EXIT_CODE: u32 = 0x4001_0004;
+
 /// 복원 상태 sanitize (모듈 rustdoc 참조). 수리 사유들을 반환한다 — pty_session
-/// 소거·`NotStarted` → `Running` 되돌림·에이전트 상태/알림 초기화는 무조건 수행되는
-/// 정상 동작이라 사유에 포함하지 않는다. 안정 ID의 다음 값을 만들 수 없으면 오류를
-/// 반환한다.
+/// 소거·`NotStarted`/시스템 종료 코드 → `Running` 되돌림·에이전트 상태/알림 초기화는
+/// 무조건 수행되는 정상 동작이라 사유에 포함하지 않는다. 안정 ID의 다음 값을 만들 수
+/// 없으면 오류를 반환한다.
 fn sanitize(state: &mut AppState, reserved_max_id: Option<u64>) -> Result<Vec<String>, String> {
     let mut repairs = Vec::new();
     for ws in &mut state.workspaces {
@@ -382,8 +391,18 @@ fn sanitize(state: &mut AppState, reserved_max_id: Option<u64>) -> Result<Vec<St
                 } = &mut tab.kind
                 {
                     *pty_session = None;
-                    // 모듈 rustdoc "복원 시 sanitize" — NotStarted 만 되돌린다.
-                    if matches!(status, TerminalStatus::NotStarted) {
+                    // 모듈 rustdoc "복원 시 sanitize" — NotStarted 와 시스템 종료
+                    // 코드로 끝난 탭만 되돌린다. Running 으로 바뀌면 code·시각은
+                    // variant 와 함께 사라진다.
+                    if matches!(status, TerminalStatus::NotStarted)
+                        || matches!(
+                            status,
+                            TerminalStatus::Exited {
+                                code: Some(SHUTDOWN_EXIT_CODE),
+                                ..
+                            }
+                        )
+                    {
                         *status = TerminalStatus::Running;
                     }
                 }
@@ -1188,52 +1207,147 @@ mod tests {
         }
     }
 
-    #[test]
-    fn sanitize_keeps_exited_terminal_tabs() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = state_path(&dir);
-        // 앱이 살아 있는 동안 PC 절전으로 WSL 이 내려가 전 탭이
-        // 강제 종료 코드와 함께 Exited 로 저장된 상태. 기록 파일이 남아 있으므로 복원
-        // 후에도 마지막 화면이 그대로 읽히고, 되살리기는 배너의 Restart 다 (ADR-0018 D3).
-        let mut state = sample_state(Some(9), 7);
-        for pane in state.workspaces[0].panes.values_mut() {
-            for tab in &mut pane.tabs {
-                let TabKind::Terminal { status, .. } = &mut tab.kind else {
-                    panic!("terminal 탭이어야 함");
-                };
-                *status = TerminalStatus::Exited {
-                    code: Some(1_073_807_364),
-                    ended_at_ms: Some(1_723_100_000_000),
-                };
+    /// terminal 탭의 상태를 id 기준으로 덮어쓴다 — pane·workspace 를 가로질러
+    /// 서로 다른 상태를 섞는 복원 테스트용.
+    fn set_statuses(state: &mut AppState, statuses: &[(TabId, TerminalStatus)]) {
+        for ws in &mut state.workspaces {
+            for pane in ws.panes.values_mut() {
+                for tab in &mut pane.tabs {
+                    let Some((_, status)) = statuses.iter().find(|(id, _)| *id == tab.id) else {
+                        continue;
+                    };
+                    let TabKind::Terminal { status: slot, .. } = &mut tab.kind else {
+                        panic!("terminal 탭이어야 함");
+                    };
+                    *slot = *status;
+                }
             }
         }
+    }
+
+    #[test]
+    fn sanitize_revives_shutdown_exit_terminal_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        // Windows 재시작·종료가 WSL 을 앱보다 먼저 내려 전 탭이 시스템 종료 코드로
+        // 끝난 상태. 끝난 시각이 있든 없든, 여러 pane·workspace 에 섞여 있어도
+        // 다음 부팅의 재스폰 대상(Running + 세션 없음)으로 돌아와야 한다.
+        let mut state = sample_state(Some(9), 100);
+        state.workspaces.push(second_split_workspace());
+        set_statuses(
+            &mut state,
+            &[
+                (
+                    TabId(5),
+                    TerminalStatus::Exited {
+                        code: Some(SHUTDOWN_EXIT_CODE),
+                        ended_at_ms: Some(1_723_100_000_000),
+                    },
+                ),
+                (
+                    TabId(6),
+                    TerminalStatus::Exited {
+                        code: Some(SHUTDOWN_EXIT_CODE),
+                        ended_at_ms: None,
+                    },
+                ),
+                (
+                    TabId(11),
+                    TerminalStatus::Exited {
+                        code: Some(SHUTDOWN_EXIT_CODE),
+                        ended_at_ms: Some(1_723_100_000_001),
+                    },
+                ),
+                (
+                    TabId(12),
+                    TerminalStatus::Exited {
+                        code: Some(SHUTDOWN_EXIT_CODE),
+                        ended_at_ms: None,
+                    },
+                ),
+            ],
+        );
         save_atomic(&path, &state).unwrap();
-        match load(&path) {
-            LoadOutcome::Restored { state, repairs } => {
-                for pane in state.workspaces[0].panes.values() {
-                    for tab in &pane.tabs {
-                        let TabKind::Terminal {
-                            pty_session,
-                            status,
-                            ..
-                        } = &tab.kind
-                        else {
-                            panic!("terminal 탭이어야 함");
-                        };
-                        assert_eq!(*pty_session, None, "pty_session 은 무조건 소거");
-                        assert_eq!(
-                            *status,
-                            TerminalStatus::Exited {
-                                code: Some(1_073_807_364),
-                                ended_at_ms: Some(1_723_100_000_000)
-                            },
-                            "Exited 는 종료 코드·시각과 함께 그대로 남아야 함"
-                        );
-                    }
+        let LoadOutcome::Restored { state, repairs } = load(&path) else {
+            panic!("Restored 여야 함");
+        };
+        assert!(
+            repairs.is_empty(),
+            "정상 복원 정규화는 수리 사유가 아니다: {repairs:?}"
+        );
+        for ws in &state.workspaces {
+            for pane in ws.panes.values() {
+                for tab in &pane.tabs {
+                    let TabKind::Terminal {
+                        pty_session,
+                        status,
+                        ..
+                    } = &tab.kind
+                    else {
+                        panic!("terminal 탭이어야 함");
+                    };
+                    assert_eq!(*pty_session, None, "pty_session 은 무조건 소거");
+                    assert_eq!(
+                        *status,
+                        TerminalStatus::Running,
+                        "tab {} 는 시스템 종료 코드라 재스폰 대상이어야 함",
+                        tab.id.0
+                    );
                 }
-                assert!(repairs.is_empty(), "repairs: {repairs:?}");
             }
-            other => panic!("Restored 여야 함: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sanitize_keeps_other_exited_terminal_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        // 정상 종료(0·1)·크래시(0xC000013A)·코드 없음은 사용자가 끝냈거나 원인을
+        // 모르는 종료다. 기록 파일이 남아 있으므로 복원 후에도 마지막 화면이 그대로
+        // 읽히고, 되살리기는 배너의 Restart 다 (ADR-0018 D3).
+        let mut state = sample_state(Some(9), 100);
+        state.workspaces.push(second_split_workspace());
+        let kept: [(TabId, Option<u32>, Option<u64>); 4] = [
+            (TabId(5), Some(0), Some(1_700_000_000_000)),
+            (TabId(6), Some(1), None),
+            (TabId(11), None, Some(1_700_000_000_001)),
+            (TabId(12), Some(0xC000_013A), Some(1_700_000_000_002)),
+        ];
+        set_statuses(
+            &mut state,
+            &kept.map(|(id, code, ended_at_ms)| (id, TerminalStatus::Exited { code, ended_at_ms })),
+        );
+        save_atomic(&path, &state).unwrap();
+        let LoadOutcome::Restored { state, repairs } = load(&path) else {
+            panic!("Restored 여야 함");
+        };
+        assert!(repairs.is_empty(), "repairs: {repairs:?}");
+        for ws in &state.workspaces {
+            for pane in ws.panes.values() {
+                for tab in &pane.tabs {
+                    let TabKind::Terminal {
+                        pty_session,
+                        status,
+                        ..
+                    } = &tab.kind
+                    else {
+                        panic!("terminal 탭이어야 함");
+                    };
+                    assert_eq!(*pty_session, None, "pty_session 은 무조건 소거");
+                    let (_, code, ended_at_ms) = kept
+                        .iter()
+                        .find(|(id, _, _)| *id == tab.id)
+                        .expect("테스트가 모든 탭의 상태를 정했다");
+                    assert_eq!(
+                        *status,
+                        TerminalStatus::Exited {
+                            code: *code,
+                            ended_at_ms: *ended_at_ms
+                        },
+                        "그 밖의 Exited 는 종료 코드·시각과 함께 그대로 남아야 함"
+                    );
+                }
+            }
         }
     }
 

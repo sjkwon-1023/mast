@@ -18,7 +18,32 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type { Terminal as XtermTerminal } from "@xterm/xterm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import { installFrontEndLogging, installImeCommitDiagnostics } from "../src/infrastructure/logging";
+import type { UiSettings } from "../src/infrastructure/backend";
+
+const logLines = vi.hoisted(() => [] as string[]);
+
+vi.mock("../src/infrastructure/backend", () => ({
+  logLine: (text: string) => {
+    logLines.push(text);
+    return Promise.resolve();
+  },
+}));
+
+function loggingOn(): void {
+  const settings: UiSettings = {
+    fontFamily: null,
+    fontSize: null,
+    highlightLanguages: null,
+    log: true,
+    remote: null,
+    showTabIds: null,
+    macOptionIsMeta: null,
+  };
+  installFrontEndLogging(settings, new EventTarget());
+}
 
 type TerminalCtor = new (options: { cols: number; rows: number }) => XtermTerminal;
 
@@ -33,7 +58,8 @@ const Esm = ((await import(pathToFileURL(resolve(XTERM_LIB, "xterm.mjs")).href))
 type Op =
   | { t: "compose"; text: string }
   | { t: "commit"; text: string }
-  | { t: "plain"; text: string };
+  | { t: "plain"; text: string }
+  | { t: "key" };
 
 /** 키 한 번에 브라우저가 내는 이벤트 묶음. commit 뒤의 compose 는 받침이 넘어가며
  *  같은 키에서 새 조합이 시작되는 경우다. */
@@ -54,15 +80,46 @@ const SENTENCE: Op[][] = [
   [{ t: "commit", text: "장" }],
 ];
 
+/** 순수 확정만 있는 열 — 일반 키·공백 없이 이어 치는 두벌식. 받침이 넘어가는 키에서
+ *  commit 과 다음 compose 가 같은 태스크에 온다. 진단이 이 묶음을 match=true 로
+ *  정산하는지 보는 입력이다. */
+const COMMITS: Op[][] = [
+  [{ t: "compose", text: "ㅌ" }],
+  [{ t: "compose", text: "테" }],
+  [{ t: "compose", text: "텟" }],
+  [{ t: "commit", text: "테" }, { t: "compose", text: "스" }],
+  [{ t: "compose", text: "슽" }],
+  [{ t: "commit", text: "스" }, { t: "compose", text: "트" }],
+  [{ t: "compose", text: "트" }],
+  [{ t: "commit", text: "트" }],
+];
+
+/** 확정 직후에 IME 를 거치지 않는 일반 키를 끼워 넣은 열 — 비교를 보류해야 한다. */
+const MIXED: Op[][] = [
+  [{ t: "compose", text: "ㅌ" }],
+  [{ t: "compose", text: "테" }],
+  [{ t: "commit", text: "테" }],
+  [{ t: "key" }],
+  [{ t: "compose", text: "스" }],
+  [{ t: "commit", text: "스" }],
+];
+
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-async function typeSentence(Terminal: TerminalCtor, flushEvery: number): Promise<string> {
+async function typeOps(
+  Terminal: TerminalCtor,
+  flushEvery: number,
+  script: Op[][],
+  watchCommits: boolean,
+): Promise<{ text: string; commits: string[] }> {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const term = new Terminal({ cols: 80, rows: 24 });
   term.open(host);
   const textarea = host.querySelector("textarea");
   if (textarea === null) throw new Error("xterm did not create its textarea");
+  logLines.length = 0;
+  const diagnostics = watchCommits ? installImeCommitDiagnostics(term, 7) : null;
   const sent: string[] = [];
   term.onData((data) => sent.push(data));
 
@@ -72,11 +129,16 @@ async function typeSentence(Terminal: TerminalCtor, flushEvery: number): Promise
     textarea.value = committed + (composing ?? "");
     textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
   };
-  const composition = (type: string, data: string) =>
-    textarea.dispatchEvent(new CompositionEvent(type, { data, bubbles: true }));
+  // happy-dom 의 CompositionEvent 는 data init 을 버리므로 직접 얹는다 — xterm 과
+  // 진단이 읽는 것은 이 프로퍼티 하나뿐이다 (src/infrastructure/logging.test.ts 와 같은 이유).
+  const composition = (type: string, data: string) => {
+    const ev = new Event(type, { bubbles: true });
+    Object.defineProperty(ev, "data", { value: data });
+    return textarea.dispatchEvent(ev);
+  };
 
   let pressed = 0;
-  for (const ops of SENTENCE) {
+  for (const ops of script) {
     // IME 가 삼키는 키는 keyCode 229 / key "Process" 로 온다.
     const keydown = new KeyboardEvent("keydown", { key: "Process", bubbles: true, cancelable: true });
     Object.defineProperty(keydown, "keyCode", { value: 229 });
@@ -94,6 +156,9 @@ async function typeSentence(Terminal: TerminalCtor, flushEvery: number): Promise
         composition("compositionend", op.text);
         committed += op.text;
         composing = null;
+      } else if (op.t === "key") {
+        // IME 를 거치지 않는 일반 키 — 확정 묶음과 겹치면 비교를 보류해야 한다.
+        textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
       } else {
         committed += op.text;
       }
@@ -108,9 +173,18 @@ async function typeSentence(Terminal: TerminalCtor, flushEvery: number): Promise
   await tick();
   await tick();
   await tick();
+  await tick();
+  diagnostics?.dispose();
   term.dispose();
   host.remove();
-  return sent.join("");
+  return {
+    text: sent.join(""),
+    commits: logLines.filter((line) => line.startsWith("ime: commit")),
+  };
+}
+
+async function typeSentence(Terminal: TerminalCtor, flushEvery: number): Promise<string> {
+  return (await typeOps(Terminal, flushEvery, SENTENCE, false)).text;
 }
 
 const BUNDLES: [string, TerminalCtor][] = [
@@ -126,5 +200,23 @@ describe.each(BUNDLES)("@xterm/xterm 6.0 %s", (_bundle, Terminal) => {
         "테스트 문장",
       );
     }
+  });
+
+  it("순수 확정 묶음은 실제 전송과 일치한다", async () => {
+    loggingOn();
+    for (const flushEvery of [1, COMMITS.length]) {
+      const { text, commits } = await typeOps(Terminal, flushEvery, COMMITS, true);
+      expect(text, `flushEvery=${flushEvery}`).toBe("테스트");
+      // 확정과 전송이 실제로 관찰됐고, 어느 묶음도 unknown 으로 새지 않았다.
+      expect(commits.length, `flushEvery=${flushEvery}`).toBeGreaterThan(0);
+      for (const line of commits) expect(line).toContain("match=true");
+    }
+  });
+
+  it("확정 묶음과 겹친 일반 키는 unknown 이다", async () => {
+    loggingOn();
+    const { commits } = await typeOps(Terminal, COMMITS.length, MIXED, true);
+    expect(commits.length).toBeGreaterThan(0);
+    expect(commits.join("\n")).toContain("match=unknown reason=mixed-input");
   });
 });

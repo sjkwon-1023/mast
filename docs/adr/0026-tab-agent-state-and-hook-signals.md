@@ -796,7 +796,10 @@ this unreleased branch first set; it is not raised again for this change.
 
 **Accepted limits.** No hint is written early (no SessionStart or UserPromptSubmit writer), so a session
 with no written hint is not restored, for example a Codex session quit before its first turn completes.
-The dead-tab case (`0x40010004`) and Windows shutdown handling are outside this change.
+The dead-tab case (`0x40010004`) and Windows shutdown handling are outside this change. *[That was the
+scope of this amendment. [ADR-0018](0018-exited-tab-as-terminal-record.md)'s 2026-10-20 amendment now
+revives exactly that code at boot, so those tabs reach the rules above; autoResume's default-off,
+generation, allowed commands, queue and hint limits are unchanged.]*
 
 **Accepted limit: nested shells that do not run the mast integration.** Only a nested bash started under a
 WSL **bash** root drops the inherited `MAST_PROMPT_GEN`, at its first prompt, because the integration runs

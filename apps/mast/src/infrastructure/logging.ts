@@ -12,7 +12,17 @@
 // **내용은 남기지 않는다.** 조합 이벤트는 글자 수만 남기고 글자를 남기지 않으며,
 // 단축키는 이름 있는 키(`ArrowLeft`·`Tab`)만 그대로 남기고 인쇄 가능한 한 글자는
 // 가린다. 로그 파일이 사용자가 친 것의 사본이 되면 안 된다는 규율이 백엔드와 같다.
+//
+// 여기서 한 가지를 더 본다 (ADR-0020, 2026-10-20 진단): Windows 두벌식에서
+// `compositionend.data` 와 xterm 이 실제로 보낸 문자열이 **같은지**. xterm 6 은
+// compositionend 직후의 zero-delay 태스크에서 textarea 값을 읽어 보내므로
+// (CompositionHelper._finalizeComposition), 한 번의 확정이 여러 onData 로 갈라지거나
+// 여러 확정이 한 onData 로 합쳐질 수 있다. 그래서 end 하나와 onData 하나를 짝지어
+// 비교하지 않고, 마지막 이벤트 뒤 두 번의 zero-delay 태스크 동안 조용해질 때까지를
+// 한 묶음으로 모아 비교한다. 값은 여기서만 쓰고 버린다 — 원문·해시·문자 코드를
+// 로그에 넣지 않고, 이벤트를 취소·재전송하거나 DOM 값을 쓰지 않는다.
 
+import { IS_MAC } from "../shared/platform";
 import { logLine } from "./backend";
 import type { UiSettings } from "./backend";
 
@@ -44,9 +54,21 @@ export function logSwallowedShortcut(ev: KeyboardEvent): void {
   );
 }
 
+/** 이벤트가 속한 pane 의 `data-pane-id` — pane 밖이거나 ID 가 숫자가 아니면 `none`.
+ *  좌표·title·입력값은 읽지 않는다. */
+function paneLabel(node: EventTarget | null): string {
+  const el = node instanceof Element ? node.closest<HTMLElement>(".pane[data-pane-id]") : null;
+  const id = el?.dataset.paneId ?? "";
+  return /^\d+$/.test(id) ? id : "none";
+}
+
 /** 부팅 배선 — capture 단계 window 리스너인 이유는 xterm 의 숨은 textarea 가 이벤트를
  *  소비해도 먼저 보기 위해서다. 조합의 시작·갱신·끝이 **각각 도착했는지**가 관찰
- *  대상이라, 중간에 누가 멈추면 관찰 자체가 무의미해진다. */
+ *  대상이라, 중간에 누가 멈추면 관찰 자체가 무의미해진다.
+ *
+ *  같은 옵트인 설치 지점에서 실제 DOM 포커스 이동도 pane ID 로 남긴다. 명령 dispatch 나
+ *  `focus()` 호출 의도가 아니라 **포커스를 받은 DOM 대상**을 보므로, 마우스·키보드·뷰어
+ *  이동이 같은 규칙으로 잡힌다. 창 전체 focus 는 별도 표면이라 여기서 만들지 않는다. */
 export function installFrontEndLogging(
   settings: UiSettings,
   target: EventTarget = window,
@@ -67,4 +89,345 @@ export function installFrontEndLogging(
       { capture: true },
     );
   }
+
+  // 도착 이벤트 하나만 남긴다. pane A→B 는 focusout(A, relatedTarget=B) 뒤
+  // focusin(B) 이므로 focusin 쪽만 쓰면 전환이 한 줄로 남고, 같은 pane 안의
+  // textarea→헤더 이동은 from==to 로 걸러진다. 창 밖으로 나갈 때는 focusin 이
+  // 오지 않으므로 relatedTarget 이 null 인 focusout 만 따로 남긴다.
+  target.addEventListener(
+    "focusin",
+    (ev) => {
+      const from = paneLabel((ev as FocusEvent).relatedTarget);
+      const to = paneLabel(ev.target);
+      if (from === to) return;
+      log(`pane: focus from=${from} to=${to}`);
+    },
+    { capture: true },
+  );
+  target.addEventListener(
+    "focusout",
+    (ev) => {
+      if ((ev as FocusEvent).relatedTarget !== null) return;
+      const from = paneLabel(ev.target);
+      if (from === "none") return;
+      log(`pane: focus from=${from} to=none`);
+    },
+    { capture: true },
+  );
+}
+
+const IME_MAX_CODE_UNITS = 4096;
+const IME_MAX_ENDS = 32;
+const IME_MAX_ON_DATA = 32;
+const IME_MAX_OBSERVE_MS = 250;
+
+/** onData 를 만들지 않는 키 — 묶음과 겹쳐도 비교를 흐리지 않는다. */
+const NON_INPUT_KEYS = new Set([
+  "Shift",
+  "Control",
+  "Alt",
+  "Meta",
+  "CapsLock",
+  "HangulMode",
+  "HanjaMode",
+  "Process",
+  "Unidentified",
+]);
+
+/** 판정 불가 사유는 이 고정 목록만 쓴다 — 내용이나 예외 문자열을 reason 에 끼워 넣지 않는다. */
+type UnknownReason =
+  | "no-data"
+  | "empty-end"
+  | "before-end"
+  | "event-order"
+  | "mixed-input"
+  | "interrupted"
+  | "limit";
+
+interface CommitBundle {
+  expected: string;
+  actual: string;
+  ends: number;
+  onData: number;
+  /** 첫 사유가 이긴다 — 뒤에 온 사유로 앞의 판정 불가를 덮지 않는다. */
+  reason: UnknownReason | null;
+  deadline: number;
+}
+
+/** 진단이 xterm 에서 요구하는 것만 — 로깅 층이 터미널 구현 전체에 묶이지 않게 한다. */
+export interface ImeDiagnosticsTerminal {
+  readonly element?: HTMLElement;
+  readonly textarea?: HTMLTextAreaElement;
+  onData(listener: (data: string) => void): { dispose(): void };
+}
+
+/** 뷰 수명에 붙는 진단 손잡이. 꺼져 있거나 macOS 면 설치되지 않는다. */
+export interface ImeCommitDiagnostics {
+  /** 프로그램 붙여넣기(`TerminalView.paste`)도 일반 입력과 겹친 것으로 본다. */
+  notePaste(): void;
+  /** blur·숨김처럼 확정 묶음을 이어 볼 수 없게 되는 순간. */
+  interrupt(): void;
+  dispose(): void;
+}
+
+class CommitWatch implements ImeCommitDiagnostics {
+  private composing = false;
+  /** end 없이 새 start 가 왔다 — Microsoft IME 가 겹쳐 보낸 조합. */
+  private overlap = false;
+  /** 조합 중 end 전에 onData 가 나갔다 — 어느 확정의 전송인지 알 수 없다. */
+  private dataBeforeEnd = false;
+  /** 조합·묶음과 겹친 일반 키나 붙여넣기. */
+  private mixed = false;
+  /** 상한을 넘겼다 — 다음 start 까지 뒤따르는 onData 를 새 묶음으로 받지 않는다. */
+  private limited = false;
+  private bundle: CommitBundle | null = null;
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  private settleGeneration = 0;
+  private closed = false;
+  private readonly dataSub: { dispose(): void };
+
+  constructor(
+    private readonly terminal: ImeDiagnosticsTerminal,
+    private readonly session: number,
+    private readonly textarea: HTMLTextAreaElement,
+  ) {
+    // xterm 은 공개 onData 로만 관찰한다 — private 훅이나 번들 패치 없이 replay gate
+    // 뒤의 기존 전달 경로를 건드리지 않는다.
+    this.dataSub = terminal.onData((data) => this.onData(data));
+    textarea.addEventListener("compositionstart", this.onCompositionStart, true);
+    textarea.addEventListener("compositionupdate", this.onCompositionUpdate, true);
+    textarea.addEventListener("compositionend", this.onCompositionEnd, true);
+    textarea.addEventListener("keydown", this.onKeyDown, true);
+    textarea.addEventListener("paste", this.onPaste, true);
+    textarea.addEventListener("blur", this.onBlur);
+  }
+
+  notePaste(): void {
+    this.markMixed();
+  }
+
+  interrupt(): void {
+    if (this.closed) return;
+    if (this.bundle !== null) {
+      this.bundle.reason ??= "interrupted";
+      this.closeBundle();
+    } else if (this.composing) {
+      this.logUnknown("interrupted", 0, 0);
+    }
+    this.composing = false;
+    this.overlap = false;
+    this.dataBeforeEnd = false;
+    this.mixed = false;
+  }
+
+  dispose(): void {
+    if (this.closed) return;
+    this.interrupt();
+    this.closed = true;
+    this.dataSub.dispose();
+    this.textarea.removeEventListener("compositionstart", this.onCompositionStart, true);
+    this.textarea.removeEventListener("compositionupdate", this.onCompositionUpdate, true);
+    this.textarea.removeEventListener("compositionend", this.onCompositionEnd, true);
+    this.textarea.removeEventListener("keydown", this.onKeyDown, true);
+    this.textarea.removeEventListener("paste", this.onPaste, true);
+    this.textarea.removeEventListener("blur", this.onBlur);
+  }
+
+  private readonly onCompositionStart = (): void => {
+    if (this.closed) return;
+    if (this.limited) {
+      // 상한에 걸린 조합의 꼬리는 버리고 다음 조합부터 새 묶음으로 본다.
+      this.limited = false;
+      this.overlap = false;
+      this.dataBeforeEnd = false;
+      this.mixed = false;
+      this.composing = true;
+      return;
+    }
+    if (this.composing) {
+      this.overlap = true;
+      if (this.bundle !== null) this.bundle.reason ??= "event-order";
+    } else {
+      this.overlap = false;
+      this.dataBeforeEnd = false;
+      this.mixed = false;
+    }
+    this.composing = true;
+  };
+
+  /** 조합 밖의 update — 2026-10-19 현장 로그처럼 닫힌 조합 뒤에 온다. 열린 묶음이
+   *  있으면 그 구간의 순서가 깨진 것이므로 판정을 보류한다. */
+  private readonly onCompositionUpdate = (): void => {
+    if (this.closed || this.limited || this.composing) return;
+    if (this.bundle !== null) this.bundle.reason ??= "event-order";
+  };
+
+  private readonly onCompositionEnd = (ev: Event): void => {
+    if (this.closed || this.limited) return;
+    const data = (ev as CompositionEvent).data ?? "";
+    if (!this.composing) {
+      // 조합 밖에서 온 end — 어느 조합의 확정인지 귀속할 수 없다. 열린 묶음이 있으면
+      // 그 묶음의 비교도 이 확정을 빼고 내린 셈이 되므로 함께 판정 불가로 만든다.
+      if (this.bundle !== null) this.bundle.reason ??= "event-order";
+      else this.logUnknown("event-order", 0, 0);
+      return;
+    }
+    this.composing = false;
+
+    const bundle = this.open();
+    if (this.overlap) bundle.reason ??= "event-order";
+    if (this.dataBeforeEnd) bundle.reason ??= "before-end";
+    if (this.mixed) bundle.reason ??= "mixed-input";
+    this.overlap = false;
+    this.dataBeforeEnd = false;
+    this.mixed = false;
+
+    // 250ms 상한은 이벤트가 묶음을 계속 늘리지 못하게 하는 선이다. 조용해지면
+    // settle 이 먼저 닫으므로, 상한은 다음 이벤트가 왔을 때 확인하면 충분하다.
+    if (Date.now() >= bundle.deadline) {
+      this.hitLimit(bundle);
+      return;
+    }
+
+    if (data.length === 0) bundle.reason ??= "empty-end";
+    bundle.ends += 1;
+    if (
+      bundle.expected.length + data.length > IME_MAX_CODE_UNITS ||
+      bundle.ends > IME_MAX_ENDS
+    ) {
+      this.hitLimit(bundle);
+      return;
+    }
+    bundle.expected += data;
+    this.armSettle();
+  };
+
+  private readonly onData = (data: string): void => {
+    if (this.closed || this.limited) return;
+    const bundle = this.bundle;
+    if (bundle === null) {
+      // 조합 중인데 end 가 아직 없다 — 이 전송을 다음 확정에 붙이지 않는다.
+      if (this.composing) this.dataBeforeEnd = true;
+      return;
+    }
+    if (Date.now() >= bundle.deadline) {
+      this.hitLimit(bundle);
+      return;
+    }
+    if (
+      bundle.actual.length + data.length > IME_MAX_CODE_UNITS ||
+      bundle.onData >= IME_MAX_ON_DATA
+    ) {
+      this.hitLimit(bundle);
+      return;
+    }
+    bundle.actual += data;
+    bundle.onData += 1;
+    this.armSettle();
+  };
+
+  private readonly onKeyDown = (ev: KeyboardEvent): void => {
+    if (this.closed || this.limited) return;
+    // IME 가 삼킨 키(229)만 일반 입력이 아니다. `isComposing` 으로 거르지 않는 것은
+    // xterm 이 keyCode 로만 가르기 때문이다 — 조합 중의 비-229 Enter 는 조합을 확정하고
+    // CR 도 보낸다. Tab·Escape·방향키도 onData 로 시퀀스를 보내므로, 수식키·입력 모드
+    // 전환 키가 아니면 다른 입력이 섞인 것으로 보고 보류한다.
+    if (ev.keyCode === 229 || NON_INPUT_KEYS.has(ev.key)) return;
+    this.markMixed();
+  };
+
+  private readonly onPaste = (): void => {
+    this.markMixed();
+  };
+
+  private readonly onBlur = (): void => {
+    this.interrupt();
+  };
+
+  private markMixed(): void {
+    if (this.closed || this.limited) return;
+    // 앞 묶음이 아직 열린 채 다음 조합이 진행 중일 수 있다 — 둘 다에 남긴다.
+    if (this.bundle !== null) this.bundle.reason ??= "mixed-input";
+    if (this.composing) this.mixed = true;
+  }
+
+  private open(): CommitBundle {
+    if (this.bundle !== null) return this.bundle;
+    const bundle: CommitBundle = {
+      expected: "",
+      actual: "",
+      ends: 0,
+      onData: 0,
+      reason: null,
+      deadline: Date.now() + IME_MAX_OBSERVE_MS,
+    };
+    this.bundle = bundle;
+    return bundle;
+  }
+
+  private armSettle(): void {
+    const generation = ++this.settleGeneration;
+    if (this.settleTimer !== null) clearTimeout(this.settleTimer);
+    // xterm 이 compositionend 뒤 zero-delay 태스크에서 보내므로 한 번 더 기다린다.
+    // 그 사이 새 이벤트가 오면 generation 이 바뀌어 경계를 다시 잡는다.
+    this.settleTimer = setTimeout(() => {
+      if (generation !== this.settleGeneration) return;
+      this.settleTimer = setTimeout(() => {
+        if (generation !== this.settleGeneration) return;
+        this.settleTimer = null;
+        this.closeBundle();
+      }, 0);
+    }, 0);
+  }
+
+  private hitLimit(bundle: CommitBundle): void {
+    bundle.reason ??= "limit";
+    this.closeBundle();
+    this.limited = true;
+  }
+
+  private closeBundle(): void {
+    const bundle = this.bundle;
+    if (bundle === null) return;
+    this.bundle = null;
+    this.settleGeneration += 1;
+    if (this.settleTimer !== null) {
+      clearTimeout(this.settleTimer);
+      this.settleTimer = null;
+    }
+
+    const reason = bundle.reason ?? (bundle.onData === 0 ? "no-data" : null);
+    if (reason !== null) {
+      this.logUnknown(reason, bundle.ends, bundle.onData);
+      return;
+    }
+    log(
+      `ime: commit match=${bundle.expected === bundle.actual} ${this.identifiers()} ` +
+        `ends=${bundle.ends} onData=${bundle.onData} ` +
+        `expectedLen=${bundle.expected.length} actualLen=${bundle.actual.length}`,
+    );
+  }
+
+  private logUnknown(reason: UnknownReason, ends: number, onData: number): void {
+    log(
+      `ime: commit match=unknown reason=${reason} ${this.identifiers()} ` +
+        `ends=${ends} onData=${onData}`,
+    );
+  }
+
+  private identifiers(): string {
+    return `session=${this.session} pane=${paneLabel(this.terminal.element ?? null)}`;
+  }
+}
+
+/** 터미널별 옵트인 비교 관찰자. 로그가 꺼져 있거나 macOS 면 `null` 이라
+ *  onData 구독·리스너·타이머·문자열 보관이 하나도 생기지 않는다. */
+export function installImeCommitDiagnostics(
+  terminal: ImeDiagnosticsTerminal,
+  session: number,
+): ImeCommitDiagnostics | null {
+  if (!enabled || IS_MAC) return null;
+  const textarea = terminal.textarea;
+  if (textarea === undefined) return null;
+  return new CommitWatch(terminal, session, textarea);
 }

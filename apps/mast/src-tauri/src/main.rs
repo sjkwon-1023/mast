@@ -458,6 +458,9 @@ fn main() {
                         #[cfg(target_os = "macos")]
                         managed.sessions.shutdown();
                         managed.saver.flush();
+                        // flush 호출이 돌아온 지점의 표식일 뿐, 디스크 저장 성공이나
+                        // Exit 원인의 증거는 아니다 (로그 큐는 비동기·bounded).
+                        winlog!("exit: router and saver flush returned");
                     }
                     // setup 실패로 manage 전에 종료되는 경로뿐 — flush 할 상태
                     // 자체가 없다.

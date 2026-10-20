@@ -2566,6 +2566,174 @@ fn running_terminal_tabs_lists_only_sessionless_running() {
     assert_eq!(d.running_terminal_tabs(), vec![TabId(6)]);
 }
 
+/// 디스크에서 온 부팅 대상 상태 — pane 2: tab 5(시스템 종료 코드, cwd /custom),
+/// tab 6(Running). pane 3: tab 7(정상 종료 1), tab 8(크래시 0xC000013A),
+/// tab 9(NotStarted). next_id 10.
+fn stored_boot_state() -> AppState {
+    let mut state = adopted_state();
+    let pane2 = state.workspaces[0].panes.get_mut(&PaneId(2)).unwrap();
+    pane2.tabs = vec![
+        sessionless_tab(
+            5,
+            TerminalStatus::Exited {
+                code: Some(1_073_807_364),
+                ended_at_ms: Some(1_723_100_000_000),
+            },
+            Some("/custom"),
+        ),
+        sessionless_tab(6, TerminalStatus::Running, None),
+    ];
+    pane2.active_tab = Some(TabId(5));
+    let pane3 = state.workspaces[0].panes.get_mut(&PaneId(3)).unwrap();
+    pane3.tabs = vec![
+        sessionless_tab(
+            7,
+            TerminalStatus::Exited {
+                code: Some(1),
+                ended_at_ms: Some(1_700_000_000_000),
+            },
+            None,
+        ),
+        sessionless_tab(
+            8,
+            TerminalStatus::Exited {
+                code: Some(0xC000_013A),
+                ended_at_ms: None,
+            },
+            None,
+        ),
+        sessionless_tab(9, TerminalStatus::NotStarted, None),
+    ];
+    pane3.active_tab = Some(TabId(7));
+    state.next_id = 10;
+    state
+}
+
+/// 실제 `save_atomic` → `load` → `Dispatcher::adopt` 를 거친 부팅 상태.
+fn booted_dispatcher() -> (Dispatcher, FakeSessionHost) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.json");
+    crate::persist::save_atomic(&path, &stored_boot_state()).unwrap();
+    let crate::persist::LoadOutcome::Restored { state, repairs } = crate::persist::load(&path)
+    else {
+        panic!("Restored 여야 함");
+    };
+    assert!(repairs.is_empty(), "정상 상태에 수리 사유: {repairs:?}");
+    let host = FakeSessionHost::default();
+    (Dispatcher::adopt(state, Box::new(host.clone())), host)
+}
+
+/// 시스템 종료 코드로 끝난 탭 하나만 새 자동 후보가 된다 — load 의 정규화 결과를
+/// 실제 `running_terminal_tabs`/`respawn_plan` 에 넣어 확인한다.
+#[test]
+fn load_adopts_only_the_shutdown_exit_tab_as_a_new_boot_target() {
+    let (d, _host) = booted_dispatcher();
+    // 5 는 시스템 종료 코드라 Running 으로 정규화되어 후보가 되고, 6·9 는 기존
+    // 후보 그대로다. 7·8 은 Exited 로 남아 자동 후보가 아니다.
+    assert_eq!(
+        d.running_terminal_tabs(),
+        vec![TabId(5), TabId(6), TabId(9)]
+    );
+    let plan = crate::wsl::respawn_plan(
+        d.state(),
+        &crate::wsl::WslStatus::Ready {
+            distros: vec!["Ubuntu".into()],
+            failures: Vec::new(),
+            checked: vec!["Ubuntu".into()],
+        },
+        None,
+    );
+    assert_eq!(plan.ready, vec![TabId(5), TabId(6), TabId(9)]);
+    assert!(plan.skipped.is_empty(), "skipped: {:?}", plan.skipped);
+
+    // 그 밖의 Exited 는 code·시각이 그대로 남는다 — 배너의 Restart 만이 길이다.
+    assert_eq!(
+        terminal_kind(&d, PaneId(3), 0),
+        (
+            None,
+            TerminalStatus::Exited {
+                code: Some(1),
+                ended_at_ms: Some(1_700_000_000_000)
+            }
+        )
+    );
+    assert_eq!(
+        terminal_kind(&d, PaneId(3), 1),
+        (
+            None,
+            TerminalStatus::Exited {
+                code: Some(0xC000_013A),
+                ended_at_ms: None
+            }
+        )
+    );
+}
+
+/// 부팅 재스폰은 기존 경로 그대로 — 같은 탭 id·cwd·distro 로 스폰한다.
+#[test]
+fn the_revived_shutdown_tab_respawns_with_its_own_identity() {
+    let (mut d, host) = booted_dispatcher();
+    let session = d.respawn_tab(TabId(5)).unwrap();
+    assert_eq!(
+        terminal_kind(&d, PaneId(2), 0),
+        (Some(session), TerminalStatus::Running)
+    );
+    let spawns = host.spawns();
+    assert_eq!(spawns.len(), 1);
+    assert_eq!(spawns[0].cwd.as_deref(), Some("/custom"));
+    assert_eq!(spawns[0].distro.as_deref(), Some("Ubuntu"));
+    assert_eq!(spawns[0].history_tab, Some(TabId(5).0));
+}
+
+/// 실패는 기존 `respawn_tab` 계약대로 Exited(None, None) 이다 — 정규화가 이미
+/// code·시각을 지웠으므로 원래 시스템 종료 메타데이터는 복구되지 않는다.
+#[test]
+fn a_failed_respawn_of_the_revived_shutdown_tab_drops_the_exit_metadata() {
+    let (mut d, host) = booted_dispatcher();
+    host.set_fail_spawn(true);
+    let err = d.respawn_tab(TabId(5)).unwrap_err();
+    assert!(matches!(err, CommandError::SpawnFailed { .. }), "{err:?}");
+    assert_eq!(
+        terminal_kind(&d, PaneId(2), 0),
+        (
+            None,
+            TerminalStatus::Exited {
+                code: None,
+                ended_at_ms: None
+            }
+        )
+    );
+}
+
+/// WSL 이 준비되지 않으면 새 대상도 기록을 남긴 채 보류된다 — 복원 정규화와
+/// 계획 계산 어느 쪽도 `RecordStore` 파일을 지우지 않는다.
+#[test]
+fn a_shutdown_tab_keeps_its_record_while_wsl_holds_the_boot() {
+    let dir = tempfile::tempdir().unwrap();
+    let records = crate::record::RecordStore::new(dir.path().join("records"));
+    records.write(TabId(5), b"last screen").unwrap();
+
+    let path = dir.path().join("state.json");
+    crate::persist::save_atomic(&path, &stored_boot_state()).unwrap();
+    let crate::persist::LoadOutcome::Restored { state, repairs } = crate::persist::load(&path)
+    else {
+        panic!("Restored 여야 함");
+    };
+    assert!(repairs.is_empty(), "정상 상태에 수리 사유: {repairs:?}");
+    let d = Dispatcher::adopt(state, Box::new(FakeSessionHost::default()));
+
+    let plan = crate::wsl::respawn_plan(d.state(), &crate::wsl::WslStatus::Probing, None);
+    assert!(plan.ready.is_empty());
+    assert_eq!(
+        plan.skipped.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec![TabId(5), TabId(6), TabId(9)]
+    );
+    assert_eq!(
+        records.read(TabId(5)).unwrap().as_deref(),
+        Some(&b"last screen"[..])
+    );
+}
+
 #[test]
 fn tab_of_session_names_the_adopting_tab_only() {
     let (mut d, _host) = adopted_dispatcher();

@@ -128,3 +128,77 @@ the record of the 5.5.0 fault and of why the patch existed.
 
 Verification: Linux only, on the 6.0.0 build (vitest, `npm run build`, both Secure Remote audits). The
 Windows and macOS checks are not run; they are listed as pending in WINDOWS-BUILD §10.
+
+## Amendment (2026-10-20) — composition-vs-onData diagnostics only
+
+The IME fault is **not fixed** by this change. The opt-in log now also records, per terminal, whether
+the text Microsoft IME reports as committed equals the text xterm actually sent. It observes only:
+it cancels nothing, replays nothing, writes no DOM value, and does not touch the existing `onData` →
+replay gate → `enqueueWrite` path or the `shared/keys.ts` `isComposing` guard.
+
+1. **Where it lives.** `installFrontEndLogging(settings)` already installs capture listeners only when
+   `log` is true (ADR-0014). Each `TerminalView` on Windows attaches the observer in `attach()` and
+   disposes it in `dispose()`; hiding the tab interrupts an open bundle, and the paste path marks it
+   as mixed input. With `log` off, or on macOS, `installImeCommitDiagnostics` returns `null` — no
+   listener, `onData` subscription, timer or held string exists. The observer uses the public
+   `Terminal.textarea` and `Terminal.onData`; no private xterm hook or bundle patch is added.
+
+2. **Comparison unit is one settled bundle, not one end/one send.** From the first `compositionend`
+   until the bundle closes, all `compositionend.data` values are concatenated in arrival order
+   (expected) and all `onData` strings are concatenated in arrival order (actual). The comparison is
+   exact JavaScript string equality: no Unicode normalization, trim, substring search or re-encoding.
+   Lengths are UTF-16 code units, like the composition log. Several ends may become one send, and one
+   end may become several sends. `match=true` means exactly that those two observed sums are equal.
+
+3. **The bundle closes on two zero-delay task boundaries.** xterm's composition helper sends from a
+   zero-delay task after `compositionend`, so one task boundary is not enough — the observer re-arms
+   after every end or send and closes only when two consecutive zero-delay boundaries pass with no
+   new event. A fixed millisecond delay or "close on the first send" is not used. A send that arrives
+   while a composition is open but before any end is not attached to the next commit.
+
+4. **Bounds.** Expected and actual each hold at most 4096 code units, at most 32 ends and at most 32
+   sends, and a bundle accepts ends and sends for at most 250 ms after its first end. An end or send
+   past any bound emits `match=unknown reason=limit`, drops the bundle, and ignores the rest of that
+   composition's tail until the next `compositionstart`; the tail is never mistaken for the next
+   normal bundle. The 250 ms bound is checked on arrival, not on settle: a settle that a busy main
+   thread delays past 250 ms adds nothing to the bundle, so it still closes with a verdict — marking
+   it `limit` would discard exactly the comparisons taken next to a flooding pane. A timer exists
+   only while a bundle is open.
+
+5. **Unknown reasons are a fixed list**: `no-data` (no send at all), `empty-end` (a commit with empty
+   data, including a cancelled composition, which the DOM cannot distinguish), `before-end` (a send
+   before the first end of the composition, so attribution is unknown), `event-order` (overlapping
+   or orphaned composition events — including the `compositionstart` before the open composition's
+   end that the 2026-10-19 log showed; an orphaned `update` or `end` while a bundle is open marks
+   that bundle too),
+   `mixed-input` (any key outside the IME's own `229` keydowns — Tab, Escape and arrows included,
+   since xterm sends sequences for them; only modifier and input-mode keys are exempt — or a paste
+   overlapped the bundle, including `TerminalView.paste()`'s program paste), `interrupted` (blur,
+   hide or dispose),
+   and `limit`. No content, exception object or character code is ever interpolated into a reason.
+   An unknown line keeps the identifiers and counts:
+   `ime: commit match=unknown reason=no-data session=7 pane=3 ends=1 onData=0`. A normal close writes
+   `ime: commit match=true session=7 pane=3 ends=2 onData=1 expectedLen=2 actualLen=2`.
+
+6. **Identifiers and content.** A line carries the numeric session id and the ancestor
+   `.pane[data-pane-id]` of the terminal at close (`none` when there is none), plus the end/send
+   counts and lengths. It never carries the typed text, a hash, character codes, the textarea value,
+   a pane title, a cwd or a URL. The held strings live only in memory and are dropped when the bundle
+   closes or is interrupted. The same opt-in install also writes `pane: focus from=<id|none>
+   to=<id|none>` from capture-phase `focusin`/`focusout`, so a commit bundle can be placed on the
+   pane timeline without recording anything about the focused element.
+
+7. **What this cannot show.** `onData` is xterm's generated data *before* the replay gate, so these
+   lines do not prove the PTY received the bytes. `match=true` does not prove the IME reported what
+   the user intended — if `compositionend.data` was already wrong, the two paths agree and the
+   comparison is still `true`. A `no-data` line alone does not prove xterm dropped a character.
+   `match=false` must be read together with whether generic input was excluded (`mixed-input`). The
+   byte capture in WINDOWS-BUILD §10 F1, from another pane's ordinary shell while the bad state
+   persists, is what decides whether the PTY saw the wrong bytes.
+
+Field evidence this amendment was written against, neither reproduced nor recorded as a confirmed
+cause: the user remembers that in the bad state typing in a neighbouring pane's ordinary shell also
+produced the wrong characters (not only an agent's input box), and `mast.log` at 2026-10-19 22:15:31
+held the only out-of-order sequence among 809 composition events in that window — a
+`compositionstart` before the open composition ended, then an `update` and a second `end` after it
+closed. The next reproduction is what the lines are waiting for.

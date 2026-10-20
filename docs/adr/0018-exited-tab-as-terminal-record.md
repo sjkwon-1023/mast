@@ -104,6 +104,10 @@ and the diagnostics would otherwise report a number nothing bounds.
    marker in decision 5 is what keeps that window from looking like a leak.
 
 3. **Records survive a relaunch; `Exited` is no longer reverted on restore (D3).**
+   *[Amended 2026-10-20: `Exited { code: Some(0x40010004) }` is now normalized back to `Running`
+   at load — see the amendment at the end. The `NotStarted` half, every other `Exited`, and the
+   record lifetime rules stand.]*
+
    `persist::sanitize` still clears every `pty_session` and still turns `NotStarted` back into
    `Running`, but it now **keeps** `Exited`. The boot respawn wave enumerates `Running` tabs
    only, so a tab that was finished when the app closed comes back as a record with a Restart
@@ -275,7 +279,8 @@ and the diagnostics would otherwise report a number nothing bounds.
   command output, file contents, an agent's transcript tail. `docs/SETTINGS.md` says so, says
   where it is and says when files are deleted. `mast.log` still never contains terminal output;
   that separation is unchanged (ADR-0014).
-- **After a sleep or `wsl --shutdown`, every tab needs its own Restart.** This is the one place
+- ~~**After a sleep or `wsl --shutdown`, every tab needs its own Restart.**~~ — **superseded
+  by the 2026-10-20 amendment for `0x40010004`.** For every other exit this is still the one place
   the change is worse than what it replaces, and it is the price of decision 3. The bulk restart
   is recorded as a follow-up in the backlog.
 
@@ -319,9 +324,10 @@ and the diagnostics would otherwise report a number nothing bounds.
   preamble — so a tab that flooded its screen writes close to a megabyte to disk. Whether a
   smaller cap still preserves a useful last screen is the backlog's own question and is
   deliberately not answered here.
-- **After a sleep or a `wsl --shutdown`, every tab is restarted by hand.** Decision 3 leaves them
+- ~~**After a sleep or a `wsl --shutdown`, every tab is restarted by hand.** Decision 3 leaves them
   exited on the next launch and there is no workspace-level Restart; the bulk revive is recorded
-  as a backlog follow-up.
+  as a backlog follow-up.~~ — **superseded by the 2026-10-20 amendment for `0x40010004`; the
+  workspace-level and bulk Restart are still follow-ups.**
 - **Records are plaintext on disk, unencrypted**, like `state.json` next to them. They are
   deleted by the four rules above, and a force-quit between a close and its delete leaves files
   that only the next boot's sweep collects.
@@ -337,3 +343,57 @@ and the diagnostics would otherwise report a number nothing bounds.
   build on Linux, so the exit sequence, the sweep, the release path and the audit wiring were
   reviewed against a written checklist (recorded in the chunk-2 and chunk-4 commit messages) and
   are verified in the field by WINDOWS-BUILD §10 v0.3.25.
+
+## Amendment (2026-10-20) — a Windows shutdown exit revives its tab at boot
+
+Decision 3 now has one exact-code exception. A Windows restart takes WSL down before mast, and
+every live tab is recorded as `Exited { code: Some(0x40010004) }` (`DBG_TERMINATE_PROCESS`, the
+console-teardown code) — field evidence on 2026-10-19 07:33 and 2026-10-20 07:36, both restarts.
+The code a sleep or `wsl --shutdown` leaves is not recorded yet; a tab revives only if it is this
+one. Those tabs are not shells the user ended, so leaving them as records made a
+system restart the one case where the workspace comes back dead. The exception is deliberately
+one code wide and applies only at load.
+
+1. **Only `Exited { code: Some(0x40010004) }` is normalized back to `Running`.** `persist::sanitize`
+   maps that code and the existing `NotStarted` to `Running` with no session, exactly as
+   `NotStarted` is handled: no `repairs` entry, no format version change. `SHUTDOWN_EXIT_CODE: u32
+   = 0x4001_0004` is a named constant in `persist.rs`; no OS API, dependency or `cfg` is involved,
+   because this is a restore policy for saved state and therefore means the same on the Linux dev
+   box. The tab joins the existing boot respawn wave (WSL readiness, distro warm-up, 250 ms pacing)
+   with its id, `cwd`, distro, history and the existing opt-in `autoResume` rules. No new restart
+   path, setting or command exists, and the runtime spawn gate is unchanged.
+
+2. **Every other `Exited` keeps its code and `ended_at_ms`.** Code 0 and 1, a crash code such as
+   `0xC000013A`, and a missing code stay records with the banner Restart. The distinction is not
+   "did the shell return" — `exit 1` and a killed shell remain indistinguishable — it is the one
+   console-teardown code the OS writes when it ends the console under the app.
+
+3. **Record lifetime is unchanged (decision 4).** The boot wave deletes the previous record after a
+   successful respawn, so the revived tab shows a new shell and the previous screen is replaced;
+   that is the accepted cost of reviving it, and decision 4's delete-after-success rule is unchanged
+   — this only adds one more case that reaches it. A failed respawn keeps the record but leaves
+   `Exited { code: None, ended_at_ms: None }`: the original code and exit time are lost, and nothing
+   recovers them. Both results are accepted rather than repaired here.
+
+4. **A death while the app stays up is still not restarted.** A tab that exits during `sleep` or
+   `wsl --shutdown` remains a record for the rest of that run; opening its workspace does not
+   restart it and there is no bulk Restart. The exception applies at the next load only.
+   `WM_QUERYENDSESSION` (save and quit before WSL is torn down, keeping tabs `Running` without
+   relying on the code) remains a separate follow-up in the backlog.
+
+5. **`0x40010004` is a policy trigger, not a cause classifier.** Any other way that code is
+   produced — a kill that uses the same value, a crash inside WSL — revives that tab too. The
+   restore rule must not be read as proof of how the shell died.
+
+6. **The new Exit log line is an observation, not a verdict.** The normal managed branch of
+   `RunEvent::Exit` now logs `exit: router and saver flush returned` immediately after
+   `managed.saver.flush()` returns; the secure-remote shutdown → router flush → platform teardown →
+   saver flush order is unchanged, and the `none` branch keeps its existing line. This marks the
+   return of those calls. It does not prove the state reached disk (the log queue is asynchronous
+   and bounded), and its absence does not prove Exit did not run: a force-quit, an unreturned flush
+   and an undrained queue look the same in the file. It exists so a system shutdown can be compared
+   with the shell `exited` lines on the same timeline.
+
+Field verification is pending: WINDOWS-BUILD §10 "Unreleased — shutdown-exit restore and IME
+diagnostics". No Windows run is recorded as passed, and the Linux tests only cover the saved-state
+policy.
