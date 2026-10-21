@@ -92,7 +92,7 @@ MVP.
 #### Viewers
 
 - **Changes viewer** (ADR-0022): Windows field verification pending.
-- **Notepad drawer** (ADR-0034): Windows and macOS field checks (WINDOWS-BUILD §10 "notepad field
+- **Notepad drawer** (ADR-0034, ADR-0036): Windows and macOS field checks (WINDOWS-BUILD §10 "notepad field
   verification") not yet run; the macOS target was neither compiled nor tested for this change.
   Accepted: no merge UI for an unknown on-disk note.
 - **Reload while minimized** resumes Markdown polling until the next minimize/restore

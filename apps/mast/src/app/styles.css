@@ -1692,16 +1692,28 @@ body {
 .new-browser-tab:hover { background: var(--border); }
 
 /* ── 메모장 서랍 ─────────────────────────────────────────────────────
-   비모달 <dialog> 를 오른쪽에 고정한다. pane 레이아웃·컨테이너 크기·PTY 크기를
-   건드리지 않도록 body 기준 fixed 로 띄우고, 높이는 보이는 앱 영역 안에 둔다.
-   폭은 좁은 창에서도 닫을 수 있게 viewport - 16px 로 제한한다. */
+   비모달 <dialog> 를 body 위에 띄운다. pane 레이아웃·컨테이너 크기·PTY 크기를
+   건드리지 않도록 body 기준 fixed 다. 위치는 왼쪽·위 기준(left/top + width/height,
+   right/bottom 은 auto) 이어야 브라우저 기본 resize 핸들(오른쪽 아래)이 포인터를
+   따라간다. 기본값은 위 8px·오른쪽 8px·폭 min(420px, 창폭-16px)·높이 창높이-16px
+   이고, 사용자가 옮기거나 크기를 바꾸면 그 사각형이 저장된다 (features/notepad/view.ts). */
 .notepad-drawer {
   position: fixed;
-  inset: 8px 8px 8px auto;
+  top: 8px;
+  right: 8px;
   width: min(420px, calc(100vw - 16px));
-  max-height: calc(100vh - 16px);
+  height: calc(100vh - 16px);
+  min-width: 280px;
+  min-height: 320px;
+  /* UA 스타일시트가 dialog 에 주는 max-width/max-height 가 native resize 를 막는다 —
+     크기 상한은 두지 않기로 했다. */
+  max-width: none;
+  max-height: none;
   margin: 0;
   padding: 12px;
+  /* resize 가 붙으려면 overflow 가 visible 이 아니어야 한다 — 넘친 내용도 여기서 닿는다. */
+  overflow: auto;
+  resize: both;
   color: var(--fg);
   background: var(--bg-panel);
   border: 1px solid var(--border);
@@ -1721,6 +1733,9 @@ body {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 8px;
+  /* 서랍을 끌어 옮기는 면 — 버튼은 각자의 커서를 그대로 둔다. */
+  cursor: move;
+  user-select: none;
 }
 
 .notepad-title {
@@ -1787,7 +1802,7 @@ body {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 4px;
-  font: 13px/1.45 monospace;
+  font: calc(var(--viewer-font-size, 12px) + 1px)/1.45 var(--viewer-font-family, monospace);
   resize: none;
   white-space: pre-wrap;
 }
