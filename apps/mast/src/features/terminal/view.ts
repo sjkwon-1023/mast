@@ -40,6 +40,7 @@ import { Channel } from "@tauri-apps/api/core";
 import type { OutputChunk } from "../../infrastructure/backend";
 import { parseAttachBody, parseFrame } from "./frame";
 import { WebKitImeInput } from "./webkit-ime-input";
+import { WindowsImeInput } from "./windows-ime-input";
 import type { GateResult } from "./attach-gate";
 import { installImeCommitDiagnostics, log } from "../../infrastructure/logging";
 import type { ImeCommitDiagnostics } from "../../infrastructure/logging";
@@ -68,8 +69,8 @@ export class TerminalView {
 
   private focusPending = false;
 
-  // macOS WebKit 한글 입력 어댑터. Windows 는 설치하지 않는다 (webkit-ime.ts 참조).
-  private ime: WebKitImeInput | null = null;
+  // 한글 입력 어댑터 — macOS 는 webkit-ime.ts, Windows 는 windows-ime.ts.
+  private ime: WebKitImeInput | WindowsImeInput | null = null;
 
   // Windows IME 확정 ↔ xterm 전송 비교 진단. 로그 옵트인 + 비 macOS 에서만 생긴다.
   private imeDiag: ImeCommitDiagnostics | null = null;
@@ -228,8 +229,13 @@ export class TerminalView {
 
     this.fit();
     this.installCopyPasteKeys();
-    if (IS_MAC) this.ime = new WebKitImeInput(this.term);
-    else this.imeDiag = installImeCommitDiagnostics(this.term, this.session);
+    if (IS_MAC) {
+      this.ime = new WebKitImeInput(this.term);
+    } else {
+      // 진단의 capture 리스너가 어댑터의 stopPropagation 보다 먼저 돌도록 먼저 설치한다.
+      this.imeDiag = installImeCommitDiagnostics(this.term, this.session);
+      this.ime = new WindowsImeInput(this.term);
+    }
 
     // attach 응답 전에 들어오는 출력을 놓치지 않도록 채널을 먼저 만든다.
     const channel = new Channel<OutputChunk>();

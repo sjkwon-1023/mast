@@ -3113,6 +3113,30 @@ item record the Windows version, the WebView2 runtime version, the keyboard and 
 These are Windows field checks only. ARM64 and macOS are not run by this list and are not covered by
 the Linux gates.
 
+### Unreleased — Windows IME adapter (ADR-0020 amendment 2026-10-21)
+
+**Not yet run — no item below is recorded as passed.** This build sends `compositionend.data` from a mast
+adapter instead of letting xterm read the textarea. The Linux gates cover it in happy-dom only, with no
+WebView2, TSF or Microsoft IME. For every item record the Windows version, the WebView2 runtime version,
+the keyboard and IME, the app commit, dev or release, and whether `"log"` is true.
+
+1. **F1 bytes.** Run F1 from the xterm 6.0 section above, idle and next to a pane running
+   `bash scripts/wsl/flood.sh 10 --random-lines`. Add `조작해도` (`/tmp/mast-ime-jojak.*`) to the three
+   sentences. Type in an ordinary shell and in a Claude Code input box. `cmp` must exit 0 for every file.
+2. **Keys during composition.** With a syllable still composing, press Space, Enter, Backspace, an arrow
+   key, Escape, Ctrl+C, the 한/영 key, and Shift+Enter in Claude Code. Also click another pane and hide the
+   tab with a workspace switch. In each case the syllable must arrive exactly once, before the key's own
+   effect, and a syllable erased with Backspace must not arrive.
+3. **Preview and candidate window.** While composing, the pending syllable shows at the terminal cursor and
+   disappears on commit. Press the 한자 key on a syllable: the candidate window must open near the cursor,
+   and the chosen hanja must arrive in place of the syllable.
+4. **Log on.** With `"log": true`, type the F1 sentences for a few minutes. `ime: commit match=true …`
+   lines must carry `xtermWindow=same` or `xtermWindow=differs`. Record how many say `differs`; each one is
+   an occurrence the adapter masked. A `match=false` line means the adapter itself sent something other
+   than the IME's commit, and is a failure to report.
+5. **Other input.** If available, a Japanese IME commit, the emoji panel (Win+.), and pasting with Ctrl+V
+   and from the context menu while composing. Each must arrive once and in order.
+
 ### Unreleased — notepad field verification (ADR-0034, 2026-10-20)
 
 Pending Windows field verification. The Linux gates and the Windows native tests do not show

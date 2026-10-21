@@ -202,3 +202,64 @@ produced the wrong characters (not only an agent's input box), and `mast.log` at
 held the only out-of-order sequence among 809 composition events in that window — a
 `compositionstart` before the open composition ended, then an `update` and a second `end` after it
 closed. The next reproduction is what the lines are waiting for.
+
+## Amendment (2026-10-21) — a Windows input adapter commits `compositionend.data`
+
+The 2026-10-20 diagnostics caught the first `match=false`. `mast.log` at 2026-10-21 08:22, tab session 1
+pane 2 running Claude Code: `조작해도` typed, `자작` shown, repeatedly. Four consecutive bundles closed
+`match=false … ends=1 onData=1 expectedLen=1 actualLen=1`, each at a syllable boundary (`compositionend` and
+the next `compositionstart` in the same millisecond), with no `event-order` and no `mixed-input` on those
+bundles. The run began right after a `before-end` bundle (xterm sent during an open composition) and ended
+when focus moved to pane 91 at 08:22:15.4, whose next bundle was `match=true`. That day: 202 `match=true`, 4
+`match=false`, all in that window.
+
+**Reading.** xterm 6.0's `_finalizeComposition` does not send `compositionend.data`. Its zero-delay task
+sends `textarea.value.substring(start + _dataAlreadySent.length, newest composition start)`, a window of the
+textarea. Equal length with different content means that window held something other than what the IME
+reported as committed. Every field shape so far (`조`→`자`, `수`→`주`, `이`→`미`) is an earlier syllable
+replaced by the next one. One model that fits is Windows TSF rewriting the textarea under the next
+composition (upstream #6049). That is not confirmed; the log carries no content by design (amendment
+2026-10-20, item 6). A textarea-based adapter like macOS `webkit-ime.ts` would read the same suspect value.
+The adapter therefore commits the IME's own report.
+
+This amendment supersedes Decision 4's rejection of "sending `ev.data` from a capture listener". The
+surface it named, the inline composition view, is now owned by mast.
+
+1. **The adapter.** On Windows, `TerminalView.attach()` installs `features/terminal/windows-ime-input.ts`,
+   which wires the pure state machine `windows-ime.ts`. It listens in the capture phase on `term.element`.
+   It stops `compositionstart`/`compositionupdate`/`compositionend` and keyCode 229 keydowns before they
+   reach xterm's textarea listeners, and sends each `compositionend.data` through `term.input(data, true)`.
+   That is the same `onData` → replay gate → `enqueueWrite` path xterm's own input takes. The 229 keydown
+   is blocked because xterm, never seeing the composition, would otherwise diff the textarea on it
+   (`_handleAnyTextareaChanges`). The textarea value stays native (no `preventDefault`): TSF computes its
+   ranges from it.
+2. **Boundaries.** During a composition, a non-229 keydown that is not Shift, Control, Alt or CapsLock
+   alone first sends the latest `compositionupdate.data`. The exemption list is xterm
+   `CompositionHelper.keydown`'s. The same applies to blur, paste, tab hide and dispose. A composition sent
+   this way does not send again at its `compositionend`, so the keydown double send (#5778 / #6140) does
+   not occur. An empty end sends nothing. An end that arrives after an overlapping start, or outside any
+   composition (the 2026-10-19 sequence), still sends its data: it is the IME's commit report.
+3. **Preview.** xterm's composition view never activates now. `composition-preview.ts`, extracted from
+   `webkit-ime-input.ts`, places the pending text at the cursor for both adapters. The macOS adapter's
+   behaviour is unchanged.
+4. **Diagnostics.** The observer's listeners moved from the textarea to the capture phase on
+   `term.element`, and `view.ts` installs it before the adapter. On the textarea they would never see the
+   events the adapter stops. `match` now checks what the adapter sent. Verdict lines gain
+   `xtermWindow=same|differs`, which records whether the window xterm 6.0's `compositionend` path would
+   have sent equals the committed text. The window is traced with xterm's own start, composing and
+   single-flag sending rules, including the #6089 coalescing. `differs` beside `match=true` means the
+   adapter masked an occurrence of this fault. A window past 4096 code units counts as `differs`. The line
+   still carries no content; `unknown` lines are unchanged.
+5. **Accepted limits.** The adapter assumes the IME's `compositionend.data` is what the user meant. If the
+   IME itself reports the wrong syllable, the adapter sends it. A 229 keydown that changes the textarea
+   without composition events is no longer diffed. xterm's `input` handler still sends `insertText`
+   (emoji panel, keyless input). A non-229 key that does not actually end the composition drops that
+   composition's remainder. A late end of an overlapped composition after such a flush can send twice.
+   Both of these last cases are outside every field sequence seen so far.
+
+Verification: Linux only. Unit tests cover `windows-ime.ts`, and `windows-ime-dom.test.ts` runs the real
+6.0 bundle through `TerminalView`. In that test, a control shows stock xterm sending `자` where the IME
+committed `조` under the textarea-overwrite model, and the adapter sends `조작`. With the adapter disabled,
+five of its cases fail. `tooling/ime-composition.test.ts` asserts `xtermWindow=same` on the stock bundle,
+so the trace matches what xterm really sends. Windows checks are WINDOWS-BUILD §10 "Windows IME adapter"
+and are not run.

@@ -105,7 +105,12 @@ async function settle(): Promise<void> {
   await vi.advanceTimersByTimeAsync(1);
 }
 
+/** 판정 줄. xterm 구간 판정(`xtermWindow`)은 그것만 보는 케이스가 따로 있어 여기서는 뗀다. */
 function commits(): string[] {
+  return rawCommits().map((line) => line.replace(/ xtermWindow=\S+$/, ""));
+}
+
+function rawCommits(): string[] {
   return sent.filter((line) => line.startsWith("ime: commit"));
 }
 
@@ -661,6 +666,65 @@ describe("IME 확정 비교", () => {
     composition(term.textarea, "compositionend", "테");
     await vi.advanceTimersByTimeAsync(1000);
     expect(commits()).toEqual([]);
+  });
+
+  it("xterm 이 읽었을 textarea 구간이 확정과 같으면 xtermWindow=same 이다", async () => {
+    enable();
+    const term = fakeTerminal(3);
+    watch(term);
+
+    composition(term.textarea, "compositionstart", "");
+    term.textarea.value = "테";
+    composition(term.textarea, "compositionupdate", "테");
+    composition(term.textarea, "compositionend", "테");
+    term.emit("테");
+    await settle();
+
+    expect(rawCommits()).toEqual([
+      "ime: commit match=true session=7 pane=3 ends=1 onData=1 expectedLen=1 actualLen=1 xtermWindow=same",
+    ]);
+  });
+
+  it("다음 조합이 textarea 의 앞 음절을 바꿔 쓰면 xtermWindow=differs 다", async () => {
+    enable();
+    const term = fakeTerminal(3);
+    watch(term);
+
+    composition(term.textarea, "compositionstart", "");
+    term.textarea.value = "조";
+    composition(term.textarea, "compositionupdate", "조");
+    composition(term.textarea, "compositionend", "조");
+    composition(term.textarea, "compositionstart", "");
+    term.textarea.value = "자";
+    composition(term.textarea, "compositionupdate", "자");
+    term.emit("조");
+    await settle();
+
+    expect(rawCommits()).toEqual([
+      "ime: commit match=true session=7 pane=3 ends=1 onData=1 expectedLen=1 actualLen=1 xtermWindow=differs",
+    ]);
+  });
+
+  it("한 태스크의 여러 end 는 첫 타이머가 최신 조합 시작까지 읽는다", async () => {
+    enable();
+    const term = fakeTerminal(3);
+    watch(term);
+
+    composition(term.textarea, "compositionstart", "");
+    term.textarea.value = "테";
+    composition(term.textarea, "compositionend", "테");
+    composition(term.textarea, "compositionstart", "");
+    term.textarea.value = "테스";
+    composition(term.textarea, "compositionend", "스");
+    composition(term.textarea, "compositionstart", "");
+    term.textarea.value = "테스ㅌ";
+    composition(term.textarea, "compositionupdate", "ㅌ");
+    term.emit("테스");
+    await settle();
+
+    expect(rawCommits()).toEqual([
+      "ime: commit match=true session=7 pane=3 ends=2 onData=1 expectedLen=2 actualLen=2 xtermWindow=same",
+    ]);
   });
 
   it("전송 로그에 입력 원문·해시·문자 코드가 남지 않는다", async () => {
