@@ -20,7 +20,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Terminal as XtermTerminal } from "@xterm/xterm";
 import { describe, expect, it, vi } from "vitest";
 
-import { installFrontEndLogging, installImeCommitDiagnostics } from "../src/infrastructure/logging";
+import {
+  XtermCompositionShadow,
+  installFrontEndLogging,
+  installImeCommitDiagnostics,
+} from "../src/infrastructure/logging";
 import type { UiSettings } from "../src/infrastructure/backend";
 
 const logLines = vi.hoisted(() => [] as string[]);
@@ -214,10 +218,251 @@ describe.each(BUNDLES)("@xterm/xterm 6.0 %s", (_bundle, Terminal) => {
     }
   });
 
+  it("조합이 229 지연 diff 보다 먼저 끝나면 진단도 xterm 이 실제로 보낸 diff 를 따른다", async () => {
+    // xterm 은 조합 밖의 229 keydown 마다 textarea diff 를 예약하고, 그 타이머가 조합이 끝난 뒤
+    // 돌면 diff 를 보내고 end 구간을 `_dataAlreadySent` 만큼 민다. 이미 확정된 '가' 뒤에서
+    // 입력창이 '다나' 로 바뀐 채 end('나') 가 타이머보다 먼저 오면 xterm 은 '다나' 를 보낸다.
+    loggingOn();
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const term = new Terminal({ cols: 80, rows: 24 });
+    term.open(host);
+    const textarea = host.querySelector("textarea");
+    if (textarea === null) throw new Error("xterm did not create its textarea");
+    logLines.length = 0;
+    const diagnostics = installImeCommitDiagnostics(term, 7);
+    const sent: string[] = [];
+    term.onData((data) => sent.push(data));
+    const composition = (type: string, data: string) => {
+      const ev = new Event(type, { bubbles: true });
+      Object.defineProperty(ev, "data", { value: data });
+      textarea.dispatchEvent(ev);
+    };
+    try {
+      textarea.value = "가";
+      const keydown = new KeyboardEvent("keydown", { key: "Process", bubbles: true, cancelable: true });
+      Object.defineProperty(keydown, "keyCode", { value: 229 });
+      textarea.dispatchEvent(keydown);
+      composition("compositionstart", "");
+      textarea.value = "다나";
+      composition("compositionupdate", "나");
+      composition("compositionend", "나");
+      for (let i = 0; i < 4; i += 1) await tick();
+
+      expect(sent.join("")).toBe("다나");
+      const commits = logLines.filter((line) => line.startsWith("ime: commit"));
+      expect(commits).toHaveLength(1);
+      expect(commits[0]).toMatch(/match=false .* xtermWindow=differs$/);
+    } finally {
+      diagnostics?.dispose();
+      term.dispose();
+      host.remove();
+    }
+  });
+
+  it("라이브러리 전제: 조합 중 한자 키는 xterm 이 음절을 먼저 보내고 조합을 끝낸 것으로 본다", async () => {
+    // Windows 어댑터는 한자 키에서 조합을 끊지 않는다(windows-ime.ts). 진단의 xtermWindow 는 이
+    // xterm 동작을 따라가야 한다 — 어댑터 쪽 판정은 windows-ime-dom.test.ts 가 본다.
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const term = new Terminal({ cols: 80, rows: 24 });
+    term.open(host);
+    const textarea = host.querySelector("textarea");
+    if (textarea === null) throw new Error("xterm did not create its textarea");
+    const sent: string[] = [];
+    term.onData((data) => sent.push(data));
+    const composition = (type: string, data: string) => {
+      const ev = new Event(type, { bubbles: true });
+      Object.defineProperty(ev, "data", { value: data });
+      textarea.dispatchEvent(ev);
+    };
+    const keydown = (key: string, keyCode: number) => {
+      const ev = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      Object.defineProperty(ev, "keyCode", { value: keyCode });
+      textarea.dispatchEvent(ev);
+    };
+    try {
+      textarea.value = "가";
+      composition("compositionstart", "");
+      textarea.value = "가한";
+      composition("compositionupdate", "한");
+      await tick();
+      keydown("HanjaMode", 25);
+      keydown("Process", 229);
+      textarea.value = "가韓";
+      composition("compositionupdate", "韓");
+      composition("compositionend", "韓");
+      for (let i = 0; i < 4; i += 1) await tick();
+
+      expect(sent).toEqual(["한", "가韓"]);
+    } finally {
+      term.dispose();
+      host.remove();
+    }
+  });
+
   it("확정 묶음과 겹친 일반 키는 unknown 이다", async () => {
     loggingOn();
     const { commits } = await typeOps(Terminal, COMMITS.length, MIXED, true);
     expect(commits.length).toBeGreaterThan(0);
     expect(commits.join("\n")).toContain("match=unknown reason=mixed-input");
+  });
+});
+
+/** 원본 번들과 진단의 그림자(XtermCompositionShadow)에 같은 DOM 이벤트를 넣는 장치. 그림자는
+ *  element capture 에서 xterm 보다 먼저 같은 이벤트를 받으므로 타이머 순서도 이벤트마다 같다. */
+function twin(Terminal: TerminalCtor) {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const term = new Terminal({ cols: 80, rows: 24 });
+  term.open(host);
+  const textarea = host.querySelector("textarea");
+  if (textarea === null || term.element === undefined) throw new Error("xterm did not open");
+  const stock: string[] = [];
+  const traced: string[] = [];
+  term.onData((data) => stock.push(data));
+  const shadow = new XtermCompositionShadow(textarea, (data) => traced.push(data));
+  const element = term.element;
+  element.addEventListener("compositionstart", () => shadow.compositionStart(), true);
+  element.addEventListener("compositionupdate", () => shadow.compositionUpdate(), true);
+  element.addEventListener("compositionend", () => shadow.compositionEnd(), true);
+  element.addEventListener("keydown", (ev) => shadow.keydown((ev as KeyboardEvent).keyCode), true);
+
+  const composition = (type: string, data: string, value?: string) => {
+    if (value !== undefined) textarea.value = value;
+    const ev = new Event(type, { bubbles: true });
+    Object.defineProperty(ev, "data", { value: data });
+    textarea.dispatchEvent(ev);
+  };
+  const keydown = (key: string, keyCode: number) => {
+    const ev = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    Object.defineProperty(ev, "keyCode", { value: keyCode });
+    textarea.dispatchEvent(ev);
+  };
+  return {
+    textarea,
+    composition,
+    keydown,
+    async settle(): Promise<{ stock: string[]; traced: string[] }> {
+      for (let i = 0; i < 4; i += 1) await tick();
+      shadow.dispose();
+      term.dispose();
+      host.remove();
+      return { stock, traced };
+    },
+  };
+}
+
+describe.each(BUNDLES)("XtermCompositionShadow 대 @xterm/xterm 6.0 %s", (_bundle, Terminal) => {
+  it("두벌식 문장을 flush 간격과 무관하게 같이 보낸다", async () => {
+    for (const flushEvery of FLUSH_EVERY) {
+      const t = twin(Terminal);
+      let committed = "";
+      let composing: string | null = null;
+      let pressed = 0;
+      for (const ops of SENTENCE) {
+        t.keydown("Process", 229);
+        for (const op of ops) {
+          if (op.t === "compose") {
+            if (composing === null) {
+              t.composition("compositionstart", "");
+              composing = "";
+            }
+            composing = op.text;
+            t.composition("compositionupdate", op.text, committed + composing);
+          } else if (op.t === "commit") {
+            committed += op.text;
+            composing = null;
+            t.composition("compositionend", op.text, committed);
+          } else if (op.t === "plain") {
+            committed += op.text;
+            t.textarea.value = committed;
+          }
+        }
+        pressed += 1;
+        if (pressed % flushEvery === 0) {
+          await tick();
+          await tick();
+        }
+      }
+      const { stock, traced } = await t.settle();
+      expect(traced, `flushEvery=${flushEvery}`).toEqual(stock);
+    }
+  });
+
+  it("앞 확정 뒤 입력창이 바뀐 채 end 가 diff 보다 먼저 와도 같이 보낸다", async () => {
+    const t = twin(Terminal);
+    t.textarea.value = "가";
+    t.keydown("Process", 229);
+    t.composition("compositionstart", "");
+    t.composition("compositionupdate", "나", "다나");
+    t.composition("compositionend", "나");
+    const { stock, traced } = await t.settle();
+    expect(stock).toEqual(["다나"]);
+    expect(traced).toEqual(stock);
+  });
+
+  it("한자 키 뒤 후보 update 와 end 가 한 태스크에 와도 같이 보낸다", async () => {
+    const t = twin(Terminal);
+    t.textarea.value = "가";
+    t.composition("compositionstart", "");
+    t.composition("compositionupdate", "한", "가한");
+    await tick();
+    t.keydown("HanjaMode", 25);
+    t.keydown("Process", 229);
+    t.composition("compositionupdate", "韓", "가韓");
+    t.composition("compositionend", "韓");
+    const { stock, traced } = await t.settle();
+    expect(stock).toEqual(["한", "가韓"]);
+    expect(traced).toEqual(stock);
+  });
+
+  it("한자 키 뒤 229 diff 가 end 보다 먼저 돌아도 같이 보낸다", async () => {
+    const t = twin(Terminal);
+    t.composition("compositionstart", "");
+    t.composition("compositionupdate", "한", "한");
+    t.keydown("HanjaMode", 25);
+    t.keydown("Process", 229);
+    t.composition("compositionupdate", "韓", "韓");
+    await tick();
+    t.composition("compositionend", "韓");
+    const { stock, traced } = await t.settle();
+    // windows-ime-dom.test.ts 의 같은 열이 이 합을 전제로 xtermWindow=same 을 기대한다.
+    expect(stock.join("")).toBe("韓");
+    expect(traced).toEqual(stock);
+  });
+
+  it("앞 확정이 정산되기 전 다음 조합의 한자 키도 같이 보낸다", async () => {
+    // windows-ime-dom.test.ts 의 묶음 귀속 테스트와 같은 열 — xterm 의 전송 순서를 고정한다.
+    const t = twin(Terminal);
+    t.composition("compositionstart", "");
+    t.composition("compositionupdate", "가", "가");
+    t.composition("compositionend", "가");
+    t.composition("compositionstart", "");
+    t.composition("compositionupdate", "한", "가한");
+    setTimeout(() => t.keydown("HanjaMode", 25), 0);
+    await tick();
+    await tick();
+    t.composition("compositionupdate", "韓", "가韓");
+    t.composition("compositionend", "韓");
+    const { stock, traced } = await t.settle();
+    expect(stock).toEqual(["가", "한", "韓"]);
+    expect(traced).toEqual(stock);
+  });
+
+  it("첫 end 타이머 뒤 새 조합이 끼어들어 오래된 타이머가 다시 보내도 같이 보낸다", async () => {
+    const t = twin(Terminal);
+    t.composition("compositionstart", "");
+    t.composition("compositionend", "가", "가");
+    // 첫 end 의 타이머 뒤, 둘째 end 의 타이머 앞에 새 조합 하나를 끼운다.
+    setTimeout(() => {
+      t.composition("compositionstart", "");
+      t.composition("compositionend", "다", "가나다");
+    }, 0);
+    t.composition("compositionstart", "");
+    t.composition("compositionend", "나", "가나");
+    const { stock, traced } = await t.settle();
+    expect(stock).toEqual(["가나", "나다"]);
+    expect(traced).toEqual(stock);
   });
 });

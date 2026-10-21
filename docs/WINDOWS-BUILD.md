@@ -3126,13 +3126,15 @@ the keyboard and IME, the app commit, dev or release, and whether `"log"` is tru
 2. **Keys during composition.** With a syllable still composing, press Space, Enter, Backspace, an arrow
    key, Escape, Ctrl+C, the 한/영 key, and Shift+Enter in Claude Code. Also click another pane and hide the
    tab with a workspace switch. In each case the syllable must arrive exactly once, before the key's own
-   effect, and a syllable erased with Backspace must not arrive.
+   effect, and a syllable erased with Backspace must not arrive. No syllable may arrive twice: the
+   DOM tests assume WebView2 reports composition changes as `insertCompositionText`, not `insertText`.
 3. **Preview and candidate window.** While composing, the pending syllable shows at the terminal cursor and
    disappears on commit. Press the 한자 key on a syllable: the candidate window must open near the cursor,
    and the chosen hanja must arrive in place of the syllable.
 4. **Log on.** With `"log": true`, type the F1 sentences for a few minutes. `ime: commit match=true …`
-   lines must carry `xtermWindow=same` or `xtermWindow=differs`. Record how many say `differs`; each one is
-   an occurrence the adapter masked. A `match=false` line means the adapter itself sent something other
+   lines must carry `xtermWindow=same`, `differs` or `unknown`. Record how many say `differs`; each one is
+   an occurrence the adapter masked. `unknown` means the stock path's send could not be attributed to one
+   bundle (around a blur or tab hide); count it separately. A `match=false` line means the adapter itself sent something other
    than the IME's commit, and is a failure to report.
 5. **Other input.** If available, a Japanese IME commit, the emoji panel (Win+.), and pasting with Ctrl+V
    and from the context menu while composing. Each must arrive once and in order.

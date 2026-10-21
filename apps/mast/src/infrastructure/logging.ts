@@ -17,7 +17,7 @@
 // `compositionend.data` 와 실제로 보낸 문자열(onData)이 **같은지**. 2026-10-21 부터 확정은
 // Windows 입력 어댑터(features/terminal/windows-ime.ts)가 보내므로 이 비교는 어댑터를 검증하고,
 // 판정 줄의 `xtermWindow` 는 어댑터가 막은 xterm 6 경로였다면 보냈을 textarea 구간이 확정
-// 글자와 같았는지를 따로 남긴다. xterm 6 은 compositionend 직후의 zero-delay 태스크에서
+// 글자와 같았는지를 따로 남긴다(어느 확정의 몫인지 가를 수 없으면 unknown). xterm 6 은 compositionend 직후의 zero-delay 태스크에서
 // textarea 값을 읽어 보내므로(CompositionHelper._finalizeComposition), 한 번의 확정이 여러
 // 전송으로 갈라지거나 여러 확정이 한 전송으로 합쳐질 수 있다. 그래서 end 하나와 onData
 // 하나를 짝지어 비교하지 않고, 마지막 이벤트 뒤 두 번의 zero-delay 태스크 동안 조용해질
@@ -123,6 +123,9 @@ const IME_MAX_ENDS = 32;
 const IME_MAX_ON_DATA = 32;
 const IME_MAX_OBSERVE_MS = 250;
 
+/** xterm 6 CompositionHelper.keydown 이 조합을 끊지 않는 keyCode (CapsLock·229·Shift·Ctrl·Alt). */
+const XTERM_NON_BREAKING_KEY_CODES = new Set([20, 229, 16, 17, 18]);
+
 /** onData 를 만들지 않는 키 — 묶음과 겹쳐도 비교를 흐리지 않는다. */
 const NON_INPUT_KEYS = new Set([
   "Shift",
@@ -149,10 +152,14 @@ type UnknownReason =
 interface CommitBundle {
   expected: string;
   actual: string;
-  /** xterm 6 CompositionHelper 가 읽었을 textarea 구간의 합. */
+  /** xterm 6 CompositionHelper 가 보냈을 문자열의 합 — end 구간과 229 지연 diff. */
   xtermWindow: string;
   /** 구간 합이 상한을 넘었다 — 상한 안의 expected 와 같을 수 없다. */
   xtermWindowOverflow: boolean;
+  /** 앞 묶음(닫힌 세대)의 end 지연 전송이 이 묶음 동안 도착했다 — 어느 확정의 몫인지 가를 수 없다. */
+  xtermWindowUnknown: boolean;
+  /** 열릴 때의 묶음 세대. 묶음이 닫힐 때마다 CommitWatch.epoch 가 오른다. */
+  epoch: number;
   ends: number;
   onData: number;
   /** 첫 사유가 이긴다 — 뒤에 온 사유로 앞의 판정 불가를 덮지 않는다. */
@@ -176,6 +183,98 @@ export interface ImeCommitDiagnostics {
   dispose(): void;
 }
 
+/** xterm 6.0 `CompositionHelper`(src/browser/input/CompositionHelper.ts)의 전송 판단을 그대로 옮긴
+ *  그림자. Windows 입력 어댑터가 실제 helper 에 이벤트를 주지 않으므로, helper 였다면 무엇을
+ *  보냈을지만 계산해 `send` 로 넘긴다 (xtermWindow). 필드·분기·타이머 수는 원본과 같다 — 타이머는
+ *  원본처럼 이벤트마다 zero-delay 하나씩이고 dispose 가 모두 지운다. `_dataAlreadySent` 는
+ *  길이만 쓰이므로 길이만 둔다. tooling/ime-composition.test.ts 가 같은 이벤트 열을 원본 번들과
+ *  이 그림자에 함께 넣어 전송이 같은지 대조한다. `kind` 는 전송이 어느 경로에서 나왔는지, `tag` 는
+ *  end 지연 전송이 예약될 때 호출자가 준 값이다 — 묶음 귀속(CommitWatch.addXtermSend)이 쓴다. */
+export type XtermSendKind = "end" | "early" | "diff";
+
+export class XtermCompositionShadow {
+  private isComposing = false;
+  private isSendingComposition = false;
+  private start = 0;
+  private end = 0;
+  private dataAlreadySentLength = 0;
+  private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+
+  constructor(
+    private readonly textarea: HTMLTextAreaElement,
+    private readonly send: (data: string, kind: XtermSendKind, tag: number) => void,
+  ) {}
+
+  compositionStart(): void {
+    this.isComposing = true;
+    this.start = this.textarea.value.length;
+    this.dataAlreadySentLength = 0;
+  }
+
+  compositionUpdate(): void {
+    this.later(() => {
+      this.end = this.textarea.value.length;
+    });
+  }
+
+  compositionEnd(tag = 0): void {
+    this.finalize(true, tag);
+  }
+
+  keydown(keyCode: number): void {
+    if (this.isComposing || this.isSendingComposition) {
+      if (XTERM_NON_BREAKING_KEY_CODES.has(keyCode)) return;
+      this.finalize(false);
+    }
+    if (keyCode === 229) this.handleAnyTextareaChanges();
+  }
+
+  dispose(): void {
+    for (const timer of this.timers) clearTimeout(timer);
+    this.timers.clear();
+  }
+
+  private finalize(waitForPropagation: boolean, tag = 0): void {
+    this.isComposing = false;
+    if (!waitForPropagation) {
+      this.isSendingComposition = false;
+      this.send(this.textarea.value.substring(this.start, this.end), "early", tag);
+      return;
+    }
+    const from = this.start;
+    this.isSendingComposition = true;
+    this.later(() => {
+      if (!this.isSendingComposition) return;
+      this.isSendingComposition = false;
+      const value = this.textarea.value;
+      const at = from + this.dataAlreadySentLength;
+      const data = this.isComposing ? value.substring(at, this.start) : value.substring(at);
+      if (data.length > 0) this.send(data, "end", tag);
+    });
+  }
+
+  private handleAnyTextareaChanges(): void {
+    const before = this.textarea.value;
+    this.later(() => {
+      if (this.isComposing) return;
+      const after = this.textarea.value;
+      const diff = after.replace(before, "");
+      this.dataAlreadySentLength = diff.length;
+      if (after.length > before.length) this.send(diff, "diff", 0);
+      else if (after.length < before.length) this.send("\x7f", "diff", 0);
+      else if (after !== before) this.send(after, "diff", 0);
+    });
+  }
+
+  private later(fn: () => void): void {
+    const timer = setTimeout(() => {
+      this.timers.delete(timer);
+      fn();
+    }, 0);
+    this.timers.add(timer);
+  }
+}
+
 class CommitWatch implements ImeCommitDiagnostics {
   private composing = false;
   /** end 없이 새 start 가 왔다 — Microsoft IME 가 겹쳐 보낸 조합. */
@@ -189,11 +288,11 @@ class CommitWatch implements ImeCommitDiagnostics {
   private bundle: CommitBundle | null = null;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
   private settleGeneration = 0;
-  // xterm 6 CompositionHelper 의 `_compositionPosition.start`·`_isComposing`·
-  // `_isSendingComposition` 을 같은 규칙으로 따라간다 (xtermWindow).
-  private xtermStart = 0;
-  private xtermComposing = false;
-  private xtermSending = false;
+  private readonly xterm: XtermCompositionShadow;
+  private epoch = 0;
+  // 묶음이 열리기 전(end 전)에 xterm 이 보냈을 문자열 — 그 end 가 여는 묶음에 얹는다.
+  private xtermCarry = "";
+  private xtermCarryOverflow = false;
   private closed = false;
   private readonly dataSub: { dispose(): void };
   private readonly listeners: Array<[string, (ev: Event) => void]>;
@@ -207,6 +306,9 @@ class CommitWatch implements ImeCommitDiagnostics {
     // xterm 은 공개 onData 로만 관찰한다 — private 훅이나 번들 패치 없이 replay gate
     // 뒤의 기존 전달 경로를 건드리지 않는다.
     this.dataSub = terminal.onData((data) => this.onData(data));
+    this.xterm = new XtermCompositionShadow(textarea, (data, kind, tag) =>
+      this.addXtermSend(data, kind, tag),
+    );
     // Windows 입력 어댑터가 textarea 에 닿기 전에 조합 이벤트를 멈추므로 같은 element 의
     // capture 에서 어댑터보다 먼저 본다.
     this.listeners = [
@@ -236,6 +338,8 @@ class CommitWatch implements ImeCommitDiagnostics {
     this.overlap = false;
     this.dataBeforeEnd = false;
     this.mixed = false;
+    this.xtermCarry = "";
+    this.xtermCarryOverflow = false;
   }
 
   dispose(): void {
@@ -244,15 +348,17 @@ class CommitWatch implements ImeCommitDiagnostics {
     this.closed = true;
     this.dataSub.dispose();
     for (const [type, fn] of this.listeners) this.element.removeEventListener(type, fn, true);
+    this.xterm.dispose();
   }
 
   private readonly onCompositionStart = (ev: Event): void => {
     if (this.closed || ev.target !== this.textarea) return;
-    this.xtermStart = this.textarea.value.length;
-    this.xtermComposing = true;
+    this.xterm.compositionStart();
     if (this.limited) {
       // 상한에 걸린 조합의 꼬리는 버리고 다음 조합부터 새 묶음으로 본다.
       this.limited = false;
+      this.xtermCarry = "";
+      this.xtermCarryOverflow = false;
       this.overlap = false;
       this.dataBeforeEnd = false;
       this.mixed = false;
@@ -273,14 +379,16 @@ class CommitWatch implements ImeCommitDiagnostics {
   /** 조합 밖의 update — 2026-10-19 현장 로그처럼 닫힌 조합 뒤에 온다. 열린 묶음이
    *  있으면 그 구간의 순서가 깨진 것이므로 판정을 보류한다. */
   private readonly onCompositionUpdate = (ev: Event): void => {
-    if (ev.target !== this.textarea) return;
-    if (this.closed || this.limited || this.composing) return;
+    if (this.closed || ev.target !== this.textarea) return;
+    this.xterm.compositionUpdate();
+    if (this.limited || this.composing) return;
     if (this.bundle !== null) this.bundle.reason ??= "event-order";
   };
 
   private readonly onCompositionEnd = (ev: Event): void => {
     if (this.closed || ev.target !== this.textarea) return;
-    this.traceXtermWindow();
+    // 이 end 가 열거나 합류할 묶음의 세대 — 그 사이 묶음이 닫히면 세대가 오른다.
+    this.xterm.compositionEnd(this.epoch);
     if (this.limited) return;
     const data = (ev as CompositionEvent).data ?? "";
     if (!this.composing) {
@@ -293,6 +401,7 @@ class CommitWatch implements ImeCommitDiagnostics {
     this.composing = false;
 
     const bundle = this.open();
+    this.claimXtermCarry(bundle);
     if (this.overlap) bundle.reason ??= "event-order";
     if (this.dataBeforeEnd) bundle.reason ??= "before-end";
     if (this.mixed) bundle.reason ??= "mixed-input";
@@ -345,8 +454,10 @@ class CommitWatch implements ImeCommitDiagnostics {
   };
 
   private readonly onKeyDown = (ev: Event): void => {
-    if (this.closed || this.limited || ev.target !== this.textarea) return;
+    if (this.closed || ev.target !== this.textarea) return;
     const key = ev as KeyboardEvent;
+    this.xterm.keydown(key.keyCode);
+    if (this.limited) return;
     // IME 가 삼킨 키(229)만 일반 입력이 아니다. `isComposing` 으로 거르지 않는 것은
     // xterm 이 keyCode 로만 가르기 때문이다 — 조합 중의 비-229 Enter 는 조합을 확정하고
     // CR 도 보낸다. Tab·Escape·방향키도 onData 로 시퀀스를 보내므로, 수식키·입력 모드
@@ -364,27 +475,39 @@ class CommitWatch implements ImeCommitDiagnostics {
     this.interrupt();
   };
 
-  /** xterm 6 `_finalizeComposition(true)` 가 zero-delay 태스크에서 읽었을 구간. 여러 end 가 한
-   *  태스크에 오면 첫 타이머만 보내는 것까지 같다 (업스트림 #6089). */
-  private traceXtermWindow(): void {
-    this.xtermComposing = false;
-    const start = this.xtermStart;
-    this.xtermSending = true;
-    setTimeout(() => {
-      if (this.closed || !this.xtermSending) return;
-      this.xtermSending = false;
-      const value = this.textarea.value;
-      const read = this.xtermComposing
-        ? value.substring(start, this.xtermStart)
-        : value.substring(start);
-      const bundle = this.bundle;
-      if (bundle === null) return;
-      if (bundle.xtermWindow.length + read.length > IME_MAX_CODE_UNITS) {
-        bundle.xtermWindowOverflow = true;
-      } else {
-        bundle.xtermWindow += read;
-      }
-    }, 0);
+  /** 전송을 출처로 귀속한다. end 의 지연 전송은 그 end 가 연 묶음 몫이다. 조기 종료·229 diff 는
+   *  브라우저 조합이 열려 있으면 그 조합의 다음 end 몫이라 — 앞 묶음이 아직 정산 중이어도 —
+   *  다음 묶음에 얹고, 아니면 열린 묶음 몫이다. 어느 묶음에도 속하지 않으면(키 없는 입력의 diff,
+   *  상한·중단으로 닫힌 묶음) 버린다. */
+  private addXtermSend(data: string, kind: XtermSendKind, tag: number): void {
+    if (kind !== "end" && this.composing) {
+      if (this.xtermCarry.length + data.length > IME_MAX_CODE_UNITS) this.xtermCarryOverflow = true;
+      else this.xtermCarry += data;
+      return;
+    }
+    const bundle = this.bundle;
+    if (bundle === null) return;
+    if (kind === "end" && tag !== bundle.epoch) {
+      bundle.xtermWindowUnknown = true;
+      return;
+    }
+    this.appendXtermWindow(bundle, data);
+  }
+
+  /** 조합이 열린 동안 이월한 조기 전송을 그 조합의 end 가 연(또는 합류한) 묶음으로 옮긴다. */
+  private claimXtermCarry(bundle: CommitBundle): void {
+    if (this.xtermCarryOverflow) bundle.xtermWindowOverflow = true;
+    else this.appendXtermWindow(bundle, this.xtermCarry);
+    this.xtermCarry = "";
+    this.xtermCarryOverflow = false;
+  }
+
+  private appendXtermWindow(bundle: CommitBundle, data: string): void {
+    if (bundle.xtermWindow.length + data.length > IME_MAX_CODE_UNITS) {
+      bundle.xtermWindowOverflow = true;
+    } else {
+      bundle.xtermWindow += data;
+    }
   }
 
   private markMixed(): void {
@@ -401,6 +524,8 @@ class CommitWatch implements ImeCommitDiagnostics {
       actual: "",
       xtermWindow: "",
       xtermWindowOverflow: false,
+      xtermWindowUnknown: false,
+      epoch: this.epoch,
       ends: 0,
       onData: 0,
       reason: null,
@@ -435,6 +560,7 @@ class CommitWatch implements ImeCommitDiagnostics {
     const bundle = this.bundle;
     if (bundle === null) return;
     this.bundle = null;
+    this.epoch += 1;
     this.settleGeneration += 1;
     if (this.settleTimer !== null) {
       clearTimeout(this.settleTimer);
@@ -446,8 +572,11 @@ class CommitWatch implements ImeCommitDiagnostics {
       this.logUnknown(reason, bundle.ends, bundle.onData);
       return;
     }
-    const xtermWindow =
-      !bundle.xtermWindowOverflow && bundle.xtermWindow === bundle.expected ? "same" : "differs";
+    const xtermWindow = bundle.xtermWindowUnknown
+      ? "unknown"
+      : !bundle.xtermWindowOverflow && bundle.xtermWindow === bundle.expected
+        ? "same"
+        : "differs";
     log(
       `ime: commit match=${bundle.expected === bundle.actual} ${this.identifiers()} ` +
         `ends=${bundle.ends} onData=${bundle.onData} ` +

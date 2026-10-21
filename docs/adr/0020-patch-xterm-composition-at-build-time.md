@@ -233,9 +233,11 @@ surface it named, the inline composition view, is now owned by mast.
    is blocked because xterm, never seeing the composition, would otherwise diff the textarea on it
    (`_handleAnyTextareaChanges`). The textarea value stays native (no `preventDefault`): TSF computes its
    ranges from it.
-2. **Boundaries.** During a composition, a non-229 keydown that is not Shift, Control, Alt or CapsLock
-   alone first sends the latest `compositionupdate.data`. The exemption list is xterm
-   `CompositionHelper.keydown`'s. The same applies to blur, paste, tab hide and dispose. A composition sent
+2. **Boundaries.** During a composition, a non-229 keydown that is not Shift, Control, Alt, CapsLock,
+   한/영 (21) or 한자 (25) alone first sends the latest `compositionupdate.data`. The list is xterm
+   `CompositionHelper.keydown`'s plus the two Korean input keys. The 한자 key continues the composition
+   into candidate selection, so breaking on it would send the hangul syllable instead of the chosen
+   hanja. A composition that 한/영 ends arrives with its data on the IME's own end. The same applies to blur, paste, tab hide and dispose. A composition sent
    this way does not send again at its `compositionend`, so the keydown double send (#5778 / #6140) does
    not occur. An empty end sends nothing. An end that arrives after an overlapping start, or outside any
    composition (the 2026-10-19 sequence), still sends its data: it is the IME's commit report.
@@ -245,11 +247,29 @@ surface it named, the inline composition view, is now owned by mast.
 4. **Diagnostics.** The observer's listeners moved from the textarea to the capture phase on
    `term.element`, and `view.ts` installs it before the adapter. On the textarea they would never see the
    events the adapter stops. `match` now checks what the adapter sent. Verdict lines gain
-   `xtermWindow=same|differs`, which records whether the window xterm 6.0's `compositionend` path would
-   have sent equals the committed text. The window is traced with xterm's own start, composing and
-   single-flag sending rules, including the #6089 coalescing. `differs` beside `match=true` means the
-   adapter masked an occurrence of this fault. A window past 4096 code units counts as `differs`. The line
-   still carries no content; `unknown` lines are unchanged.
+   `xtermWindow=same|differs|unknown`, which records whether what stock xterm 6.0 would have sent during the
+   bundle equals the committed text. The trace is `XtermCompositionShadow`, a line-for-line port of
+   `CompositionHelper`'s send decisions, fed the same events. It covers the
+   `compositionend` window with its start, composing and single-flag sending rules (including the #6089
+   coalescing); the textarea diff that a 229 keydown outside a composition schedules
+   (`_handleAnyTextareaChanges`), which is sent when the composition ends before that task runs and
+   shifts the next window by `_dataAlreadySent`; and `_finalizeComposition(false)` on a non-229 keydown
+   during a composition, which sends `[start, end)` at once (with `end` from the `compositionupdate`
+   timer) and leaves xterm out of the composition. The 한/영 and 한자 keys take that path in xterm but
+   not in the adapter. Sends are attributed by their source. An end's delayed send belongs to the bundle
+   that end opened. An early finalize or a 229 diff traced while the browser composition is still open
+   belongs to that composition's coming end, and is carried into its bundle even if the previous bundle
+   is still settling, including when that end joins the settling bundle. Otherwise it belongs to the
+   open bundle. A send that belongs to no bundle, such as the diff of keyless input or a send after a
+   limit or interrupt with no bundle open, is dropped. Sometimes an end's delayed send arrives while a
+   later bundle is open, after the bundle its end belonged to was closed by a limit or an interrupt.
+   xterm's shared sending flag lets that timer send in the later bundle's time, so the send cannot be
+   attributed. That bundle reads `xtermWindow=unknown`: the boundary is recorded as ambiguous rather
+   than resolved. A differential test in `tooling/ime-composition.test.ts` feeds identical event
+   sequences to both stock bundles and to the shadow and requires identical send lists. `differs` beside `match=true` means the adapter masked
+   an occurrence of this fault. A trace past 4096 code units counts as `differs`. Trace timers are
+   xterm's own: one zero-delay timer per traced event, all cleared by `dispose()`. `_dataAlreadySent` is
+   kept as a length only. The line still carries no content; `unknown` lines are unchanged.
 5. **Accepted limits.** The adapter assumes the IME's `compositionend.data` is what the user meant. If the
    IME itself reports the wrong syllable, the adapter sends it. A 229 keydown that changes the textarea
    without composition events is no longer diffed. xterm's `input` handler still sends `insertText`
@@ -261,5 +281,27 @@ Verification: Linux only. Unit tests cover `windows-ime.ts`, and `windows-ime-do
 6.0 bundle through `TerminalView`. In that test, a control shows stock xterm sending `자` where the IME
 committed `조` under the textarea-overwrite model, and the adapter sends `조작`. With the adapter disabled,
 five of its cases fail. `tooling/ime-composition.test.ts` asserts `xtermWindow=same` on the stock bundle,
-so the trace matches what xterm really sends. Windows checks are WINDOWS-BUILD §10 "Windows IME adapter"
+so the trace matches what xterm really sends.
+
+Final review (codex, same day) found three gaps, fixed in a follow-up change. First, the trace ignored the
+229 diff and `_dataAlreadySent`. A stock-bundle case now locks this: `가` already committed, the textarea
+rewritten to `다나`, and the end arriving before the diff task. xterm sends `다나`; the line must read
+`match=false … xtermWindow=differs`, and it read `same` before the fix. Second, trace timers were not
+bounded or cleared on dispose. Third, the DOM tests sent no `input` events. Blocking the 229 keydown also
+keeps xterm's `_keyDownSeen` unset, which changes when its `insertText` branch sends. The DOM tests now
+send Chromium-style `insertCompositionText`, keyless `insertText` and a 229-then-`insertText` commit, and
+each arrives once. The real WebView2 event order remains a field item. The 한자 key exemption in item 2
+came from the same review. A second review found that the trace did not follow xterm's early finalize
+on that key, so a hanja choice was logged `same`. A stock-bundle test now locks what xterm sends (`한`,
+then `가韓`, for `가` + `한` → 한자 → `韓`). The adapter's line for the same sequence must read `match=true …
+xtermWindow=differs`. A third review found two orderings where a partial imitation still diverged: a 229
+diff that runs before the end, and a stale end timer that re-sends after a newer end. Those findings
+replaced the imitation with the port and the differential test. Each divergence is now one of its cases.
+A fourth review found the port's sends attributed by timing, not source: a hanja key in the next
+composition landed in the previous bundle while it was still settling. A `TerminalView` test locks the
+source rule on that sequence, where xterm sends `가`, `한`, `韓`, and the lines must read `same`, then
+`differs`. A fifth review found two more boundary cases. First, an end that joined a settling bundle left
+the carried early send behind. That end now claims it. Second, a delayed end send crossed an interrupt
+into a new bundle. The user chose to mark such bundles `unknown` instead of refining attribution further.
+Both cases are locked by tests. Windows checks are WINDOWS-BUILD §10 "Windows IME adapter"
 and are not run.

@@ -7,6 +7,11 @@
 // 디스패치하고, 백엔드 mock 의 writeStdin 으로 나간 바이트(= PTY 도착 바이트)를 본다. 키
 // 사이에 타이머를 돌리지 않는다 — 메인 스레드가 바쁜 쪽이 xterm 경로에 불리한 조건이다.
 //
+// 조합 중 입력창 변경은 Chromium 처럼 `insertCompositionText` input 으로 알린다. xterm 의 input
+// 처리(`_inputEvent`)는 `insertText` 만 보내는데, 어댑터가 229 keydown 을 막아 xterm 의
+// `_keyDownSeen` 이 서지 않으므로 그 분기가 실제로 어떻게 도는지도 여기서 본다. 실기기의
+// 이벤트 열은 확인되지 않았다 — WINDOWS-BUILD §10 "Windows IME adapter" 가 그 확인이다.
+//
 // `overwrite` 는 TSF 가 다음 음절의 조합으로 textarea 의 앞 음절을 바꿔 쓴 상태를 흉내 낸다.
 // 2026-10-21 현장 `match=false`(길이 1:1, 내용 다름)와 맞는 한 가지 모형일 뿐 원인으로 확인된
 // 것은 아니다. 어댑터가 textarea 를 읽지 않는다는 것을 보이는 데 쓴다.
@@ -92,13 +97,15 @@ class Typist {
           this.composing = "";
         }
         if (op.overwrite === true) this.field = this.field.slice(0, -1);
+        composition(this.textarea, "compositionupdate", op.text);
         this.composing = op.text;
         this.sync();
-        composition(this.textarea, "compositionupdate", op.text);
+        this.input("insertCompositionText", op.text, true);
       } else {
         this.field += op.text;
         this.composing = null;
         this.sync();
+        this.input("insertCompositionText", op.text, true);
         composition(this.textarea, "compositionend", op.text);
       }
     }
@@ -126,12 +133,33 @@ class Typist {
     if (this.textarea.value === "") this.field = "";
   }
 
+  /** 조합 없이 입력창에 글자를 넣는다 — 이모지 패널처럼 키가 없거나, 229 keydown 뒤에
+   *  insertText 로만 확정하는 입력. */
+  insertText(data: string, withImeKey: boolean): void {
+    if (withImeKey) this.textarea.dispatchEvent(keyEvent("keydown", "Process", 229));
+    this.field += data;
+    this.sync();
+    this.input("insertText", data, false);
+    if (withImeKey) this.textarea.dispatchEvent(keyEvent("keyup", "Process", 229));
+  }
+
+  /** 조합 중의 비-229 키 — 한자 키처럼 조합을 끊지 않는 키. */
+  key(key: string, keyCode: number): void {
+    this.textarea.dispatchEvent(keyEvent("keydown", key, keyCode));
+    this.textarea.dispatchEvent(keyEvent("keyup", key, keyCode));
+  }
+
   /** 앞선 키가 끊은 조합을 IME 가 뒤늦게 닫는다. */
   end(data: string): void {
     this.field += data;
     this.composing = null;
     this.sync();
     composition(this.textarea, "compositionend", data);
+  }
+
+  private input(inputType: string, data: string, isComposing: boolean): void {
+    const init = { inputType, data, isComposing, bubbles: true, composed: true };
+    this.textarea.dispatchEvent(new InputEvent("input", init));
   }
 
   private sync(): void {
@@ -250,6 +278,41 @@ describe("Windows 한글 입력 (실제 xterm + TerminalView)", () => {
     }
   });
 
+  it("키 없이 들어온 insertText(이모지 패널)는 한 번 간다", async () => {
+    const { view, textarea } = await attachedView();
+    try {
+      new Typist(textarea).insertText("😀", false);
+      expect(await ptyBytes()).toBe("😀");
+    } finally {
+      view.dispose();
+    }
+  });
+
+  it("229 keydown 뒤 조합 없이 insertText 로 확정한 글자도 한 번 간다", async () => {
+    const { view, textarea } = await attachedView();
+    try {
+      const typist = new Typist(textarea);
+      typist.insertText("가", true);
+      typist.insertText("나", true);
+      expect(await ptyBytes()).toBe("가나");
+    } finally {
+      view.dispose();
+    }
+  });
+
+  it("한자 키로 고른 후보가 음절 대신 간다", async () => {
+    const { view, textarea } = await attachedView();
+    try {
+      const typist = new Typist(textarea);
+      typist.word([[compose("ㅎ")], [compose("하")], [compose("한")]]);
+      typist.key("HanjaMode", 25);
+      typist.ime([compose("韓"), commit("韓")]);
+      expect(await ptyBytes()).toBe("韓");
+    } finally {
+      view.dispose();
+    }
+  });
+
   it("탭이 숨겨지면 열린 조합을 보내고 뒤늦은 end 는 다시 보내지 않는다", async () => {
     const { view, textarea } = await attachedView();
     try {
@@ -296,6 +359,116 @@ describe("Windows 한글 입력 (실제 xterm + TerminalView)", () => {
       await ptyBytes();
       expect(h.logLines.filter((line) => line.startsWith("ime: commit"))).toEqual([
         "ime: commit match=true session=7 pane=none ends=2 onData=2 expectedLen=2 actualLen=2 xtermWindow=differs",
+      ]);
+    } finally {
+      view.dispose();
+    }
+  });
+
+  it("end 전에 xterm 경로가 보냈을 전송도 그 end 의 묶음에 넣어 비교한다", async () => {
+    // 한자 키로 xterm 은 조합을 끝냈다고 보지만 어댑터의 조합은 열려 있다. 그 사이 229 diff 가
+    // end 보다 먼저 돌면 xterm 의 전송이 묶음보다 앞선다 — 이 열에서 xterm 의 합은 '韓' 이다
+    // (tooling/ime-composition.test.ts).
+    const { view, textarea } = await attachedView();
+    try {
+      h.logLines.length = 0;
+      composition(textarea, "compositionstart", "");
+      textarea.value = "한";
+      composition(textarea, "compositionupdate", "한");
+      textarea.dispatchEvent(keyEvent("keydown", "HanjaMode", 25));
+      textarea.dispatchEvent(keyEvent("keydown", "Process", 229));
+      textarea.value = "韓";
+      composition(textarea, "compositionupdate", "韓");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      composition(textarea, "compositionend", "韓");
+      expect(await ptyBytes()).toBe("韓");
+      expect(h.logLines.filter((line) => line.startsWith("ime: commit"))).toEqual([
+        "ime: commit match=true session=7 pane=none ends=1 onData=1 expectedLen=1 actualLen=1 xtermWindow=same",
+      ]);
+    } finally {
+      view.dispose();
+    }
+  });
+
+  it("다음 조합의 조기 전송은 정산 중인 앞 묶음이 아니라 그 조합의 묶음에 넣는다", async () => {
+    // xterm 의 전체 전송은 '가', '한'(한자 키의 조기 전송), '韓' 이다. 앞 묶음('가')이 settle 을
+    // 기다리는 동안 다음 조합에서 한자 키가 온다.
+    const { view, textarea } = await attachedView();
+    try {
+      h.logLines.length = 0;
+      composition(textarea, "compositionstart", "");
+      textarea.value = "가";
+      composition(textarea, "compositionupdate", "가");
+      composition(textarea, "compositionend", "가");
+      composition(textarea, "compositionstart", "");
+      textarea.value = "가한";
+      composition(textarea, "compositionupdate", "한");
+      // 첫 end·update 타이머 뒤, 앞 묶음의 정산 전에 한자 키가 온다.
+      setTimeout(() => textarea.dispatchEvent(keyEvent("keydown", "HanjaMode", 25)), 0);
+      await ptyBytes();
+      textarea.value = "가韓";
+      composition(textarea, "compositionupdate", "韓");
+      composition(textarea, "compositionend", "韓");
+      expect(await ptyBytes()).toBe("가韓");
+      expect(h.logLines.filter((line) => line.startsWith("ime: commit"))).toEqual([
+        "ime: commit match=true session=7 pane=none ends=1 onData=1 expectedLen=1 actualLen=1 xtermWindow=same",
+        "ime: commit match=true session=7 pane=none ends=1 onData=1 expectedLen=1 actualLen=1 xtermWindow=differs",
+      ]);
+    } finally {
+      view.dispose();
+    }
+  });
+
+  it("정산 중인 앞 묶음에 합류하는 end 도 그 조합의 조기 전송을 가져가고 다음 묶음으로 새지 않는다", async () => {
+    // 한자 키와 후보 확정이 앞 묶음('가')의 정산 전에 온다. 합친 묶음의 xterm 전송은 '가', '한',
+    // '韓' 이라 확정 합 '가韓' 과 다르다. 그 뒤의 정상 조합에는 아무것도 새지 않는다.
+    const { view, textarea } = await attachedView();
+    try {
+      h.logLines.length = 0;
+      composition(textarea, "compositionstart", "");
+      textarea.value = "가";
+      composition(textarea, "compositionupdate", "가");
+      composition(textarea, "compositionend", "가");
+      composition(textarea, "compositionstart", "");
+      textarea.value = "가한";
+      composition(textarea, "compositionupdate", "한");
+      setTimeout(() => {
+        textarea.dispatchEvent(keyEvent("keydown", "HanjaMode", 25));
+        textarea.value = "가韓";
+        composition(textarea, "compositionupdate", "韓");
+        composition(textarea, "compositionend", "韓");
+      }, 0);
+      expect(await ptyBytes()).toBe("가韓");
+      // 앞 묶음이 정산될 때까지 기다린 뒤 다음 조합을 친다.
+      for (let i = 0; i < 3; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      composition(textarea, "compositionstart", "");
+      textarea.value = "가韓다";
+      composition(textarea, "compositionupdate", "다");
+      composition(textarea, "compositionend", "다");
+      expect(await ptyBytes()).toBe("가韓다");
+      expect(h.logLines.filter((line) => line.startsWith("ime: commit"))).toEqual([
+        "ime: commit match=true session=7 pane=none ends=2 onData=2 expectedLen=2 actualLen=2 xtermWindow=differs",
+        "ime: commit match=true session=7 pane=none ends=1 onData=1 expectedLen=1 actualLen=1 xtermWindow=same",
+      ]);
+    } finally {
+      view.dispose();
+    }
+  });
+
+  it("한자 선택은 어댑터가 맞게 보내도 xterm 경로였다면 달랐다고 남긴다", async () => {
+    // 이 열에서 xterm 6.0 은 '한' 과 '가韓' 을 보낸다 (tooling/ime-composition.test.ts 의 전제).
+    const { view, textarea } = await attachedView();
+    try {
+      const typist = new Typist(textarea);
+      typist.word([[compose("ㄱ")], [compose("가")], [commit("가"), compose("ㅎ")], [compose("하")], [compose("한")]]);
+      await ptyBytes();
+      h.writeStdin.mockClear();
+      h.logLines.length = 0;
+      typist.key("HanjaMode", 25);
+      typist.ime([compose("韓"), commit("韓")]);
+      expect(await ptyBytes()).toBe("韓");
+      expect(h.logLines.filter((line) => line.startsWith("ime: commit"))).toEqual([
+        "ime: commit match=true session=7 pane=none ends=1 onData=1 expectedLen=1 actualLen=1 xtermWindow=differs",
       ]);
     } finally {
       view.dispose();
