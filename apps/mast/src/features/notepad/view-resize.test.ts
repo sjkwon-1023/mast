@@ -110,6 +110,28 @@ function paneShape(root: HTMLElement): PaneShape {
   };
 }
 
+/** happy-dom 에는 레이아웃이 없다 — 인라인 기하를 외곽으로 돌려주는 스텁. */
+function stubDrawerRect(drawer: HTMLElement): void {
+  vi.spyOn(drawer, "getBoundingClientRect").mockImplementation(() => {
+    const style = drawer.style;
+    const left = Number.parseFloat(style.left) || 0;
+    const top = Number.parseFloat(style.top) || 0;
+    const width = Number.parseFloat(style.width) || 0;
+    const height = Number.parseFloat(style.height) || 0;
+    return {
+      x: left,
+      y: top,
+      left,
+      top,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height,
+      toJSON: () => ({}),
+    } as DOMRect;
+  });
+}
+
 let feature: NotepadFeature | null = null;
 
 beforeEach(() => {
@@ -211,8 +233,53 @@ describe("메모장 토글과 터미널 레이아웃", () => {
     const state = createNotepadState();
     feature = createNotepadFeature(hostFor(initial), state);
     await feature.toggle();
-    expect(document.querySelector("dialog.notepad-drawer")).not.toBeNull();
+    const drawer = document.querySelector<HTMLDialogElement>("dialog.notepad-drawer");
+    expect(drawer).not.toBeNull();
     await nextFrame();
+    // 열기만 해도 pane 은 그대로다.
+    expect(resize.mock.calls.length).toBe(before);
+    expect(paneShape(viewRoot)).toEqual(shapeBefore);
+    expect(view.paneRects()).toEqual(rectsBefore);
+
+    // 헤더 드래그 — 서랍 위치만 움직인다. (native grip 조작 성공을 주장하는 게 아니라,
+    //  서랍 기하가 바뀌어도 pane 이 흔들리지 않음을 보는 것이다.)
+    stubDrawerRect(drawer!);
+    const head = drawer!.querySelector<HTMLElement>(".notepad-header");
+    expect(head).not.toBeNull();
+    const leftBefore = Number.parseFloat(drawer!.style.left);
+    head!.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        pointerId: 1,
+        button: 0,
+        clientX: 100,
+        clientY: 100,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    head!.dispatchEvent(
+      new PointerEvent("pointermove", {
+        pointerId: 1,
+        clientX: 160,
+        clientY: 140,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(drawer!.style.left).toBe(`${leftBefore + 60}px`);
+    await nextFrame();
+    expect(resize.mock.calls.length).toBe(before);
+    expect(paneShape(viewRoot)).toEqual(shapeBefore);
+    expect(view.paneRects()).toEqual(rectsBefore);
+
+    // native resize 결과를 인라인 값으로 준다 — 서랍 크기만 바뀐다.
+    drawer!.style.width = "600px";
+    drawer!.style.height = "500px";
+    await nextFrame();
+    expect(resize.mock.calls.length).toBe(before);
+    expect(paneShape(viewRoot)).toEqual(shapeBefore);
+    expect(view.paneRects()).toEqual(rectsBefore);
+
     await feature.close();
     await nextFrame();
 

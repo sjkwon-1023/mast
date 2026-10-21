@@ -6,7 +6,12 @@
 //
 // C5 는 워크스페이스 전환을 따라가는 sync 와, macOS dirty 보고가 끝난 뒤에만
 // 편집을 여는 준비 단계를 더한다. 후자는 host 의 선택 콜백이라 Windows 경로에는 없다.
+//
+// 서랍의 위치·크기는 이 모듈이 소유한다. 기하는 서랍 DOM 안에만 있고(WebView
+// localStorage 한 칸), 헤더 pointer 로 옮기고 브라우저 기본 resize 로 크기를 바꾼다.
+// 리스너는 서랍 DOM 에만 붙어 DOM 과 함께 사라진다 (ADR-0034 결정 8).
 
+import { log } from "../../infrastructure/logging";
 import type { NoteScope, StateSnapshot, WorkspaceId } from "../../shared/types";
 import { notepadState, pendingDraft } from "./state";
 import type { NotepadState } from "./state";
@@ -37,6 +42,7 @@ export interface NotepadFeature {
 
 interface Drawer {
   dialog: HTMLDialogElement;
+  header: HTMLElement;
   textarea: HTMLTextAreaElement;
   workspaceButton: HTMLButtonElement;
   globalButton: HTMLButtonElement;
@@ -61,14 +67,195 @@ interface Drawer {
   /** 읽기 실패 시 백업 내용을 보여 주기만 한다 (state 세션은 열리지 않았다). */
   fallbackText: string | null;
   localError: string | null;
+  /** 열린 직후 또는 마지막으로 저장한 외곽 — 사용자가 움직이지 않았는지 비교하는 기준. */
+  geometry: Geometry;
+  /** 헤더에서 시작한 이동 — 활성 포인터 하나만 유효하다. */
+  drag: Drag | null;
   unsubscribe: (() => void) | null;
 }
+
+/** 서랍 외곽 사각형 (CSS px). */
+interface Geometry {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** 진행 중인 이동 — 시작 시점의 포인터 좌표와 외곽을 기억한다. */
+interface Drag {
+  pointerId: number;
+  pointerX: number;
+  pointerY: number;
+  left: number;
+  top: number;
+}
+
+/** 서랍 기하 저장 키 — WebView localStorage 한 칸. 세션 초안 키와 섞지 않는다. */
+const GEOMETRY_KEY = "mast.notepadGeometry";
+
+/** 기본 외관의 여백 — 위·오른쪽 8px. */
+const EDGE_PX = 8;
+
+/** 기본 폭 — 좁은 창에서는 창폭-16px 로 줄어든다. */
+const DEFAULT_WIDTH_PX = 420;
+
+/** 저장값의 헤더가 화면에 걸치는지 보는 기준. 완전히 바깥이면 기본값으로 연다. */
+const HEADER_MIN_VISIBLE_PX = 48;
+const HEADER_MIN_TOP_PX = 24;
+
+/** 기하가 실제로 달라졌는지 보는 허용 오차 (px). */
+const GEOMETRY_EPSILON_PX = 0.5;
 
 const REPORT_ERROR =
   "Editing is disabled because Mast could not report the unsaved note state.";
 
 const sameScope = (a: NoteScope, b: NoteScope): boolean =>
   a.type === "global" ? b.type === "global" : b.type === "workspace" && a.workspace === b.workspace;
+
+function viewportSize(): { width: number; height: number } {
+  return { width: window.innerWidth, height: window.innerHeight };
+}
+
+/** 저장값이 없을 때의 기본 외관 — 위·오른쪽 8px, 폭 min(420px, 창폭-16px), 높이 창높이-16px. */
+function defaultGeometry(): Geometry {
+  const { width, height } = viewportSize();
+  const drawerWidth = Math.max(0, Math.min(DEFAULT_WIDTH_PX, width - EDGE_PX * 2));
+  return {
+    left: width - EDGE_PX - drawerWidth,
+    top: EDGE_PX,
+    width: drawerWidth,
+    height: Math.max(0, height - EDGE_PX * 2),
+  };
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** 저장된 기하를 읽는다 — 서랍을 열 때 한 번만. 깨진 값은 저장하지 않은 것으로 본다. */
+function readStoredGeometry(): Geometry | null {
+  let raw: string | null;
+  try {
+    raw = window.localStorage.getItem(GEOMETRY_KEY);
+  } catch {
+    // 저장소를 못 읽어도 서랍은 열린다 — 기본 기하로 간다.
+    return null;
+  }
+  if (raw === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  const left = finiteNumber(record.left);
+  const top = finiteNumber(record.top);
+  const width = finiteNumber(record.width);
+  const height = finiteNumber(record.height);
+  if (left === null || top === null || width === null || height === null) return null;
+  if (width <= 0 || height <= 0) return null;
+  const geometry: Geometry = { left, top, width, height };
+  // 헤더가 화면에 전혀 걸치지 않으면 기본값으로 연다. 그 외 보정은 어디에도 없다.
+  const view = viewportSize();
+  const headerVisible =
+    geometry.top >= 0 &&
+    geometry.top <= view.height - HEADER_MIN_TOP_PX &&
+    geometry.left < view.width - HEADER_MIN_VISIBLE_PX &&
+    geometry.left + geometry.width > HEADER_MIN_VISIBLE_PX;
+  return headerVisible ? geometry : null;
+}
+
+/** 왼쪽·위 기준 배치 — native resize 핸들(오른쪽 아래)이 포인터를 따라가려면
+ *  right/bottom 이 auto 여야 한다. */
+function applyGeometry(dialog: HTMLElement, geometry: Geometry): void {
+  dialog.style.left = `${geometry.left}px`;
+  dialog.style.top = `${geometry.top}px`;
+  dialog.style.width = `${geometry.width}px`;
+  dialog.style.height = `${geometry.height}px`;
+  dialog.style.right = "auto";
+  dialog.style.bottom = "auto";
+}
+
+function sameGeometry(a: Geometry, b: Geometry): boolean {
+  return (
+    Math.abs(a.left - b.left) < GEOMETRY_EPSILON_PX &&
+    Math.abs(a.top - b.top) < GEOMETRY_EPSILON_PX &&
+    Math.abs(a.width - b.width) < GEOMETRY_EPSILON_PX &&
+    Math.abs(a.height - b.height) < GEOMETRY_EPSILON_PX
+  );
+}
+
+/** 서랍 기하를 저장한다 — 사용자가 움직이지 않았으면 쓰지 않는다. */
+function saveGeometry(current: Drawer): void {
+  const rect = current.dialog.getBoundingClientRect();
+  // 창이 숨겨진 상태(최소화)에서는 외곽이 0 이 된다 — 그 값을 저장하면 기억이 지워진다.
+  if (rect.width <= 0 || rect.height <= 0) return;
+  const next: Geometry = {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+  // 움직이지 않았다면 저장하지 않는다 — 기본 위치가 창 크기를 계속 따라야 한다.
+  if (sameGeometry(next, current.geometry)) return;
+  try {
+    window.localStorage.setItem(GEOMETRY_KEY, JSON.stringify(next));
+    current.geometry = next;
+  } catch (error) {
+    // 저장은 실패해도 서랍을 닫는 흐름은 막지 않는다.
+    log(`notepad: geometry save failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** 헤더 드래그 — 주 버튼이면서 버튼 밖에서만 시작한다. 리스너는 서랍 DOM 과 함께 사라진다. */
+function attachDrag(current: Drawer): void {
+  const header = current.header;
+  header.addEventListener("pointerdown", (ev) => {
+    if (current.drag !== null) return;
+    if (ev.button !== 0) return;
+    const target = ev.target;
+    // Close 버튼과 그 아래는 클릭이지 이동이 아니다.
+    if (target instanceof Element && target.closest("button") !== null) return;
+    // 텍스트 선택과 포커스 이동을 막는다 — 메모 입력칸의 포커스가 유지되어야 한다.
+    ev.preventDefault();
+    const rect = current.dialog.getBoundingClientRect();
+    current.drag = {
+      pointerId: ev.pointerId,
+      pointerX: ev.clientX,
+      pointerY: ev.clientY,
+      left: rect.left,
+      top: rect.top,
+    };
+    header.setPointerCapture(ev.pointerId);
+  });
+  header.addEventListener("pointermove", (ev) => {
+    const drag = current.drag;
+    if (drag === null || ev.pointerId !== drag.pointerId) return;
+    // 클램프는 없다 — 화면 밖으로 나가도 그대로 둔다.
+    current.dialog.style.left = `${drag.left + (ev.clientX - drag.pointerX)}px`;
+    current.dialog.style.top = `${drag.top + (ev.clientY - drag.pointerY)}px`;
+  });
+  header.addEventListener("pointerup", (ev) => {
+    const drag = current.drag;
+    if (drag === null || ev.pointerId !== drag.pointerId) return;
+    current.drag = null;
+    saveGeometry(current);
+  });
+  header.addEventListener("pointercancel", (ev) => {
+    const drag = current.drag;
+    if (drag === null || ev.pointerId !== drag.pointerId) return;
+    // 취소는 저장하지 않는다 — 마지막으로 적용된 위치를 그대로 둔다.
+    current.drag = null;
+  });
+  header.addEventListener("lostpointercapture", (ev) => {
+    const drag = current.drag;
+    if (drag === null || ev.pointerId !== drag.pointerId) return;
+    current.drag = null;
+  });
+}
 
 function createButton(label: string): HTMLButtonElement {
   const button = document.createElement("button");
@@ -84,12 +271,14 @@ function buildDrawer(
   scope: NoteScope,
   focusBefore: HTMLElement | null,
   active: WorkspaceId | null,
+  geometry: Geometry,
 ): Drawer {
   const dialog = document.createElement("dialog");
   // showModal 을 쓰지 않는다 — pane 입력을 막지 않는 비모달 서랍이다.
   // open 속성만 세우면 backdrop 이 생기지 않고, 브라우저 뷰의 dialog[open] 감지도 동작한다.
   dialog.className = "notepad-drawer";
   dialog.setAttribute("aria-label", "Notepad");
+  applyGeometry(dialog, geometry);
 
   const header = document.createElement("div");
   header.className = "notepad-header";
@@ -136,8 +325,9 @@ function buildDrawer(
   header.append(title, workspaceLabel, closeButton);
   dialog.append(header, scopes, label, status, error);
 
-  return {
+  const drawer: Drawer = {
     dialog,
+    header,
     textarea,
     workspaceButton,
     globalButton,
@@ -155,8 +345,12 @@ function buildDrawer(
     blocked: false,
     fallbackText: null,
     localError: null,
+    geometry,
+    drag: null,
     unsubscribe: null,
   };
+  attachDrag(drawer);
+  return drawer;
 }
 
 export function createNotepadFeature(
@@ -219,6 +413,8 @@ export function createNotepadFeature(
   }
 
   function teardown(current: Drawer): void {
+    // 닫기·읽기 취소·워크스페이스 폐기가 같은 teardown 을 쓴다 — 기하는 여기서 저장한다.
+    saveGeometry(current);
     current.unsubscribe?.();
     current.unsubscribe = null;
     // dialog 를 먼저 닫아야 browser 뷰의 dialog[open] MutationObserver 가 숨김/복원을 예약한다.
@@ -349,11 +545,24 @@ export function createNotepadFeature(
     const focusBefore =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const token = ++generation;
+    // 기하는 열 때 한 번만 읽는다 — 부팅·모듈 로드 시에는 저장소에 닿지 않는다.
+    const geometry = readStoredGeometry() ?? defaultGeometry();
 
-    const current = buildDrawer(hasWorkspaces, scope, focusBefore, active);
+    const current = buildDrawer(hasWorkspaces, scope, focusBefore, active, geometry);
     drawer = current;
     document.body.append(current.dialog);
     current.dialog.setAttribute("open", "");
+    // CSS 최소 크기가 요청한 크기보다 크면 실제 외곽이 달라진다 — 비교 기준을 열린 외곽으로
+    // 잡아야 무조작 닫기가 저장하지 않는다. 0 크기(최소화된 창)면 요청값을 그대로 둔다.
+    const opened = current.dialog.getBoundingClientRect();
+    if (opened.width > 0 && opened.height > 0) {
+      current.geometry = {
+        left: opened.left,
+        top: opened.top,
+        width: opened.width,
+        height: opened.height,
+      };
+    }
     current.unsubscribe = state.subscribe(render);
     current.closeButton.addEventListener("click", () => void close());
     current.textarea.addEventListener("input", () => {

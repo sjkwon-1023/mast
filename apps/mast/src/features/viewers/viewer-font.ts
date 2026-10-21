@@ -18,7 +18,8 @@
 //   `--viewer-font-size` 가 심긴 채로 남는다 — 아래 applyViewerFontSize 참조.)
 // - **글꼴 family 의 대상은 모노스페이스 콘텐츠뿐이다** — 사이드바·탭바·버튼·
 //   상태줄 같은 UI 크롬과 마크다운 산문은 사용자가 고른 "코드 글꼴"의 대상이
-//   아니다. 반면 **크기**는 마크다운 산문도 따른다 (`.markdown-body` 가
+//   아니다. 메모장 textarea 는 명령·코드 조각을 적는 등폭 표면이라 대상에 넣는다.
+//   **크기**는 마크다운 산문과 메모장도 따른다 (`.markdown-body` 가
 //   `calc(var(--viewer-font-size, 12px) + 1px)`): 줌은 "지금 보는 이 문서를
 //   키우는" 조작이라 산문만 제자리에 남으면 반쪽이다. 어떤 셀렉터가 어느 변수를
 //   읽는지는 app/styles.css 가 정본이고 features/viewers/viewer-font.test.ts 가 그 목록을 잠근다.

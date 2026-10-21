@@ -251,8 +251,15 @@ describe("styles.css 의 뷰어 글꼴 계약", () => {
         ".markdown-editor",
         ".changes-file",
         ".changes-diff",
+        ".notepad-text",
       ]),
     );
+  });
+
+  it("메모장은 family 와 크기(+1px)를 모두 따른다", () => {
+    const note = rules().find((rule) => rule.selector === ".notepad-text");
+    expect(note?.body).toContain(`var(${FAMILY_VAR}, monospace)`);
+    expect(note?.body).toContain(`calc(var(${SIZE_VAR}, ${DEFAULT_VIEWER_FONT_SIZE}px) + 1px)`);
   });
 
   it("글꼴 family 는 마크다운 산문에 닿지 않는다 (크기만 따른다)", () => {

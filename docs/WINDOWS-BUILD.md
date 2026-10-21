@@ -3137,7 +3137,7 @@ the keyboard and IME, the app commit, dev or release, and whether `"log"` is tru
 5. **Other input.** If available, a Japanese IME commit, the emoji panel (Win+.), and pasting with Ctrl+V
    and from the context menu while composing. Each must arrive once and in order.
 
-### Unreleased — notepad field verification (ADR-0034, 2026-10-20)
+### Unreleased — notepad field verification (ADR-0034, ADR-0036, 2026-10-20)
 
 Pending Windows field verification. The Linux gates and the Windows native tests do not show
 WebView2 behavior. Do not mark an item passed until it has been run on the target machine. Record
@@ -3189,6 +3189,42 @@ check.
    textarea, notes read, dedicated worker or periodic task. After closing the drawer, its DOM and
    clean text must be gone. Use the existing Windows measurement tooling only if needed; do not
    record performance numbers that were not measured.
+9. **Font.** With `fontFamily` set in `settings.json` (for example
+   `'Sarasa Mono K', 'Hack Nerd Font Mono', monospace`), the note text must use that family for
+   both Korean and Latin text. `Ctrl+=`/`Ctrl+-`/`Ctrl+0` with the note focused must zoom the
+   note together with the terminal and viewers, and must not leak `=`/`-`/`0` into the note. With
+   `fontFamily` and `fontSize` removed, the note must look as before (13px browser `monospace`).
+10. **Moving the drawer.** Open the drawer with a Korean note in progress and drag it by the
+    header background, by the `Notepad` title, and by a workspace name. The drawer must follow the
+    pointer by the drag distance without a jump, and it must go where it is dragged even beyond the
+    screen edge. A press on the Close button must close the drawer and must not move it first.
+    Record whether the note textarea kept focus, whether an active IME composition survived the
+    press, and what pointer device was used. With a modifier held (Ctrl, Shift or Alt), a header
+    drag must behave the same.
+11. **Native resize.** Confirm a resize grip is visible at the bottom-right corner and that
+    dragging it changes width and height. Move the drawer left first, then widen it: the drawer
+    must not be clipped at a maximum. Record the smallest size the grip reaches; the CSS minimum is
+    280×320 px. Check that the note textarea grows and shrinks with the drawer and scrolls instead
+    of being clipped at the minimum.
+12. **Layout during move and resize.** Using the same method as item 2, compare terminal
+    `cols`/`rows`, pane bounds and resize records before opening, after moving, after resizing and
+    after closing. Nothing may resize, re-attach or force a TUI redraw. Record any change with its
+    terminal and pane.
+13. **Restart restores the rectangle.** Move and resize the drawer, close it, quit and relaunch,
+    and reopen it. The position and size must be the ones left by the last header drag or close,
+    not the default. Repeat with the drawer left open and quit through the title-bar X: a position
+    saved at the last header drag must be restored, while a size change made after that drag may
+    be lost (accepted limit). Record which of the two happened.
+14. **A stored rectangle in a smaller window.** Drag the drawer off the left or bottom edge (or
+    save a rectangle on a large window), quit, shrink the window or change the display scale, and
+    reopen. When the stored header is entirely off screen the drawer must open at the default
+    position. When part of the header is still on screen the stored rectangle must be applied
+    unchanged, and the drawer must remain closable with `Ctrl+Shift+M` and Esc. Record the stored
+    rectangle and the window size for each case.
+15. **Native browser page.** Open a native browser page, open the drawer, then move and resize the
+    drawer so that it overlaps the page again at a different rectangle. The page must stay hidden
+    while the drawer is open and must return to its previous bounds after closing, as in item 2.
+    Record whether any part of the page showed through during the drag or resize.
 
 ### Unreleased — agent file open field verification (ADR-0035, 2026-10-20)
 

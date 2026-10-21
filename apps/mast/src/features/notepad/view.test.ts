@@ -1,4 +1,8 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../infrastructure/backend", () => ({
@@ -6,6 +10,7 @@ vi.mock("../../infrastructure/backend", () => ({
   detachTerminal: vi.fn(async () => undefined),
   notesRead: vi.fn(async () => ""),
   notesSave: vi.fn(async () => ({ type: "saved" })),
+  logLine: vi.fn(async () => undefined),
 }));
 
 import type {
@@ -153,6 +158,63 @@ function type(value: string): void {
   area.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+/** 서랍 기하 저장 키 — WebView localStorage 한 칸. */
+const GEOMETRY_KEY = "mast.notepadGeometry";
+
+/** happy-dom 에는 레이아웃이 없다 — 인라인 기하를 외곽으로 돌려주는 스텁. */
+function stubDialogRect(): void {
+  const element = dialog();
+  if (element === null) throw new Error("notepad dialog is not open");
+  vi.spyOn(element, "getBoundingClientRect").mockImplementation(() => {
+    const style = element.style;
+    const left = Number.parseFloat(style.left) || 0;
+    const top = Number.parseFloat(style.top) || 0;
+    const width = Number.parseFloat(style.width) || 0;
+    const height = Number.parseFloat(style.height) || 0;
+    return {
+      x: left,
+      y: top,
+      left,
+      top,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height,
+      toJSON: () => ({}),
+    } as DOMRect;
+  });
+}
+
+function header(): HTMLElement {
+  const element = dialog()?.querySelector<HTMLElement>(".notepad-header") ?? null;
+  if (element === null) throw new Error("notepad header is not open");
+  return element;
+}
+
+function pointer(
+  type: string,
+  init: { pointerId?: number; button?: number; clientX?: number; clientY?: number } = {},
+): PointerEvent {
+  return new PointerEvent(type, {
+    pointerId: init.pointerId ?? 1,
+    button: init.button ?? 0,
+    clientX: init.clientX ?? 0,
+    clientY: init.clientY ?? 0,
+    bubbles: true,
+    cancelable: true,
+  });
+}
+
+function savedGeometry(): { left: number; top: number; width: number; height: number } | null {
+  const raw = window.localStorage.getItem(GEOMETRY_KEY);
+  return raw === null ? null : JSON.parse(raw);
+}
+
+/** 저장소 접근이 실패하는 상황을 만든다 — localStorage 자체를 갈아 끼운다. */
+function stubLocalStorage(over: Partial<Storage>): void {
+  vi.spyOn(window, "localStorage", "get").mockReturnValue(over as Storage);
+}
+
 let feature: NotepadFeature | null = null;
 
 function start(host: NotepadHost, ipc: NotepadIpc) {
@@ -163,7 +225,11 @@ function start(host: NotepadHost, ipc: NotepadIpc) {
 
 beforeEach(() => {
   sessionStorage.clear();
+  window.localStorage.clear();
   document.body.replaceChildren();
+  // 기하는 창 크기를 본다 — 이 파일에서는 창을 1200×800 으로 고정한다.
+  vi.spyOn(window, "innerWidth", "get").mockReturnValue(1200);
+  vi.spyOn(window, "innerHeight", "get").mockReturnValue(800);
 });
 
 afterEach(async () => {
@@ -919,5 +985,461 @@ describe("기존 레이아웃 계약", () => {
     expect(dialog()?.parentElement).toBe(document.body);
     expect(viewRoot.childElementCount).toBe(0);
     expect(viewRoot.getAttribute("style")).toBeNull();
+  });
+});
+
+describe("서랍 기하 (열 때의 위치·크기)", () => {
+  // 창은 1200×800 으로 고정해 있다 — 기본 외관은 위 8px·오른쪽 8px,
+  // 폭 min(420px, 1200-16px)=420px, 높이 800-16px=784px 이다.
+  const DEFAULT_LEFT = 772;
+  const DEFAULT_TOP = 8;
+  const DEFAULT_WIDTH = 420;
+  const DEFAULT_HEIGHT = 784;
+
+  it("저장값이 없으면 기본 외관으로 연다", async () => {
+    const backend = makeBackend();
+    const { host } = makeHost(snapshot(1, [1]));
+    start(host, backend.ipc);
+
+    await feature!.toggle();
+
+    expect(dialog()?.style.left).toBe(`${DEFAULT_LEFT}px`);
+    expect(dialog()?.style.top).toBe(`${DEFAULT_TOP}px`);
+    expect(dialog()?.style.width).toBe(`${DEFAULT_WIDTH}px`);
+    expect(dialog()?.style.height).toBe(`${DEFAULT_HEIGHT}px`);
+    // native resize 핸들이 오른쪽 아래에 있어야 하므로 right/bottom 은 auto 다.
+    expect(dialog()?.style.right).toBe("auto");
+    expect(dialog()?.style.bottom).toBe("auto");
+  });
+
+  it("저장값이 있으면 그 사각형으로 연다", async () => {
+    window.localStorage.setItem(
+      GEOMETRY_KEY,
+      JSON.stringify({ left: 100, top: 50, width: 300, height: 400 }),
+    );
+    const backend = makeBackend();
+    const { host } = makeHost(snapshot(1, [1]));
+    start(host, backend.ipc);
+
+    await feature!.toggle();
+
+    expect(dialog()?.style.left).toBe("100px");
+    expect(dialog()?.style.top).toBe("50px");
+    expect(dialog()?.style.width).toBe("300px");
+    expect(dialog()?.style.height).toBe("400px");
+  });
+
+  it("깨진 저장값은 기본값으로 연다", async () => {
+    const broken = [
+      "not-json",
+      "[]",
+      "{}",
+      '{"left":"100","top":50,"width":300,"height":400}',
+      '{"left":1e999,"top":50,"width":300,"height":400}',
+      '{"left":100,"top":50,"width":0,"height":400}',
+      '{"left":100,"top":50,"width":300,"height":-5}',
+    ];
+    for (const raw of broken) {
+      window.localStorage.setItem(GEOMETRY_KEY, raw);
+      const backend = makeBackend();
+      const { host } = makeHost(snapshot(1, [1]));
+      start(host, backend.ipc);
+
+      await feature!.toggle();
+
+      expect(dialog()?.style.left).toBe(`${DEFAULT_LEFT}px`);
+      expect(dialog()?.style.width).toBe(`${DEFAULT_WIDTH}px`);
+      await feature!.close();
+      feature = null;
+      window.localStorage.clear();
+    }
+  });
+
+  it("헤더가 화면에 전혀 걸치지 않는 저장값은 기본값으로 연다", async () => {
+    const offscreen = [
+      { left: 5000, top: 5000, width: 300, height: 400 },
+      { left: -5000, top: 10, width: 300, height: 400 },
+      { left: 1200, top: 10, width: 300, height: 400 },
+    ];
+    for (const geometry of offscreen) {
+      window.localStorage.setItem(GEOMETRY_KEY, JSON.stringify(geometry));
+      const backend = makeBackend();
+      const { host } = makeHost(snapshot(1, [1]));
+      start(host, backend.ipc);
+
+      await feature!.toggle();
+
+      expect(dialog()?.style.left).toBe(`${DEFAULT_LEFT}px`);
+      expect(dialog()?.style.top).toBe(`${DEFAULT_TOP}px`);
+      await feature!.close();
+      feature = null;
+      window.localStorage.clear();
+    }
+  });
+
+  it("저장소를 읽을 수 없으면 기본값으로 연다", async () => {
+    stubLocalStorage({
+      getItem: () => {
+        throw new Error("storage disabled");
+      },
+    });
+    const backend = makeBackend();
+    const { host } = makeHost(snapshot(1, [1]));
+    start(host, backend.ipc);
+
+    await feature!.toggle();
+
+    expect(dialog()?.style.left).toBe(`${DEFAULT_LEFT}px`);
+    expect(dialog()?.style.width).toBe(`${DEFAULT_WIDTH}px`);
+  });
+
+  it("범위 전환과 워크스페이스 따라가기로 기하가 바뀌지 않는다", async () => {
+    const backend = makeBackend({ "ws:1": "one", "ws:2": "two", global: "shared" });
+    const { host, setSnapshot } = makeHost(snapshot(1, [1, 2]));
+    start(host, backend.ipc);
+    await feature!.toggle();
+    const before = {
+      left: dialog()?.style.left,
+      top: dialog()?.style.top,
+      width: dialog()?.style.width,
+      height: dialog()?.style.height,
+    };
+
+    button("Global")!.click();
+    await vi.waitFor(() => expect(textarea()?.value).toBe("shared"));
+    expect(dialog()?.style.left).toBe(before.left);
+    expect(dialog()?.style.height).toBe(before.height);
+
+    button("This workspace")!.click();
+    await vi.waitFor(() => expect(textarea()?.value).toBe("one"));
+
+    setSnapshot(snapshot(2, [1, 2]));
+    feature!.sync(snapshot(2, [1, 2]));
+    await vi.waitFor(() => expect(textarea()?.value).toBe("two"));
+    expect(dialog()?.style.left).toBe(before.left);
+    expect(dialog()?.style.top).toBe(before.top);
+    expect(dialog()?.style.width).toBe(before.width);
+    expect(dialog()?.style.height).toBe(before.height);
+  });
+});
+
+describe("서랍 이동 (헤더 드래그)", () => {
+  async function openDrawer(): Promise<void> {
+    const backend = makeBackend();
+    const { host } = makeHost(snapshot(1, [1]));
+    start(host, backend.ipc);
+    await feature!.toggle();
+    stubDialogRect();
+  }
+
+  it("포인터 이동량만큼 정확히 옮긴다", async () => {
+    await openDrawer();
+    const head = header();
+
+    head.dispatchEvent(pointer("pointerdown", { clientX: 100, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { clientX: 130, clientY: 80 }));
+
+    expect(dialog()?.style.left).toBe("802px");
+    expect(dialog()?.style.top).toBe("-12px");
+  });
+
+  it("화면 밖으로 나가도 그대로 둔다 (클램프 없음)", async () => {
+    await openDrawer();
+    const head = header();
+
+    head.dispatchEvent(pointer("pointerdown", { clientX: 100, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { clientX: -5000, clientY: 9000 }));
+
+    // 시작 위치 772·8 에서 포인터 이동량 (-5100, +8900) 만큼 그대로 간다.
+    expect(dialog()?.style.left).toBe("-4328px");
+    expect(dialog()?.style.top).toBe("8908px");
+  });
+
+  it("pointerdown 은 기본 동작을 막고 메모 입력칸의 포커스를 유지한다", async () => {
+    await openDrawer();
+    const area = textarea()!;
+    expect(document.activeElement).toBe(area);
+
+    const down = pointer("pointerdown", { clientX: 100, clientY: 100 });
+    header().dispatchEvent(down);
+
+    expect(down.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(area);
+  });
+
+  it("Close 버튼 누름은 이동을 시작하지 않고 클릭은 정상 동작한다", async () => {
+    await openDrawer();
+    const close = button("Close")!;
+
+    const down = pointer("pointerdown", { clientX: 10, clientY: 10 });
+    close.dispatchEvent(down);
+    header().dispatchEvent(pointer("pointermove", { clientX: 300, clientY: 300 }));
+
+    expect(down.defaultPrevented).toBe(false);
+    expect(dialog()?.style.left).toBe("772px");
+
+    close.click();
+    await vi.waitFor(() => expect(dialog()).toBeNull());
+  });
+
+  it("주 버튼이 아니면 이동을 시작하지 않는다", async () => {
+    await openDrawer();
+
+    const down = pointer("pointerdown", { button: 2, clientX: 100, clientY: 100 });
+    header().dispatchEvent(down);
+    header().dispatchEvent(pointer("pointermove", { clientX: 300, clientY: 300 }));
+
+    expect(down.defaultPrevented).toBe(false);
+    expect(dialog()?.style.left).toBe("772px");
+  });
+
+  it("시작하지 않은 포인터 id 는 위치를 바꾸지 않는다", async () => {
+    await openDrawer();
+    const head = header();
+
+    head.dispatchEvent(pointer("pointerdown", { pointerId: 1, clientX: 100, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { pointerId: 2, clientX: 300, clientY: 300 }));
+
+    expect(dialog()?.style.left).toBe("772px");
+    expect(dialog()?.style.top).toBe("8px");
+  });
+
+  it("끝난 뒤의 pointermove 는 위치를 바꾸지 않는다", async () => {
+    await openDrawer();
+    const head = header();
+
+    head.dispatchEvent(pointer("pointerdown", { clientX: 100, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { clientX: 130, clientY: 100 }));
+    head.dispatchEvent(pointer("pointerup", { clientX: 130, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 100 }));
+
+    expect(dialog()?.style.left).toBe("802px");
+  });
+});
+
+describe("서랍 기하 저장", () => {
+  async function openDrawer(): Promise<void> {
+    const backend = makeBackend();
+    const { host } = makeHost(snapshot(1, [1]));
+    start(host, backend.ipc);
+    await feature!.toggle();
+    stubDialogRect();
+  }
+
+  it("pointerup 은 저장하고 pointercancel 은 저장하지 않는다", async () => {
+    await openDrawer();
+    const head = header();
+
+    head.dispatchEvent(pointer("pointerdown", { clientX: 100, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { clientX: 130, clientY: 100 }));
+    head.dispatchEvent(pointer("pointercancel", { clientX: 130, clientY: 100 }));
+
+    // 취소는 저장하지 않는다 — 마지막으로 적용된 위치(772+30)만 남는다.
+    expect(savedGeometry()).toBeNull();
+    expect(dialog()?.style.left).toBe("802px");
+
+    head.dispatchEvent(pointer("pointerdown", { clientX: 100, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { clientX: 160, clientY: 100 }));
+    head.dispatchEvent(pointer("pointerup", { clientX: 160, clientY: 100 }));
+
+    expect(savedGeometry()).toEqual({ left: 862, top: 8, width: 420, height: 784 });
+  });
+
+  it("옮긴 뒤 닫으면 그 사각형을 저장한다", async () => {
+    await openDrawer();
+    const head = header();
+
+    head.dispatchEvent(pointer("pointerdown", { clientX: 100, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { clientX: 130, clientY: 80 }));
+
+    await feature!.close();
+
+    expect(savedGeometry()).toEqual({ left: 802, top: -12, width: 420, height: 784 });
+  });
+
+  it("크기를 바꾼 뒤 닫으면 그 사각형을 저장한다", async () => {
+    await openDrawer();
+    // native resize 결과를 인라인 값으로 준다.
+    dialog()!.style.width = "600px";
+    dialog()!.style.height = "500px";
+
+    await feature!.close();
+
+    expect(savedGeometry()).toEqual({ left: 772, top: 8, width: 600, height: 500 });
+  });
+
+  it("움직이지 않고 닫으면 저장하지 않는다", async () => {
+    await openDrawer();
+
+    await feature!.close();
+
+    expect(savedGeometry()).toBeNull();
+  });
+
+  it("옮겼다가 원래 자리로 돌아오면 마지막 자리를 저장한다", async () => {
+    await openDrawer();
+    const head = header();
+
+    head.dispatchEvent(pointer("pointerdown", { clientX: 100, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { clientX: 130, clientY: 100 }));
+    head.dispatchEvent(pointer("pointerup", { clientX: 130, clientY: 100 }));
+    expect(savedGeometry()).toEqual({ left: 802, top: 8, width: 420, height: 784 });
+
+    head.dispatchEvent(pointer("pointerdown", { clientX: 130, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { clientX: 100, clientY: 100 }));
+    head.dispatchEvent(pointer("pointerup", { clientX: 100, clientY: 100 }));
+    expect(savedGeometry()).toEqual({ left: 772, top: 8, width: 420, height: 784 });
+  });
+
+  it("쓰기에 실패한 사각형은 닫을 때 다시 저장한다", async () => {
+    await openDrawer();
+    const head = header();
+    vi.spyOn(window.localStorage, "setItem").mockImplementationOnce(() => {
+      throw new Error("quota");
+    });
+
+    head.dispatchEvent(pointer("pointerdown", { clientX: 100, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { clientX: 130, clientY: 100 }));
+    head.dispatchEvent(pointer("pointerup", { clientX: 130, clientY: 100 }));
+    expect(savedGeometry()).toBeNull();
+
+    await feature!.close();
+
+    expect(savedGeometry()).toEqual({ left: 802, top: 8, width: 420, height: 784 });
+  });
+
+  it("CSS 최소 크기에 걸린 작은 창에서도 무조작 닫기는 저장하지 않는다", async () => {
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(300);
+    // 열리기 전에 설치한다 — 실제 외곽은 min-height 320px 이 요청 높이 284px 를 이긴다.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const left = Number.parseFloat(this.style.left) || 0;
+      const top = Number.parseFloat(this.style.top) || 0;
+      const width = Math.max(Number.parseFloat(this.style.width) || 0, 280);
+      const height = Math.max(Number.parseFloat(this.style.height) || 0, 320);
+      return {
+        x: left,
+        y: top,
+        left,
+        top,
+        width,
+        height,
+        right: left + width,
+        bottom: top + height,
+        toJSON: () => ({}),
+      } as DOMRect;
+    });
+    const backend = makeBackend();
+    const { host } = makeHost(snapshot(1, [1]));
+    start(host, backend.ipc);
+    await feature!.toggle();
+    expect(dialog()?.style.height).toBe("284px");
+
+    await feature!.close();
+
+    expect(savedGeometry()).toBeNull();
+  });
+
+  it("로딩 중 닫아도 조작이 없으면 저장하지 않는다", async () => {
+    const backend = makeBackend();
+    const read = deferred<string>();
+    vi.mocked(backend.ipc.read).mockImplementationOnce(async (scope) => {
+      backend.reads.push(scope);
+      return read.promise;
+    });
+    const { host } = makeHost(snapshot(1, [1]));
+    start(host, backend.ipc);
+
+    const opening = feature!.toggle();
+    await vi.waitFor(() => expect(backend.reads).toHaveLength(1));
+    stubDialogRect();
+    button("Close")!.click();
+
+    expect(savedGeometry()).toBeNull();
+
+    read.resolve("late");
+    await opening;
+  });
+
+  it("저장소가 throw 해도 닫기는 정상 완료된다", async () => {
+    await openDrawer();
+    const base = window.localStorage;
+    stubLocalStorage({
+      getItem: (key: string) => base.getItem(key),
+      setItem: () => {
+        throw new Error("quota exceeded");
+      },
+    });
+    const head = header();
+    head.dispatchEvent(pointer("pointerdown", { clientX: 100, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { clientX: 130, clientY: 100 }));
+
+    await feature!.close();
+
+    expect(dialog()).toBeNull();
+  });
+
+  it("저장값은 세션 초안 키와 섞지 않는다", async () => {
+    await openDrawer();
+    const head = header();
+    head.dispatchEvent(pointer("pointerdown", { clientX: 100, clientY: 100 }));
+    head.dispatchEvent(pointer("pointermove", { clientX: 130, clientY: 100 }));
+    head.dispatchEvent(pointer("pointerup", { clientX: 130, clientY: 100 }));
+
+    expect(sessionStorage.getItem(NOTEPAD_DRAFT_KEY)).toBeNull();
+    expect(window.localStorage.getItem(GEOMETRY_KEY)).not.toBeNull();
+  });
+});
+
+describe("styles.css 의 서랍 기하 계약", () => {
+  /** 파일을 직접 읽는 이유: vitest 는 CSS import 를 빈 모듈로 지워버린다(`css: false`
+   *  기본값). 경로는 실행 cwd 가 아니라 이 파일 자신에서 잡는다. */
+  const css = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), "../../app/styles.css"),
+    "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "");
+
+  /** 이 스타일시트에는 @media 등 중첩 at-rule 이 없어 이 정규식으로 충분하다. */
+  function rules(): { selector: string; body: string }[] {
+    const out: { selector: string; body: string }[] = [];
+    const re = /([^{}]+)\{([^{}]*)\}/g;
+    let match = re.exec(css);
+    while (match !== null) {
+      out.push({ selector: match[1].trim(), body: match[2] });
+      match = re.exec(css);
+    }
+    return out;
+  }
+
+  it("서랍은 브라우저 기본 resize 를 쓰고 최소 외곽을 갖는다", () => {
+    const drawer = rules().find((rule) => rule.selector === ".notepad-drawer");
+    expect(drawer?.body).toContain("resize: both");
+    expect(drawer?.body).toContain("min-width: 280px");
+    expect(drawer?.body).toContain("min-height: 320px");
+  });
+
+  it("서랍에 크기 상한이 없고 overflow 가 visible 이 아니다", () => {
+    const drawer = rules().find((rule) => rule.selector === ".notepad-drawer");
+    // UA 스타일시트의 dialog 상한은 해제해야 한다 — 그 위에 수치 상한이 있으면
+    // native resize 결과를 화면 밖으로 밀어낸다.
+    const caps = [...(drawer?.body ?? "").matchAll(/max-(width|height)\s*:\s*([^;]+)/g)];
+    expect(caps.length).toBeGreaterThan(0);
+    for (const [, , value] of caps) expect(value.trim()).toBe("none");
+    // resize 는 overflow 가 visible 이 아니어야 붙는다 — 넘친 내용도 스크롤로 닿아야 한다.
+    const overflow = /overflow:\s*([^;]+)/.exec(drawer?.body ?? "")?.[1].trim();
+    expect(overflow).toBeDefined();
+    expect(["auto", "scroll"]).toContain(overflow);
+  });
+
+  it("textarea 는 자체 resize 하지 않고 최소 높이를 유지한다", () => {
+    const text = rules().find((rule) => rule.selector === ".notepad-text");
+    expect(text?.body).toContain("resize: none");
+    expect(text?.body).toContain("min-height: 160px");
+  });
+
+  it("헤더는 이동 커서를 갖는다", () => {
+    const head = rules().find((rule) => rule.selector === ".notepad-header");
+    expect(head?.body).toContain("cursor: move");
   });
 });

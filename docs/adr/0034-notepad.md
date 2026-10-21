@@ -26,7 +26,8 @@ split: opening or closing it does not change the pane tree, the terminal grid, t
 `cols`/`rows`, or the number of PTY resize requests. The drawer uses a non-modal `<dialog>` with
 `open`, not `showModal`, so the pane behind it and the sidebar remain usable and no backdrop
 blocks input. Its width is `min(420px, viewport - 16px)` and its height is capped by
-`calc(100vh - 16px)`.
+`calc(100vh - 16px)`. These are the first-open defaults; ADR-0036 defines moving, resizing and
+remembering the drawer.
 
 The DOM is built on the first toggle and removed when the drawer closes. The view module is loaded
 with a dynamic import at the first toggle; the state module is loaded only when the drawer opens
