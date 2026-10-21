@@ -10,9 +10,11 @@
 //
 // - 229 keydown: xterm 에 넘기지 않는다. xterm 은 조합 이벤트를 못 보므로 조합 밖으로 알고
 //   229 마다 textarea 차이를 따로 보낸다(`_handleAnyTextareaChanges`).
-// - 조합 중의 비-229 keydown(수식키·CapsLock 단독 제외): xterm 이 그 키를 보내기 전에 마지막
-//   update 를 먼저 보낸다. 뒤따르는 그 조합의 end 는 다시 보내지 않는다(업스트림 #5778 의
-//   이중 전송을 피한다). 제외 목록은 xterm CompositionHelper.keydown 과 같다.
+// - 조합 중의 비-229 keydown(수식키·CapsLock·한/영·한자 단독 제외): xterm 이 그 키를 보내기
+//   전에 마지막 update 를 먼저 보낸다. 뒤따르는 그 조합의 end 는 다시 보내지 않는다(업스트림
+//   #5778 의 이중 전송을 피한다). 제외 목록은 xterm CompositionHelper.keydown 에 한/영(21)과
+//   한자(25)를 더한 것이다 — 한자 키는 조합을 이어 후보 선택으로 가므로 여기서 끊으면 고른
+//   한자 대신 한글 음절이 간다. 한/영으로 끝나는 조합은 IME 의 end 가 data 를 싣고 온다.
 // - blur·붙여넣기·탭 숨김·뷰 해제: 위와 같이 남은 조합을 먼저 보낸다.
 // - 조합이 겹치거나(end 없이 새 start) 조합 밖에서 end 가 와도 end 의 data 는 IME 의 확정
 //   보고이므로 보낸다 (2026-10-19 로그의 겹친 조합).
@@ -27,8 +29,8 @@ export type ImeRouting = "pass" | "block";
 
 const IME_KEY_CODE = 229;
 
-// Shift·Control·Alt·CapsLock 단독은 조합을 끊지 않는다.
-const NON_BREAKING_KEY_CODES = new Set([16, 17, 18, 20]);
+// Shift·Control·Alt·CapsLock·한/영·한자 단독은 조합을 끊지 않는다.
+const NON_BREAKING_KEY_CODES = new Set([16, 17, 18, 20, 21, 25]);
 
 export class WindowsImeState {
   private composing = false;

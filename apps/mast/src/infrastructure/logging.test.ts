@@ -519,6 +519,31 @@ describe("IME 확정 비교", () => {
     ]);
   });
 
+  it("중단으로 닫힌 묶음의 xterm 지연 전송이 새 묶음에 도착하면 xtermWindow=unknown 이다", async () => {
+    // 한 태스크에서 A 확정 → blur → B 확정. xterm 이라면 A 의 end 타이머가 공용 플래그를 쓰며 B 의
+    // 시간대에 보낸다 — 어느 확정의 몫인지 가를 수 없다.
+    enable();
+    const term = fakeTerminal(3);
+    watch(term);
+
+    composition(term.textarea, "compositionstart", "");
+    term.textarea.value = "가";
+    composition(term.textarea, "compositionend", "가");
+    term.emit("가");
+    term.textarea.dispatchEvent(new Event("blur"));
+    term.textarea.value = "";
+    composition(term.textarea, "compositionstart", "");
+    term.textarea.value = "나";
+    composition(term.textarea, "compositionend", "나");
+    term.emit("나");
+    await settle();
+
+    expect(rawCommits()).toEqual([
+      "ime: commit match=unknown reason=interrupted session=7 pane=3 ends=1 onData=1",
+      "ime: commit match=true session=7 pane=3 ends=1 onData=1 expectedLen=1 actualLen=1 xtermWindow=unknown",
+    ]);
+  });
+
   it("blur 는 남은 묶음을 interrupted 로 닫는다", async () => {
     enable();
     const term = fakeTerminal(3);
@@ -725,6 +750,28 @@ describe("IME 확정 비교", () => {
     expect(rawCommits()).toEqual([
       "ime: commit match=true session=7 pane=3 ends=2 onData=1 expectedLen=2 actualLen=2 xtermWindow=same",
     ]);
+  });
+
+  it("xterm 추적 타이머는 원본처럼 이벤트마다 하나씩이고 dispose 가 모두 지운다", () => {
+    enable();
+    const term = fakeTerminal(3);
+    const diagnostics = watch(term);
+    const before = vi.getTimerCount();
+
+    // 조합 밖의 229 keydown 은 xterm 의 지연 diff 를 예약한다 (조합·전송 대기 중에는 예약하지 않는다).
+    for (let i = 0; i < 2; i += 1) {
+      const keydown = new KeyboardEvent("keydown", { key: "Process", bubbles: true });
+      Object.defineProperty(keydown, "keyCode", { value: 229 });
+      term.textarea.dispatchEvent(keydown);
+    }
+    composition(term.textarea, "compositionstart", "");
+    composition(term.textarea, "compositionupdate", "가");
+    for (let i = 0; i < 3; i += 1) composition(term.textarea, "compositionend", "가");
+    // update 1 + end 3 + diff 2, 그리고 열린 묶음의 settle 1.
+    expect(vi.getTimerCount() - before).toBe(7);
+
+    diagnostics.dispose();
+    expect(vi.getTimerCount()).toBe(before);
   });
 
   it("전송 로그에 입력 원문·해시·문자 코드가 남지 않는다", async () => {

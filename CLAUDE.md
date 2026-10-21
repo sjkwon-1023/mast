@@ -74,9 +74,10 @@ MVP.
   `compositionend.data`. The Windows adapter (`features/terminal/windows-ime*.ts`) now sends
   `compositionend.data` and keeps xterm's composition path out. Pending: WINDOWS-BUILD §10 "Windows IME
   adapter". That covers the F1 byte check, the keys pressed during composition, the candidate-window
-  position, and the `xtermWindow=same|differs` field, which shows whether the old fault still occurs
-  under the adapter. The cause stays unconfirmed (TSF rewriting the textarea, upstream #6049, is the model
-  that fits). If the IME's own commit report is wrong, the adapter does not help. The `shared/keys.ts`
+  position, and the `xtermWindow=same|differs|unknown` field, which shows whether the old fault still
+  occurs under the adapter (`unknown` where a send cannot be attributed to one bundle). The cause
+  stays unconfirmed (TSF rewriting the textarea, upstream #6049, is the model that fits). If the IME's
+  own commit report is wrong, the adapter does not help. The `shared/keys.ts`
   `isComposing` guard and the composition log lines (ADR-0014) stay.
 - **Splitter resize is mouse-drag only.**
 - **Per-pane split-button affordance** (ADR-0004): a first-time user read the header

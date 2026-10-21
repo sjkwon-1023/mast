@@ -50,13 +50,23 @@ describe("WindowsImeState", () => {
     expect(sent).toEqual(["도", "가"]);
   });
 
-  it("Shift·Control·Alt·CapsLock 단독은 조합을 끊지 않는다", () => {
+  it("Shift·Control·Alt·CapsLock·한/영·한자 단독은 조합을 끊지 않는다", () => {
     const { ime, sent } = state();
     ime.compositionStart();
     ime.compositionUpdate("ㄲ");
-    for (const keyCode of [16, 17, 18, 20]) expect(ime.keydown({ keyCode })).toBe("pass");
+    for (const keyCode of [16, 17, 18, 20, 21, 25]) expect(ime.keydown({ keyCode })).toBe("pass");
     expect(sent).toEqual([]);
     expect(ime.pendingText()).toBe("ㄲ");
+  });
+
+  it("한자 키로 고른 후보는 end 의 data 로 간다", () => {
+    const { ime, sent } = state();
+    ime.compositionStart();
+    ime.compositionUpdate("한");
+    ime.keydown({ keyCode: 25 });
+    ime.compositionUpdate("韓");
+    ime.compositionEnd("韓");
+    expect(sent).toEqual(["韓"]);
   });
 
   it("조합 밖의 비-229 키와 flush 는 아무것도 보내지 않는다", () => {
