@@ -759,7 +759,15 @@ session owns a tab's hint, and an automatic run uses that hint unchanged.
 **Execution.** Only `claude --resume <token>`, `codex resume <token>` and `opencode --session <token>`
 run, with tokens of `[A-Za-z0-9_-]` up to 96 characters, through `command` and a fixed argv. There is no
 `eval`, no `sh -c` and no PTY input injection. Each shell tries once. The command enters the tab's
-history once, before the queue, so a skipped or cancelled run still leaves the manual hint. After the
+history once, before the queue, so a skipped or cancelled run still leaves the manual hint. Once the queue
+admits the run, and before the CLI starts, the shell replaces the hint (tmp+mv) with the same command and
+line 2 and with the current generation as line 3. A resumed agent does not always write a hint before the
+user types: Claude's SessionStart is not a writer. Without the replacement, a session resumed and left
+running without input until quit kept the previous boot's generation, so the boot after that skipped it.
+If the replacement fails, the shell prints `[mast] auto-resume: cannot update ~/.mast/resume/tab-<id>…`
+and runs the agent anyway. The old line 3 then makes the next boot skip the session, which is not an
+unwanted run. `SETUP_VERSION` goes to 27 so WSL installs that already ran setup v25 or v26 receive the new
+`integration.sh`. After the
 run the shell records a new generation. The shell remembers the command it ran and the generation it ran
 under; a hint with that command and that generation, which the resumed session keeps writing (a notify
 arriving after the agent exits included), is not added to history again, while the same session started
@@ -777,7 +785,15 @@ next boot, that boot can run the exited agent once. This needs the user's own pe
 `~/.mast/prompt` and is accepted.
 
 **One manual hint.** With a matching integration, the first prompt owns the manual hint and its history
-entry in bash and zsh, whether or not `autoResume` is on. `launch.sh` prints and records the hint only for an
+entry in bash and zsh, whether or not `autoResume` is on. A root shell remembers the previous shell's last
+generation when it reads `integration.sh`, before its first prompt writes a new one. If a three-line hint's
+generation differs from that one, a prompt was drawn after the hint was written: the session ended
+normally, and that prompt already put the command into history. The first prompt then neither prints the
+hint nor adds it again; re-adding it made the resume command newer than every command typed after the
+agent exited (field report 2026-10-21). For this to hold in zsh, the integration writes its `print -s`
+history entries out at once with `fc -AI`; `INC_APPEND_HISTORY` alone writes them only when the next
+command is entered, so quitting at the prompt lost them. A two-line hint or a missing prompt file keeps
+the previous behavior. `launch.sh` prints and records the hint only for an
 older or missing `integration.sh`; otherwise bash would record the same hint twice.
 
 **Queue.** `scripts/wsl/mast-auto-resume.py` (installed as `~/.mast/bin/mast-auto-resume.py`; macOS

@@ -346,6 +346,30 @@ class AutoResumeCases:
                 # 세대의 기록 1회다. 늦은 갱신을 다시 넣었다면 3 이다.
                 self.assertEqual(self.history_text(shell).count(self.HINT), 2)
 
+    def test_a_resumed_agent_that_never_rewrites_its_hint_is_resumed_at_every_boot(self):
+        # 실제 Claude 는 재개 직후 힌트를 쓰지 않는다(SessionStart 는 writer 가 아니다). 입력 없이 실행 중에 앱을
+        # 끄면 힌트 3행은 셸이 실행 직전에 바꿔 둔 실행 세대뿐이고, 그것이 없으면 두 번째 재시작부터 건너뛴다.
+        self.prepare()
+        (self.home / ".mast/bin/claude").write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$MAST_PROMPT_GEN" >> "$HOME/agent-log"\n'
+            'printf "AGENT-RUNNING\\n"\nIFS= read -r line\n'
+        )
+        self.auto = "1"
+        hint = self.home / ".mast/resume/tab-42"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(self.HINT + "\n1\nold-1\n", "old-1")
+                for boot in range(1, 4):
+                    # 대기열의 3 초 간격은 이 사례와 무관하므로 부팅마다 허가 기록을 지운다.
+                    (self.home / ".mast/auto-resume.lock").unlink(missing_ok=True)
+                    self.begin(shell)
+                    self.read_until(b"AGENT-RUNNING")
+                    log = self.agent_log()
+                    self.assertEqual(len(log), boot)
+                    self.assertEqual(hint.read_text(), "%s\n1\n%s\n" % (self.HINT, log[-1]))
+                    self.kill()  # 에이전트가 실행 중인 채로 탭을 닫는다.
+
     def test_a_run_that_exits_normally_is_not_offered_to_run_again(self):
         self.prepare()
         self.auto = "1"
@@ -365,7 +389,6 @@ class AutoResumeCases:
         self.auto = "1"
         cases = {
             "two-line hint from an older writer": (self.HINT + "\n1\n", "old-1"),
-            "other generation": (self.HINT + "\n1\nother-9\n", "old-1"),
             "no prompt file": (self.HINT + "\n1\nold-1\n", None),
             "extra line": (self.HINT + "\n1\nold-1\nextra\n", "old-1"),
         }
@@ -378,6 +401,47 @@ class AutoResumeCases:
                     self.finish()
                     self.assertEqual(self.agent_log(), [])
                     self.assertIn(("resume previous agent: %s" % self.HINT).encode(), self.output)
+
+    def test_a_hint_written_before_the_last_prompt_is_neither_run_nor_offered_again(self):
+        # 세대가 다르면 힌트를 쓴 뒤 이전 셸에 프롬프트가 더 나왔고, 그 프롬프트가 이미 history 에 넣었다.
+        self.prepare()
+        for auto in ("", "1"):
+            self.auto = auto
+            for shell in self.SHELLS:
+                with self.subTest(auto=auto, shell=shell):
+                    self.reset()
+                    self.write_state(self.HINT + "\n1\nother-9\n", "old-1")
+                    self.start(shell)
+                    self.finish()
+                    self.assertEqual(self.agent_log(), [])
+                    self.assertNotIn(b"resume previous agent", self.output)
+                    self.assertNotIn(b"auto-resume", self.output)
+
+    def test_a_session_that_ended_normally_keeps_its_place_in_history(self):
+        # 정상 종료 뒤 입력한 명령이 resume 명령보다 최신이어야 한다. 다음 부팅이 힌트를 다시 넣으면 ↑ 한 번에
+        # resume 명령이 나온다. 입력 없이 앱을 끈 경우에도 이전 셸이 넣은 resume 명령은 history 에 남아야 한다.
+        resumed = AGENT_HINTS["claude"]
+        self.prepare()
+        for auto in ("", "1"):
+            self.auto = auto
+            for shell in self.SHELLS:
+                for after in ("echo after-agent", None):
+                    with self.subTest(auto=auto, shell=shell, after=after):
+                        self.reset()
+                        (self.home / ".mast/resume").mkdir(parents=True)
+                        self.start(shell)
+                        self.send("claude")
+                        if after:
+                            self.send(after)
+                        self.kill()
+                        self.start(shell)
+                        self.finish()
+                        self.assertNotIn(b"resume previous agent", self.output)
+                        self.assertEqual(len(self.agent_log()), 1)
+                        history = self.history_text(shell).splitlines()
+                        self.assertEqual(history.count(resumed), 1)
+                        if after:
+                            self.assertLess(history.index(resumed), history.index(after))
 
     def test_forbidden_or_oversized_candidates_are_never_run(self):
         self.prepare()
@@ -533,6 +597,27 @@ class AutoResumeCases:
                 self.assertNotIn(b"[mast] auto-resume:", self.output)
                 self.assertIn(("resume previous agent: %s" % self.HINT).encode(), self.output)
                 self.assertEqual(self.output.count(UNAVAILABLE.encode()), 1)
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes into a 0555 directory, so the write failure cannot be produced")
+    def test_a_hint_that_cannot_be_updated_still_runs_and_says_so(self):
+        # 실패하면 3행이 옛 세대로 남아 다음 부팅에서 건너뛸 뿐이므로 실행은 막지 않는다.
+        self.prepare()
+        (self.home / ".mast/bin/claude").write_text('#!/bin/sh\nprintf "claude %s\\n" "$*" >> "$HOME/agent-log"\n')
+        self.auto = "1"
+        hint = self.HINT + "\n1\nold-1\n"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(hint, "old-1")
+                (self.home / ".mast/resume").chmod(0o555)
+                try:
+                    self.start(shell)
+                    self.finish()
+                finally:
+                    (self.home / ".mast/resume").chmod(0o755)
+                self.assertEqual(len(self.agent_log()), 1)
+                self.assertEqual(self.output.count(b"cannot update ~/.mast/resume/tab-42"), 1)
+                self.assertEqual((self.home / ".mast/resume/tab-42").read_text(), hint)
 
     def test_the_unavailable_notice_is_printed_once_per_shell(self):
         self.prepare()
