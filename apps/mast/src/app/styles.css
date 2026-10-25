@@ -1336,6 +1336,12 @@ body {
   font-style: italic;
 }
 
+/* KaTeX 블록 수식은 줄바꿈되지 않으므로 긴 식은 뷰어 폭을 넘기지 않고 가로로 스크롤한다 */
+.markdown-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 /* 2MiB 초과 안내 — 렌더를 거부하고 텍스트 뷰어로 여는 길만 준다 */
 .markdown-notice {
   color: var(--fg-muted);

@@ -119,3 +119,32 @@ no longer bounces straight back to the parent.
   no-LF window back-read fragment, Win32 device-name aliasing (a checkpoint observation),
   and the post-flush remount race — the same family as the persistence debounce trade-off,
   where the cost is at most the last half-second of scroll position.
+
+## Amendment (2026-10-25): LaTeX math in the Markdown viewer
+
+The Markdown viewer renders `$…$` inline and `$$…$$` display math with KaTeX through
+`marked-katex-extension`. Decision 8 stands unchanged: raw HTML is still escaped, links still
+have no `href`, images are still placeholders.
+
+- **Why this does not reopen decision 8.** File-borne HTML still never reaches the DOM. KaTeX
+  parses TeX and emits its own markup; the file controls only the formula text. `trust: false`
+  (set explicitly, it is also KaTeX's default) keeps `\href`, `\url`, `\includegraphics` and
+  the `\html*` commands from producing links, loads or attributes — they render as red text.
+  vitest locks this on the actual render output, with no `href`/`src` attribute, no `img` tag
+  and no event-handler attribute.
+- **`nonStandard: true`.** The standard rule requires whitespace or punctuation after the
+  closing `$`, so `$O(n)$이다` would stay literal; Korean particles attach directly to the
+  formula. Accepted cost: prose with two bare dollar signs on one line (`$5 and $10`) renders
+  the span between them as math. Code spans and fenced blocks keep `$` as text.
+- **`throwOnError: false`.** A malformed formula renders as KaTeX's error span in place
+  instead of failing the whole document.
+- **Version.** `marked-katex-extension` 5.1.13 accepts `katex` below 0.19, so KaTeX is on
+  0.18.x until the extension widens its peer range.
+- **Cost.** KaTeX's JS, CSS and fonts load only with the already lazy Markdown viewer chunk,
+  so there is no idle cost. KaTeX's CSS lists woff2, woff and ttf for every font, and WebView2
+  and WKWebView only ever fetch the woff2. The `katex-woff2-only` plugin in
+  `apps/mast/vite.config.ts` drops the other two references so they are not bundled, which cuts
+  the fonts from about 1.07 MB to about 256 KB. The JS adds about 260 KB and the CSS about
+  30 KB. If KaTeX changes its `@font-face` format, the plugin fails the build instead of
+  silently bundling all three formats again.
+- **Not field-verified** on Windows or macOS; covered by vitest only.

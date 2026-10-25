@@ -147,6 +147,51 @@ describe("renderMarkdown", () => {
     const html = renderMarkdown("![](pic.png)\n");
     expect(html).toContain('<span class="md-image">[image: pic.png]</span>');
   });
+
+  it("renders inline and display math with KaTeX", () => {
+    const html = renderMarkdown("energy $E=mc^2$ here\n\n$$\n\\sum_{i=1}^n i\n$$\n");
+    expect(html).toContain('class="katex"');
+    expect(html).toContain('class="katex-display"');
+    expect(html).not.toContain("$E=mc^2$");
+  });
+
+  it("renders math followed directly by a Korean particle", () => {
+    const html = renderMarkdown("복잡도는 $O(n)$이다\n");
+    expect(html).toContain('class="katex"');
+    expect(html).not.toContain("$O(n)$");
+  });
+
+  it("keeps dollar signs inside code as text", () => {
+    const html = renderMarkdown("`echo $HOME $PATH`\n\n```sh\necho $a $b\n```\n");
+    expect(html).not.toContain("katex");
+    expect(html).toContain("echo $HOME $PATH");
+  });
+
+  it("does not let math commands create links, loads or attributes", () => {
+    const html = renderMarkdown(
+      [
+        "$\\href{javascript:alert(1)}{x}$",
+        "",
+        "$\\url{https://example.com}$",
+        "",
+        "$\\includegraphics{https://example.com/a.png}$",
+        "",
+        "$\\htmlData{onclick=alert(1)}{x}$",
+        "",
+      ].join("\n"),
+    );
+    // 막힌 명령은 `\href` 같은 빨간 본문 텍스트로만 남는다 — 태그 속성으로는 생기지 않는다.
+    expect(html).not.toMatch(/<[^>]*\s(href|src)\s*=/i);
+    expect(tagNames(html)).not.toContain("img");
+    expect(hasEventHandlerAttribute(html)).toBe(false);
+    expect(html).not.toContain("data-onclick");
+  });
+
+  it("shows a broken formula as an error instead of failing the whole document", () => {
+    const html = renderMarkdown("# Title\n\nbad $\\frac{1}{$ formula\n");
+    expect(html).toContain("<h1>Title</h1>");
+    expect(html).toContain("katex-error");
+  });
 });
 
 describe("MtimePoller", () => {
