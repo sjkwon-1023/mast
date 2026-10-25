@@ -12,7 +12,9 @@ import { markdownDraft, keepMarkdownDraft, discardMarkdownDraft, markdownSaved, 
 //    ② 링크는 `href` 자체를 만들지 않으며(대상은 title 로만 보여준다),
 //    ③ 이미지는 placeholder 텍스트로 바꾼다 — 렌더 결과에 원격 로드도 실행
 //    가능한 URL 도 남지 않는다. 판정은 순수 함수 renderMarkdown 이라 vitest 로
-//    잠근다.
+//    잠근다. `$…$`·`$$…$$` 수식은 KaTeX 가 수식 문법을 해석해 자기 HTML 을 만든다 —
+//    파일의 HTML 이 통과하는 길이 아니며, `trust: false` 라 `\href`·`\includegraphics`·
+//    `\html*` 같은 링크·로드·속성 명령은 렌더되지 않는다.
 // 2. UTF-8 마크다운에 한해 원문 편집·저장을 제공한다. 2MiB 를 넘는 파일은
 //    렌더·편집을 거부하고 "open as text" 안내만 준다.
 //    마크다운 렌더는 파일 전체를 문자열로 올려야 해서 textViewer 의 윈도우 전략
@@ -37,6 +39,8 @@ import { markdownDraft, keepMarkdownDraft, discardMarkdownDraft, markdownSaved, 
 // 화면을 되돌린다 (beforeViewerFontSize / setViewerFontSize).
 
 import { Marked } from "marked";
+import markedKatex from "marked-katex-extension";
+import "katex/dist/katex.min.css";
 
 import type { TimerHost } from "../../terminal/ack-batcher";
 import { fsReadChunk, fsStat, fsSaveMarkdown } from "../../../infrastructure/backend";
@@ -82,25 +86,34 @@ function escapeHtml(text: string): string {
 /** raw HTML·링크·이미지를 무해화한 marked 인스턴스 (파일 상단 계약 1).
  *  전역 `marked` 를 설정하지 않고 인스턴스를 따로 둔다 — 전역 설정은 다른
  *  모듈이 marked 를 쓰기 시작하는 순간 조용히 서로를 덮는다. */
-const renderer = new Marked({
-  renderer: {
-    // 블록 html 토큰과 인라인 tag 토큰이 모두 여기로 온다 — 원문을 그대로
-    // 텍스트로 보여준다 (<script> 는 화면에 `<script>` 라고 찍힌다).
-    html({ text }) {
-      return escapeHtml(text);
-    },
-    // href 를 아예 만들지 않는다: 클릭 무동작 계약이기도 하고, marked 는
-    // `javascript:` 같은 스킴을 걸러주지 않으므로 href 를 두면 그 자체가 표면이
-    // 된다. 대상은 title(툴팁)로만 보여준다.
-    link({ href, tokens }) {
-      return `<a class="md-link" title="${escapeHtml(href)}">${this.parser.parseInline(tokens)}</a>`;
-    },
-    // 이미지는 원격·로컬 로드를 하지 않고 placeholder 텍스트로 대체한다.
-    image({ href, text }) {
-      return `<span class="md-image">[image: ${escapeHtml(text.length > 0 ? text : href)}]</span>`;
+const renderer = new Marked(
+  markedKatex({
+    // 표준 규칙은 닫는 `$` 뒤에 공백·문장부호만 허용해 `$n$의` 처럼 조사가 붙은 수식을 놓친다.
+    nonStandard: true,
+    // 잘못된 수식 하나가 문서 전체 렌더를 깨지 않게 그 자리에 오류 표시만 남긴다.
+    throwOnError: false,
+    trust: false,
+  }),
+  {
+    renderer: {
+      // 블록 html 토큰과 인라인 tag 토큰이 모두 여기로 온다 — 원문을 그대로
+      // 텍스트로 보여준다 (<script> 는 화면에 `<script>` 라고 찍힌다).
+      html({ text }) {
+        return escapeHtml(text);
+      },
+      // href 를 아예 만들지 않는다: 클릭 무동작 계약이기도 하고, marked 는
+      // `javascript:` 같은 스킴을 걸러주지 않으므로 href 를 두면 그 자체가 표면이
+      // 된다. 대상은 title(툴팁)로만 보여준다.
+      link({ href, tokens }) {
+        return `<a class="md-link" title="${escapeHtml(href)}">${this.parser.parseInline(tokens)}</a>`;
+      },
+      // 이미지는 원격·로컬 로드를 하지 않고 placeholder 텍스트로 대체한다.
+      image({ href, text }) {
+        return `<span class="md-image">[image: ${escapeHtml(text.length > 0 ? text : href)}]</span>`;
+      },
     },
   },
-});
+);
 
 /** 마크다운 원문 → 렌더된 HTML 문자열 (순수). 결과에는 raw HTML 도, href 를 가진
  *  앵커도, 외부 리소스 참조도 없다 — 그 사실을 features/viewers/markdown/view.test.ts 가 잠근다. */
