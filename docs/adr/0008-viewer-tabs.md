@@ -141,7 +141,10 @@ have no `href`, images are still placeholders.
 - **Version.** `marked-katex-extension` 5.1.13 accepts `katex` below 0.19, so KaTeX is on
   0.18.x until the extension widens its peer range.
 - **Cost.** KaTeX's JS, CSS and fonts load only with the already lazy Markdown viewer chunk,
-  so there is no idle cost. The build carries all three font formats (about 1.07 MB of fonts,
-  plus about 260 KB of JS and 30 KB of CSS); both WebView2 and WKWebView use only the woff2
-  files.
+  so there is no idle cost. KaTeX's CSS lists woff2, woff and ttf for every font, and WebView2
+  and WKWebView only ever fetch the woff2. The `katex-woff2-only` plugin in
+  `apps/mast/vite.config.ts` drops the other two references so they are not bundled, which cuts
+  the fonts from about 1.07 MB to about 256 KB. The JS adds about 260 KB and the CSS about
+  30 KB. If KaTeX changes its `@font-face` format, the plugin fails the build instead of
+  silently bundling all three formats again.
 - **Not field-verified** on Windows or macOS; covered by vitest only.
