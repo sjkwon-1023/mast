@@ -356,6 +356,10 @@ fn warm_wsl(distros: &[Option<String>]) {
     use std::os::windows::process::CommandExt;
     use std::time::Instant;
 
+    // PowerShell 모드에는 예열할 WSL VM 이 없다 — wsl.exe 를 띄우지 않는다 (ADR-0037 결정 6).
+    if crate::host::powershell_mode() {
+        return;
+    }
     // 콘솔 창 억제 — commands.rs 의 wsl.exe 호출과 같은 플래그다.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 

@@ -288,6 +288,41 @@ export function pathBasename(path: string): string {
   return segments.length > 0 ? segments[segments.length - 1] : "/";
 }
 
+/** Windows 경로의 마지막 세그먼트 — `\` 와 `/` 를 모두 구분자로 본다. 드라이브 루트(`C:\`)는
+ *  `C:` 다. PowerShell 모드 전용이다: WSL 의 리눅스 경로에서는 `\` 도 파일 이름의 글자다. */
+export function windowsPathBasename(path: string): string {
+  const segments = path.split(/[\\/]/).filter((s) => s.length > 0);
+  return segments.length > 0 ? segments[segments.length - 1] : path;
+}
+
+/** 현재 폴더로 새 워크스페이스를 만들 때의 `createWorkspace` 인자 (main.ts 글루가 그대로 보낸다).
+ *  `/mnt` 거부는 WSL 파일 시스템 규칙이라 macOS 와 PowerShell 모드에는 적용하지 않는다.
+ *  distro 는 WSL 리눅스 경로에만 붙고, PowerShell 모드 경로는 드라이브 경로라 null 이다.
+ *  PowerShell 모드는 드라이브 경로가 아니면 거부한다: 탭 스폰은 드라이브 경로만 작업 폴더로 넘기므로
+ *  받아들이면 워크스페이스가 조용히 홈에서 열린다 (백엔드 폴더 선택과 같은 규칙·문구). */
+export function currentFolderWorkspace(
+  cwd: string,
+  wslDistro: string | null,
+  host: { mac: boolean; powershell: boolean },
+): { name: string; rootPath: string; distro: string | null } | { error: string } {
+  if (host.powershell && !/^[A-Za-z]:\\/.test(cwd)) {
+    return {
+      error: `PowerShell mode needs a folder on a drive letter; map the network folder to a drive first: ${cwd}`,
+    };
+  }
+  if (!host.mac && !host.powershell && (cwd === "/mnt" || cwd.startsWith("/mnt/"))) {
+    return {
+      error:
+        "cannot create a workspace under /mnt: Windows drives are data-only — cd into the WSL filesystem first",
+    };
+  }
+  return {
+    name: host.powershell ? windowsPathBasename(cwd) : pathBasename(cwd),
+    rootPath: cwd,
+    distro: host.mac || host.powershell ? null : wslDistro,
+  };
+}
+
 /** keydown → 액션. 가로채기 목록에 없는 조합은 전부 null 이고, 그때 글루는
  *  이벤트에 손대지 않는다 (터미널로 그대로 흘려보낸다). */
 export function keyAction(spec: KeySpec, mac = IS_MAC): KeyAction | null {

@@ -34,7 +34,8 @@ it from your desk or your phone. A native Apple Silicon build is available too.
 
 **You need** Windows 11 (x64 or ARM64) with WebView2, which Windows 11 includes, and WSL2 with a
 Linux distribution such as Ubuntu. If WSL is not ready, mast walks you through installing it; the
-built-in browser tab works without WSL.
+built-in browser tab works without WSL. A PC without WSL can use
+[PowerShell mode](#install-on-windows-without-wsl-powershell-mode) instead.
 
 1. **Set up WSL2** if you have not: run `wsl --install` in an administrator PowerShell, restart
    Windows, then open Ubuntu once and create your Linux user.
@@ -66,6 +67,35 @@ mast update
 
 Then quit mast completely and open it again. The sidebar shows your version, and mast tells you
 when a newer release is out; it never installs anything on its own.
+
+## Install on Windows without WSL (PowerShell mode)
+
+A PC without WSL can run mast with its terminal tabs in Windows PowerShell. This mode needs Windows 11
+x64 and nothing else: no WSL and no Linux distribution. Only x64 is checked for it, and this mode has
+not yet been run on a real PC; its device checklist is in [WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md).
+In PowerShell:
+
+```powershell
+$env:MAST_WINDOWS_SHELL='powershell'; irm https://raw.githubusercontent.com/sjkwon-1023/mast/main/scripts/win/install.ps1 | iex
+```
+
+The installer puts `mast.exe` in `%LOCALAPPDATA%\Programs\mast`, installs the hook that reports
+Antigravity CLI status, and sets `"windowsShell": "powershell"` in
+`%AppData%\app.mast.desktop\settings.json`. Quit mast completely and open it again. New terminal tabs
+open Windows PowerShell in your home folder.
+
+**Works:** terminal tabs, splits and workspaces. A tab goes back to its folder after a restart when
+the folder is on a drive letter (`C:\...`). The Antigravity CLI card shows running and idle, and
+`mast update` in a PowerShell tab installs the latest version.
+
+**Does not work:** Claude Code, Codex and OpenCode status; Windows notifications (Antigravity CLI has
+no "waiting for you" signal, so it never notifies in this mode); the **Changes** viewer, the folder
+browser and Ctrl+click on file paths; `mast ls`, `send`, `open`, `diff`, `config` and `layout`;
+auto-resume; cmd tabs. The notepad and the built-in browser tab are still available. The phone remote is
+too, but its use with PowerShell tabs has not been checked on a real PC yet.
+
+Moving an existing WSL install to this mode, or back, has not been tested on a device. Use a fresh
+install for this mode.
 
 ## Install on macOS (Apple Silicon)
 

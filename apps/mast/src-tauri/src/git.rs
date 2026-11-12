@@ -32,6 +32,8 @@ pub(crate) fn distro(distro: Option<String>) -> Option<String> {
 
 #[tauri::command]
 pub async fn git_status(distro: Option<String>, path: String) -> Result<GitStatus, String> {
+    // 코어 Git 은 `wsl.exe` 로 돈다 — PowerShell 모드에서는 띄우지 않고 거부한다.
+    crate::host::require_wsl("Git queries")?;
     // pool 진입 전에 제한해야 빠른 탭 전환이 dispatch 와 공유하는 blocking pool 을
     // 대기 작업으로 채우지 않는다. WSL 기본 배포판은 relay 가 직접 선택한다.
     let slot = GitSlot::acquire()?;
@@ -46,6 +48,7 @@ pub async fn git_status(distro: Option<String>, path: String) -> Result<GitStatu
 
 #[tauri::command]
 pub async fn git_diff(distro: Option<String>, request: GitDiffRequest) -> Result<GitDiff, String> {
+    crate::host::require_wsl("Git queries")?;
     let slot = GitSlot::acquire()?;
     let distro = self::distro(distro);
     tauri::async_runtime::spawn_blocking(move || {

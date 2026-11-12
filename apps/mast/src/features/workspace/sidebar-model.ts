@@ -51,6 +51,7 @@ const STATUS_LABELS: Record<AgentStatus, string> = {
  *  `/srv/a/b/c` → `…/b/c`, `/srv/data` → 원문 유지. */
 export function abbreviatePath(rootPath: string | null): string | null {
   if (rootPath === null) return null;
+  if (/^[A-Za-z]:\\/.test(rootPath)) return abbreviateDrivePath(rootPath);
   const home = rootPath.replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, "~");
   const isHome = home.startsWith("~");
   const rest = isHome ? home.slice(1) : home;
@@ -63,6 +64,21 @@ export function abbreviatePath(rootPath: string | null): string | null {
   }
   if (segs.length <= 2) return rootPath;
   return `…/${segs.slice(-2).join("/")}`;
+}
+
+/** `abbreviatePath` 의 Windows 드라이브 경로판 (PowerShell 모드) — `C:\Users\<user>` 를 `~` 로 치환하고
+ *  같은 규칙을 `\` 로 적용한다. 드라이브 문자는 `/` 의 짝인 루트라 세그먼트에 세지 않는다. */
+function abbreviateDrivePath(path: string): string {
+  const home = path.replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/i, "~");
+  const isHome = home.startsWith("~");
+  const segs = (isHome ? home.slice(1) : path.slice(3)).split(/[\\/]/).filter((s) => s.length > 0);
+  if (isHome) {
+    if (segs.length === 0) return "~";
+    if (segs.length <= 2) return `~\\${segs.join("\\")}`;
+    return `~\\…\\${segs.slice(-2).join("\\")}`;
+  }
+  if (segs.length <= 2) return path;
+  return `…\\${segs.slice(-2).join("\\")}`;
 }
 
 /** lastAgentMessage 1줄 절단 — 첫 줄만 남긴다 (시각적 말줄임은 CSS 몫).

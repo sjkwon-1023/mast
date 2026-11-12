@@ -698,6 +698,21 @@ pub struct UiSettings {
     /// 한 번만 읽으므로 바꾼 뒤에는 앱을 다시 시작해야 한다.
     pub remote: Option<RemoteSettings>,
     pub browser: Option<BrowserSettings>,
+    /// Windows 실행 셸 — `"wsl"`(기본) 또는 `"powershell"`. 부팅 때 한 번만 읽는다.
+    ///
+    /// 타입을 `String` 으로 두지 않는다: 잘못된 타입이 파일 전체의 파싱을 막으면 macOS 가
+    /// 이 키 하나로 시작하지 못한다. 검증은 Windows 빌드에서만 하고 ([`windows_shell_setting`]),
+    /// 그 뒤 값은 `"powershell"` 일 때만 남는다 — 없음·`"wsl"` 은 직렬화에서도 빠져 프론트
+    /// payload 가 기존과 같다.
+    #[serde(rename = "windowsShell", default, skip_serializing_if = "Option::is_none")]
+    pub windows_shell: Option<serde_json::Value>,
+}
+
+impl UiSettings {
+    /// Windows PowerShell 모드인가. 검증을 통과한 값만 보므로 WSL·macOS 에서는 항상 거짓이다.
+    pub fn powershell_mode(&self) -> bool {
+        self.windows_shell.as_ref().and_then(serde_json::Value::as_str) == Some("powershell")
+    }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -761,6 +776,7 @@ pub fn get_ui_settings(app: AppHandle) -> Result<UiSettings, String> {
         enabled: crate::browser::enabled(&app),
         agent_eval: crate::browser::agent_eval(&app),
     });
+    apply_boot_windows_shell(&mut settings, crate::host::powershell_mode());
     Ok(settings)
 }
 
@@ -787,8 +803,9 @@ pub(crate) fn read_ui_settings(app: &AppHandle) -> Result<UiSettings, String> {
 /// `AppHandle` 없이 직접 부른다 (아래 `tests` — Windows CI 에서만 도는 글루라
 /// 파싱 계약은 여기에 잠근다). `path` 는 오류 문구에 쓰는 표시용 경로다.
 fn parse_ui_settings(text: &str, path: &Path) -> Result<UiSettings, String> {
-    let settings: UiSettings = serde_json::from_str(text)
+    let mut settings: UiSettings = serde_json::from_str(text)
         .map_err(|err| format!("cannot parse {}: {err}", path.display()))?;
+    settings.windows_shell = windows_shell_setting(settings.windows_shell.take(), path)?;
     if let Some(shell) = &settings.shell {
         if shell.trim().is_empty() || shell.contains('\0') {
             return Err(format!("shell in {} must not be blank or contain NUL", path.display()));
@@ -837,6 +854,41 @@ fn parse_ui_settings(text: &str, path: &Path) -> Result<UiSettings, String> {
         }
     }
     Ok(settings)
+}
+
+/// `windowsShell` 원본 값 → 정규화된 값. Windows 에서는 `"powershell"` 만 남기고 `"wsl"`·없음·`null`
+/// 은 `None` 으로 바꾼다. 그 밖의 값과 타입은 사유와 함께 파일 전체를 실패시킨다 (fontSize 와 같은
+/// loud-fail 규율). 다른 플랫폼은 키를 읽지 않은 것과 같이 지운다.
+#[cfg(windows)]
+fn windows_shell_setting(
+    raw: Option<serde_json::Value>,
+    path: &Path,
+) -> Result<Option<serde_json::Value>, String> {
+    match raw {
+        None => Ok(None),
+        Some(value) => match value.as_str() {
+            Some("wsl") => Ok(None),
+            Some("powershell") => Ok(Some(value)),
+            _ => Err(format!(
+                "windowsShell in {} must be \"wsl\" or \"powershell\", got {value}",
+                path.display()
+            )),
+        },
+    }
+}
+
+#[cfg(not(windows))]
+fn windows_shell_setting(
+    _raw: Option<serde_json::Value>,
+    _path: &Path,
+) -> Result<Option<serde_json::Value>, String> {
+    Ok(None)
+}
+
+/// 프론트로 보내는 `windowsShell` 은 부팅 때 정한 모드를 따른다. 화면을 리로드할 때 다시 읽은 파일 값을
+/// 보내면 탭은 옛 모드로 떠 있는데 화면만 새 모드로 그려져 어긋난다 (`browser` 가 부팅 때 만든 상태를 보내는 규율과 같다).
+fn apply_boot_windows_shell(settings: &mut UiSettings, boot_powershell: bool) {
+    settings.windows_shell = boot_powershell.then(|| serde_json::Value::from("powershell"));
 }
 
 /// 프론트엔드가 런타임 로그 파일에 한 줄 남긴다 — 로그가 켜져 있을 때만이고,
@@ -1068,7 +1120,8 @@ fn shell_execute(url: &str) -> Result<(), String> {
 
 #[derive(serde::Serialize)]
 pub struct PickedFolder {
-    /// 워크스페이스 `rootPath` 로 그대로 쓰는 리눅스 절대 경로.
+    /// 워크스페이스 `rootPath` 로 그대로 쓰는 리눅스 절대 경로. PowerShell 모드에서는 고른
+    /// Windows 경로를 그대로 담는다 (필드 이름은 프론트 계약이라 바꾸지 않는다).
     pub linux_path: String,
     /// `\\wsl.localhost\<distro>\...` 를 골랐을 때의 배포판 이름. 드라이브 경로
     /// (`C:\...` → `/mnt/c/...`)는 배포판을 알 수 없어 None 이고, 그때는 기존
@@ -1104,6 +1157,9 @@ pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
     let path = picked
         .to_str()
         .ok_or_else(|| format!("selected path is not valid UTF-8: {}", picked.display()))?;
+    if crate::host::powershell_mode() {
+        return powershell_picked_folder(path).map(Some);
+    }
     let (distro, linux_path) = wslpath::from_windows_path(path)?;
     // Windows 드라이브 픽(UNC 가 아닌 경로 → distro None → /mnt/<d>/...)은 워크
     // 스페이스 루트가 될 수 없다 (코어 CreateWorkspace 도 /mnt 를 거부하지만, 여기서
@@ -1129,6 +1185,34 @@ pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
 #[tauri::command]
 pub async fn pick_workspace_folder() -> Result<Option<PickedFolder>, String> {
     Err("folder picker is Windows-only".to_owned())
+}
+
+/// PowerShell 모드의 폴더 선택 결과 — 고른 Windows 경로를 WSL 경로로 바꾸지 않고 그대로 쓴다 (ADR-0037 결정 5).
+/// 드라이브 루트도 워크스페이스가 될 수 있다: WSL 쪽의 `/mnt` 거부는 이 모드에 없다.
+/// 드라이브 문자가 없는 경로(UNC `\\server\share` 등)는 거부한다: 탭 스폰은 드라이브 경로만
+/// 작업 폴더로 넘기므로, 받아들이면 그 워크스페이스의 셸이 조용히 홈에서 열린다.
+#[cfg(windows)]
+fn powershell_picked_folder(path: &str) -> Result<PickedFolder, String> {
+    if !crate::host::is_drive_path(path) {
+        return Err(format!(
+            "PowerShell mode needs a folder on a drive letter; map the network folder to a drive first: {path}"
+        ));
+    }
+    Ok(PickedFolder {
+        linux_path: path.to_owned(),
+        distro: None,
+        name: windows_folder_name(path),
+    })
+}
+
+/// Windows 경로의 마지막 세그먼트 — `\` 와 `/` 를 모두 구분자로 본다. 드라이브 루트(`C:\`)는 `C:` 다.
+/// [`folder_name`] 은 WSL·macOS 가 함께 쓰므로 바꾸지 않고, 백슬래시를 아는 것은 이 함수뿐이다.
+#[cfg(windows)]
+fn windows_folder_name(path: &str) -> String {
+    path.rsplit(['\\', '/'])
+        .find(|component| !component.is_empty())
+        .unwrap_or(path)
+        .to_owned()
 }
 
 /// 리눅스 경로의 마지막 세그먼트 (빈 세그먼트는 건너뛴다) — 코어의 탭 제목
@@ -1378,6 +1462,7 @@ fn read_chunk(
 /// 해석·같은 UNC 조립을 두 벌 두지 않기 위해서다.
 #[cfg(windows)]
 pub(crate) fn host_path(distro: Option<String>, path: &str) -> Result<PathBuf, String> {
+    crate::host::require_wsl("WSL file paths")?;
     let distro = resolve_distro(distro)?;
     Ok(PathBuf::from(wslpath::to_unc(&distro, path)?))
 }
@@ -1425,6 +1510,7 @@ fn query_default_distro() -> Result<String, String> {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
+    crate::host::require_wsl("the WSL default distribution lookup")?;
     let output = std::process::Command::new("wsl.exe")
         .args(["-l", "-q"])
         // 릴리스 빌드는 windows_subsystem="windows" 라 콘솔이 없다 — 이 플래그가
@@ -1548,6 +1634,88 @@ mod tests {
         assert_eq!(future.show_tab_ids, None);
         assert!(parse_ui_settings(r#"{"fontSize": 200}"#, path()).is_err());
         assert!(parse_ui_settings(r#"{"remote": {"port": 80}}"#, path()).is_err());
+    }
+
+    #[test]
+    fn windows_shell_absent_null_or_wsl_keeps_the_wsl_mode_and_its_output() {
+        for text in ["{}", r#"{"windowsShell": null}"#, r#"{"windowsShell": "wsl"}"#] {
+            let settings = parse_ui_settings(text, path()).unwrap();
+            assert!(!settings.powershell_mode(), "{text}");
+            // 직렬화(프론트 payload)에도 키가 나타나지 않아야 WSL 사용자의 출력이 그대로다.
+            let serialized = serde_json::to_value(settings).unwrap();
+            assert!(serialized.get("windowsShell").is_none(), "{text}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_shell_powershell_is_read_and_sent_to_the_frontend() {
+        let settings = parse_ui_settings(r#"{"windowsShell": "powershell"}"#, path()).unwrap();
+        assert!(settings.powershell_mode());
+        let serialized = serde_json::to_value(settings).unwrap();
+        assert_eq!(serialized["windowsShell"], "powershell");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_shell_rejects_other_values_and_types_instead_of_falling_back() {
+        for text in [
+            r#"{"windowsShell": "PowerShell"}"#,
+            r#"{"windowsShell": "cmd"}"#,
+            r#"{"windowsShell": ""}"#,
+            r#"{"windowsShell": 1}"#,
+            r#"{"windowsShell": true}"#,
+            r#"{"windowsShell": ["powershell"]}"#,
+        ] {
+            let err = parse_ui_settings(text, path()).unwrap_err();
+            assert!(err.contains("windowsShell"), "{text} → {err}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_macos_shell_path_does_not_block_the_windows_powershell_mode() {
+        // `shell` 은 macOS 로그인 셸 경로다. 같은 파일에 있어도 Windows 시작을 막지 않는다.
+        let settings = parse_ui_settings(
+            r#"{"shell": "/bin/zsh", "windowsShell": "powershell"}"#,
+            path(),
+        )
+        .unwrap();
+        assert!(settings.powershell_mode());
+        assert_eq!(settings.shell.as_deref(), Some("/bin/zsh"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn windows_shell_is_not_read_off_windows() {
+        // macOS 빌드는 이 키를 읽지도 검증하지도 않는다 — 어떤 값이어도 시작을 막지 않고 모드는 꺼진다.
+        for text in [
+            r#"{"windowsShell": "powershell"}"#,
+            r#"{"windowsShell": 1}"#,
+            r#"{"windowsShell": "nonsense"}"#,
+        ] {
+            let settings = parse_ui_settings(text, path()).unwrap();
+            assert!(!settings.powershell_mode(), "{text}");
+            assert!(serde_json::to_value(settings).unwrap().get("windowsShell").is_none());
+        }
+    }
+
+    /// 화면 리로드가 다시 읽은 파일 값으로 모드를 바꾸지 않는다: 부팅은 WSL 인데 파일이 powershell 이면 키가 없고,
+    /// 부팅은 PowerShell 인데 파일이 없으면 powershell 이 간다.
+    #[test]
+    fn frontend_windows_shell_follows_the_boot_mode_not_the_reloaded_file() {
+        let mut file_edited_to_powershell = UiSettings {
+            windows_shell: Some(serde_json::Value::from("powershell")),
+            ..UiSettings::default()
+        };
+        apply_boot_windows_shell(&mut file_edited_to_powershell, false);
+        let serialized = serde_json::to_value(file_edited_to_powershell).unwrap();
+        assert!(serialized.get("windowsShell").is_none());
+
+        let mut file_without_key = UiSettings::default();
+        apply_boot_windows_shell(&mut file_without_key, true);
+        let serialized = serde_json::to_value(file_without_key).unwrap();
+        assert_eq!(serialized["windowsShell"], "powershell");
     }
 
     #[test]
@@ -1909,6 +2077,48 @@ mod tests {
         assert!(!json.contains("secret workspace body"));
         assert!(!json.contains("secret global body"));
         assert!(!json.contains("noteStorage"));
+    }
+
+    /// PowerShell 모드의 폴더 선택은 Windows 경로를 WSL 로 바꾸지 않고, 배포판을 비운다 (ADR-0037 결정 5).
+    #[cfg(windows)]
+    #[test]
+    fn powershell_picked_folder_keeps_the_windows_path_without_a_distro() {
+        let folder = powershell_picked_folder(r"C:\Users\me\proj").unwrap();
+        assert_eq!(folder.linux_path, r"C:\Users\me\proj");
+        assert_eq!(folder.distro, None);
+        assert_eq!(folder.name, "proj");
+        // 드라이브 루트도 워크스페이스가 될 수 있다 (WSL 의 /mnt 거부는 이 모드에 없다).
+        let root = powershell_picked_folder(r"D:\").unwrap();
+        assert_eq!(root.linux_path, r"D:\");
+        assert_eq!(root.name, "D:");
+    }
+
+    /// 드라이브 문자가 없는 폴더(UNC 등)는 워크스페이스로 받지 않고 영어 오류로 거부한다 — 스폰이 드라이브 경로만 넘기기 때문이다.
+    #[cfg(windows)]
+    #[test]
+    fn powershell_picked_folder_refuses_a_folder_without_a_drive_letter() {
+        for path in [r"\\server\share\proj", r"C:proj", r"\proj"] {
+            let Err(err) = powershell_picked_folder(path) else {
+                panic!("accepted a folder without a drive letter: {path}");
+            };
+            assert!(
+                err.starts_with("PowerShell mode needs a folder on a drive letter"),
+                "{err}"
+            );
+            assert!(err.ends_with(path), "{err}");
+        }
+        assert!(powershell_picked_folder(r"z:\lower").is_ok());
+    }
+
+    /// 워크스페이스 이름은 `\` 와 `/` 가 섞인 Windows 경로의 마지막 세그먼트다.
+    #[cfg(windows)]
+    #[test]
+    fn windows_folder_name_splits_on_backslashes_and_keeps_drive_roots() {
+        assert_eq!(windows_folder_name(r"C:\Users\me\proj"), "proj");
+        assert_eq!(windows_folder_name(r"C:\Users\me\proj\"), "proj");
+        assert_eq!(windows_folder_name(r"C:\"), "C:");
+        assert_eq!(windows_folder_name(r"\\server\share\proj"), "proj");
+        assert_eq!(windows_folder_name("C:/mixed/dir"), "dir");
     }
 }
 

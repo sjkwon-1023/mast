@@ -59,6 +59,9 @@ jobs:
       - name: Remote crate tests
         run: cargo test -p mast-remote
 
+      - name: Agy hook tests
+        run: cargo test -p mast-agy-hook
+
       # test_shells.py 의 WSL 사례는 zsh 가 없으면 skip 이 아니라 실패한다. 이 설치 단계를 빼거나
       # 실패를 무시하게 바꾸지 않는다.
       - name: Install zsh (shell PTY tests)
@@ -158,6 +161,12 @@ jobs:
       - name: Provision tests (x64 Windows, native)
         run: cargo test -p mast-app --target x86_64-pc-windows-msvc provision::tests
 
+      - name: WSL health tests (x64 Windows, native)
+        run: "cargo test -p mast-app --target x86_64-pc-windows-msvc wsl_health::"
+
+      - name: Agy hook tests (x64 Windows, native)
+        run: cargo test -p mast-agy-hook --target x86_64-pc-windows-msvc
+
       - name: Install script tests (Windows PowerShell 5.1)
         run: python -m unittest discover -s scripts/win/tests -v
 
@@ -178,8 +187,10 @@ jobs:
         include:
           - target: x86_64-pc-windows-msvc
             asset_name: mast-x64.exe
+            hook_asset_name: mast-agy-hook-x64.exe
           - target: aarch64-pc-windows-msvc
             asset_name: mast-arm64.exe
+            hook_asset_name: mast-agy-hook-arm64.exe
     steps:
       - uses: actions/checkout@v5
 
@@ -203,6 +214,12 @@ jobs:
           npm ci
           npm run tauri build -- --target ${{ matrix.target }} --no-bundle
 
+      # VC++ 재배포 패키지가 없는 PC 에서 훅이 뜨지 않으므로 VC 런타임을 exe 에 정적으로 묶는다 (앱 빌드는 tauri 가 이미 묶는다).
+      - name: Build mast-agy-hook (release)
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --release -p mast-agy-hook --target ${{ matrix.target }}
+
       # 이 레포의 Rust 테스트 중 `mast-app`(글루)의 것은 Windows 타깃에서만 컴파일된다
       # — ubuntu 의 gates job 은 `mast-core`/`mast-remote` 만 돌린다. 그래서 래퍼 argv 계약 테스트가
       # 시작 표식 도입(d21d9a8) 이후 조용히 낡아 있었다. x64 레그에서만 실행한다
@@ -218,18 +235,28 @@ jobs:
           path: target/${{ matrix.target }}/release/mast-app.exe
           if-no-files-found: error
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mast-agy-hook-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/mast-agy-hook.exe
+          if-no-files-found: error
+
       # 태그 트리거 전용: Release 에 올릴 타깃별 명확한 이름의 복사본.
       # workflow_dispatch 실행은 위 artifact 업로드(원본 파일명)만 하고 여기서 끝난다.
-      - name: Copy release asset
+      - name: Copy release assets
         if: startsWith(github.ref, 'refs/tags/v')
-        run: cp target/${{ matrix.target }}/release/mast-app.exe target/${{ matrix.target }}/release/${{ matrix.asset_name }}
+        run: |
+          cp target/${{ matrix.target }}/release/mast-app.exe target/${{ matrix.target }}/release/${{ matrix.asset_name }}
+          cp target/${{ matrix.target }}/release/mast-agy-hook.exe target/${{ matrix.target }}/release/${{ matrix.hook_asset_name }}
 
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: target/${{ matrix.target }}/release/${{ matrix.asset_name }}
+          files: |
+            target/${{ matrix.target }}/release/${{ matrix.asset_name }}
+            target/${{ matrix.target }}/release/${{ matrix.hook_asset_name }}
 
   macos-artifacts:
     # windows-artifacts 와 같은 트리거·권한. 서명·공증 없이 올리므로 브라우저로 받은 zip 은

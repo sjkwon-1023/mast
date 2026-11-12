@@ -399,6 +399,10 @@ impl Default for ShellSpawnReq {
 /// PTY 부수효과 포트. 실제 구현은 앱 글루(`SessionManager` 래핑), 테스트는 fake.
 pub trait SessionHost: Send {
     fn browser_enabled(&self) -> bool { true }
+    /// Windows PowerShell 모드인가. 참이면 OSC 7 cwd 를 드라이브 경로(`C:\...`)로 저장해
+    /// 재시작 스폰이 그 값을 그대로 넘기게 한다 ([`crate::wslpath::to_windows_drive_path`]).
+    /// 기본은 거짓이라 WSL·macOS·테스트 호스트의 동작은 그대로다.
+    fn powershell_mode(&self) -> bool { false }
     /// 셸 세션을 스폰하고 휘발성 세션 id 를 돌려준다.
     fn spawn_shell(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId>;
 
