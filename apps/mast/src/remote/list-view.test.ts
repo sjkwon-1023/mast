@@ -51,6 +51,19 @@ function viewerTab(id: number, title: string, agentStatus: AgentStatus = "idle")
   };
 }
 
+function imageTab(id: number, title: string): Tab {
+  const kind: TabKind = { type: "imageViewer", path: "/tmp/shot.png" };
+  return {
+    id,
+    title,
+    kind,
+    notification: "none",
+    lastActivityMs: null,
+    agentStatus: "idle",
+    lastAgentMessage: null,
+  };
+}
+
 function ws(
   id: number,
   opts: {
@@ -232,6 +245,22 @@ describe("ListView needsInput dot", () => {
     const row = view.root.querySelector<HTMLElement>(".tab");
     row?.click();
     expect(opened).toEqual([{ tab: 10, title: "first" }]);
+  });
+});
+
+describe("ListView image tab", () => {
+  it("이미지 탭은 image 로 표시되는 정적 행이다", () => {
+    const { view, opened } = mount();
+    view.render(snapshot(1, [ws(1, { tabs: [terminalTab(10, "term"), imageTab(11, "shot")] })]));
+
+    const rows = [...view.root.querySelectorAll<HTMLElement>(".tab")];
+    const row = rows.find((el) => el.querySelector(".tab-title")?.textContent === "shot");
+    expect(row?.tagName).toBe("DIV");
+    expect(row?.classList.contains("tab-static")).toBe(true);
+    expect(row?.querySelector(".tab-detail")?.textContent).toBe("image");
+
+    row?.click();
+    expect(opened).toEqual([]);
   });
 });
 

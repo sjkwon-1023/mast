@@ -284,6 +284,7 @@ fn viewer_kind(viewer: &ViewerSpec) -> &'static str {
         ViewerSpec::ChangesViewer { .. } => "changesViewer",
         ViewerSpec::TextViewer { .. } => "textViewer",
         ViewerSpec::MarkdownViewer { .. } => "markdownViewer",
+        ViewerSpec::ImageViewer { .. } => "imageViewer",
     }
 }
 
@@ -292,7 +293,8 @@ fn viewer_path(viewer: &ViewerSpec) -> &str {
         ViewerSpec::FolderBrowser { path }
         | ViewerSpec::ChangesViewer { path }
         | ViewerSpec::TextViewer { path }
-        | ViewerSpec::MarkdownViewer { path } => path.as_str(),
+        | ViewerSpec::MarkdownViewer { path }
+        | ViewerSpec::ImageViewer { path } => path.as_str(),
     }
 }
 
@@ -839,6 +841,15 @@ mod tests {
     }
 
     #[test]
+    fn image_viewer_specs_carry_their_kind_and_path() {
+        let viewer = ViewerSpec::ImageViewer {
+            path: "/shots/a.png".into(),
+        };
+        assert_eq!(viewer_kind(&viewer), "imageViewer");
+        assert_eq!(viewer_path(&viewer), "/shots/a.png");
+    }
+
+    #[test]
     fn a_pane_of_another_workspace_is_unknown_target_and_mutates_nothing() {
         let mut fx = fixture(Some("/work"));
         let src = source(&fx);
@@ -994,11 +1005,13 @@ mod tests {
             let root = std::env::temp_dir()
                 .join(format!("mast-presentation-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
-            for dir in ["work/docs", "repo/.git", "repo/src", "plain"] {
+            for dir in ["work/docs", "work/shots", "repo/.git", "repo/src", "plain"] {
                 std::fs::create_dir_all(root.join(dir)).unwrap();
             }
             std::fs::write(root.join("work/docs/a.md"), "# a").unwrap();
             std::fs::write(root.join("work/docs/b.txt"), "b").unwrap();
+            std::fs::write(root.join("work/shots/a.png"), b"\x89PNG").unwrap();
+            std::fs::write(root.join("work/shots/a.svg"), "<svg/>").unwrap();
             std::fs::write(root.join("repo/src/main.ts"), "export {};").unwrap();
             std::fs::write(root.join("plain/x.txt"), "x").unwrap();
             Self(root)
@@ -1079,6 +1092,19 @@ mod tests {
             opened("/work/docs/b.txt"),
             Ok(ViewerSpec::TextViewer {
                 path: "/work/docs/b.txt".into()
+            })
+        );
+        assert_eq!(
+            opened("/work/shots/a.png"),
+            Ok(ViewerSpec::ImageViewer {
+                path: "/work/shots/a.png".into()
+            })
+        );
+        // SVG 는 이미지가 아니다 — 텍스트 뷰어로 남는다.
+        assert_eq!(
+            opened("/work/shots/a.svg"),
+            Ok(ViewerSpec::TextViewer {
+                path: "/work/shots/a.svg".into()
             })
         );
         assert_eq!(

@@ -47,5 +47,10 @@
   { "type": "moveWorkspace", "workspace": 1, "before": 2 },
   { "type": "moveWorkspace", "workspace": 1, "before": null },
   { "type": "moveTab", "tab": 3, "pane": 2, "before": 4 },
-  { "type": "moveTab", "tab": 3, "pane": 2, "before": null }
+  { "type": "moveTab", "tab": 3, "pane": 2, "before": null },
+  {
+    "type": "createTab",
+    "pane": 2,
+    "tab": { "type": "imageViewer", "path": "/home/dev/code/mast/shots/a.png" }
+  }
 ]

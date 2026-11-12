@@ -452,9 +452,9 @@ pub struct Tab {
 ///
 /// 뷰어의 스크롤 위치는 종류마다 단위가 다르다 — textViewer 는 **최상단 가시
 /// 행의 전역 byte offset**(파일이 커도 창 이동과 무관하게 같은 지점을 가리키게
-/// 하는 값), markdownViewer 는 **렌더된 픽셀 offset** 이다. folderBrowser 는
-/// 스크롤 위치를 기억하지 않아 필드 자체가 없다 (`SetViewerScroll` 대상이 되면
-/// `KindMismatch`).
+/// 하는 값), markdownViewer 는 **렌더된 픽셀 offset** 이다. folderBrowser 와
+/// imageViewer 는 스크롤 위치를 기억하지 않아 필드 자체가 없다 (`SetViewerScroll`
+/// 대상이 되면 `KindMismatch`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -486,6 +486,11 @@ pub enum TabKind {
         path: String,
         /// 렌더된 픽셀 offset (enum rustdoc 참조).
         scroll_top: f64,
+    },
+    /// 이미지 뷰어 탭. 경로만 저장한다 — 바이트·Blob URL·맞춤 여부·스크롤은
+    /// 뷰가 마운트된 동안의 임시 상태다.
+    ImageViewer {
+        path: String,
     },
 }
 

@@ -14,7 +14,28 @@
     { "type": "folderBrowser", "path": "/home/dev/code/mast/src" },
     { "type": "changesViewer", "path": "/home/dev/code/mast" },
     { "type": "textViewer", "path": "/home/dev/code/mast/notes.txt" },
-    { "type": "markdownViewer", "path": "/home/dev/code/mast/README.md" }
+    { "type": "markdownViewer", "path": "/home/dev/code/mast/README.md" },
+    { "type": "imageViewer", "path": "/home/dev/code/mast/shots/a.png" }
+  ],
+  "imageBranch": [
+    { "kind": "file", "path": "/a.png", "open": "imageViewer", "folder": "imageViewer" },
+    { "kind": "file", "path": "/a.PNG", "open": "imageViewer", "folder": "imageViewer" },
+    { "kind": "file", "path": "/a.JpEg", "open": "imageViewer", "folder": "imageViewer" },
+    { "kind": "file", "path": "/a.jpg", "open": "imageViewer", "folder": "imageViewer" },
+    { "kind": "file", "path": "/a.gif", "open": "imageViewer", "folder": "imageViewer" },
+    { "kind": "file", "path": "/a.bmp", "open": "imageViewer", "folder": "imageViewer" },
+    { "kind": "file", "path": "/.hidden.webp", "open": "imageViewer", "folder": "imageViewer" },
+    { "kind": "file", "path": "/.png", "open": "textViewer", "folder": "textViewer" },
+    { "kind": "file", "path": "/x.png.txt", "open": "textViewer", "folder": "textViewer" },
+    { "kind": "file", "path": "/dir.png/noext", "open": "textViewer", "folder": "textViewer" },
+    { "kind": "file", "path": "/noext", "open": "textViewer", "folder": "textViewer" },
+    { "kind": "file", "path": "/a.svg", "open": "textViewer", "folder": "textViewer" },
+    { "kind": "file", "path": "/a.SVG", "open": "textViewer", "folder": "textViewer" },
+    { "kind": "file", "path": "/a.avif", "open": "textViewer", "folder": "textViewer" },
+    { "kind": "file", "path": "/a.ico", "open": "textViewer", "folder": "textViewer" },
+    { "kind": "file", "path": "/notes.md", "open": "markdownViewer", "folder": "markdownViewer" },
+    { "kind": "file", "path": "/notes.markdown", "open": "textViewer", "folder": "markdownViewer" },
+    { "kind": "directory", "path": "/dir.png", "open": "folderBrowser" }
   ],
   "viewerPresented": {
     "type": "viewerPresented",
@@ -64,7 +85,8 @@
         "id": 9,
         "activeTab": 16,
         "tabs": [
-          { "id": 16, "kind": "markdownViewer", "title": "README.md", "path": "/home/dev/code/mast/README.md", "url": null }
+          { "id": 16, "kind": "markdownViewer", "title": "README.md", "path": "/home/dev/code/mast/README.md", "url": null },
+          { "id": 17, "kind": "imageViewer", "title": "a.png", "path": "/home/dev/code/mast/shots/a.png", "url": null }
         ]
       }
     ]

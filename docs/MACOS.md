@@ -461,6 +461,14 @@ treating these features as field-verified:
   `--pane`, `--split right|down`, a path with spaces, and a relative path that
   contains `..`. Check the exit codes (0, 1, 2) against ADR-0035.
 
+- Open images with `mast open` and ⌘+click: PNG with transparency, JPEG, animated GIF, WebP and
+  BMP must render in WKWebView, `.svg` must open as text, and a file over 64 MiB, an empty file or
+  a `.png`-named non-image must show the in-tab error while the tab stays open. Check fit and
+  original toggling, scrolling a large image, the fit reset after restart and `mast layout`
+  reporting `imageViewer`.
+- macOS has no WebView memory monitor, so a very large image is not reset the way it can be on
+  Windows. Open one and record what happens.
+
 Do not record any of these manual checks as complete until they have actually
 been run.
 

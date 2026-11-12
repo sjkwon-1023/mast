@@ -188,6 +188,15 @@ impl Dispatcher {
                     },
                 })
             }
+            NewTab::ImageViewer { path } => {
+                // 뷰어와 같은 경로 검증·basename 제목을 쓴다. 파일을 읽지 않고
+                // PTY 도 만들지 않는다.
+                validate_viewer_path(&path)?;
+                Ok(PreparedTab::Viewer {
+                    title: path_title(&path),
+                    kind: TabKind::ImageViewer { path },
+                })
+            }
         }
     }
 

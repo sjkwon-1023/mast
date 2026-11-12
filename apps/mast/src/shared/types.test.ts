@@ -82,6 +82,8 @@ function tabKindLabel(kind: TabKind): string {
       return `markdownViewer:${kind.scrollTop}`;
     case "changesViewer":
       return `changesViewer:${kind.path}`;
+    case "imageViewer":
+      return `imageViewer:${kind.path}`;
     default:
       return assertNever(kind);
   }
@@ -108,18 +110,22 @@ function newTabTag(spec: NewTab): string {
     case "changesViewer":
       expect(spec.path === null || typeof spec.path === "string").toBe(true);
       return spec.type;
+    case "imageViewer":
+      expect(typeof spec.path).toBe("string");
+      return spec.type;
     default:
       return assertNever(spec);
   }
 }
 
-/** ViewerSpec 전 variant 를 narrowing 으로 통과시키며 태그를 돌려준다 (뷰어 4종뿐). */
+/** ViewerSpec 전 variant 를 narrowing 으로 통과시키며 태그를 돌려준다 (뷰어 5종뿐). */
 function viewerSpecTag(spec: ViewerSpec): string {
   switch (spec.type) {
     case "folderBrowser":
     case "changesViewer":
     case "textViewer":
     case "markdownViewer":
+    case "imageViewer":
       expect(typeof spec.path).toBe("string");
       return spec.type;
     default:
@@ -319,7 +325,7 @@ describe("stage10-snapshot.json", () => {
     expect(snapshotFixture.revision).toBe(6);
     expect(snapshotFixture.state.revision).toBe(6);
     expect(snapshotFixture.state.activeWorkspace).toBe(1);
-    expect(snapshotFixture.state.nextId).toBe(16);
+    expect(snapshotFixture.state.nextId).toBe(18);
     expect(snapshotFixture.state.workspaces).toHaveLength(2);
   });
 
@@ -361,7 +367,7 @@ describe("stage10-snapshot.json", () => {
     expect(tab6.lastActivityMs).toBeNull();
   });
 
-  it("narrows viewer tabs (folderBrowser/textViewer/markdownViewer)", () => {
+  it("narrows viewer tabs (folderBrowser/textViewer/markdownViewer/imageViewer)", () => {
     const ws1 = snapshotFixture.state.workspaces[0];
     const labels = Object.values(ws1.panes)
       .flatMap((p) => p.tabs)
@@ -369,6 +375,7 @@ describe("stage10-snapshot.json", () => {
     expect(labels).toContain("markdownViewer:120.5");
     expect(labels).toContain("folderBrowser:/home/dev/code/mast/src");
     expect(labels).toContain("textViewer:0");
+    expect(labels).toContain("imageViewer:/home/dev/code/mast/shots/a.png");
     const tab5 = ws1.panes["2"].tabs[1];
     expect(tab5.notification).toBe("unread");
 
@@ -451,9 +458,9 @@ describe("changes-viewer.json", () => {
 describe("stage10-commands.json", () => {
   it("covers every Command variant with internal tag narrowing", () => {
     const tags = commandsFixture.map(commandTag);
-    // 뒤쪽 createTab 3개는 뷰어 NewTab 3종을 실은 형태(21단계)이고, 그 뒤
-    // createWorkspace 는 tab 필드 누락 하위호환 형태다 (계획 13-D1). 새 variant
-    // 는 **뒤에 덧붙인다** — 앞에 끼우면 아래 인덱스 단언이 전부 밀린다.
+    // 뒤쪽 createTab 4개는 뷰어 NewTab 4종을 실은 형태(21단계 + 이미지 뷰어)이고,
+    // 그 뒤 createWorkspace 는 tab 필드 누락 하위호환 형태다 (계획 13-D1). 새
+    // variant 는 **뒤에 덧붙인다** — 앞에 끼우면 아래 인덱스 단언이 전부 밀린다.
     expect(tags).toEqual([
       "createWorkspace",
       "switchWorkspace",
@@ -476,6 +483,7 @@ describe("stage10-commands.json", () => {
       "moveWorkspace",
       "moveTab",
       "moveTab",
+      "createTab",
     ]);
   });
 
@@ -559,6 +567,14 @@ describe("stage10-commands.json", () => {
       type: "markdownViewer",
       path: "/home/dev/code/mast/README.md",
     });
+
+    // imageViewer NewTab — 21단계 뷰어 4종의 마지막, path 필수.
+    const imageTab = commandsFixture[21];
+    if (imageTab.type !== "createTab") throw new Error("22nd must be createTab");
+    expect(imageTab.tab).toEqual({
+      type: "imageViewer",
+      path: "/home/dev/code/mast/shots/a.png",
+    });
   });
 });
 
@@ -628,6 +644,7 @@ describe("agent-file-open.json", () => {
       "changesViewer",
       "textViewer",
       "markdownViewer",
+      "imageViewer",
     ]);
   });
 
@@ -649,6 +666,7 @@ describe("agent-file-open.json", () => {
       "browser",
       "textViewer",
       "markdownViewer",
+      "imageViewer",
     ]);
     expect(layout.panes[1].tabs[0]).toEqual({
       id: 5,

@@ -148,3 +148,49 @@ have no `href`, images are still placeholders.
   30 KB. If KaTeX changes its `@font-face` format, the plugin fails the build instead of
   silently bundling all three formats again.
 - **Not field-verified** on Windows or macOS; covered by vitest only.
+
+## Amendment (2026-11-12): Image viewer tab
+
+A read-only image viewer joins the viewer tabs. It shows agent-produced screenshots and
+figures without a thumbnail grid, zoom library or inline terminal images. An image tab that is
+not displayed is only its model entry: no file is read and no viewer code is loaded.
+
+- **New tab kind `imageViewer` stores only `path`.** Rust `TabKind`/`NewTab`/`ViewerSpec` and the
+  TypeScript mirror share `{ "type": "imageViewer", "path": "/absolute/path/a.png" }`. Bytes,
+  Blob URLs, fit mode, scroll and errors are not persisted, and creating the tab reads no file and
+  starts no PTY. The state file version stays 1 and `persist.rs::is_known_tab_kind` accepts the
+  kind, so an older app removes this tab only and keeps the rest, per ADR-0021.
+  `SetViewerScroll` still targets text and Markdown tabs; sending it to an image tab is
+  `kindMismatch`.
+- **Formats and branching.** `png jpg jpeg gif webp bmp`, the basename's last extension, ASCII
+  case-insensitive. SVG is not supported and opens as text. The branch lives in two places,
+  `open_viewer` in Rust and `viewerTabForPath` in TypeScript, and the single `imageBranch` table in
+  `fixtures/agent-file-open.json` keeps them equal. The existing `.markdown` difference is
+  unchanged.
+- **Reading.** `fs_stat` first, then `fs_read_chunk` in 4 MiB chunks to EOF. The file cap is
+  64 MiB (67,108,864 bytes; equal is allowed) and there is no pixel limit. A directory, a failed
+  `fs_stat` and a size over the cap fail before any chunk is read, and a file that grows past the
+  cap during the read is refused too. No new IPC, dependency, cache, timer or file watcher.
+  Leaving the tab and returning reads the file again.
+- **Display.** One `<img>` with a Blob URL. The MIME comes from the extension table, and
+  `image/svg+xml` is never given. There is no byte-signature check: the WebView decoder decides
+  whether the bytes are an image, and a failure shows `Cannot decode image`.
+- **Fit is the default.** A button wrapping the image toggles between fit and original, and the
+  original size scrolls. The mode is not persisted. The image is centred by its auto margins
+  rather than by flex alignment, so an image larger than the pane in original mode starts at the
+  top-left and the rest is reached by scrolling.
+- **Lifetime follows decision 5.** Only each pane's active viewer tab in the active workspace is
+  mounted. Release revokes the Blob URL, and late read or load results are discarded. The viewer
+  module is a dynamic import loaded on first display.
+- **Visible kinds.** `mast open`, terminal links, `mast ls` and `mast layout` report
+  `imageViewer`; the phone list shows `image` as a non-clickable row. `mast --help` does not
+  describe per-kind branching, so it is unchanged, and the bundled skill is reinstalled on every
+  app start, so `SETUP_VERSION` was not raised.
+- **Accepted limits.** 64 MiB is a file-size cap, not a memory cap. An image with very many pixels
+  can trip the Windows WebView memory monitor (`MAST_RESET_MEM_MB`, default 1536) and the same tab
+  opens the same image again after the reload; macOS has no such monitor. Changing the file while
+  it is being read can produce a decode failure or a partly drawn image. One in-flight read
+  request cannot be cancelled.
+- **Verification.** Automated: the Rust and TypeScript suites and x64 Windows clippy pass. Not
+  verified: actual WebView2 and WKWebView rendering. Field checks stay pending in
+  `docs/WINDOWS-BUILD.md` §10 and `docs/MACOS.md`.

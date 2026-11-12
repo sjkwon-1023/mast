@@ -116,9 +116,9 @@ export interface Tab {
 /** 탭 종류별 상태 — internal tag "type".
  *
  *  scrollTop 시맨틱은 종류마다 다르다: textViewer 는 최상단 가시 행의 전역 byte
- *  offset, markdownViewer 는 렌더된 픽셀 offset. folderBrowser·changesViewer 는
- *  스크롤 위치를 기억하지 않아 필드 자체가 없다 (setViewerScroll 대상이 되면
- *  kindMismatch). */
+ *  offset, markdownViewer 는 렌더된 픽셀 offset. folderBrowser·changesViewer·
+ *  imageViewer 는 스크롤 위치를 기억하지 않아 필드 자체가 없다
+ *  (setViewerScroll 대상이 되면 kindMismatch). */
 export type TabKind =
   | { type: "browser"; url: string }
   | {
@@ -132,7 +132,8 @@ export type TabKind =
   | { type: "folderBrowser"; path: string }
   | { type: "textViewer"; path: string; scrollTop: number }
   | { type: "markdownViewer"; path: string; scrollTop: number }
-  | { type: "changesViewer"; path: string };
+  | { type: "changesViewer"; path: string }
+  | { type: "imageViewer"; path: string };
 
 export type TerminalStatus =
   | { type: "running" }
@@ -153,7 +154,10 @@ export type NewTab =
   | { type: "folderBrowser"; path: string | null }
   | { type: "textViewer"; path: string }
   | { type: "markdownViewer"; path: string }
-  | { type: "changesViewer"; path: string | null };
+  | { type: "changesViewer"; path: string | null }
+  /** 이미지 뷰어 — path 필수. 파일을 읽지 않고 탭을 만들며, 경로 검증과 제목은
+   *  다른 뷰어와 같다. */
+  | { type: "imageViewer"; path: string };
 
 /** 직렬화 가능한 command bus 명령 집합 (command.rs Command).
  *  JSON 은 internal tag: {"type": "createWorkspace", "name": ...}. */
@@ -203,12 +207,13 @@ export type Command =
       placement: Placement;
     };
 
-/** 표시할 뷰어 명세 (command.rs ViewerSpec) — 뷰어 4종만, path 필수. */
+/** 표시할 뷰어 명세 (command.rs ViewerSpec) — 뷰어 5종만, path 필수. */
 export type ViewerSpec =
   | { type: "folderBrowser"; path: string }
   | { type: "changesViewer"; path: string }
   | { type: "textViewer"; path: string }
-  | { type: "markdownViewer"; path: string };
+  | { type: "markdownViewer"; path: string }
+  | { type: "imageViewer"; path: string };
 
 /** 뷰어 탭의 자리 (command.rs Placement). right 는 horizontal, down 은 vertical 이다. */
 export type Placement =
@@ -276,7 +281,7 @@ export interface LayoutPane {
 
 export interface LayoutTab {
   id: TabId;
-  /** terminal | folderBrowser | changesViewer | textViewer | markdownViewer | browser */
+  /** terminal | folderBrowser | changesViewer | textViewer | markdownViewer | imageViewer | browser */
   kind: string;
   title: string;
   /** 터미널은 cwd, 뷰어는 경로, 브라우저는 null. */

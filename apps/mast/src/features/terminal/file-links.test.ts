@@ -289,6 +289,26 @@ describe("클릭 활성화", () => {
     expect(h.presentTerminalPath).toHaveBeenCalledExactlyOnceWith(SESSION, "src/a.ts");
   });
 
+  it("이미지 경로의 imageViewer 응답을 오류 없이 넘긴다", async () => {
+    h.presentTerminalPath.mockResolvedValueOnce({
+      workspace: 1,
+      pane: 1,
+      tab: 9,
+      kind: "imageViewer",
+      path: "shots/a.png",
+      active: true,
+    });
+    const onError = vi.fn();
+    const term = terminal();
+    await write(term, "shots/a.png");
+    const [link] = await linksAt(term, 1, false, onError);
+    link.activate(new MouseEvent("click", { ctrlKey: true }), link.text);
+    await vi.waitFor(() =>
+      expect(h.presentTerminalPath).toHaveBeenCalledExactlyOnceWith(SESSION, "shots/a.png"),
+    );
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("macOS 는 ⌘+클릭만 요청하고 Ctrl+클릭은 무시한다", async () => {
     const term = terminal();
     await write(term, "src/a.ts");

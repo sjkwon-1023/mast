@@ -1201,6 +1201,96 @@ body {
   user-select: none;
 }
 
+/* ── 뷰어 탭 — imageViewer ───────────────────────────────────────────
+   배너(loading·오류) + 스크롤 컨테이너 + 모드 라벨. 맞춤 모드는 이미지가
+   pane 보다 작아도 키우지 않는다 (max-width/height 만 준다). 원본 모드는
+   이미지 자연 크기로 button 이 자라고 스크롤 컨테이너가 넘친다. 가운데 정렬은
+   이미지의 auto margin 이 맡는다 — 남는 공간이 있을 때만 가운데로 모으고, 넘치면
+   왼쪽 위에서 시작해 스크롤로 전체에 닿는다 (flex 의 center 정렬은 넘친 쪽을 자른다). */
+
+.image-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.image-status {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-status.error {
+  color: var(--error);
+}
+
+.image-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+  outline: none; /* 프로그램적 focus(tabindex -1) 표시는 하지 않는다 */
+}
+
+.image-toggle {
+  flex: 0 0 auto;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: zoom-in;
+}
+
+.image-toggle:disabled {
+  cursor: default;
+}
+
+.image-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.image-canvas {
+  display: block;
+  margin: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.image-view.original .image-toggle {
+  width: max-content;
+  height: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  cursor: zoom-out;
+}
+
+.image-view.original .image-canvas {
+  max-width: none;
+  max-height: none;
+}
+
+.image-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
 /* ── 뷰어 탭 — markdownViewer (21단계 청크 D) ─────────────────────────
    folderBrowser·textViewer 와 같은 세로 스택(배너 + 본문). 본문은 pane 폭을
    사용하고 줄간격을 조금 넓힌다 — 그 이상의 타이포그래피는 두지 않는다

@@ -113,6 +113,7 @@ impl Dispatcher {
                     TabKind::ChangesViewer { .. } => ("changesViewer", "viewer"),
                     TabKind::TextViewer { .. } => ("textViewer", "viewer"),
                     TabKind::MarkdownViewer { .. } => ("markdownViewer", "viewer"),
+                    TabKind::ImageViewer { .. } => ("imageViewer", "viewer"),
                 };
                 out.push(TabInfo {
                     tab: tab.id.0,
@@ -229,6 +230,7 @@ fn layout_tab(tab: &Tab) -> LayoutTab {
         TabKind::ChangesViewer { path } => ("changesViewer", Some(path.clone()), None),
         TabKind::TextViewer { path, .. } => ("textViewer", Some(path.clone()), None),
         TabKind::MarkdownViewer { path, .. } => ("markdownViewer", Some(path.clone()), None),
+        TabKind::ImageViewer { path } => ("imageViewer", Some(path.clone()), None),
         TabKind::Browser { url } => ("browser", None, Some(url.clone())),
     };
     LayoutTab {

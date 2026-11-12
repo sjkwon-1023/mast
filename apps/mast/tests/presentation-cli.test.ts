@@ -265,6 +265,24 @@ print(json.dumps(run_main(["layout"])))
     expect(outcome.stdout.trim().split("\n")).toHaveLength(1);
   });
 
+  it("passes an imageViewer open result through unchanged", () => {
+    const result = {
+      workspace: 1,
+      pane: 9,
+      tab: 16,
+      kind: "imageViewer",
+      path: "/shots/a.png",
+      active: true,
+    };
+    const outcome = inProcess(`
+${reply(JSON.stringify({ result }))}
+print(json.dumps(run_main(["open", "/shots/a.png"])))
+`, { MAST: "1" });
+    expect(outcome).toMatchObject({ status: 0, stderr: "", sent: 1, replyDirRemoved: true });
+    expect(JSON.parse(outcome.stdout)).toEqual(result);
+    expect(outcome.stdout.trim().split("\n")).toHaveLength(1);
+  });
+
   it("passes the server error envelope through unchanged with exit 1 and no retry", () => {
     const outcome = inProcess(`
 ${reply(JSON.stringify({ error: { code: "not_found", message: "no such file" } }))}

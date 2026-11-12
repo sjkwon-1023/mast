@@ -162,6 +162,8 @@ function placeholderText(tab: Tab | null): string {
       return `markdownViewer: ${kind.path} (no viewer mounted)`;
     case "changesViewer":
       return `changesViewer: ${kind.path} (no viewer mounted)`;
+    case "imageViewer":
+      return `imageViewer: ${kind.path} (no viewer mounted)`;
   }
 }
 

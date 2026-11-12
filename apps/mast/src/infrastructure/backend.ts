@@ -421,7 +421,7 @@ export interface PresentedViewer {
   workspace: number;
   pane: number;
   tab: number;
-  kind: "folderBrowser" | "textViewer" | "markdownViewer" | "changesViewer";
+  kind: "folderBrowser" | "textViewer" | "markdownViewer" | "changesViewer" | "imageViewer";
   path: string;
   active: boolean;
 }
