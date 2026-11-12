@@ -54,6 +54,18 @@
                 "lastActivityMs": null,
                 "agentStatus": "idle",
                 "lastAgentMessage": null
+              },
+              {
+                "id": 17,
+                "title": "a.png",
+                "kind": {
+                  "type": "imageViewer",
+                  "path": "/home/dev/code/mast/shots/a.png"
+                },
+                "notification": "none",
+                "lastActivityMs": null,
+                "agentStatus": "idle",
+                "lastAgentMessage": null
               }
             ],
             "activeTab": 4
@@ -163,7 +175,7 @@
       }
     ],
     "activeWorkspace": 1,
-    "nextId": 16,
+    "nextId": 18,
     "revision": 6
   }
 }

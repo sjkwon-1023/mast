@@ -1091,6 +1091,28 @@ fn create_markdown_viewer_starts_at_pixel_zero() {
 }
 
 #[test]
+fn create_image_viewer_keeps_only_the_path() {
+    // imageViewer 는 기존 뷰어와 같은 생성 계약(스폰 없음·basename 제목·경로
+    // 검증)을 쓰고, 저장되는 필드는 path 뿐이다.
+    let (mut d, host) = dispatcher();
+    let (_ws, pane) = create_ws_rooted(&mut d, "ws", Some("/proj"));
+    let tab = create_viewer_tab(
+        &mut d,
+        pane,
+        NewTab::ImageViewer {
+            path: "/proj/shot.PNG".into(),
+        },
+    );
+    assert!(host.spawns().is_empty(), "이미지 탭 생성은 스폰이 없다");
+    let t = tab_view(&d, tab);
+    assert_eq!(
+        serde_json::to_value(&t.kind).unwrap(),
+        serde_json::json!({"type": "imageViewer", "path": "/proj/shot.PNG"})
+    );
+    assert_eq!(t.title, "shot.PNG");
+}
+
+#[test]
 fn create_workspace_and_split_pane_accept_viewer_tabs_atomically() {
     let (mut d, host) = dispatcher();
     // 워크스페이스 + 뷰어 탭 원자 생성 — session 만 None 이고 tab 은 Some.
@@ -1214,6 +1236,13 @@ fn viewer_commands_reject_wrong_tab_kinds_without_state_change() {
             path: "/proj/a.md".into(),
         },
     );
+    let image = create_viewer_tab(
+        &mut d,
+        pane,
+        NewTab::ImageViewer {
+            path: "/proj/a.png".into(),
+        },
+    );
     let before = serde_json::to_value(d.state()).unwrap();
 
     let cases = [
@@ -1240,13 +1269,20 @@ fn viewer_commands_reject_wrong_tab_kinds_without_state_change() {
             markdown,
         ),
         // SetViewerScroll 은 스크롤 위치를 모델에 가진 뷰어만 받는다 —
-        // folderBrowser 는 그 필드가 없어 KindMismatch (기결정).
+        // folderBrowser·imageViewer 는 그 필드가 없어 KindMismatch (기결정).
         (
             Command::SetViewerScroll {
                 tab: folder,
                 scroll_top: 10.0,
             },
             folder,
+        ),
+        (
+            Command::SetViewerScroll {
+                tab: image,
+                scroll_top: 10.0,
+            },
+            image,
         ),
         (
             Command::SetViewerScroll {
@@ -1328,6 +1364,10 @@ fn viewer_paths_are_validated_on_create_and_navigate() {
             Command::CreateTab {
                 pane,
                 tab: NewTab::MarkdownViewer { path: path.into() },
+            },
+            Command::CreateTab {
+                pane,
+                tab: NewTab::ImageViewer { path: path.into() },
             },
             Command::CreateTab {
                 pane,
@@ -1470,6 +1510,13 @@ fn viewer_tabs_survive_persist_round_trip() {
             path: "/proj/README.md".into(),
         },
     );
+    let image = create_viewer_tab(
+        &mut d,
+        pane,
+        NewTab::ImageViewer {
+            path: "/proj/shot.png".into(),
+        },
+    );
     d.dispatch(Command::SetViewerScroll {
         tab: text,
         scroll_top: 4096.0,
@@ -1521,6 +1568,13 @@ fn viewer_tabs_survive_persist_round_trip() {
             path: "/proj/README.md".into(),
             scroll_top: 120.5,
         }
+    );
+    assert_eq!(
+        kind_of(&state, image),
+        TabKind::ImageViewer {
+            path: "/proj/shot.png".into(),
+        },
+        "imageViewer 탭은 unknown kind 제거 대상이 아니다"
     );
 
     // 재스폰 대상은 terminal 탭뿐 — 뷰어 탭은 열거에 끼지 않는다.
@@ -3443,6 +3497,36 @@ fn list_tabs_covers_every_tab_kind_and_pane() {
 }
 
 #[test]
+fn image_viewer_tabs_report_kind_and_path_in_list_and_layout() {
+    let (mut d, _host) = dispatcher();
+    let (_ws, pane) = create_ws(&mut d, "ws");
+    let (_t_term, session) = create_terminal_tab(&mut d, pane);
+    let image = create_viewer_tab(
+        &mut d,
+        pane,
+        NewTab::ImageViewer {
+            path: "/shots/a.png".into(),
+        },
+    );
+
+    let tabs = d.list_tabs(session);
+    let listed = tabs.iter().find(|t| t.tab == image.0).unwrap();
+    assert_eq!((listed.kind, listed.status), ("imageViewer", "viewer"));
+    assert_eq!(listed.title, "a.png");
+
+    let info = d.layout_for_session(session).unwrap();
+    let laid_out = info
+        .panes
+        .iter()
+        .flat_map(|pane| &pane.tabs)
+        .find(|tab| tab.id == image)
+        .unwrap();
+    assert_eq!(laid_out.kind, "imageViewer");
+    assert_eq!(laid_out.path.as_deref(), Some("/shots/a.png"));
+    assert_eq!(laid_out.url, None);
+}
+
+#[test]
 fn list_tabs_is_a_pure_query_and_serializes_camel_case() {
     let (mut d, _host) = dispatcher();
     assert!(
@@ -4099,6 +4183,74 @@ fn explicit_split_on_a_workspace_without_a_slot_leaves_it_empty() {
 }
 
 #[test]
+fn present_viewer_places_image_tabs_in_every_placement() {
+    let (mut d, _host) = dispatcher();
+    let (ws, pane) = create_ws(&mut d, "w");
+    let (source, _) = create_terminal_tab(&mut d, pane);
+
+    // 옵션 없는 호출 — 오른쪽 분할의 새 pane 에 탭이 놓이고 자리가 정해진다.
+    let (_, slot, default_tab, active) = present(
+        &mut d,
+        source,
+        ViewerSpec::ImageViewer {
+            path: "/shots/a.png".into(),
+        },
+        Placement::Default,
+    );
+    assert!(active);
+    assert_eq!(d.state().workspace(ws).unwrap().viewer_pane, Some(slot));
+    assert_eq!(
+        tab_view(&d, default_tab).kind,
+        TabKind::ImageViewer {
+            path: "/shots/a.png".into(),
+        }
+    );
+    assert_eq!(tab_view(&d, default_tab).title, "a.png");
+
+    // 기존 pane 에 탭만 더한다.
+    let (_, target, same_pane_tab, _) = present(
+        &mut d,
+        source,
+        ViewerSpec::ImageViewer {
+            path: "/shots/b.webp".into(),
+        },
+        Placement::Pane { pane },
+    );
+    assert_eq!(target, pane);
+    assert_eq!(
+        tab_view(&d, same_pane_tab).kind,
+        TabKind::ImageViewer {
+            path: "/shots/b.webp".into(),
+        }
+    );
+
+    // 명시적 분할은 자리를 바꾸지 않는다.
+    let (_, split_pane, split_tab, _) = present(
+        &mut d,
+        source,
+        ViewerSpec::ImageViewer {
+            path: "/shots/c.gif".into(),
+        },
+        Placement::Split {
+            pane,
+            direction: SplitDirection::Vertical,
+        },
+    );
+    assert_ne!(split_pane, pane);
+    assert_eq!(
+        tab_view(&d, split_tab).kind,
+        TabKind::ImageViewer {
+            path: "/shots/c.gif".into(),
+        }
+    );
+    assert_eq!(
+        split_direction_into(&d.state().workspace(ws).unwrap().layout, split_pane),
+        Some(SplitDirection::Vertical)
+    );
+    assert_eq!(d.state().workspace(ws).unwrap().viewer_pane, Some(slot));
+}
+
+#[test]
 fn present_viewer_failures_leave_every_field_untouched() {
     let (mut d, _host) = dispatcher();
     let (ws, pane) = create_ws(&mut d, "a");
@@ -4156,6 +4308,29 @@ fn present_viewer_failures_leave_every_field_untouched() {
         Command::PresentViewer {
             source,
             viewer: text_viewer("relative.txt"),
+            placement: Placement::Default,
+        },
+    );
+    assert!(matches!(err, CommandError::InvalidPath { .. }), "{err:?}");
+    // 이미지 뷰어도 같은 실패 계약을 지킨다 — 배치·경로 실패 뒤 상태는 그대로다.
+    let err = failed_unchanged(
+        &mut d,
+        Command::PresentViewer {
+            source,
+            viewer: ViewerSpec::ImageViewer {
+                path: "/shots/a.png".into(),
+            },
+            placement: Placement::Pane { pane: other_pane },
+        },
+    );
+    assert!(matches!(err, CommandError::UnknownTarget { .. }), "{err:?}");
+    let err = failed_unchanged(
+        &mut d,
+        Command::PresentViewer {
+            source,
+            viewer: ViewerSpec::ImageViewer {
+                path: "relative.png".into(),
+            },
             placement: Placement::Default,
         },
     );

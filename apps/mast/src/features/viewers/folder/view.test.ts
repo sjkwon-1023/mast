@@ -15,6 +15,15 @@ import {
 } from "./view";
 import type { DirEntry } from "../../../infrastructure/backend";
 import type { KeySpec } from "../../../shared/keys";
+import agentFileOpenFixtureJson from "../../../../../../fixtures/agent-file-open.json";
+
+/** Rust `open_viewer` 테스트와 공유하는 확장자 분기표. `open` 은 mast open,
+ *  `folder` 는 이 폴더 뷰의 기대다 (`.markdown` 은 의도된 차이). */
+const imageBranch = (
+  agentFileOpenFixtureJson as unknown as {
+    imageBranch: { kind: "file" | "directory"; path: string; open: string; folder?: string }[];
+  }
+).imageBranch;
 
 function entry(name: string, is_dir: boolean, size: number | null = null): DirEntry {
   return { name, is_dir, size };
@@ -132,6 +141,28 @@ describe("viewerTabForPath", () => {
 
   it("does not read the extension from a parent directory name", () => {
     expect(viewerTabForPath("/home/u/docs.md/plain").type).toBe("textViewer");
+  });
+
+  it("routes image extensions to the image viewer", () => {
+    expect(viewerTabForPath("/shots/a.png")).toEqual({
+      type: "imageViewer",
+      path: "/shots/a.png",
+    });
+    expect(viewerTabForPath("/shots/a.PNG").type).toBe("imageViewer");
+    expect(viewerTabForPath("/shots/.hidden.webp").type).toBe("imageViewer");
+    // SVG·이중 확장자·dotfile 은 이미지가 아니다.
+    expect(viewerTabForPath("/shots/a.svg").type).toBe("textViewer");
+    expect(viewerTabForPath("/shots/x.png.txt").type).toBe("textViewer");
+    expect(viewerTabForPath("/shots/.png").type).toBe("textViewer");
+  });
+
+  it("matches the shared image branch table for every file case", () => {
+    const fileCases = imageBranch.filter((entry) => entry.kind === "file");
+    expect(fileCases.length).toBeGreaterThan(0);
+    for (const entry of fileCases) {
+      expect(entry.folder, `${entry.path} needs a folder expectation`).toBeDefined();
+      expect(viewerTabForPath(entry.path).type, entry.path).toBe(entry.folder);
+    }
   });
 });
 

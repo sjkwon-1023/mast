@@ -138,7 +138,7 @@ pub enum Command {
     },
 }
 
-/// 표시할 뷰어 명세 — 뷰어 4종만 가진다. 터미널과 브라우저는 타입 수준에서 제외된다.
+/// 표시할 뷰어 명세 — 뷰어 5종만 가진다. 터미널과 브라우저는 타입 수준에서 제외된다.
 /// 경로는 필수이며, 준비는 [`NewTab`] 과 같은 경로 검증을 거친다.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
@@ -151,6 +151,7 @@ pub enum ViewerSpec {
     ChangesViewer { path: String },
     TextViewer { path: String },
     MarkdownViewer { path: String },
+    ImageViewer { path: String },
 }
 
 impl ViewerSpec {
@@ -160,6 +161,7 @@ impl ViewerSpec {
             ViewerSpec::ChangesViewer { path } => NewTab::ChangesViewer { path: Some(path) },
             ViewerSpec::TextViewer { path } => NewTab::TextViewer { path },
             ViewerSpec::MarkdownViewer { path } => NewTab::MarkdownViewer { path },
+            ViewerSpec::ImageViewer { path } => NewTab::ImageViewer { path },
         }
     }
 }
@@ -219,6 +221,11 @@ pub enum NewTab {
     /// 방식으로 볼 뿐이라 계약은 동일하다 — 읽기 전용, 경로 필수. 스크롤
     /// 시맨틱만 다르다 (렌더된 px — [`crate::model::TabKind`] rustdoc).
     MarkdownViewer {
+        path: String,
+    },
+    /// 이미지 뷰어 탭. TextViewer 와 같은 읽기 전용 계약(경로 필수, 스폰 없음)이고
+    /// 스크롤 위치 필드가 없다.
+    ImageViewer {
         path: String,
     },
 }
@@ -428,7 +435,7 @@ pub struct TabInfo {
     /// 워크스페이스 자체가 백그라운드일 수 있으므로 "지금 눈에 보인다"는 뜻은 아니다.
     pub active: bool,
     /// 탭 종류 — 모델 [`crate::model::TabKind`] 의 camelCase 이름
-    /// (`terminal` | `folderBrowser` | `textViewer` | `markdownViewer`).
+    /// (`terminal` | `folderBrowser` | `textViewer` | `markdownViewer` | `imageViewer`).
     pub kind: &'static str,
     /// `running` | `exited` (터미널) | `viewer` (프로세스가 없는 뷰어 탭).
     pub status: &'static str,
@@ -465,7 +472,7 @@ pub struct LayoutPane {
 #[serde(rename_all = "camelCase")]
 pub struct LayoutTab {
     pub id: TabId,
-    /// `terminal` | `folderBrowser` | `changesViewer` | `textViewer` | `markdownViewer` | `browser`.
+    /// `terminal` | `folderBrowser` | `changesViewer` | `textViewer` | `markdownViewer` | `imageViewer` | `browser`.
     pub kind: String,
     pub title: String,
     /// 터미널은 cwd, 뷰어는 경로, 브라우저는 None.

@@ -3295,6 +3295,33 @@ click.
 7. Hold Alt and move the mouse over a terminal: the crosshair appears, and Alt+drag still selects
    a column block. Release Alt: the crosshair goes away.
 
+### Unreleased — image viewer field verification (ADR-0008 amendment 2026-11-12)
+
+Pending Windows field verification. The automated tests and the x64 clippy run do not show WebView2
+rendering, memory behaviour or 9P read timing. Do not mark an item passed until it has been run on
+the target machine. Record the commit, the Windows version, the WebView2 runtime and the distro.
+
+1. **Opening.** Open the same image with `mast open -- <absolute path>`, a click or Enter in the
+   folder viewer and a Ctrl+click in terminal output. The success JSON `kind` must be `imageViewer`.
+   Also check an uppercase extension, `.jpeg`, and a path with spaces or Korean. `mast layout` must
+   show `imageViewer` and the path.
+2. **Formats.** PNG with transparency, JPEG, animated GIF, WebP and BMP must render. A `.svg` file
+   must open in a text tab.
+3. **Fit and original.** An image larger than the pane, an image smaller than the pane, and both in a
+   narrow split: fit must not crop, and a small image must not be enlarged. A click and Enter/Space
+   with the button focused must switch to original and back, and a large image must scroll to its
+   top-left and bottom-right. A small image must stay centred in original mode too.
+4. **Limits and errors.** A file over 64 MiB, an empty file, and a `.png`-named SVG or text file must
+   show an error inside the tab while the tab stays open. Leaving the tab and returning must read the
+   file again.
+5. **Races.** While an image is loading, switch to another tab or workspace or close the tab; a late
+   frame must not appear. Replace the file on disk: the displayed image must stay unchanged, and
+   returning to the tab must show the new file.
+6. **Restart.** After a manual UI reset and after restarting the app, the same tab must open in fit
+   mode.
+7. **Phone list and neighbours.** The phone list must show the image tab as `image` and must not let
+   it be pressed. Text, Markdown and Changes viewers and terminal links must keep working.
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy

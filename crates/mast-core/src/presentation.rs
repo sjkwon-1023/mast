@@ -221,10 +221,17 @@ pub enum Kind {
     Other,
 }
 
-/// `open` 의 뷰어 명세. `.md` 확장자는 대소문자를 무시한다.
+/// 이미지로 여는 확장자. `mast open` 과 폴더 뷰의 분기표가 이 목록을 공유한다
+/// (`fixtures/agent-file-open.json` 의 `imageBranch`).
+const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+
+/// `open` 의 뷰어 명세. `.md` 와 이미지 확장자는 대소문자를 무시한다.
 pub fn open_viewer(path: &str, kind: Kind) -> Result<ViewerSpec, PresentationError> {
     match kind {
         Kind::Directory => Ok(ViewerSpec::FolderBrowser {
+            path: path.to_owned(),
+        }),
+        Kind::File if is_image(path) => Ok(ViewerSpec::ImageViewer {
             path: path.to_owned(),
         }),
         Kind::File if is_markdown(path) => Ok(ViewerSpec::MarkdownViewer {
@@ -237,6 +244,17 @@ pub fn open_viewer(path: &str, kind: Kind) -> Result<ViewerSpec, PresentationErr
             "only regular files and directories can be shown",
         )),
     }
+}
+
+/// basename 의 마지막 점 뒤만 본다. `Path::extension` 이 선두 점만 있는 이름
+/// (`.png`)을 확장자 없음으로, 이중 확장자(`x.png.txt`)는 마지막 것만 돌려주므로
+/// TypeScript 의 `lowerExtension` 과 같은 규칙이다.
+fn is_image(path: &str) -> bool {
+    Path::new(path).extension().is_some_and(|extension| {
+        IMAGE_EXTENSIONS
+            .iter()
+            .any(|known| extension.eq_ignore_ascii_case(known))
+    })
 }
 
 fn is_markdown(path: &str) -> bool {
@@ -504,10 +522,16 @@ mod tests {
     }
 
     #[test]
-    fn open_picks_the_viewer_from_the_kind_and_the_markdown_extension() {
+    fn open_picks_the_viewer_from_the_kind_the_markdown_extension_and_the_image_table() {
         assert_eq!(
             open_viewer("/r", Kind::Directory),
             Ok(ViewerSpec::FolderBrowser { path: "/r".into() })
+        );
+        assert_eq!(
+            open_viewer("/r/dir.png", Kind::Directory),
+            Ok(ViewerSpec::FolderBrowser {
+                path: "/r/dir.png".into()
+            })
         );
         assert_eq!(
             open_viewer("/r/a.md", Kind::File),
@@ -521,6 +545,33 @@ mod tests {
                 path: "/r/A.MD".into()
             })
         );
+        // 폴더 뷰와 달리 `mast open` 의 `.markdown` 은 text 다 — 기존 차이를 유지한다.
+        assert_eq!(
+            open_viewer("/r/a.markdown", Kind::File),
+            Ok(ViewerSpec::TextViewer {
+                path: "/r/a.markdown".into()
+            })
+        );
+        for path in ["/r/a.png", "/r/a.PNG", "/r/.hidden.webp", "/r/a.JpEg"] {
+            assert_eq!(
+                open_viewer(path, Kind::File),
+                Ok(ViewerSpec::ImageViewer { path: path.into() }),
+                "{path}"
+            );
+        }
+        for path in [
+            "/r/.png",
+            "/r/x.png.txt",
+            "/r/dir.png/noext",
+            "/r/a.svg",
+            "/r/a.avif",
+        ] {
+            assert_eq!(
+                open_viewer(path, Kind::File),
+                Ok(ViewerSpec::TextViewer { path: path.into() }),
+                "{path}"
+            );
+        }
         assert_eq!(
             open_viewer("/r/a.txt", Kind::File),
             Ok(ViewerSpec::TextViewer {

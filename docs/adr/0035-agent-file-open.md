@@ -72,8 +72,9 @@ splits the source terminal's pane to the right and records the new pane as the v
   validation rejects `.` and `..`.
 - A stat that follows links (`fs::metadata`) decides the kind. Only regular files and directories
   are shown. A missing path is `not_found`; any other non-regular kind is `invalid_path`.
-- A `.md` extension, case-insensitively, opens the Markdown viewer. Other regular files open the
-  text viewer. Directories open the folder browser.
+- A `.md` extension, case-insensitively, opens the Markdown viewer. A `.png`, `.jpg`, `.jpeg`,
+  `.gif`, `.webp` or `.bmp` extension, case-insensitively, opens the image viewer. Other regular
+  files open the text viewer. Directories open the folder browser.
 - `diff` asks Git for the repository root of the path itself when it is a directory, or of its parent
   when it is a file, and opens the changes viewer at that root (`diff_lookup_dir`, `repository_root`).
   A missing path is not searched upward. A path outside a repository fails with `not_repository`.

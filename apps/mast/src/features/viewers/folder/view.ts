@@ -1,6 +1,6 @@
 // folderBrowser 탭의 뷰 — fs_list_dir 로 읽은 항목을 dirs-first 로 나열하고,
 // 디렉터리 클릭은 NavigateFolder, 파일 클릭은 뷰어 탭 생성(확장자에 따라
-// markdownViewer 또는 textViewer)으로 잇는다.
+// markdownViewer·imageViewer 또는 textViewer)으로 잇는다.
 //
 // 탐색이 뷰 내부 상태가 아니라 **dispatcher 명령**인 것이 이 파일의 핵심 계약이다:
 // 현재 경로는 모델(TabKind::FolderBrowser.path)이 소유하고,
@@ -26,6 +26,7 @@ import type { KeySpec } from "../../../shared/keys";
 import { IS_MAC } from "../../../shared/platform";
 import type { ViewerKind, ViewerView } from "../viewer-view";
 import { setBanner } from "../viewer-view";
+import { isImagePath, lowerExtension } from "../image/extensions";
 import type { Command, CommandOutput, NewTab, PaneId, TabId } from "../../../shared/types";
 
 /** UI 발 dispatch — main.ts dispatchUI 래퍼 (실패는 상태 라인에 표면화되고 null). */
@@ -92,16 +93,13 @@ export function folderRows(path: string, entries: readonly DirEntry[]): FolderRo
 
 /** 파일 클릭이 만드는 뷰어 탭 명세 (순수).
  *
- *  `.md`/`.markdown` 만 markdownViewer 로, 나머지는 전부 textViewer 로 연다.
- *  확장자는 **basename 의 마지막 점 뒤**로 본다: 선두 점은 dotfile 표시이지
- *  확장자가 아니므로 `.md` 라는 이름의 파일은 텍스트로 연다. */
+ *  `.md`/`.markdown` 은 markdownViewer, 이미지 확장자는 imageViewer, 나머지는
+ *  전부 textViewer 로 연다. 확장자는 **basename 의 마지막 점 뒤**로 본다: 선두
+ *  점은 dotfile 표시이지 확장자가 아니므로 `.md` 라는 이름의 파일은 텍스트로 연다. */
 export function viewerTabForPath(path: string): NewTab {
-  const name = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
-  const dot = name.lastIndexOf(".");
-  const ext = dot > 0 ? name.slice(dot) : "";
-  return ext === ".md" || ext === ".markdown"
-    ? { type: "markdownViewer", path }
-    : { type: "textViewer", path };
+  const ext = lowerExtension(path);
+  if (ext === ".md" || ext === ".markdown") return { type: "markdownViewer", path };
+  return isImagePath(path) ? { type: "imageViewer", path } : { type: "textViewer", path };
 }
 
 /** 파일 크기 표시 (1024 진법, 정수는 소수점 없이). null 이면 빈 문자열. */
@@ -407,9 +405,9 @@ export class FolderView implements ViewerView {
   }
 
   /** 디렉터리는 탐색(모델 경유), 파일은 같은 pane 에 뷰어 탭 생성 — 확장자로
-   *  markdownViewer / textViewer 를 고른다 (viewerTabForPath). 클릭과 Enter 가
-   *  같은 경로다. 실패(없는 경로·kindMismatch 등)는 dispatchUI 가 상태 라인에
-   *  표면화한다. */
+   *  markdownViewer / imageViewer / textViewer 를 고른다 (viewerTabForPath). 클릭과
+   *  Enter 가 같은 경로다. 실패(없는 경로·kindMismatch 등)는 dispatchUI 가 상태
+   *  라인에 표면화한다. */
   private openRow(row: FolderRow): void {
     if (row.isDir) {
       void this.dispatch({ type: "navigateFolder", tab: this.tab, path: row.path });

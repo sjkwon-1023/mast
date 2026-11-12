@@ -458,6 +458,10 @@ export class WorkspaceView {
           const { ChangesView } = await import("../changes/changes-view");
           return (host, kind) => new ChangesView(host, target.tab, distro, kind);
         }
+        case "imageViewer": {
+          const { ImageView } = await import("../viewers/image/view");
+          return (host, kind) => new ImageView(host, distro, kind);
+        }
       }
     });
     this.viewerViews.set(target.tab, created);

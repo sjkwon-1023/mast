@@ -175,7 +175,13 @@ struct RemovedUnknownTab {
 fn is_known_tab_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "terminal" | "folderBrowser" | "textViewer" | "markdownViewer" | "changesViewer" | "browser"
+        "terminal"
+            | "folderBrowser"
+            | "textViewer"
+            | "markdownViewer"
+            | "changesViewer"
+            | "browser"
+            | "imageViewer"
     )
 }
 
@@ -995,6 +1001,33 @@ mod tests {
         assert_eq!(
             repairs,
             vec!["viewer pane PaneId(99) of workspace WorkspaceId(1) is not one of its panes — cleared"]
+        );
+    }
+
+    #[test]
+    fn image_viewer_tab_roundtrips_and_is_not_an_unknown_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(&dir);
+        let mut state = sample_state(None, 100);
+        state.workspaces[0].panes.get_mut(&PaneId(3)).unwrap().tabs[0].kind =
+            TabKind::ImageViewer {
+                path: "/shots/a.png".into(),
+            };
+        save_atomic(&path, &state).unwrap();
+
+        let LoadOutcome::Restored {
+            state: restored,
+            repairs,
+        } = load(&path)
+        else {
+            panic!("an image viewer tab must restore");
+        };
+        assert!(repairs.is_empty(), "정상 상태에 수리 사유: {repairs:?}");
+        assert_eq!(
+            restored.workspaces[0].panes[&PaneId(3)].tabs[0].kind,
+            TabKind::ImageViewer {
+                path: "/shots/a.png".into(),
+            }
         );
     }
 

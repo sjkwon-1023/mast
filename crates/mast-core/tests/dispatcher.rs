@@ -5,11 +5,12 @@
 //! 소비해 양쪽 표류를 막는다. Rust 단독 round-trip 은 계약 검증으로 무효
 //! (fixture 파일이 기준).
 
-use serde::{Deserialize, Serialize};
 use mast_core::command::{
     Command, CommandError, CommandOutput, LayoutInfo, NewTab, Placement, ViewerSpec,
 };
 use mast_core::model::{AppState, PaneId, SplitId, TabId, WorkspaceId};
+use mast_core::presentation::{open_viewer, Kind};
+use serde::{Deserialize, Serialize};
 
 fn read_fixture(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -135,12 +136,12 @@ fn commands_fixture_round_trips() {
     let original: serde_json::Value = serde_json::from_str(&text).unwrap();
     let parsed: Vec<Command> = serde_json::from_str(&text).unwrap();
 
-    // 전 Command variant 1개씩(14종) + 뷰어 NewTab 3종을 실은 createTab 3개
-    // (21단계) + createWorkspace 의 tab 필드 누락 하위호환 형태 1개 +
+    // 전 Command variant 1개씩(14종) + 뷰어 NewTab 4종을 실은 createTab 4개
+    // (21단계 + 이미지 뷰어) + createWorkspace 의 tab 필드 누락 하위호환 형태 1개 +
     // moveWorkspace 의 before 두 형태 중 나머지 하나(null = 맨 뒤) + moveTab 의 두 형태 —
     // variant 추가 시 fixture 도 갱신할 것 (새 variant 는 뒤에 덧붙인다:
     // 앞에 끼우면 아래 인덱스 단언이 전부 밀린다).
-    assert_eq!(parsed.len(), 21);
+    assert_eq!(parsed.len(), 22);
 
     // 뷰어 NewTab 잠금 (21단계): folderBrowser 의 path 는 nullable(= 워크스페이스
     // root_path 상속), textViewer·markdownViewer 는 필수다.
@@ -217,6 +218,19 @@ fn commands_fixture_round_trips() {
         }
     );
 
+    // 맨 뒤 imageViewer NewTab — path 필수 (textViewer 와 같은 형태).
+    assert!(
+        matches!(
+            &parsed[21],
+            Command::CreateTab {
+                tab: NewTab::ImageViewer { .. },
+                ..
+            }
+        ),
+        "imageViewer 엔트리: {:?}",
+        parsed[21]
+    );
+
     // 재직렬화는 None 을 "tab": null 로 명시하므로, 원본의 compat 엔트리에
     // "tab": null 을 보충한 형태와 비교한다 (그 외 전 엔트리는 strict
     // round-trip).
@@ -252,7 +266,7 @@ fn agent_file_open_fixture_round_trips() {
     assert_eq!(serde_json::to_value(&placements).unwrap(), fixture["placements"]);
 
     let viewers: Vec<ViewerSpec> = serde_json::from_value(fixture["viewers"].clone()).unwrap();
-    assert_eq!(viewers.len(), 4);
+    assert_eq!(viewers.len(), 5);
     assert_eq!(serde_json::to_value(&viewers).unwrap(), fixture["viewers"]);
 
     let presented = CommandOutput::ViewerPresented {
@@ -267,4 +281,31 @@ fn agent_file_open_fixture_round_trips() {
     assert_eq!(serde_json::to_value(&layout).unwrap(), fixture["layout"]);
     assert_eq!(layout.focused, Some(PaneId(3)));
     assert_ne!(Some(layout.self_pane), layout.focused);
+}
+
+#[test]
+fn image_branch_fixture_matches_open_viewer() {
+    // 확장자 분기표는 TypeScript 의 `viewerTabForPath` 테스트와 **같은 표**를 읽는다.
+    // `open` 은 `mast open`(Rust)의 기대, `folder` 는 폴더 뷰(TypeScript)의 기대다 —
+    // `.markdown` 은 두 진입점의 의도된 차이다 (mast open 은 text).
+    let text = read_fixture("agent-file-open.json");
+    let fixture: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let cases = fixture["imageBranch"].as_array().unwrap();
+    assert!(cases.len() >= 15);
+
+    for case in cases {
+        let path = case["path"].as_str().unwrap();
+        let kind = match case["kind"].as_str().unwrap() {
+            "file" => Kind::File,
+            "directory" => Kind::Directory,
+            other => panic!("unknown kind {other}"),
+        };
+        let expected = case["open"].as_str().unwrap();
+        let viewer = open_viewer(path, kind).unwrap();
+        assert_eq!(
+            serde_json::to_value(&viewer).unwrap()["type"],
+            serde_json::Value::String(expected.into()),
+            "{path}"
+        );
+    }
 }

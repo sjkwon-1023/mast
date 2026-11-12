@@ -179,6 +179,8 @@ function tabDetail(kind: TabKind): string {
       return "text";
     case "changesViewer":
       return "changes";
+    case "imageViewer":
+      return "image";
     default:
       return "markdown";
   }
