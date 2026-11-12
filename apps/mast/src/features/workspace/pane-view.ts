@@ -1,4 +1,5 @@
 import { IS_MAC } from "../../shared/platform";
+import { isPowerShellMode } from "../../shared/windows-shell";
 // pane 1개의 뷰 — 헤더(탭바 + 탭 생성·분할 아이콘) + keep-alive 콘텐츠 영역.
 //
 // 콘텐츠는 keep-alive 다: 탭별 TerminalView 는 앱 수준 레지스트리
@@ -167,12 +168,18 @@ function placeholderText(tab: Tab | null): string {
   }
 }
 
+/** 셸이 WSL 안에서 도는가 — 아니면 시작 지연을 WSL 탓으로 돌리는 문구를 쓰지 않는다 (macOS·PowerShell 모드). */
+function shellRunsInWsl(): boolean {
+  return !IS_MAC && !isPowerShellMode();
+}
+
 /** 시작하지 못한 탭의 배너 문구 (영어 UI 텍스트) — exited 와 전혀 다른 상황이라
- *  안내가 갈린다: "아직 시작도 못 했다"(Windows 에서는 대개 WSL 이 느리다)와 "끝났다".
- *  macOS 에는 WSL 이 없으므로 셸 시작 자체를 가리키는 문구를 쓴다. */
-const NOT_STARTED_NOTICE = IS_MAC
-  ? "The shell has not started. Its startup files may be slow or waiting for input."
-  : "The shell has not started. WSL may be slow or unresponsive.";
+ *  안내가 갈린다: "아직 시작도 못 했다"(WSL 에서는 대개 WSL 이 느리다)와 "끝났다". */
+function notStartedNotice(): string {
+  return shellRunsInWsl()
+    ? "The shell has not started. WSL may be slow or unresponsive."
+    : "The shell has not started. Its startup files may be slow or waiting for input.";
+}
 
 /** 끝난 탭의 배너 문구 — DOM-free 순수 함수라 테스트가 네 조합을 다 잠근다.
  *
@@ -447,7 +454,7 @@ export class PaneView {
       setText(this.restartTextEl, exitedNoticeText(status.code, status.endedAtMs));
       setText(this.restartButtonEl, "Restart");
     } else {
-      setText(this.restartTextEl, NOT_STARTED_NOTICE);
+      setText(this.restartTextEl, notStartedNotice());
       setText(this.restartButtonEl, "Retry");
     }
   }
@@ -462,16 +469,8 @@ export class PaneView {
     const header = document.createElement("div");
     header.className = "pane-header";
 
-    header.append(
-      this.unreadEl,
-      this.tabStripEl,
-      // 터미널 cwd 는 클릭 시점의 스냅샷(this.pane)을 thunk 안에서 읽는다 — 클로저에
-      // 굳히면 탭이 바뀐 뒤에도 옛 경로로 연다 (restartTab 필드 주석과 같은 이유).
-      this.iconButton("+", withShortcut("New terminal tab", "newTerminalTab"), () => ({
-        type: "createTab",
-        pane: this.paneId,
-        tab: { type: "terminal", cwd: paneTerminalCwd(this.pane) },
-      }), shortcutBadge("newTerminalTab")),
+    // 폴더 브라우저와 Git 변경 뷰어는 WSL 파일을 읽는다. PowerShell 모드에서는 버튼을 만들지 않는다.
+    const wslViewerButtons: HTMLElement[] = isPowerShellMode() ? [] : [
       // 폴더 탐색 탭 — path null 이면 워크스페이스 rootPath, 그것도
       // 없으면 "/" 로 코어가 해석한다 (terminal 의 cwd 와 대칭).
       this.svgButton(SVG_FOLDER, withShortcut("New folder browser tab", "newFolderTab"), () => ({
@@ -486,6 +485,18 @@ export class PaneView {
         pane: this.paneId,
         tab: { type: "changesViewer", path: null },
       })),
+    ];
+    header.append(
+      this.unreadEl,
+      this.tabStripEl,
+      // 터미널 cwd 는 클릭 시점의 스냅샷(this.pane)을 thunk 안에서 읽는다 — 클로저에
+      // 굳히면 탭이 바뀐 뒤에도 옛 경로로 연다 (restartTab 필드 주석과 같은 이유).
+      this.iconButton("+", withShortcut("New terminal tab", "newTerminalTab"), () => ({
+        type: "createTab",
+        pane: this.paneId,
+        tab: { type: "terminal", cwd: paneTerminalCwd(this.pane) },
+      }), shortcutBadge("newTerminalTab")),
+      ...wslViewerButtons,
       this.iconButton("◎", "New browser tab", () => ({
         type: "createTab", pane: this.paneId, tab: {type: "browser", url: ""},
       })),
@@ -671,9 +682,9 @@ export class PaneView {
     const notStarted = document.createElement("span");
     notStarted.className = "tab-not-started";
     notStarted.textContent = "not started";
-    notStarted.title = IS_MAC
-      ? "The shell has not started yet — its startup files may be slow or waiting for input."
-      : "The shell has not started yet — WSL may be slow or unresponsive.";
+    notStarted.title = shellRunsInWsl()
+      ? "The shell has not started yet — WSL may be slow or unresponsive."
+      : "The shell has not started yet — its startup files may be slow or waiting for input.";
 
     const close = document.createElement("button");
     close.type = "button";

@@ -180,6 +180,22 @@ describe("abbreviatePath", () => {
     expect(abbreviatePath("/srv")).toBe("/srv");
   });
 
+  it("abbreviates a PowerShell drive path with the same rules and backslashes", () => {
+    expect(abbreviatePath("C:\\Users\\kwon1")).toBe("~");
+    expect(abbreviatePath("C:\\Users\\kwon1\\code")).toBe("~\\code");
+    expect(abbreviatePath("C:\\Users\\kwon1\\a\\b\\c")).toBe("~\\…\\b\\c");
+    expect(abbreviatePath("D:\\a\\b\\c")).toBe("…\\b\\c");
+    expect(abbreviatePath("D:\\data\\x")).toBe("D:\\data\\x");
+    expect(abbreviatePath("C:\\Users")).toBe("C:\\Users");
+    expect(abbreviatePath("C:\\")).toBe("C:\\");
+  });
+
+  it("matches the Users folder name without case, since Windows paths ignore case", () => {
+    expect(abbreviatePath("C:\\users\\kwon1")).toBe("~");
+    expect(abbreviatePath("C:\\USERS\\kwon1\\code")).toBe("~\\code");
+    expect(abbreviatePath("c:\\users")).toBe("c:\\users");
+  });
+
   it("does not treat a /home-prefixed name as the home dir itself", () => {
     expect(abbreviatePath("/home")).toBe("/home");
     expect(abbreviatePath("/homelab/x")).toBe("/homelab/x");

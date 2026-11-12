@@ -9,6 +9,7 @@ import {
 } from "../../shared/keys";
 import type { KeyAction, PaneRect } from "../../shared/keys";
 import { IS_MAC } from "../../shared/platform";
+import { isPowerShellMode } from "../../shared/windows-shell";
 import { logSwallowedShortcut } from "../../infrastructure/logging";
 import { adjustFontSize, resetFontSize } from "../../features/terminal/settings";
 import { adjustViewerFontSize, resetViewerFontSize } from "../../features/viewers/viewer-font";
@@ -43,6 +44,8 @@ export function installNavKeys(context: NavigationContext, mac = IS_MAC): void {
         if (ev.isComposing && (ev.ctrlKey || ev.altKey)) logSwallowedShortcut(ev);
         return;
       }
+      // PowerShell 모드에는 폴더 브라우저가 없다. 키를 소비하지 않고 셸로 그대로 흘려보낸다.
+      if (action.type === "newTab" && action.kind === "folderBrowser" && isPowerShellMode()) return;
       ev.preventDefault();
       ev.stopPropagation();
       // 반복 keydown 은 토글 키로 소비만 한다 — 서랍이 열렸다 닫히는 흔들림을 막는다.

@@ -276,6 +276,10 @@ fn claim(key: &str) -> bool {
 /// 남긴 인자다 — 현재 구현은 쓰지 않는다.
 #[cfg(not(target_os = "macos"))]
 pub fn ensure_provisioned(_app: &AppHandle, wsl: &Arc<WslHealth>, distro: Option<&str>) {
+    // PowerShell 모드에는 설치할 배포판이 없다 — 설치 스크립트를 흘리지 않는다 (ADR-0037 결정 6).
+    if crate::host::powershell_mode() {
+        return;
+    }
     let distro = distro.filter(|d| !d.is_empty()).map(str::to_owned);
     let target = distro.clone().unwrap_or_else(|| "default distro".to_owned());
     let wsl = Arc::clone(wsl);

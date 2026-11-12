@@ -7,6 +7,7 @@ use crate::model::{
     AgentStatus, NotificationState, PaneId, Tab, TabId, TabKind, TerminalStatus, Workspace,
 };
 use crate::notify::{OscBatch, OscDelta};
+use crate::wslpath::to_windows_drive_path;
 
 impl Dispatcher {
     /// 세션 이벤트 반영. 상태가 실제로 바뀔 때만 `revision += 1`.
@@ -129,6 +130,7 @@ impl Dispatcher {
         let visible = self.state.active_workspace == Some(ws_ref.id)
             && ws_ref.panes[&pane].active_tab == Some(tab_id);
         let message_seq = self.osc_batch_seq;
+        let powershell = self.host.powershell_mode();
 
         let ws = &mut self.state.workspaces[wi];
         let tab = &mut ws
@@ -154,12 +156,15 @@ impl Dispatcher {
                 changed = true;
             }
         }
-        if let Some(next_cwd) = &delta.cwd {
+        if let Some(raw_cwd) = &delta.cwd {
             // respawn 이 탭 cwd 를 쓰므로(재시작 후 마지막 디렉터리 복원) OSC 7 은
-            // 탭에 기록된 cwd 를 갱신한다.
+            // 탭에 기록된 cwd 를 갱신한다. PowerShell 모드는 드라이브 경로로 저장해야
+            // 재시작 스폰(host.rs)이 작업 폴더로 넘길 수 있다.
+            let drive = powershell.then(|| to_windows_drive_path(raw_cwd)).flatten();
+            let next_cwd = drive.as_deref().unwrap_or(raw_cwd.as_str());
             if let TabKind::Terminal { cwd, .. } = &mut tab.kind {
-                if cwd.as_deref() != Some(next_cwd.as_str()) {
-                    *cwd = Some(next_cwd.clone());
+                if cwd.as_deref() != Some(next_cwd) {
+                    *cwd = Some(next_cwd.to_owned());
                     changed = true;
                 }
             }

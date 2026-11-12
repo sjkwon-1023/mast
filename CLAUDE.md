@@ -15,6 +15,10 @@ and on pushes to `main` or a `v*` tag. **Remaining: stage 23**, ARM64 device tes
 (`docs/WINDOWS-BUILD.md` §11), which awaits hardware. Every decision lives in `docs/adr/`;
 the WINDOWS-BUILD §10 subsections per release stay as regression checklists.
 
+The Windows PowerShell mode for PCs without WSL (ADR-0037) is implemented but not yet
+field-verified; its checklist is WINDOWS-BUILD §10 "Unreleased — Windows PowerShell mode field
+verification".
+
 One field lesson worth keeping: synthetic needs-input tests must reset state first
 (`mast:idle` then `mast:needsInput`) — the onset only fires on a transition.
 
@@ -40,7 +44,9 @@ needs to argue against this list first.
 
 - Keeping every workspace's xterm/renderer alive just to preserve visual state.
 - Becoming a full code editor or IDE.
-- Supporting PowerShell/CMD profiles; WSL2 remains the terminal execution model.
+- Supporting PowerShell/CMD profiles beyond the one PowerShell mode for PCs without WSL (ADR-0037).
+  WSL2 remains the default execution model; cmd tabs and running both modes in one install are not
+  supported.
 - Restarting the Rust backend as a memory watchdog action.
 - Adding always-on services whose idle cost scales with the number of workspaces, unless the
   feature clearly requires it.
@@ -214,6 +220,8 @@ MVP.
 - `crates/mast-remote` — the LAN remote surface's HTTP server: head parser on `httparse`,
   route table, pairing token, per-IP limiter, handlers. Pure Rust, no Tauri; its integration
   tests run against a real listener on Linux (`tests/server.rs`, unix-only `tests/server_pty.rs`).
+- `crates/mast-agy-hook` — the Windows PowerShell mode's Antigravity CLI hook (ADR-0037): a small
+  console exe that writes the status OSC to the tab console. Builds everywhere, runs only on Windows.
 - `apps/mast` — the MVP app (계획 v2 section 17, stage 10 onward): Tauri v2 + vanilla TS
   frontend driving the `mast-core` `Dispatcher` over a single serializable `Command` bus.
   Architecture: ADR-0002 (state/bus/attach), ADR-0003 (split/tab UI).
@@ -232,6 +240,7 @@ MVP.
 export PATH="$HOME/.local/node/bin:$HOME/.cargo/bin:$PATH"
 cargo test -p mast-core
 cargo test -p mast-remote
+cargo test -p mast-agy-hook
 cd apps/spike && npm run build && npx vitest run
 cd apps/mast && npm run build && npm run audit:secure-remote && npm run audit:secure-remote:self-test && npx vitest run
 ```
@@ -260,9 +269,9 @@ also runs the Windows installer tests.
 - `src-tauri` cannot compile for the Linux host (no webkit2gtk) — the `windows-gates` job
   IS the compile gate for the glue.
 - Windows build/run and the manual verification flow: `docs/WINDOWS-BUILD.md`.
-- The app spawns `wsl.exe --cd ~ [-d $MAST_DISTRO] --exec bash -c <scripts/wsl/launch.sh>` on
-  Windows; that wrapper execs the WSL login shell, zsh or bash (falling back to `/bin/bash`), and
-  `$SHELL -l` on Unix.
+- In WSL mode the app spawns `wsl.exe --cd ~ [-d $MAST_DISTRO] --exec bash -c <scripts/wsl/launch.sh>`
+  on Windows; PowerShell mode runs `powershell.exe` instead and never starts `wsl.exe` (ADR-0037). That
+  wrapper execs the WSL login shell, zsh or bash (falling back to `/bin/bash`), and `$SHELL -l` on Unix.
 
 ## Conventions
 

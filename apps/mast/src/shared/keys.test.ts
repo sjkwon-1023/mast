@@ -10,10 +10,12 @@ import {
   nextTab,
   nextWorkspace,
   paneInDirection,
+  currentFolderWorkspace,
   paneTerminalCwd,
   pathBasename,
   shortcutBadge as platformShortcutBadge,
   shortcutLabel as platformShortcutLabel,
+  windowsPathBasename,
   workspaceAtOrdinal,
 } from "./keys";
 import type { KeySpec, PaneRect } from "./keys";
@@ -475,6 +477,67 @@ describe("activeTerminalCwd / pathBasename", () => {
     expect(pathBasename("/home/dev/proj")).toBe("proj");
     expect(pathBasename("/home/dev/proj/")).toBe("proj");
     expect(pathBasename("/")).toBe("/");
+  });
+});
+
+describe("PowerShell 모드의 경로 이름과 현재 폴더 워크스페이스", () => {
+  it("windowsPathBasename 은 \\ 와 / 를 구분자로 보고, 드라이브 루트는 드라이브 문자다", () => {
+    expect(windowsPathBasename("C:\\Users\\me\\proj")).toBe("proj");
+    expect(windowsPathBasename("C:\\Users\\me\\proj\\")).toBe("proj");
+    expect(windowsPathBasename("C:/mixed/dir")).toBe("dir");
+    expect(windowsPathBasename("D:\\")).toBe("D:");
+  });
+
+  it("WSL 의 pathBasename 은 \\ 를 파일 이름 글자로 그대로 둔다", () => {
+    expect(pathBasename("/home/dev/a\\b")).toBe("a\\b");
+  });
+
+  it("WSL 현재 폴더 워크스페이스는 /mnt 를 거부하고 배포판을 싣는다", () => {
+    const wsl = { mac: false, powershell: false };
+    expect(currentFolderWorkspace("/mnt/c/x", "Ubuntu", wsl)).toEqual({
+      error: expect.stringContaining("cannot create a workspace under /mnt"),
+    });
+    expect(currentFolderWorkspace("/home/u/proj", "Ubuntu", wsl)).toEqual({
+      name: "proj",
+      rootPath: "/home/u/proj",
+      distro: "Ubuntu",
+    });
+  });
+
+  it("PowerShell 모드는 /mnt 검사를 하지 않고 드라이브 경로를 그대로 쓰며 distro 를 null 로 둔다", () => {
+    const ps = { mac: false, powershell: true };
+    expect(currentFolderWorkspace("C:\\Users\\me\\proj", null, ps)).toEqual({
+      name: "proj",
+      rootPath: "C:\\Users\\me\\proj",
+      distro: null,
+    });
+    // /mnt 검사는 이 모드에 없다: /mnt/c 는 /mnt 거부 문구 대신 드라이브 규칙으로 거부된다.
+    expect(currentFolderWorkspace("/mnt/c", null, ps)).toEqual({
+      error: expect.stringContaining("needs a folder on a drive letter"),
+    });
+  });
+
+  it("PowerShell 모드는 드라이브 문자가 없는 폴더를 영어 오류로 거부한다", () => {
+    const ps = { mac: false, powershell: true };
+    for (const cwd of ["/home/u/proj", "\\\\server\\share\\proj", "C:proj", "\\proj"]) {
+      expect(currentFolderWorkspace(cwd, null, ps)).toEqual({
+        error: `PowerShell mode needs a folder on a drive letter; map the network folder to a drive first: ${cwd}`,
+      });
+    }
+    expect(currentFolderWorkspace("z:\\lower", null, ps)).toEqual({
+      name: "lower",
+      rootPath: "z:\\lower",
+      distro: null,
+    });
+  });
+
+  it("macOS 는 /mnt 검사를 하지 않고 distro 를 null 로 둔다 (기존 동작)", () => {
+    const mac = { mac: true, powershell: false };
+    expect(currentFolderWorkspace("/mnt/x", "Ubuntu", mac)).toEqual({
+      name: "x",
+      rootPath: "/mnt/x",
+      distro: null,
+    });
   });
 });
 

@@ -11,6 +11,7 @@ import {
   unregisterTerminalFontTarget,
 } from "../../features/terminal/settings";
 import { viewerFontSize } from "../../features/viewers/viewer-font";
+import { applyWindowsShellSettings } from "../../shared/windows-shell";
 
 function context(snapshot: StateSnapshot | null = null): NavigationContext {
   return {
@@ -25,6 +26,48 @@ function context(snapshot: StateSnapshot | null = null): NavigationContext {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("navigation in PowerShell mode", () => {
+  afterEach(() => applyWindowsShellSettings({ windowsShell: null }));
+
+  it("passes the folder browser shortcut to the shell and keeps the other tab shortcuts", () => {
+    applyWindowsShellSettings({ windowsShell: "powershell" });
+    const add = vi.spyOn(window, "addEventListener");
+    const host = context(structuredClone(snapshotJson) as unknown as StateSnapshot);
+    installNavKeys(host, false);
+    const call = add.mock.calls.find(([type]) => type === "keydown")!;
+    add.mockRestore();
+    const listener = call[1] as EventListener;
+    const terminal = document.createElement("div");
+    document.body.append(terminal);
+    try {
+      const folder = new KeyboardEvent("keydown", {
+        key: "B",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      terminal.dispatchEvent(folder);
+      expect(folder.defaultPrevented).toBe(false);
+      expect(host.dispatchUI).not.toHaveBeenCalled();
+
+      const tab = new KeyboardEvent("keydown", {
+        key: "T",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      terminal.dispatchEvent(tab);
+      expect(tab.defaultPrevented).toBe(true);
+      expect(host.dispatchUI).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener("keydown", listener, { capture: true });
+      terminal.remove();
+    }
+  });
+});
 
 describe("navigation wiring", () => {
   it("reads the latest snapshot for each key and uses the UI dispatch path", () => {
