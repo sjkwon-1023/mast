@@ -3273,6 +3273,28 @@ over a running Mast.
 8. **Skill and help.** After `mast skill-load`, the skill text and `mast --help` must describe the same
    options, placement rules, error codes and exit codes as ADR-0035. Record any mismatch.
 
+### Unreleased — keyboard focus after Alt+Tab (ADR-0031 amendment 2026-11-12)
+
+Pending Windows field verification. The x64 clippy gate compiles the glue and vitest covers the
+crosshair class; neither shows where Windows puts keyboard focus. With `log` on, a return that
+restores focus logs `reset: signal focused=true` and `pane: focus from=none to=<pane>` without a
+click.
+
+1. Type in a terminal, Alt+Tab to another application and Alt+Tab back. Typing reaches the same
+   terminal without a click, in English and in Korean. The pointer is not a crosshair.
+2. Repeat with Alt+Shift+Tab, with the taskbar button, with Win+D twice and after minimizing and
+   restoring the window.
+3. Open the folder picker (new workspace) and cancel it. Typing reaches the terminal again.
+4. Click from another application straight into a different pane than the one that had focus. The
+   clicked pane takes focus, as before.
+5. With a browser tab: click into the page, Alt+Tab away and back, and type; the keys reach the
+   page. Then focus a terminal, Alt+Tab away and back; the keys reach the terminal. Activate Mast
+   by clicking the page while a terminal had focus, and the reverse; the clicked side takes focus.
+6. Close or switch away from a browser tab whose page had focus, Alt+Tab away and back. Typing
+   reaches the main UI, not a hidden page.
+7. Hold Alt and move the mouse over a terminal: the crosshair appears, and Alt+drag still selects
+   a column block. Release Alt: the crosshair goes away.
+
 ### Unreleased — image viewer field verification (ADR-0008 amendment 2026-11-12)
 
 Pending Windows field verification. The automated tests and the x64 clippy run do not show WebView2
