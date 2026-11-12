@@ -66,6 +66,54 @@ async function attachedView(): Promise<TerminalView> {
   return view;
 }
 
+// Alt+Tab 으로 창을 떠나면 Alt keyup 이 오지 않는다. 그때 xterm 이 Alt keydown 에 켠 열 선택용
+// 십자 커서 표시(`column-select`)가 남으면 돌아온 뒤에도 마우스가 + 모양이다.
+describe("Alt 키와 열 선택 커서", () => {
+  const altDown = (key: string): KeyboardEvent =>
+    new KeyboardEvent("keydown", { key, altKey: true, bubbles: true, cancelable: true });
+
+  it("Alt 를 누르기만 해서는 십자 커서 표시가 남지 않는다", async () => {
+    const view = await attachedView();
+    const term = termOf(view);
+    try {
+      term.textarea!.dispatchEvent(altDown("Alt"));
+      expect(term.element!.classList.contains("column-select")).toBe(false);
+      // Alt+Shift+Tab 처럼 Alt 를 누른 채 다른 수식 키를 눌러도 같다.
+      term.textarea!.dispatchEvent(altDown("Shift"));
+      expect(term.element!.classList.contains("column-select")).toBe(false);
+    } finally {
+      view.dispose();
+    }
+  });
+
+  it("Alt 를 누른 채 마우스를 움직이면 십자 커서 표시가 켜진다", async () => {
+    const view = await attachedView();
+    const term = termOf(view);
+    try {
+      const screen = term.element!.querySelector(".xterm-screen")!;
+      screen.dispatchEvent(new MouseEvent("mousemove", { altKey: true, bubbles: true }));
+      expect(term.element!.classList.contains("column-select")).toBe(true);
+    } finally {
+      view.dispose();
+    }
+  });
+
+  it("라이브러리 전제: xterm 6.0 기본은 Alt keydown 에 십자 커서 표시를 켠다", () => {
+    // 업스트림이 이 동작을 바꾸면 keepColumnSelectCursorOffKeys 를 지울 수 있다.
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const term = new Terminal({ cols: 80, rows: 24 });
+    term.open(host);
+    try {
+      term.textarea!.dispatchEvent(altDown("Alt"));
+      expect(term.element!.classList.contains("column-select")).toBe(true);
+    } finally {
+      term.dispose();
+      host.remove();
+    }
+  });
+});
+
 describe("Alt+방향키 전달", () => {
   beforeEach(() => h.writeStdin.mockClear());
 

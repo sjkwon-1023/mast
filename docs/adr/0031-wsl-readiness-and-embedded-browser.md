@@ -195,6 +195,37 @@ failed restore returns `view was not restored` and is retried on that tab's next
 surface update.
 External CDP, a server and network interception remain out of scope.
 
+## Amendment (2026-11-12): keyboard focus after the window is activated without a click
+
+Field report: after Alt+Tab back to Mast, typing went nowhere until the terminal was clicked, and
+the pointer stayed a crosshair.
+
+The cause is Decision 2's multi-webview build. Tauri's `unstable` feature creates the main webview
+as a child webview too, and wry 0.55.1 attaches its parent-window subclass, the code that moves
+keyboard focus into the webview on `WM_SETFOCUS`, only when the webview is not a child. When the
+window is activated without a mouse press on a webview (Alt+Tab, the taskbar, a native dialog
+closing), focus stays on the top-level window. tauri-runtime-wry 2.11.4 also drops the window's
+own focus event while no browser tab exists, so the reset policy and the needs-input toast treated
+the window as unfocused until that click.
+
+`window_focus.rs` (Windows only) subclasses the main window. On `WM_SETFOCUS` it moves focus to
+the webview that had it last, the main UI or a browser tab's page, and falls back to the main UI
+when that page is hidden or closed. It does nothing while a mouse button is down: a click that
+activates the window lands on a webview that takes focus itself, and moving focus to the previous
+webview would race it.
+
+tauri-runtime-wry 2.12.0 has the same restore (tauri-apps/tauri#15625). Upgrading was not done as
+part of this fix: Tauri 2.12 moves tao and wry two minor versions each and `windows` and
+`webview2-com` to 0.62 and 0.39, which this crate also uses directly, and that needs the IME and
+keyboard field checks of its own. Delete `window_focus.rs` when that upgrade lands.
+
+The crosshair is separate. xterm adds its column-selection class on every keydown with Alt held and
+removes it on the Alt keyup, which goes to the other application on Alt+Tab, so the class is still
+set on return. `keepColumnSelectCursorOffKeys` removes the class after key events, so the
+crosshair appears only while the mouse moves with Alt held. Alt+drag column selection is unchanged.
+
+Field verification is pending: `docs/WINDOWS-BUILD.md` section 10, "keyboard focus after Alt+Tab".
+
 ## Alternatives rejected
 
 - **A separate headless browser or screen streaming** (as in herdr-browser) — an always-on process

@@ -51,6 +51,9 @@ mod secure_remote;
 mod sink;
 mod state;
 mod update;
+// 클릭 없이 돌아온 창의 키 입력 복구 — Tauri 2.12 로 올리면 지운다 (모듈 doc).
+#[cfg(windows)]
+mod window_focus;
 mod wsl_health;
 
 use std::collections::HashSet;
@@ -313,6 +316,8 @@ fn main() {
                 sessions_for_secure_remote,
             ));
             update::init(&handle);
+            #[cfg(windows)]
+            window_focus::install(&handle);
             Ok(())
         })
         // 창 이벤트 두 갈래 — 포커스 전이는 리셋 정책 + 프론트 토스트 억제 신호,

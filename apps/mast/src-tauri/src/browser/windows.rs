@@ -76,6 +76,7 @@ pub(super) fn configure(
                 activate_pane(&focus_app, tab);
                 Ok(())
             })), &mut token)?;
+            crate::window_focus::track(&native_view.controller())?;
             let permissions_app = app.clone();
             core.add_PermissionRequested(&PermissionRequestedEventHandler::create(Box::new(move |_, args| {
                 if let Some(args) = args { args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY)?; }
