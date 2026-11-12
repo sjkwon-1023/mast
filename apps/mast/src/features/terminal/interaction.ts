@@ -114,6 +114,16 @@ export function macTerminalKeyAction(
   return { type: "scroll", to };
 }
 
+// xterm 은 Alt 가 눌린 keydown 마다 열 선택용 십자 커서를 켜고 Alt keyup 에서 끈다. Alt+Tab 은 그
+// keyup 이 다른 앱으로 가서, 돌아온 뒤에도 마우스가 십자 모양으로 남는다. 키로 켜진 표시는 바로
+// 지워, Alt 를 누른 채 마우스를 움직일 때(xterm 의 mousemove 처리)만 십자 커서가 나오게 한다.
+// `term.open()` 뒤에 부른다.
+export function keepColumnSelectCursorOffKeys(term: Terminal): void {
+  const clear = (): void => term.element?.classList.remove("column-select");
+  term.textarea?.addEventListener("keydown", clear);
+  term.textarea?.addEventListener("keyup", clear);
+}
+
 // 선택 없는 Ctrl+C는 SIGINT로 통과시킨다. 기록 뷰도 이 판정을 공유한다.
 export function isCopySelectionKey(ev: KeyboardEvent, hasSelection: boolean, mac = IS_MAC): boolean {
   if (ev.isComposing || !hasSelection || !primaryModifier(ev, mac)) return false;

@@ -23,7 +23,11 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
 import { readTabRecord } from "../../../infrastructure/backend";
-import { copyTerminalSelection, isCopySelectionKey } from "../../terminal/interaction";
+import {
+  copyTerminalSelection,
+  isCopySelectionKey,
+  keepColumnSelectCursorOffKeys,
+} from "../../terminal/interaction";
 import { registerTerminalFontTarget, terminalViewOptions, unregisterTerminalFontTarget } from "../../terminal/settings";
 import type { TerminalFontTarget } from "../../terminal/settings";
 import type { ViewerKind, ViewerView } from "../viewer-view";
@@ -82,6 +86,7 @@ export class RecordView implements ViewerView, TerminalFontTarget {
     this.term.loadAddon(this.fitAddon);
     this.term.open(this.root);
     this.fit();
+    keepColumnSelectCursorOffKeys(this.term);
 
     // 복사 배선 — `disableStdin` 은 xterm 의 **전송**만 막고 keydown 처리는 막지
     // 않는다. `Ctrl+C` 는 여전히 xterm 안에서 cancel(preventDefault) 되므로,

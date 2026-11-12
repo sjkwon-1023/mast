@@ -34,6 +34,7 @@ import {
   copyTerminalSelection,
   clipboardHasImage,
   macTerminalKeyAction,
+  keepColumnSelectCursorOffKeys,
 } from "./interaction";
 import type { MacTerminalKey } from "./interaction";
 import { Channel } from "@tauri-apps/api/core";
@@ -229,6 +230,7 @@ export class TerminalView {
 
     this.fit();
     this.installCopyPasteKeys();
+    keepColumnSelectCursorOffKeys(this.term);
     if (IS_MAC) {
       this.ime = new WebKitImeInput(this.term);
     } else {
