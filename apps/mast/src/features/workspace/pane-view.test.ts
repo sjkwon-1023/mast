@@ -19,6 +19,7 @@ import type { ViewRegistry, ViewerRegistry } from "./pane-view";
 import { REPORT_DEBOUNCE_MS } from "./pane-geometry";
 import type { Grid } from "./pane-geometry";
 import { applyTabIdSettings } from "./tab-id-settings";
+import { applyWindowsShellSettings } from "../../shared/windows-shell";
 import type { VisibleViewer } from "./view-reconcile";
 import type { ViewerKind, ViewerView } from "../viewers/viewer-view";
 import type { TerminalView } from "../terminal/view";
@@ -769,6 +770,47 @@ describe("PaneView header buttons", () => {
 
 // 셸 없는 탭의 재시작 배너 (ADR-0010) — notStarted 와 exited 가 같은 배너를 쓰되
 // 문구·라벨·색이 갈린다. 죽은 탭에 되살릴 길이 없던 것이 이 배너가 넓어진 이유다.
+describe("PaneView in PowerShell mode", () => {
+  afterEach(() => applyWindowsShellSettings({ windowsShell: null }));
+
+  function headerTitles(view: PaneView): string[] {
+    return Array.from(child(view.root, ".pane-header").children)
+      .filter((el): el is HTMLButtonElement => el.tagName === "BUTTON")
+      .map((b) => b.title.replace(/ \(.*\)$/, ""));
+  }
+
+  it("leaves out the WSL-only folder browser and changes viewer buttons", () => {
+    applyWindowsShellSettings({ windowsShell: "powershell" });
+    const { view } = mount();
+    view.update(pane(THREE, 10), true, null, null);
+    expect(headerTitles(view)).toEqual([
+      "New terminal tab",
+      "New browser tab",
+      "Split left/right",
+      "Split top/bottom",
+    ]);
+  });
+
+  it("does not blame WSL for a shell that has not started", () => {
+    applyWindowsShellSettings({ windowsShell: "powershell" });
+    const { view } = mount();
+    view.update(pane([terminalTab(10, { status: { type: "notStarted" } })], 10), true, null, null);
+    const text = child(child(view.root, ".pane-restart"), "span").textContent;
+    expect(text).toContain("startup files");
+    expect(text).not.toContain("WSL");
+    const badge = child(view.root, ".tab-not-started");
+    expect(badge.title).toContain("startup files");
+    expect(badge.title).not.toContain("WSL");
+  });
+
+  it("keeps the WSL wording and the folder button in the default WSL mode", () => {
+    const { view } = mount();
+    view.update(pane([terminalTab(10, { status: { type: "notStarted" } })], 10), true, null, null);
+    expect(child(child(view.root, ".pane-restart"), "span").textContent).toContain("WSL may be slow");
+    expect(headerTitles(view)).toContain("New folder browser tab");
+  });
+});
+
 describe("PaneView restart banner", () => {
   function banner(view: PaneView): HTMLElement {
     return child(view.root, ".pane-restart");

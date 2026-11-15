@@ -175,6 +175,21 @@ pub fn from_windows_path(path: &str) -> Result<(Option<String>, String), String>
     Ok((distro, linux))
 }
 
+/// OSC 7 경로(`/C:/Users/me`)를 Windows 드라이브 경로(`C:\Users\me`)로 바꾼다.
+///
+/// PowerShell 모드 전용이다. 그 모드의 셸은 `file://<호스트>/C:/...` 로 보고하고, 재시작
+/// 스폰은 드라이브 경로만 작업 폴더로 넘긴다. `/X:/` 로 시작하지 않는 값(`/home/u`,
+/// `//tmp`, `//srv/share`)은 `None` 이며, 호출자는 원래 값을 그대로 둔다.
+pub fn to_windows_drive_path(osc7_path: &str) -> Option<String> {
+    let [b'/', letter, b':', b'/', ..] = osc7_path.as_bytes() else {
+        return None;
+    };
+    if !letter.is_ascii_alphabetic() {
+        return None;
+    }
+    Some(format!("{}:\\{}", *letter as char, osc7_path[4..].replace('/', "\\")))
+}
+
 /// WSL UNC 접두를 떼고 나머지(`<distro>[\...]`)를 돌려준다. 접두 바로 뒤는
 /// 구분자이거나 문자열 끝이어야 한다 — `\\wsl.localhostx\...` 같은 다른 호스트가
 /// 접두 매칭에 걸리지 않게 한다.
@@ -501,5 +516,19 @@ mod tests {
         // Win32 가 절삭하는 후행 점·공백 컴포넌트도 통과시키지 않는다.
         let err = from_windows_path(r"C:\Users\dev.\x").unwrap_err();
         assert!(err.contains("dot or space"), "{err}");
+    }
+
+    #[test]
+    fn osc7_drive_path_becomes_a_windows_drive_path() {
+        assert_eq!(to_windows_drive_path("/C:/Users/me").as_deref(), Some(r"C:\Users\me"));
+        assert_eq!(to_windows_drive_path("/c:/a b/한").as_deref(), Some(r"c:\a b\한"));
+        assert_eq!(to_windows_drive_path("/C:/").as_deref(), Some(r"C:\"));
+    }
+
+    #[test]
+    fn osc7_paths_that_are_not_drive_paths_are_not_converted() {
+        for path in ["/home/u", "//tmp", "//srv/share/x", "/C:", "C:/x", "/1:/x", "/", ""] {
+            assert_eq!(to_windows_drive_path(path), None, "{path:?}");
+        }
     }
 }

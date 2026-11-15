@@ -22,6 +22,7 @@ struct FakeHostInner {
     /// 검사할 수 있게 탭 목록을 평탄화하지 않는다.
     releases: Mutex<Vec<(Vec<TabId>, Option<String>)>>,
     fail_spawn: AtomicBool,
+    powershell: AtomicBool,
 }
 
 #[derive(Clone, Default)]
@@ -43,9 +44,17 @@ impl FakeSessionHost {
     fn set_fail_spawn(&self, fail: bool) {
         self.0.fail_spawn.store(fail, Ordering::SeqCst);
     }
+
+    fn set_powershell_mode(&self, on: bool) {
+        self.0.powershell.store(on, Ordering::SeqCst);
+    }
 }
 
 impl SessionHost for FakeSessionHost {
+    fn powershell_mode(&self) -> bool {
+        self.0.powershell.load(Ordering::SeqCst)
+    }
+
     fn spawn_shell(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId> {
         if self.0.fail_spawn.load(Ordering::SeqCst) {
             anyhow::bail!("injected spawn failure");
@@ -1675,6 +1684,28 @@ fn apply_osc_routes_delta_to_the_tab_owning_the_session() {
 
     // 워크스페이스는 탭에서 파생된다.
     assert_eq!(agent(&d, ws), (AgentStatus::NeedsInput, msg("approve?")));
+}
+
+#[test]
+fn osc7_cwd_is_stored_as_a_drive_path_only_in_powershell_mode() {
+    let (mut d, host) = dispatcher();
+    let (_ws, pane) = create_ws(&mut d, "ws");
+    let (tab_wsl, s_wsl) = create_terminal_tab(&mut d, pane);
+    let (tab_ps, s_ps) = create_terminal_tab(&mut d, pane);
+    // PowerShell 셸은 호스트명 뒤에 드라이브 경로를 보내고, 한글은 UTF-8 %XX 로 온다.
+    let osc7 = "file://HOST/C:/Users/%ED%95%9C/my%20proj";
+
+    // WSL 모드(기본): OSC 7 경로를 디코드한 값 그대로 저장한다.
+    d.apply_osc(batch(&[(s_wsl, OscEvent::Osc7Cwd(osc7.into()))]), 1_000);
+    assert_eq!(tab_cwd(&d, tab_wsl).as_deref(), Some("/C:/Users/한/my proj"));
+
+    host.set_powershell_mode(true);
+    d.apply_osc(batch(&[(s_ps, OscEvent::Osc7Cwd(osc7.into()))]), 2_000);
+    assert_eq!(tab_cwd(&d, tab_ps).as_deref(), Some(r"C:\Users\한\my proj"));
+
+    // 드라이브 경로가 아니면 PowerShell 모드여도 값을 바꾸지 않는다.
+    d.apply_osc(batch(&[(s_ps, OscEvent::Osc7Cwd("file://HOST/home/u".into()))]), 3_000);
+    assert_eq!(tab_cwd(&d, tab_ps).as_deref(), Some("/home/u"));
 }
 
 #[test]

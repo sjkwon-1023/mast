@@ -145,6 +145,8 @@ fn main() {
             #[cfg(target_os = "macos")]
             platform::macos::initialize(&handle)?;
             let ui = commands::read_ui_settings(&handle).map_err(std::io::Error::other)?;
+            let powershell_mode = ui.powershell_mode();
+            host::set_powershell_mode(powershell_mode);
             let browser_settings = ui.browser.unwrap_or(commands::BrowserSettings {
                 enabled: true,
                 agent_eval: true,
@@ -169,7 +171,7 @@ fn main() {
 
             // WSL 진단기 — host 보다 먼저 만들어야 host 의 스폰 게이트가 이 하나를
             // 공유한다. 첫 진단은 Dispatcher 가 생긴 직후(아래)에 시작한다.
-            let wsl = wsl_health::create();
+            let wsl = wsl_health::create(powershell_mode);
 
             let tauri_host = host::TauriHost::new(
                 handle.clone(),
@@ -178,7 +180,10 @@ fn main() {
                 Arc::clone(&router),
                 Arc::clone(&records),
                 Arc::clone(&wsl),
-                ui.auto_resume == Some(true),
+                host::TabLaunch {
+                    auto_resume: ui.auto_resume == Some(true),
+                    powershell: powershell_mode,
+                },
             );
 
             let (dispatcher, needs_dogfood) = match persist::load(&state_path) {

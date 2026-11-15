@@ -3322,6 +3322,67 @@ the target machine. Record the commit, the Windows version, the WebView2 runtime
 7. **Phone list and neighbours.** The phone list must show the image tab as `image` and must not let
    it be pressed. Text, Markdown and Changes viewers and terminal links must keep working.
 
+### Unreleased — Windows PowerShell mode field verification (ADR-0037)
+
+**Not yet run — no item below is recorded as passed.** Run these on a Windows 11 x64 PC; ARM64 is not
+part of this check. Record the commit, the Windows version, `$PSVersionTable.PSVersion`, the WebView2
+runtime, the Windows user name (whether it has a space or Korean letters) and whether `"log"` is true.
+The Linux and Windows gates do not exercise a real WebView2 window, PSReadLine, the IME or a real agy
+session.
+
+1. **WSL regression (no `windowsShell` key).** On the WSL PC, run the installer with `MAST_WINDOWS_SHELL`
+   unset. `settings.json`, `hooks.json` and `%LOCALAPPDATA%\Programs\mast\bin` must not change, and no
+   `mast-agy-hook.exe` may appear. Then repeat the §10 checks for tabs, folder restore after a restart,
+   agent status and `mast send`, and compare the results with the earlier entries.
+2. **Install.** On a PC or test account without WSL, run
+   `$env:MAST_WINDOWS_SHELL='powershell'; irm …/scripts/win/install.ps1 | iex`. `settings.json` must contain
+   `"windowsShell": "powershell"`, and its first bytes must not be `EF BB BF`. `hooks.json` must have a
+   `mast` group with `mast-agy-hook running` and `mast-agy-hook idle`, with the other groups kept.
+   `bin\mast-agy-hook.exe` must exist. The user `Path` in `HKCU\Environment` must not change.
+3. **Refusals.** With an invalid JSON `settings.json`, the installer must fail, and `mast.exe`,
+   `settings.json` and `hooks.json` must be unchanged. With `MAST_WINDOWS_SHELL=PowerShell`, it must fail
+   before changing anything.
+4. **No WSL.** Start mast. `wsl.exe` must not appear in the process list, and no WSL notice may appear.
+5. **Tabs and folders.** Open a tab, a split and a new workspace. `cd` into a folder on a drive letter: the
+   sidebar path must update, and `C:\Users\<name>` must show as `~`. Quit and reopen mast: each tab must
+   return to its folder. A tab saved in a UNC folder (`\\server\share`) must start in the profile folder,
+   and the folder picker must refuse a UNC path with the drive-letter message.
+6. **Antigravity CLI status.** In a PowerShell tab, run agy and send one prompt. The card must go from
+   running to idle. No Windows notification is expected. Record the agy version.
+7. **Outside mast.** In an ordinary PowerShell window, not a mast tab, run agy. It must work, and mast
+   must not change.
+8. **Names with a space and with Korean letters.** Repeat items 5 and 6 under a user name that has a
+   space, and under one that has Korean letters. Known risk: the OSC 7 path encoding (ADR-0037 decision 4).
+9. **Input.** In a PowerShell tab, check Korean IME composition and its candidate window, arrow keys,
+   Home and End, Ctrl+C, paste and command history with the up arrow. The input cursor must stay in place
+   after a long prompt. Check agy's colors. This is the first real test of the prompt wrapper with
+   PSReadLine.
+10. **Phone remote and `mast update`.** Read and type into a PowerShell tab from the phone. In a PowerShell
+    tab, run `mast update`: `windowsShell` must stay `powershell`, and the installer must end with the
+    quit-and-reopen message. `mast ls` there must print the `only "mast update" is supported` error and
+    must not start `wsl.exe`.
+11. **Reboot.** Leave a PowerShell tab open, restart Windows, and open mast. Record whether the tab comes
+    back and, if it does not, the exit code it recorded (ADR-0010 and ADR-0018).
+12. **Hidden entry points.** The folder-browser button and `Ctrl+Shift+B` (the key must reach the shell),
+    the Git Changes button and file-path links in output must be absent or inert.
+13. **Mode switch, both ways.** On a WSL install with a folder browser or Changes tab open, set
+    `windowsShell` to `"powershell"` and restart. The restored viewer must show `PowerShell mode does not
+    support …`, and no `wsl.exe` may start. Then set it back to `"wsl"` or remove it, restart, and check
+    that the WSL tabs start as before. Record what the PowerShell-mode workspaces show.
+14. **No VC++ redistributable.** On a PC where `where.exe vcruntime140.dll` finds nothing (it searches
+    every folder on `PATH`, which includes System32 and, for example, a Python install), repeat item 6.
+    Do this before installing Python, because a Python install that is added to `PATH` (the
+    non-developer setup does this) can put its own `vcruntime140.dll` there. The hook is linked
+    statically (ADR-0037 decision 10), so the card must still go from running to idle. Record the agy
+    version and the result.
+15. **Hook imports before a tag.** Before tagging a release, run `windows-artifacts` through
+    `workflow_dispatch` on the branch. Download the `mast-agy-hook-x86_64-pc-windows-msvc` artifact and
+    check the import table of the `mast-agy-hook.exe` inside it
+    (`objdump -p` or `dumpbin /dependents`): `VCRUNTIME140.dll` must not appear. CI does not check this.
+16. **Not repeated here.** CI covers `scripts/win/tests/test_install.py` (13 new tests), the already-latest
+    early return of the installer, and the `windows-artifacts` job. The last one runs through
+    `workflow_dispatch` on the branch before a tag.
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy

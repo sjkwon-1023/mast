@@ -42,7 +42,8 @@ import {
   needsInputToastTargets,
 } from "../features/notifications/needs-input";
 import { formatCommandError } from "../shared/command-error";
-import { activeTerminalCwd, activeWorkspace, pathBasename } from "../shared/keys";
+import { activeTerminalCwd, activeWorkspace, currentFolderWorkspace } from "../shared/keys";
+import { applyWindowsShellSettings, isPowerShellMode } from "../shared/windows-shell";
 import { openPairingDialog } from "../features/pairing/dialog";
 import { Sidebar } from "../features/workspace/sidebar";
 import { Store } from "./store";
@@ -295,6 +296,7 @@ class App {
 
       // 첫 스냅샷이 뷰를 만들기 전에 설정과 로그를 적용한다.
       installFrontEndLogging(settings);
+      applyWindowsShellSettings(settings);
       applyTerminalSettings(settings);
       applyBrowserSettings(settings);
       applyViewerFontSettings(settings);
@@ -450,17 +452,19 @@ class App {
       return;
     }
 
-    if (!IS_MAC && (cwd === "/mnt" || cwd.startsWith("/mnt/"))) {
-      this.showError(
-        "cannot create a workspace under /mnt: Windows drives are data-only — cd into the WSL filesystem first",
-      );
+    const created = currentFolderWorkspace(cwd, ws.distro, {
+      mac: IS_MAC,
+      powershell: isPowerShellMode(),
+    });
+    if ("error" in created) {
+      this.showError(created.error);
       return;
     }
     void this.dispatchUI({
       type: "createWorkspace",
-      name: pathBasename(cwd),
-      rootPath: cwd,
-      distro: IS_MAC ? null : ws.distro,
+      name: created.name,
+      rootPath: created.rootPath,
+      distro: created.distro,
       tab: { type: "terminal", cwd: null },
     });
   }

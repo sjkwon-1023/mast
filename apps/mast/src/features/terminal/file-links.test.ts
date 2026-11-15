@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Terminal, type ILink, type ILinkProvider } from "@xterm/xterm";
 
 const h = vi.hoisted(() => ({
@@ -36,6 +36,7 @@ import { createFileLinkProvider, findPathCandidates } from "./file-links";
 import { TerminalView } from "./view";
 import { attachBody, termOf } from "../../test-helpers";
 import { IS_MAC } from "../../shared/platform";
+import { applyWindowsShellSettings } from "../../shared/windows-shell";
 
 const SESSION = 7;
 
@@ -259,6 +260,23 @@ describe("터미널 버퍼의 링크 범위 (셀 좌표)", () => {
     await linksAt(term, 1);
     await linksAt(term, 1);
     expect(h.presentTerminalPath).not.toHaveBeenCalled();
+  });
+});
+
+describe("PowerShell 모드의 경로 링크", () => {
+  afterEach(() => applyWindowsShellSettings({ windowsShell: null }));
+
+  it("does not offer file links, since the path is not a WSL file", async () => {
+    applyWindowsShellSettings({ windowsShell: "powershell" });
+    const term = terminal();
+    await write(term, "src/a.ts");
+    expect(await linksAt(term, 1)).toEqual([]);
+  });
+
+  it("keeps offering file links in the default WSL mode", async () => {
+    const term = terminal();
+    await write(term, "src/a.ts");
+    expect((await linksAt(term, 1)).map((l) => l.text)).toEqual(["src/a.ts"]);
   });
 });
 

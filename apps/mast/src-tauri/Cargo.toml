@@ -26,6 +26,9 @@ mast-remote = { path = "../../../crates/mast-remote" }
 # 아니다). Win32_System_Threading 은 OpenProcess/PROCESS_QUERY_LIMITED_INFORMATION
 # 의 실제 위치라 계획의 3종에 추가로 필요하다.
 [target."cfg(windows)".dependencies]
+# PowerShell 탭의 `-EncodedCommand` 인자 인코딩 (`host::encode_powershell_command`). Windows 에서만 쓰므로
+# 여기 둔다. 워크스페이스가 이미 쓰는 0.22 를 그대로 따른다 (mast-remote 와 같은 버전).
+base64 = "0.22"
 webview2-com = "0.38.2"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

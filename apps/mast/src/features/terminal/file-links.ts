@@ -3,6 +3,7 @@
 import type { IBuffer, ILink, ILinkProvider, Terminal } from "@xterm/xterm";
 import { presentTerminalPath } from "../../infrastructure/backend";
 import { IS_MAC } from "../../shared/platform";
+import { isPowerShellMode } from "../../shared/windows-shell";
 import type { SessionId } from "../../shared/types";
 
 // 한 논리 줄(soft-wrap 포함)과 후보 수의 상한이다. 넘으면 부분 경로를 잘라 만들지 않고 줄 전체에 링크를 만들지 않는다.
@@ -264,7 +265,8 @@ export function createFileLinkProvider(
 ): ILinkProvider {
   return {
     provideLinks(y, callback) {
-      const logical = readLogicalLine(term.buffer.active, y);
+      // PowerShell 모드의 경로는 WSL 파일이 아니라서 열기 IPC 가 거부한다. 링크를 만들지 않는다.
+      const logical = isPowerShellMode() ? null : readLogicalLine(term.buffer.active, y);
       if (logical === null) {
         callback(undefined);
         return;

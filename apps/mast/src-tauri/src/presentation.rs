@@ -117,6 +117,8 @@ impl Probe for HostProbe {
         dir: &str,
         budget: Duration,
     ) -> Result<String, PresentationError> {
+        crate::host::require_wsl("Git queries")
+            .map_err(|message| PresentationError::new(ErrorCode::IoError, message))?;
         let _slot = GitSlot::acquire().map_err(|_| {
             PresentationError::new(
                 ErrorCode::Busy,

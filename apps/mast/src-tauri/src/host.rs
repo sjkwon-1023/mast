@@ -33,9 +33,46 @@ pub struct TauriHost {
     /// WSL 준비 상태 진단기 — **모든 셸 스폰의 마지막 게이트**다. 진단이 끝나기
     /// 전(`Probing`)이나 준비되지 않은 상태에서는 스폰을 거부한다.
     wsl: Arc<WslHealth>,
-    /// 부팅 때 읽은 `autoResume` 설정. 모든 셸 spawn(부팅·새 탭·Restart)이 같은 값을 쓰도록
+    /// 부팅 때 읽은 탭 셸 실행 방식. 모든 셸 spawn(부팅·새 탭·Restart)이 같은 값을 쓰도록
     /// 여기서 한 번만 보관하며, 바꾸려면 앱을 다시 시작해야 한다.
-    auto_resume: bool,
+    launch: TabLaunch,
+}
+
+/// 탭 셸을 띄우는 방식. 둘 다 부팅 때 `settings.json` 에서 한 번 읽는다.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TabLaunch {
+    /// `autoResume` — WSL 래퍼의 자동 재실행 opt-in ([`spawn_spec`]).
+    pub auto_resume: bool,
+    /// Windows PowerShell 모드 ([`crate::commands::UiSettings::powershell_mode`]). 참이면
+    /// 탭 셸은 WSL 래퍼 대신 PowerShell 로 뜬다 ([`TauriHost::tab_spawn_spec`]).
+    pub powershell: bool,
+}
+
+/// 부팅 때 정한 PowerShell 모드의 프로세스 전역 사본. `main.rs` 가 `TabLaunch` 와 같은 값으로 한 번 세운다.
+/// 상태를 들고 있지 않은 자유 함수(뷰어 경로 해석, Git 조회, 예열·프로비저닝·파일 정리)가 이 값을 본다.
+static POWERSHELL_MODE: OnceLock<bool> = OnceLock::new();
+
+pub(crate) fn set_powershell_mode(on: bool) {
+    POWERSHELL_MODE
+        .set(on)
+        .expect("the shell mode is set once at boot");
+}
+
+pub(crate) fn powershell_mode() -> bool {
+    POWERSHELL_MODE.get().copied().unwrap_or(false)
+}
+
+/// WSL 을 쓰는 기능을 PowerShell 모드에서 거부한다. 거부 문구는 영어다 (CLAUDE.md 사용자 문자열 규칙).
+pub(crate) fn require_wsl(feature: &str) -> Result<(), String> {
+    check_wsl(powershell_mode(), feature)
+}
+
+fn check_wsl(powershell: bool, feature: &str) -> Result<(), String> {
+    if powershell {
+        Err(format!("PowerShell mode does not support {feature}"))
+    } else {
+        Ok(())
+    }
 }
 
 impl TauriHost {
@@ -46,7 +83,7 @@ impl TauriHost {
         router: Arc<OscRouter>,
         records: Arc<RecordStore>,
         wsl: Arc<WslHealth>,
-        auto_resume: bool,
+        launch: TabLaunch,
     ) -> Self {
         Self {
             app,
@@ -55,7 +92,7 @@ impl TauriHost {
             router,
             records,
             wsl,
-            auto_resume,
+            launch,
         }
     }
 }
@@ -169,6 +206,104 @@ fn bash_argv(history_tab: Option<u64>, cwd: Option<&str>, auto_resume: bool) -> 
     ]
 }
 
+/// PowerShell 탭 래퍼 본문. 정본은 `scripts/win/powershell-integration.ps1` 이고, 앞에 붙는 세 값
+/// (탭 id·bin 폴더·작업 폴더)은 [`powershell_spawn_spec`] 가 리터럴로 함께 인코딩한다.
+#[cfg(windows)]
+const POWERSHELL_INTEGRATION: &str = include_str!("../../../../scripts/win/powershell-integration.ps1");
+
+/// Windows 명령줄 한도(NUL 포함 32,767 wide 문자)를 넘지 않는 상한. 넘으면 스폰이 조용히 실패하지 않도록 미리 거부한다.
+#[cfg(windows)]
+const WINDOWS_COMMAND_LINE_LIMIT: usize = 32_767;
+
+/// PowerShell 탭의 실행 사양 (ADR-0037 결정 3). 실행 파일은 Windows PowerShell 5.1 이고 작업 디렉터리는
+/// 항상 사용자 프로필이다. 복원할 작업 폴더는 드라이브 경로일 때만 스크립트에 넘긴다 — 그 밖의
+/// 값(WSL 경로 등)은 버리고 홈에서 시작한다. 폴더 존재 확인은 스크립트가 하므로 앱은 디스크에 접근하지 않는다.
+#[cfg(windows)]
+fn powershell_spawn_spec(
+    req: &ShellSpawnReq,
+    bin_dir: &str,
+    user_profile: &str,
+) -> anyhow::Result<SpawnSpec> {
+    let tab = req.history_tab.map(|tab| tab.to_string()).unwrap_or_default();
+    let cwd = req.cwd.as_deref().filter(|cwd| is_drive_path(cwd)).unwrap_or_default();
+    let script = format!(
+        "$MastTab = {}\n$MastBin = {}\n$MastCwd = {}\n{POWERSHELL_INTEGRATION}",
+        ps_literal(&tab),
+        ps_literal(bin_dir),
+        ps_literal(cwd),
+    );
+    let args = vec![
+        "-NoLogo".to_string(),
+        "-NoExit".to_string(),
+        "-EncodedCommand".to_string(),
+        encode_powershell_command(&script),
+    ];
+    let line_len = "powershell.exe".len() + args.iter().map(|arg| arg.len() + 1).sum::<usize>();
+    if line_len >= WINDOWS_COMMAND_LINE_LIMIT {
+        return Err(anyhow!(
+            "PowerShell tab command line is {line_len} characters (limit {WINDOWS_COMMAND_LINE_LIMIT}); the working folder path is too long"
+        ));
+    }
+    Ok(SpawnSpec {
+        program: "powershell.exe".to_string(),
+        args,
+        cwd: Some(user_profile.to_string()),
+        cols: req.cols,
+        rows: req.rows,
+    })
+}
+
+/// 드라이브 경로(`^[A-Za-z]:\\`). 작업 폴더로 넘길 수 있는 유일한 형태다. 폴더 선택([`crate::commands`])도 같은 판정을 쓴다.
+#[cfg(windows)]
+pub(crate) fn is_drive_path(path: &str) -> bool {
+    matches!(path.as_bytes(), [letter, b':', b'\\', ..] if letter.is_ascii_alphabetic())
+}
+
+/// PowerShell 작은따옴표 리터럴. PowerShell 은 U+2018·U+2019·U+201A·U+201B 도 작은따옴표로 읽으므로
+/// 그 글자들도 두 번 적어야 한 글자가 된다. 작은따옴표 안의 나머지 글자는 확장되지 않는다.
+#[cfg(windows)]
+fn ps_literal(value: &str) -> String {
+    let mut literal = String::with_capacity(value.len() + 2);
+    literal.push('\'');
+    for ch in value.chars() {
+        if matches!(ch, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            literal.push(ch);
+        }
+        literal.push(ch);
+    }
+    literal.push('\'');
+    literal
+}
+
+/// `-EncodedCommand` 인자: 스크립트를 UTF-16LE 로 바꾼 뒤 base64 로 감싼다. 결과에 따옴표·공백이 없어
+/// 명령줄 이스케이프가 필요 없다.
+#[cfg(windows)]
+fn encode_powershell_command(script: &str) -> String {
+    use base64::Engine as _;
+    let utf16le: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    base64::engine::general_purpose::STANDARD.encode(utf16le)
+}
+
+/// `<mast.exe 폴더>\bin` — 셸 PATH 앞에 붙는 디렉터리. exe 위치를 따르므로 `MAST_APP_DIR` 로 다른 곳에
+/// 설치돼도 맞는다.
+#[cfg(windows)]
+fn mast_bin_dir() -> anyhow::Result<String> {
+    let exe = std::env::current_exe().map_err(|err| anyhow!("cannot locate mast.exe: {err}"))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| anyhow!("mast.exe has no parent folder: {}", exe.display()))?;
+    let bin = dir.join("bin");
+    bin.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow!("the mast bin folder is not valid Unicode: {}", bin.display()))
+}
+
+/// 사용자 프로필 — PowerShell 탭의 시작 디렉터리다.
+#[cfg(windows)]
+fn user_profile() -> anyhow::Result<String> {
+    std::env::var("USERPROFILE").map_err(|err| anyhow!("cannot read USERPROFILE: {err}"))
+}
+
 /// 시작 표식을 기다리는 기본 마감. 웜 스타트 실측이 163~194ms 라 크게 여유롭지만,
 /// 값을 고르는 부담 자체가 작다 — 마감을 넘겨도 세션을 죽이지 않고 탭에 표시만 하므로
 /// 틀렸을 때의 대가가 경고 한 번뿐이다. 죽이는 설계였다면 WSL 콜드 스타트가 수 초에서
@@ -255,6 +390,7 @@ fn create_session(
 
 impl SessionHost for TauriHost {
     fn browser_enabled(&self) -> bool { crate::browser::enabled(&self.app) }
+    fn powershell_mode(&self) -> bool { self.launch.powershell }
     fn spawn_shell(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId> {
         // 스폰은 Dispatcher lock 아래의 유일한 블로킹 구간이라(모듈 doc), 여기서
         // 얼마나 걸렸는지가 "앱 전체가 멈춘 것처럼 보였다"류 신고의 첫 단서다.
@@ -290,6 +426,18 @@ impl SessionHost for TauriHost {
 }
 
 impl TauriHost {
+    /// 탭 셸의 실행 사양. PowerShell 모드는 WSL 래퍼 대신 PowerShell 을 띄운다. 이 분기가
+    /// 모드에 따른 유일한 갈림이며, WSL 쪽 [`spawn_spec`] 과 그 테스트는 그대로 둔다.
+    fn tab_spawn_spec(&self, req: &ShellSpawnReq) -> anyhow::Result<SpawnSpec> {
+        #[cfg(windows)]
+        {
+            if self.launch.powershell {
+                return powershell_spawn_spec(req, &mast_bin_dir()?, &user_profile()?);
+            }
+        }
+        Ok(spawn_spec(req, self.launch.auto_resume))
+    }
+
     fn spawn_shell_inner(&self, req: ShellSpawnReq) -> anyhow::Result<SessionId> {
         // **모든 셸 스폰의 단일 게이트** — 진단이 끝나기 전에는 어떤 경로도
         // `wsl.exe` 를 띄우지 못한다. 부팅 경로는 `boot::BootWork` 가 진단을 기다린
@@ -308,7 +456,7 @@ impl TauriHost {
         // sink 가 들고 갈 탭 id — exit 이 기록 파일 이름을 여기서만 얻는다
         // (`history_tab` 은 이 세션이 실릴 탭의 안정 ID 다, 코어 rustdoc).
         let tab = req.history_tab.map(TabId);
-        let spec = spawn_spec(&req, self.auto_resume);
+        let spec = self.tab_spawn_spec(&req)?;
         let opts = SessionOptions {
             startup_deadline: startup_deadline(),
             ..SessionOptions::default()
@@ -402,6 +550,10 @@ fn release_records(records: Arc<RecordStore>, tabs: &[TabId]) {
 fn release_tab_files(tabs: &[TabId], distro: Option<&str>) {
     use std::os::windows::process::CommandExt;
 
+    // PowerShell 탭은 WSL 쪽 셸 파일을 만들지 않으므로 지울 것이 없다 — wsl.exe 를 띄우지 않는다 (ADR-0037 결정 6).
+    if powershell_mode() {
+        return;
+    }
     // 콘솔 창 억제 — boot.rs·commands.rs 의 wsl.exe 호출과 같은 플래그다.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -590,6 +742,127 @@ mod tests {
                 r#" "$HOME/.mast/agent-hooks/tab-12.json" "$HOME/.mast/agent-hooks/tab-12.lock" "$HOME/.mast/agent-hooks/tab-12.diag""#,
                 r#" "$HOME/.mast/agent-hooks/tab-12.json".tmp.* "$HOME/.mast/agent-hooks/tab-12.diag".tmp.*"#,
             )
+        );
+    }
+
+    /// PowerShell 탭 명령을 테스트가 다시 풀어 본다: base64 → UTF-16LE → 스크립트 본문.
+    fn decode_powershell_command(args: &[String]) -> String {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&args[3])
+            .expect("EncodedCommand is base64");
+        let (pairs, rest) = bytes.as_chunks::<2>();
+        assert!(rest.is_empty(), "EncodedCommand is UTF-16LE");
+        let units: Vec<u16> = pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
+        String::from_utf16(&units).expect("EncodedCommand is UTF-16LE")
+    }
+
+    fn command_line_len(spec: &SpawnSpec) -> usize {
+        spec.program.len() + spec.args.iter().map(|arg| arg.len() + 1).sum::<usize>()
+    }
+
+    fn powershell_req(cwd: Option<&str>, tab: Option<u64>) -> ShellSpawnReq {
+        ShellSpawnReq {
+            cwd: cwd.map(str::to_string),
+            history_tab: tab,
+            ..ShellSpawnReq::default()
+        }
+    }
+
+    /// 프로그램·인자 순서·작업 디렉터리 계약: 항상 `powershell.exe -NoLogo -NoExit -EncodedCommand`,
+    /// 시작 디렉터리는 사용자 프로필이다 (복원 폴더는 스크립트가 옮긴다).
+    #[test]
+    fn powershell_tab_runs_the_encoded_script_from_the_user_profile() {
+        let spec = powershell_spawn_spec(
+            &powershell_req(Some(r"C:\proj"), Some(7)),
+            r"C:\Apps\mast\bin",
+            r"C:\Users\me",
+        )
+        .unwrap();
+        assert_eq!(spec.program, "powershell.exe");
+        assert_eq!(&spec.args[..3], ["-NoLogo", "-NoExit", "-EncodedCommand"]);
+        assert_eq!(spec.cwd.as_deref(), Some(r"C:\Users\me"));
+    }
+
+    /// 탭 id·bin 폴더·드라이브 작업 폴더가 스크립트 앞의 리터럴로 들어가고, 뒤에 통합 스크립트 본문이 온다.
+    #[test]
+    fn powershell_tab_passes_tab_bin_and_drive_folder_into_the_decoded_script() {
+        let spec = powershell_spawn_spec(
+            &powershell_req(Some(r"C:\proj"), Some(7)),
+            r"C:\Apps\mast\bin",
+            r"C:\Users\me",
+        )
+        .unwrap();
+        let script = decode_powershell_command(&spec.args);
+        let expected_head = "$MastTab = '7'\n$MastBin = 'C:\\Apps\\mast\\bin'\n$MastCwd = 'C:\\proj'\n";
+        assert!(script.starts_with(expected_head), "{script}");
+        assert!(script.ends_with(include_str!("../../../../scripts/win/powershell-integration.ps1")));
+    }
+
+    /// 드라이브 경로가 아닌 작업 폴더(WSL 경로·모드 전환 잔여물)는 넘기지 않고, 탭 id 가 없으면 빈 값이다.
+    #[test]
+    fn powershell_tab_drops_non_drive_folders_and_missing_tab_ids() {
+        for cwd in [Some("/home/me/proj"), Some(r"\\server\share"), Some("C:proj"), None] {
+            let spec =
+                powershell_spawn_spec(&powershell_req(cwd, None), r"C:\bin", r"C:\Users\me").unwrap();
+            let script = decode_powershell_command(&spec.args);
+            assert!(script.starts_with("$MastTab = ''\n$MastBin = 'C:\\bin'\n$MastCwd = ''\n"), "{cwd:?}");
+        }
+    }
+
+    /// 경로의 작은따옴표 계열 글자는 리터럴에서 두 번 적혀 값이 그대로 전달된다 (명령 주입 방지).
+    #[test]
+    fn powershell_tab_quotes_apostrophes_in_paths_without_expanding_them() {
+        let spec = powershell_spawn_spec(
+            &powershell_req(Some("C:\\it\u{2019}s $(calc)"), Some(3)),
+            r"C:\Users\O'Brien\bin",
+            r"C:\Users\O'Brien",
+        )
+        .unwrap();
+        let script = decode_powershell_command(&spec.args);
+        assert!(
+            script.starts_with(
+                "$MastTab = '3'\n$MastBin = 'C:\\Users\\O''Brien\\bin'\n$MastCwd = 'C:\\it\u{2019}\u{2019}s $(calc)'\n"
+            ),
+            "{script}"
+        );
+    }
+
+    /// 긴 드라이브 폴더도 한도 안이면 통과하고, 한도를 넘는 경로는 스폰 전에 명확한 오류로 거부한다.
+    #[test]
+    fn powershell_tab_command_line_stays_under_the_windows_limit() {
+        let long_folder = format!("C:\\{}", "a".repeat(2_000));
+        let spec = powershell_spawn_spec(
+            &powershell_req(Some(&long_folder), Some(1)),
+            r"C:\bin",
+            r"C:\Users\me",
+        )
+        .unwrap();
+        assert!(command_line_len(&spec) < WINDOWS_COMMAND_LINE_LIMIT);
+
+        let too_long = format!("C:\\{}", "a".repeat(30_000));
+        let err = powershell_spawn_spec(&powershell_req(Some(&too_long), Some(1)), r"C:\bin", r"C:\Users\me")
+            .unwrap_err();
+        assert!(err.to_string().contains("command line"), "{err}");
+    }
+
+    /// `is_drive_path` 는 `^[A-Za-z]:\\` 와 같다.
+    #[test]
+    fn drive_path_check_matches_the_documented_shape() {
+        assert!(is_drive_path(r"C:\x"));
+        assert!(is_drive_path(r"z:\"));
+        for path in ["/C:/x", "C:x", "C:/x", "1:\\x", r"\\server\share", ""] {
+            assert!(!is_drive_path(path), "{path:?}");
+        }
+    }
+
+    /// WSL 기능은 PowerShell 모드에서만 거부되고, 거부 문구는 영어로 기능 이름을 그대로 말한다.
+    #[test]
+    fn wsl_features_are_refused_only_in_powershell_mode() {
+        assert!(check_wsl(false, "WSL file paths").is_ok());
+        assert_eq!(
+            check_wsl(true, "WSL file paths").unwrap_err(),
+            "PowerShell mode does not support WSL file paths"
         );
     }
 }

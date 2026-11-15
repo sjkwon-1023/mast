@@ -225,6 +225,28 @@ From a Mast shell: `mast config set macOptionIsMeta true` (or `false`), and
 values; any other type is an error on every platform, but Windows ignores the setting.
 Read once at boot.
 
+## `windowsShell` (Windows only)
+
+Chooses the shell that Windows terminal tabs run: `"wsl"` (the default) or `"powershell"`.
+
+```json
+"windowsShell": "powershell"
+```
+
+- Absent or `null` means `"wsl"`, so an existing WSL setup does not change.
+- `"powershell"` starts each terminal tab in Windows PowerShell 5.1 and needs no WSL. The scope and
+  the reasons are in [ADR-0037](./adr/0037-powershell-mode.md). In this mode the Git changes viewer,
+  the folder browser, file-path links and `Ctrl+Shift+B` are off, and `mast` accepts only
+  `mast update`.
+- Any other value or type, including `"PowerShell"` and `"cmd"`, is an error and stops startup, as
+  for the other keys.
+- Read once at boot. Quit and reopen mast after changing it.
+- This is not the `shell` key. On macOS, `shell` is the login-shell path, and Windows ignores it. The
+  macOS build does not read `windowsShell`.
+- `mast config` does not know this key: `mast config set windowsShell` is rejected. Edit the file by
+  hand, or run the installer with `MAST_WINDOWS_SHELL=powershell` as the
+  [README](../README.md#install-on-windows-without-wsl-powershell-mode) describes.
+
 ## `remote` (Local HTTP)
 
 Lets a phone on the same Wi-Fi read a tab and send it input. **This key controls the Local HTTP

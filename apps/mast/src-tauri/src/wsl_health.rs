@@ -92,14 +92,27 @@ pub fn ensure_target(health: &Arc<WslHealth>, distro: Option<String>) {
     }
 }
 
-pub fn create() -> Arc<WslHealth> {
+/// 진단기를 만든다. PowerShell 모드는 `wsl.exe` 를 한 번도 띄우지 않도록 unix 개발 실행과 같은
+/// `NotApplicable` 프로브를 쓴다 (ADR-0037 결정 6) — 그러면 스폰 게이트와 부팅 경로가 WSL 없이 열린다.
+pub fn create(powershell: bool) -> Arc<WslHealth> {
     #[cfg(windows)]
-    let probe: wsl::ProbeFn = Box::new(probe_now);
+    let probe: wsl::ProbeFn = if powershell {
+        Box::new(not_applicable)
+    } else {
+        Box::new(probe_now)
+    };
     // unix 개발 실행에는 WSL 이 없다 — 게이트가 열린 상태로 고정한다.
     #[cfg(not(windows))]
-    let probe: wsl::ProbeFn = Box::new(|| WslStatus::NotApplicable);
+    let probe: wsl::ProbeFn = {
+        let _ = powershell;
+        Box::new(not_applicable)
+    };
 
     Arc::new(WslHealth::new(probe))
+}
+
+fn not_applicable() -> WslStatus {
+    WslStatus::NotApplicable
 }
 
 /// 완료 콜백 연결 — 진단이 끝날 때마다 프론트로 `wsl-status-changed` 를 보낸다.
@@ -296,5 +309,17 @@ mod tests {
         let probing = dto(&WslStatus::Probing, &dispatcher);
         assert_eq!(probing.state, "probing");
         assert!(probing.missing_distros.is_empty());
+    }
+
+    /// PowerShell 모드의 진단기는 `wsl.exe` 프로브 대신 `NotApplicable` 을 돌려주므로 첫 진단이
+    /// 곧바로 끝나고 스폰 게이트가 열린다 (ADR-0037 결정 6).
+    #[test]
+    fn powershell_mode_diagnosis_completes_as_not_applicable() {
+        let health = create(true);
+        health.start().expect("the diagnosis thread starts");
+        assert!(matches!(
+            health.wait_for_first(Duration::from_secs(5)),
+            WslStatus::NotApplicable
+        ));
     }
 }

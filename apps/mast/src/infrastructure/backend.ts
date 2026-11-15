@@ -198,6 +198,9 @@ export interface UiSettings {
    *  1024~65535 밖을 fontSize 와 같은 자리에서 reject 한다. null 은 미설정이고
    *  그때는 리스너·스레드·토큰 파일이 아예 생기지 않는다. */
   remote: RemoteSettings | null;
+  /** Windows 셸 모드. `"powershell"` 일 때만 백엔드가 보내고, 키가 없으면 WSL 모드다.
+   *  부팅 때 한 번만 반영된다 (shared/windows-shell.ts). */
+  windowsShell?: "powershell" | null;
 }
 
 export interface RemoteSettings {
@@ -550,7 +553,8 @@ export function openSettingsFile(): Promise<void> {
 
 /** pick_workspace_folder 응답 — DTO 필드명은 글루 관례(snake_case) 그대로다. */
 export interface PickedFolder {
-  /** 워크스페이스 rootPath 로 그대로 쓰는 리눅스 절대 경로. */
+  /** 워크스페이스 rootPath 로 그대로 쓰는 경로. WSL 모드는 리눅스 절대 경로이고,
+   *  PowerShell 모드는 필드 이름과 달리 드라이브 경로(`C:\...`)다. */
   linux_path: string;
   /** \\wsl.localhost UNC 를 골랐을 때의 배포판. 드라이브 경로(/mnt/c/...)면 null
    *  이고, 그때는 백엔드의 기존 기본 배포판 해석을 탄다. */
