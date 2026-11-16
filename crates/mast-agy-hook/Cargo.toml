@@ -5,6 +5,10 @@ edition = "2021"
 
 # Antigravity CLI(agy) 훅. 설치 스크립트가 `<dest>\bin`에 두고 hooks.json 이 PATH 이름으로 부른다.
 # 판정 규칙의 원본은 WSL 쪽 `scripts/wsl/mast-agy-hook.sh` 다.
+[dependencies]
+# resume 힌트에 쓸 대화 id 를 훅 입력 JSON 에서 읽는다. mast-core 가 이미 쓰는 크레이트라 그래프가 늘지 않는다.
+serde_json = "1"
+
 [target.'cfg(windows)'.dependencies]
 # CONOUT$ 열기·VT 모드 전환에만 쓴다. 워크스페이스가 이미 쓰는 0.61 을 맞춰 그래프에 크레이트를 늘리지 않는다.
 windows-sys = { version = "0.61", features = [

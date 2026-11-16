@@ -153,12 +153,17 @@ once, at its first prompt, when the agent was still running when Mast quit. `fal
 command as the manual `↑` hint, as before. `true` and `false` are the only values; JSON `null` counts as
 unset, and any other type is an error. Read once at boot, so restart Mast after changing it.
 
-The command is always the one Mast saved: `claude --resume <id>`, `codex resume <id>` or
-`opencode --session <id>`. Auto-runs are queued across tabs: at least 3 seconds between starts, a wait
-while the machine is busy, and a 120-second cap after which the tab keeps the manual hint. Ctrl+C cancels
-a waiting run. A normal agent exit is never auto-run. See
+The command is always the one Mast saved: `claude --resume <id>`, `codex resume <id>`,
+`opencode --session <id>` or `agy --conversation <id>`. Auto-runs are queued across tabs: at least 3 seconds
+between starts, a wait while the machine is busy, and a 120-second cap after which the tab keeps the manual
+hint. Ctrl+C cancels a waiting run. A normal agent exit is never auto-run. See
 [ADR-0026](adr/0026-tab-agent-state-and-hook-signals.md) and
 [the hook contract](../scripts/wsl/claude-hook-example.md#automatic-run--autoresume).
+
+In the Windows PowerShell mode `mast config` is not available, so add `"autoResume": true` to
+`settings.json` by hand. There only Antigravity CLI is resumed (`agy --conversation <id>`), the hint is
+printed but not put into the PowerShell history, and the queue has no busy-machine wait because Windows has
+no load average. See [ADR-0037](adr/0037-powershell-mode.md) amendment 2026-11-17.
 
 ## `browser.enabled`
 

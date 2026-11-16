@@ -1,12 +1,20 @@
 //! Antigravity CLI(agy) 훅. `running` 또는 `idle` 인자로 불리며, mast 탭 안에서만 상태 OSC를 낸다.
 //! agy 는 stdout 을 JSON 으로 읽으므로 OSC 는 콘솔(CONOUT$)에 쓰고 stdout 에는 `{}` 한 줄만 남긴다.
+//! 같은 조건에서 `%USERPROFILE%\.mast\resume\tab-<id>` 에 resume 힌트도 쓴다. 읽는 쪽은
+//! `scripts/win/powershell-integration.ps1` 이다.
 
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::io::{self, IsTerminal, Write};
-use std::process::ExitCode;
+use std::fs;
+use std::io::{self, IsTerminal, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{self, ExitCode};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const USAGE: &str = "usage: mast-agy-hook running|idle";
+
+/// 훅 입력 가운데 보관하는 앞부분. 나머지는 버리면서 EOF 까지 읽는다. WSL 훅과 같은 1 MiB 다.
+const PAYLOAD_LIMIT: u64 = 1024 * 1024;
 
 // idle 본문은 WSL 훅과 달리 agy 응답을 싣지 않고 `done` 으로 고정한다. Windows 쪽은 본문 정리 경로를 두지 않는다.
 const RUNNING_OSC: &[u8] = b"\x1b]777;notify;mast:running;\x07";
@@ -37,16 +45,86 @@ fn main() -> ExitCode {
     // OSC 는 stdin 을 비우기 전에 쓴다. 비우기는 파이프가 EOF 를 줄 때까지 기다리므로, 그 사이에도 상태가 먼저 도착하게 한다.
     let mast_tab = env::var_os("MAST_TAB");
     let other_agent = inside_other_agent(|name| env::var_os(name).is_some());
-    if let Some(osc) = notification_for(event, mast_tab.as_deref(), other_agent) {
+    let osc = notification_for(event, mast_tab.as_deref(), other_agent);
+    if let Some(osc) = osc {
         write_console(osc);
     }
 
     // 콘솔 stdin 은 사용자 입력을 기다리게 되므로 읽지 않는다. 파이프는 EOF 까지 비워서 agy 의 쓰기가 막히지 않게 한다.
     let stdin = io::stdin();
-    if should_drain_stdin(stdin.is_terminal()) {
-        let _ = io::copy(&mut stdin.lock(), &mut io::sink());
+    if !should_drain_stdin(stdin.is_terminal()) {
+        return ExitCode::SUCCESS;
+    }
+    let payload = read_payload(&mut stdin.lock());
+
+    // 상태 OSC 를 낸 호출만 힌트를 쓴다. mast 밖의 agy 나 다른 에이전트가 띄운 agy 는 탭의 힌트를 바꾸지 않는다.
+    if osc.is_some() {
+        let tab = mast_tab.as_deref().and_then(OsStr::to_str).unwrap_or_default();
+        if let (Some(conversation), Some(dir)) = (resume_conversation(&payload), resume_dir()) {
+            let generation = env::var("MAST_PROMPT_GEN").ok();
+            let text = hint_text(&conversation, unix_seconds(), generation.as_deref());
+            let _ = write_hint(&dir, tab, &text);
+        }
     }
     ExitCode::SUCCESS
+}
+
+fn read_payload(reader: &mut impl Read) -> Vec<u8> {
+    let mut kept = Vec::new();
+    let _ = reader.by_ref().take(PAYLOAD_LIMIT).read_to_end(&mut kept);
+    let _ = io::copy(reader, &mut io::sink());
+    kept
+}
+
+/// 힌트로 남길 루트 대화의 id. 서브에이전트 대화도 같은 훅을 부르고 `parentConversationId` 를 채우지 않는다
+/// (agy 1.5.9 에서 확인). 그 대화의 `lastUserInput` 은 빈 문자열이라 이것이 루트 대화와의 유일한 차이다.
+/// 그래서 사용자 입력이 있는 대화만 받는다. 필드가 없는 agy(1.4.7 이전)는 힌트를 쓰지 않는다.
+fn resume_conversation(payload: &[u8]) -> Option<String> {
+    let input: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    let user_input = input.get("lastUserInput")?.as_str()?;
+    let conversation = input.get("conversationId")?.as_str()?;
+    (!user_input.is_empty() && is_plain_token(conversation, usize::MAX)).then(|| conversation.to_owned())
+}
+
+/// `[A-Za-z0-9_-]` 로만 된 비지 않은 문자열. 읽는 쪽이 같은 규칙으로 다시 검사하고 고정 인자로만 실행한다.
+fn is_plain_token(value: &str, max_len: usize) -> bool {
+    (1..=max_len).contains(&value.len())
+        && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// 1행 명령, 2행 기록 시각(epoch 초), 3행 프롬프트 세대. 세대는 형식이 맞을 때만 쓴다. WSL 힌트와 같은 형식이다.
+fn hint_text(conversation: &str, seconds: u64, generation: Option<&str>) -> String {
+    let mut text = format!("agy --conversation {conversation}\n{seconds}\n");
+    if let Some(generation) = generation.filter(|gen| is_plain_token(gen, 128)) {
+        text.push_str(generation);
+        text.push('\n');
+    }
+    text
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
+fn resume_dir() -> Option<PathBuf> {
+    let profile = env::var_os("USERPROFILE").filter(|profile| !profile.is_empty())?;
+    Some(Path::new(&profile).join(".mast").join("resume"))
+}
+
+/// 임시 파일에 쓴 뒤 이름을 바꿔 교체한다. 읽는 쪽은 옛 파일이나 새 파일 중 하나만 본다. 같은 탭에서
+/// 두 훅이 동시에 돌아도 pid 접미사가 달라 임시 파일이 겹치지 않는다. 실패하면 임시 파일을 지운다.
+fn write_hint(dir: &Path, tab: &str, text: &str) -> io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let target = dir.join(format!("tab-{tab}"));
+    let temp = dir.join(format!("tab-{tab}.tmp.{}", process::id()));
+    let result = fs::write(&temp, text).and_then(|()| fs::rename(&temp, &target));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
 }
 
 /// 인자는 정확히 하나여야 한다. 남는 인자를 무시하면 `running extra` 가 조용히 `running` 으로 읽힌다.
@@ -247,5 +325,86 @@ mod tests {
     fn stdin_is_drained_only_when_it_is_not_a_console() {
         assert!(should_drain_stdin(false));
         assert!(!should_drain_stdin(true));
+    }
+
+    const ROOT: &str = "c18e460e-c48b-4597-b22c-3d777e0dbf67";
+
+    #[test]
+    fn a_root_conversation_with_user_input_is_resumable() {
+        let payload = format!(
+            r#"{{"conversationId":"{ROOT}","hookEventName":"PreInvocation","lastUserInput":"fix it"}}"#
+        );
+        assert_eq!(resume_conversation(payload.as_bytes()), Some(ROOT.to_owned()));
+        // agy 는 줄바꿈으로 끝나는 JSON 을 보낼 수 있다.
+        assert_eq!(resume_conversation(format!("{payload}\r\n").as_bytes()), Some(ROOT.to_owned()));
+    }
+
+    #[test]
+    fn subagents_old_agy_and_malformed_ids_are_not_resumable() {
+        let cases = [
+            // 서브에이전트 대화 (agy 1.5.9 실측 모양)
+            format!(r#"{{"conversationId":"{ROOT}","lastUserInput":""}}"#),
+            // lastUserInput 이 없는 1.4.7 이전 agy
+            format!(r#"{{"conversationId":"{ROOT}"}}"#),
+            format!(r#"{{"conversationId":"{ROOT}","lastUserInput":3}}"#),
+            r#"{"lastUserInput":"hi"}"#.to_owned(),
+            r#"{"conversationId":"","lastUserInput":"hi"}"#.to_owned(),
+            r#"{"conversationId":"a;calc","lastUserInput":"hi"}"#.to_owned(),
+            r#"{"conversationId":"a b","lastUserInput":"hi"}"#.to_owned(),
+            r#"{"conversationId":"a\nb","lastUserInput":"hi"}"#.to_owned(),
+            r#"{"conversationId":"한글","lastUserInput":"hi"}"#.to_owned(),
+            r#"{"conversationId":7,"lastUserInput":"hi"}"#.to_owned(),
+            r#"["not","an","object"]"#.to_owned(),
+            "not json".to_owned(),
+            String::new(),
+        ];
+        for payload in cases {
+            assert_eq!(resume_conversation(payload.as_bytes()), None, "{payload:?}");
+        }
+    }
+
+    #[test]
+    fn hint_has_the_command_the_time_and_only_a_well_formed_generation() {
+        assert_eq!(
+            hint_text(ROOT, 1_700_000_000, Some("4242-638700000000000000-3")),
+            format!("agy --conversation {ROOT}\n1700000000\n4242-638700000000000000-3\n")
+        );
+        let two_lines = format!("agy --conversation {ROOT}\n5\n");
+        assert_eq!(hint_text(ROOT, 5, None), two_lines);
+        for bad in ["", "bad gen", "a;b", "가", &"g".repeat(129)] {
+            assert_eq!(hint_text(ROOT, 5, Some(bad)), two_lines, "{bad:?}");
+        }
+        assert_eq!(hint_text(ROOT, 5, Some(&"g".repeat(128))), format!("{two_lines}{}\n", "g".repeat(128)));
+    }
+
+    #[test]
+    fn writing_a_hint_replaces_the_previous_one_and_leaves_no_temporary_file() {
+        let dir = env::temp_dir().join(format!("mast-agy-hook-test-{}", process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let resume = dir.join(".mast").join("resume");
+
+        write_hint(&resume, "7", "first\n").unwrap();
+        write_hint(&resume, "7", "second\n").unwrap();
+        assert_eq!(fs::read_to_string(resume.join("tab-7")).unwrap(), "second\n");
+        let names: Vec<_> = fs::read_dir(&resume)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [OsString::from("tab-7")]);
+
+        // 디렉터리 자리에 파일이 있으면 실패를 돌려줄 뿐 패닉하지 않는다.
+        let blocked = dir.join("blocked");
+        fs::write(&blocked, "a file").unwrap();
+        assert!(write_hint(&blocked, "7", "x\n").is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn payload_keeps_the_first_mebibyte_and_drains_the_rest() {
+        let size = PAYLOAD_LIMIT as usize + 4096;
+        let mut reader = io::Cursor::new(vec![b'x'; size]);
+        let kept = read_payload(&mut reader);
+        assert_eq!(kept.len(), PAYLOAD_LIMIT as usize);
+        assert_eq!(reader.position() as usize, size);
     }
 }
