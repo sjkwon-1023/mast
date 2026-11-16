@@ -27,7 +27,7 @@ with the tool call it guards, happen entirely in the WSL-side scripts this docum
 
 ## Automatic provisioning
 
-**mast auto-provisions this on first run per distro (`~/.mast/.setup-v27`); this
+**mast auto-provisions this on first run per distro (`~/.mast/.setup-v28`); this
 document remains the contract and the manual path.**
 
 On launch the app streams a setup script into `wsl.exe [-d <distro>] -- bash -s` for every
@@ -108,9 +108,9 @@ A full run, in order:
 
 | Marker | Written when | To run it again |
 |---|---|---|
-| `~/.mast/.setup-v27` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v27` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
-| `~/.mast/.setup-v27-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v27-codex` reruns that step alone |
-| `~/.mast/.setup-v27-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v27-agy` reruns that step alone |
+| `~/.mast/.setup-v28` | Steps 1–11 succeeded (steps 12 and 13 may have failed) | `rm ~/.mast/.setup-v28` reruns **everything** — which also re-adds a Codex `notify` line, an AGENTS.md block or a Claude Code hook row you deleted by hand |
+| `~/.mast/.setup-v28-codex` | The Codex hooks step finished: merged, nothing to do, skipped because `hooks.json` is not writable or is a dangling link, skipped because `config.toml` holds inline hooks, refused because of the file's content (exit 3), opted out, or skipped for want of Python 3.8 | `rm ~/.mast/.setup-v28-codex` reruns that step alone |
+| `~/.mast/.setup-v28-agy` | The Antigravity CLI hooks step finished the same way (it has no inline-hooks or Python 3.8 case) | `rm ~/.mast/.setup-v28-agy` reruns that step alone |
 
 With the main marker in place, a launch still runs an agent step whose directory exists and
 whose sub-marker does not — which is how a Codex or Antigravity CLI installed after setup v16
@@ -132,8 +132,8 @@ When a run fails:
 - A file that is not writable or is a dangling symlink, and for Codex a `config.toml` with inline
   hooks, is **skipped** with a notice and counts as finished: the sub-marker is written — for
   Claude Code, whose merge is part of steps 1–11, the main marker — so no launch retries it. Once
-  the cause is fixed, `rm ~/.mast/.setup-v27-codex` (or `-agy`; for Claude Code
-  `rm ~/.mast/.setup-v27`) wires the hooks, or add the notice's snippet by hand.
+  the cause is fixed, `rm ~/.mast/.setup-v28-codex` (or `-agy`; for Claude Code
+  `rm ~/.mast/.setup-v28`) wires the hooks, or add the notice's snippet by hand.
 - A Codex or Antigravity CLI hooks file whose **content** the merge cannot handle is refused
   with exit 3: the file is left untouched and the sub-marker **is** written, because a rerun
   would refuse it the same way. The notice names the problem and says to edit the file and
@@ -167,8 +167,8 @@ that setup could not write somewhere — `cannot install …`, `cannot create �
 | When | The notice says |
 |---|---|
 | No `python3` | Install it, or wire the hooks by hand from this document |
-| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v27` (`rm ~/.mast/.setup-v27-codex` when only the Codex step ran) |
-| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v27` |
+| `python3` older than 3.8 | Install Python 3.8+ and `rm ~/.mast/.setup-v28` (`rm ~/.mast/.setup-v28-codex` when only the Codex step ran) |
+| A Claude Code install older than 2.1.101 or 2.1.118, or one whose version cannot be read | Its path; that only the status hooks were wired; update or remove that copy, then `rm ~/.mast/.setup-v28` |
 | A Codex install older than a hook feature mast relies on | Its path, and each missing feature ([version limits](#codex-version-limits)) |
 | Codex hooks were written | How to trust them — the wording follows the Codex version |
 | `config.toml` has inline `[hooks]` tables, `features.hooks = false`, `approvals_reviewer = "auto_review"`, or a stale `[hooks.state]` entry | What mast did not do, and why |
@@ -1012,11 +1012,13 @@ The other dispatcher events (`SessionStart` with its `source`, `PermissionReques
 A restart respawns every terminal tab as a **fresh login shell**: the layout comes back, but
 the agent session that was running in the tab does not, and its id is nowhere on screen. Each
 agent hands mast a confirmed id when it reports — Claude Code's hook stdin JSON carries
-`.session_id`, Codex's notify payload carries `thread-id`, and the OpenCode plugin sees session
-events. The writers are `mast-notify.sh` (on every Claude Code status hook),
-`mast-codex-notify.sh` and the OpenCode plugin; each records it per tab and the next shell in
-that tab offers it back. **The hook dispatcher never writes or reads a hint**, and Antigravity
-CLI records none — the reader below has no form for it.
+`.session_id`, Codex's notify payload carries `thread-id`, the OpenCode plugin sees session
+events, and Antigravity CLI's hook stdin JSON carries `conversationId`. The writers are
+`mast-notify.sh` (on every Claude Code status hook), `mast-codex-notify.sh`, the OpenCode plugin and
+`mast-agy-hook.sh`; each records it per tab and the next shell in that tab offers it back. **The hook
+dispatcher never writes or reads a hint.** In the Windows PowerShell mode the agy hook is
+`mast-agy-hook.exe`, which writes the same three lines to `%USERPROFILE%\.mast\resume\tab-<id>`
+([ADR-0037](../../docs/adr/0037-powershell-mode.md) amendment 2026-11-17).
 
 **This is a hint, never an action** unless you opt in. With `autoResume` off (the default), the recorded
 command is put in front of the user in two places and run by neither of them. With `autoResume` on, the
@@ -1025,11 +1027,11 @@ first prompt of a restored root shell may run it; see [Automatic run](#automatic
 | Field | Contract |
 |---|---|
 | Path | `~/.mast/resume/tab-<id>`, where `<id>` is the writer's `MAST_TAB` — the tab's stable id, which survives a restart, so the file and the tab that gets the hint are the same tab. |
-| Line 1 | The resume command: `claude --resume <id>`, `codex resume <id>`, or `opencode --session <id>`. The manual readers take **only this line** from the bash launcher, and the zsh reader also reads line 2 (see below). |
+| Line 1 | The resume command: `claude --resume <id>`, `codex resume <id>`, `opencode --session <id>`, or `agy --conversation <id>`. The manual readers take **only this line** from the bash launcher, and the zsh reader also reads line 2 (see below). |
 | Line 2 | Epoch seconds at the time of writing. The zsh reader uses it only to tell a changed hint from one it already offered in the same shell. Freshness is not judged by it. Automatic run only checks that it is digits — see below. |
 | Line 3 | The prompt generation `<nonce>-<counter>` of the root shell that ran the agent. Written only when `MAST_PROMPT_GEN` matches `^[A-Za-z0-9_-]{1,128}$`. Without it the hint is still offered by hand but is never run automatically. Read only by [Automatic run](#automatic-run--autoresume). |
-| Written when | An invocation has both a non-empty `MAST_TAB` and an id matching `^[A-Za-z0-9_-]+$` — Claude Code's `.session_id`, Codex's `thread-id` (`thread_id` is accepted too), or OpenCode's confirmed root session id. Codex additionally requires its saved session metadata to show a resumable top-level session (`resumable` below). OpenCode records a root at creation or its first observed activity, before idle. |
-| Not written when | The tab has no `MAST_TAB` (a tab without per-tab history), the payload does not parse or carries no id, or the id is not a plain token. Claude Code additionally needs parsable hook JSON and `jq`, and writes nothing when stdin is a TTY (the script run by hand, so no JSON is read at all). For Codex, also for every ownership other than `resumable` — a top-level session from another source, a temporary thread, a subagent or internal session, metadata that cannot be read — and for a `codex exec` nested in another agent's turn. For OpenCode, sessions with `parentID` are rejected, and the prior hint is preserved when the session lookup fails. |
+| Written when | An invocation has both a non-empty `MAST_TAB` and an id matching `^[A-Za-z0-9_-]+$` — Claude Code's `.session_id`, Codex's `thread-id` (`thread_id` is accepted too), OpenCode's confirmed root session id, or agy's `conversationId`. Codex additionally requires its saved session metadata to show a resumable top-level session (`resumable` below). OpenCode records a root at creation or its first observed activity, before idle. agy writes on every `PreInvocation` and `Stop`, and only when `lastUserInput` is a non-empty string (see [Antigravity CLI hooks](#antigravity-cli-hooks--geminiconfighooksjson)). |
+| Not written when | The tab has no `MAST_TAB` (a tab without per-tab history), the payload does not parse or carries no id, or the id is not a plain token. Claude Code additionally needs parsable hook JSON and `jq`, and writes nothing when stdin is a TTY (the script run by hand, so no JSON is read at all). For Codex, also for every ownership other than `resumable` — a top-level session from another source, a temporary thread, a subagent or internal session, metadata that cannot be read — and for a `codex exec` nested in another agent's turn. For OpenCode, sessions with `parentID` are rejected, and the prior hint is preserved when the session lookup fails. For agy, also without `jq`, for a subagent's conversation (its `lastUserInput` is empty), and for agy before 1.4.7, which sends no `lastUserInput`. |
 | Atomicity | Written to `<path>.tmp.<pid>` and `mv`d into place, so a concurrent reader sees either the old file or the new one, never a half-written line. The pid suffix keeps two writers firing at once in the same tab from sharing a temp name. |
 | Failure | Swallowed. Every step is guarded and the writer still exits 0 — a resume hint must never cost a notification, let alone the session. |
 
@@ -1058,11 +1060,11 @@ looks exactly as it did before. A failed read or append is ignored and the wrapp
 login shell, so a broken hint must not cost you the shell.
 
 **Both sides check the shape.** The writer guards the id's charset, and the reader accepts
-only three exact forms — `claude --resume <token>`, `codex resume <token>`, and
-`opencode --session <token>`, where `<token>`
+only four exact forms — `claude --resume <token>`, `codex resume <token>`,
+`opencode --session <token>` and `agy --conversation <token>`, where `<token>`
 is `[A-Za-z0-9_-]+` — dropping the hint silently otherwise, so a substituted file cannot
 become a surface for luring an ↑+Enter into running something else. That reader list is a
-**whitelist**: wiring a third agent means adding its form to both readers as well, or its hint is
+**whitelist**: wiring another agent means adding its form to both readers as well, or its hint is
 recorded and then quietly thrown away. Anything running as you could edit `~/.bashrc`
 directly, so this is a misfire guard rather than a privilege boundary — the same stance as the
 send channel.
@@ -1091,7 +1093,7 @@ when all of these hold:
 
 - line 3 of the hint equals the generation in `~/.mast/prompt/tab-<id>`, which the previous root shell wrote
   at its last prompt;
-- line 1 is one of the three exact forms, and its token is `[A-Za-z0-9_-]` up to 96 characters;
+- line 1 is one of the four exact forms, and its token is `[A-Za-z0-9_-]` up to 96 characters;
 - the hint has exactly three lines, each well formed.
 
 Every root shell rewrites `prompt/tab-<id>` with a new generation `<nonce>-<counter>` before each prompt, and
@@ -1104,8 +1106,9 @@ When the hint is eligible, the shell:
 
 1. records the new generation for this prompt, so a later shell cannot pick the same hint again;
 2. prints `[mast] auto-resume: <command>` and adds the command to the tab's history, once;
-3. waits in the queue (below). If admitted, it runs `claude --resume <token>`, `codex resume <token>` or
-   `opencode --session <token>` with a fixed argument list, through `command` so an alias cannot change it.
+3. waits in the queue (below). If admitted, it runs `claude --resume <token>`, `codex resume <token>`,
+   `opencode --session <token>` or `agy --conversation <token>` with a fixed argument list, through `command`
+   so an alias cannot change it.
    The text is never `eval`ed, passed to `sh -c`, or typed into the PTY;
 4. records a new generation again after the run ends.
 
@@ -1532,8 +1535,8 @@ setup adds one named hook, `"mast"`, to its global hooks file:
   event. `PreInvocation` and `Stop` take a flat handler array (`PreToolUse` and `PostToolUse` take
   matcher groups). A handler runs through `sh -c`, and `timeout` is in seconds. Global hooks have
   no trust step.
-- **One script, the event as an argument.** agy's stdin payload is camelCase JSON with no
-  event-name field, so the argument says which event ran. `running` comes from `PreInvocation`,
+- **One script, the event as an argument.** agy's stdin payload is camelCase JSON, and before
+  1.5.4 it had no event-name field (`hookEventName`), so the argument says which event ran. `running` comes from `PreInvocation`,
   which fires before every model call — several times per turn, which changes no status after
   the first. `idle` comes from `Stop`, with the first line of `finalModelOutput` as the body
   (control characters replaced, at most 500 characters, via jq), or `done` without jq or output.
@@ -1553,7 +1556,13 @@ setup adds one named hook, `"mast"`, to its global hooks file:
   `tool_confirmation_pending` state agy passes to a `statusLine`/`title` script — not
   implemented, because it would take over a single setting that belongs to you, and when agy
   runs that script again is unverified.
-- **No resume hint.** The spawn wrapper's whitelist has no form for agy, so nothing is recorded.
+- **Resume hint.** On both events the script writes `agy --conversation <conversationId>` to the tab's
+  resume hint, in the format and with the gates of [the resume hint](#resume-hint--mastresumetab-id).
+  A subagent's conversation calls the same hooks with its own `conversationId` and no
+  `parentConversationId` (agy 1.5.9), so that field cannot tell the two apart; its `lastUserInput` is
+  an empty string, while a root conversation carries the user's last message. The script therefore
+  records only a conversation whose `lastUserInput` is a non-empty string, and agy before 1.4.7, which
+  has no `lastUserInput`, records nothing. Without `jq` nothing is recorded either.
 
 The merge (`mast-hooks-merge.py agy`):
 
@@ -1616,8 +1625,8 @@ PROMPT_COMMAND="__mast_osc${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
    therefore has a tty, so it only takes step 1 — its purpose is to see whether the delivery
    path itself is alive.
 2. Read `~/.mast/setup.log`: each merged row (`added`, `wired`, `migrated`, `narrowed`) and
-   every notice is there, and the markers `~/.mast/.setup-v27`, `.setup-v27-codex` and
-   `.setup-v27-agy` show which steps finished.
+   every notice is there, and the markers `~/.mast/.setup-v28`, `.setup-v28-codex` and
+   `.setup-v28-agy` show which steps finished.
 3. Then run each agent inside a mast terminal and confirm that its hooks update the tab's badge
    and dot, the pane badge, and the sidebar status and preview. The field checklist is
    `docs/WINDOWS-BUILD.md` §10, "v0.3.32 — Agent state signals verification (setup v16)". A

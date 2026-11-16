@@ -20,6 +20,7 @@ mode sends no Windows notifications for agy; only running and idle reach the car
 On 2026-11-12 the user confirmed that these WSL features are not needed for the non-developer PCs:
 the Git changes viewer, `mast ls`, `send`, `open`, `diff`, auto-resume, Claude Code,
 Codex and OpenCode status. This mode leaves them out, and also leaves out cmd tabs and `mast config`.
+*[On 2026-11-17 the user asked for agy resume and auto-resume in this mode; see the amendment of that date.]*
 
 The constraint that shaped every decision: an existing WSL install must not change. Without a
 `windowsShell` key, the WSL code paths run as before, and the installer writes nothing new.
@@ -122,7 +123,9 @@ Two mechanisms work together.
   non-Windows builds use. Spawn gating then passes, the WSL notice does not appear, and
   `wslBlocksTerminal` is false. No probe runs `wsl.exe`.
 - **Direct gates.** Call sites that do not go through the probe have a first-line refusal or a
-  no-op. `ensure_provisioned`, `warm_wsl` and `release_tab_files` do nothing. `host_path`, which all
+  no-op. `ensure_provisioned`, `warm_wsl` and `release_tab_files` do nothing. *[Since the 2026-11-17
+  amendment `release_tab_files` removes this mode's own files on the Windows disk; it still starts no
+  `wsl.exe`.]* `host_path`, which all
   file viewers and file probes use, and the Git queries (`git_status`, `git_diff`) and the
   presentation repository-root probe refuse with an English `PowerShell mode does not support …`
   error. The folder-browser and Git Changes entry points are hidden on the frontend (decision 7).
@@ -398,6 +401,77 @@ Not run on the development PC, so CI or a device must confirm them:
   Language Mode, the script's .NET calls (`[Console]::Write`, `[Console]::Title`, `[Text.Encoding]`) may
   be refused, and the start marker would not be sent. Whether the target PCs use such a policy is
   unknown, so check on a managed PC before relying on the mode there.
+
+## Amendment (2026-11-17) — agy resume hint and auto-resume in PowerShell tabs
+
+The user asked for a restarted PowerShell tab to reopen the agy conversation it had, as WSL tabs do. This
+reverses the 2026-11-12 scoping for auto-resume only. The rule for which conversation to record is the one in
+[ADR-0026](0026-tab-agent-state-and-hook-signals.md)'s amendment of the same date: a `conversationId` whose
+`lastUserInput` is a non-empty string.
+
+**The hook.** `mast-agy-hook.exe` still writes `{}` first and the OSC second. It then reads stdin when stdin is
+not a console (keeping the first 1 MiB and draining the rest), and when it emitted the OSC — the same gates as
+before — it writes `agy --conversation <id>`, the epoch seconds and, when `MAST_PROMPT_GEN` is a plain token of
+up to 128 characters, the generation, one per line with LF endings, to
+`%USERPROFILE%\.mast\resume\tab-<id>`. The write goes to `tab-<id>.tmp.<pid>` and is renamed over the hint.
+Without `USERPROFILE` nothing is written, and every failure is ignored. The crate gains `serde_json`, which the
+workspace already builds.
+
+**Spawn.** The script gets a fourth literal, `$MastAutoResume`: `'1'` when `autoResume` is `true`, otherwise
+`''`. The body sent on the command line now drops full-line comments and blank lines. The body is UTF-16LE in
+base64, about 2.7 command-line characters per script character, and with its comments the grown script left
+about 850 characters of the 32,767 for the working folder; without them, about 3,600. The script has no
+here-strings or block comments, so dropping lines changes nothing.
+
+**The script.**
+
+- Before each prompt, a tab with an id writes the generation `<pid>-<UTC ticks>-<counter>` to
+  `%USERPROFILE%\.mast\prompt\tab-<id>` and exports it as `MAST_PROMPT_GEN`. If the write fails, it removes
+  the file, unsets the variable and prints `[mast] auto-resume unavailable: cannot write <path>` once.
+- At the end of the start-up script, after the user's profile and before the first prompt, it reads the
+  previous generation and the hint. Each must be a regular file (no reparse point), at most 256 and 1024
+  bytes, ending in a newline. Only `agy --conversation <token>` with a `[A-Za-z0-9_-]{1,96}` token is
+  accepted; any other content is ignored without a message.
+- The hint runs when `$MastAutoResume` is `'1'`, the hint has exactly three lines, line 2 is digits and
+  line 3 equals the previous generation. The script then records the first generation, finds `agy` with
+  `Get-Command -CommandType Application` (an alias or function cannot replace it), waits in the queue,
+  replaces line 3 with the current generation (`File.Replace`; on failure it says so and runs anyway),
+  reports the folder with OSC 7, and runs `& <agy path> --conversation <token>`. In every other case it
+  prints `[mast] resume previous agent: <command>`; a missing `agy` or a skipped queue prints the reason
+  first.
+- The run is in the start-up script, not in `prompt`, because the output of `prompt` becomes the prompt
+  string, so a program started there would not get the console. Ctrl+C while waiting stops the rest of the
+  start-up script, so this block is the script's last statement.
+- **Queue.** Opening `%USERPROFILE%\.mast\auto-resume.lock` with `FileShare.None` takes the place of
+  `flock`. It retries every 100 ms only on a sharing or lock violation; any other error skips with
+  `queue state unavailable`. Runs are at least 3 s apart, timed with `Stopwatch.GetTimestamp` (the
+  performance counter, the same clock in every process; a value later than now counts as none). A run that
+  would wait past 120 s is skipped. `queued` is printed once, and Ctrl+C prints `[mast] auto-resume
+  cancelled` and the manual hint. Windows has no load average, so there is no wait for a busy machine.
+
+**Tab close.** In this mode `release_tab_files` removes `prompt\tab-<id>`, `resume\tab-<id>` and
+`resume\tab-<id>.tmp.*` under `%USERPROFILE%\.mast` on a thread, and still starts no `wsl.exe`.
+
+**Setting.** `autoResume` is read at boot as before. `mast config` is not available in this mode, so the user
+adds `"autoResume": true` to `settings.json` by hand.
+
+**Accepted differences from WSL.**
+
+- The command is printed, not added to the history. PSReadLine keeps one history file for every PowerShell
+  session and loads it at the first key read, after this script, so an entry added here would not be the
+  newest, and another tab's entry could be.
+- A hint from a conversation that ended normally is printed at every restart. WSL skips it because its tab
+  history already holds the command.
+- No wait for a busy machine (above).
+- A PowerShell started inside the tab inherits `MAST_PROMPT_GEN`, so an agy that exits normally in it while
+  it stays open at quit runs once at the next boot, the same limit as WSL's nested shells.
+
+**Verification.** On Linux, `cargo test -p mast-agy-hook` (11 unit tests). On the development PC, Windows x64
+native through WSL interop: `cargo test -p mast-agy-hook` (the unit tests plus 2 that run the built exe with a
+temporary `USERPROFILE`), `cargo test -p mast-app host::tests` (15), clippy with `-D warnings` for both, and
+`scripts/win/tests/test_integration.py` (11 tests) against Windows PowerShell 5.1.26100 with a stand-in
+`agy.cmd`. The `windows-gates` job runs the same suites. Not run: a real agy started from the start-up script
+in a ConPTY tab, and the rest of WINDOWS-BUILD §10 "Antigravity CLI resume field verification".
 
 ## Related
 

@@ -1529,6 +1529,18 @@ const stopPayload = (finalModelOutput: unknown) =>
     finalModelOutput,
   });
 
+const CONVERSATION = "ec33ebf9-0cba-4100-8142-c61503f6c587";
+
+// agy 1.5.9 가 루트 대화에서 보내는 PreInvocation 입력의 모양. 서브에이전트 대화는 lastUserInput 이 빈 문자열이다.
+const invocationPayload = (fields: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    conversationId: CONVERSATION,
+    hookEventName: "PreInvocation",
+    invocationNum: 0,
+    lastUserInput: "fix the failing test",
+    ...fields,
+  });
+
 linuxSuite("mast-agy-hook.sh", () => {
   function withStub(test: (home: AgyHookHome) => void): void {
     const home = new AgyHookHome();
@@ -1708,6 +1720,115 @@ linuxSuite("mast-agy-hook.sh", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("\u001b]777;notify;mast:idle;All tests pass, shipped\u0007{}\r\n");
     expect(existsSync(home.path(".mast", "resume"))).toBe(false);
+  });
+
+  describe("resume hint", () => {
+    const hintFile = (home: AgyHookHome) => home.path(".mast", "resume", "tab-7");
+    const generation = "4242-1700000000-3";
+
+    it.each(["running", "idle"])("records agy --conversation for a root conversation on %s", (token) => {
+      withStub((home) => {
+        const run = home.hook([token], invocationPayload(), { ...IN_TAB, MAST_PROMPT_GEN: generation });
+        expect(run.status).toBe(0);
+        expect(run.stdout).toBe("{}\n");
+        expect(readFileSync(hintFile(home), "utf8")).toMatch(
+          new RegExp(`^agy --conversation ${CONVERSATION}\\n\\d+\\n${generation}\\n$`),
+        );
+        expect(readdirSync(home.path(".mast", "resume"))).toEqual(["tab-7"]);
+      });
+    });
+
+    it("writes two lines when MAST_PROMPT_GEN is missing or malformed", () => {
+      withStub((home) => {
+        for (const env of [IN_TAB, { ...IN_TAB, MAST_PROMPT_GEN: "bad gen;x" }]) {
+          home.hook(["running"], invocationPayload(), env);
+          expect(readFileSync(hintFile(home), "utf8")).toMatch(new RegExp(`^agy --conversation ${CONVERSATION}\\n\\d+\\n$`));
+        }
+      });
+    });
+
+    it("lets the latest root conversation in the tab win", () => {
+      withStub((home) => {
+        home.hook(["running"], invocationPayload(), IN_TAB);
+        home.hook(["idle"], invocationPayload({ conversationId: "c0b14f06-3c5f-474a-866b-389cb89f8a6f" }), IN_TAB);
+        expect(readFileSync(hintFile(home), "utf8")).toMatch(/^agy --conversation c0b14f06-3c5f-474a-866b-389cb89f8a6f\n/);
+      });
+    });
+
+    it.each([
+      ["a subagent conversation (empty lastUserInput)", invocationPayload({ lastUserInput: "" })],
+      ["an agy without lastUserInput (before 1.4.7)", invocationPayload({ lastUserInput: undefined })],
+      ["a non-string lastUserInput", invocationPayload({ lastUserInput: 3 })],
+      ["no conversationId", invocationPayload({ conversationId: undefined })],
+      ["a conversationId with a shell metacharacter", invocationPayload({ conversationId: "abc;touch PWNED" })],
+      ["a conversationId with a newline", invocationPayload({ conversationId: "abc\ndef" })],
+      ["an empty conversationId", invocationPayload({ conversationId: "" })],
+      ["a payload that is not JSON", "not json"],
+    ])("keeps the previous hint for %s", (_name, payload) => {
+      withStub((home) => {
+        home.hook(["running"], invocationPayload({ conversationId: "previous-root" }), IN_TAB);
+        const run = home.hook(["idle"], payload, IN_TAB);
+        expect(run.status).toBe(0);
+        expect(run.stdout).toBe("{}\n");
+        expect(readFileSync(hintFile(home), "utf8")).toMatch(/^agy --conversation previous-root\n/);
+        expect(readdirSync(home.path(".mast", "resume"))).toEqual(["tab-7"]);
+      });
+    });
+
+    it.each([
+      ["MAST_TAB unset", {}],
+      ["a MAST_TAB that is not a number", { MAST_TAB: "abc" }],
+      ["CLAUDECODE=1", { ...IN_TAB, CLAUDECODE: "1" }],
+      ["CODEX_THREAD_ID", { ...IN_TAB, CODEX_THREAD_ID: "019a0000-0000-7000-8000-000000000000" }],
+    ])("writes no hint with %s", (_name, env) => {
+      withStub((home) => {
+        for (const token of ["running", "idle"]) home.hook([token], invocationPayload(), env);
+        expect(existsSync(home.path(".mast", "resume"))).toBe(false);
+      });
+    });
+
+    it("writes no hint when jq is not on PATH", () => {
+      withStub((home) => {
+        const bin = join(home.root, "tools-without-jq");
+        mkdirSync(bin, { recursive: true });
+        for (const tool of ["head", "cat", "readlink"]) symlinkSync(tools[tool], join(bin, tool));
+        const run = home.hook(["running"], invocationPayload(), { ...IN_TAB, PATH: bin });
+        expect(run.stdout).toBe("{}\n");
+        expect(existsSync(home.path(".mast", "resume"))).toBe(false);
+      });
+    });
+
+    it("still answers {} when the resume directory cannot be created", () => {
+      withStub((home) => {
+        home.write(home.path(".mast", "resume"), "a file, not a directory");
+        const run = home.hook(["idle"], invocationPayload(), IN_TAB);
+        expect(run.status).toBe(0);
+        expect(run.stdout).toBe("{}\n");
+        expect(home.notifyArgs()).toEqual(["mast:idle", "done"]);
+      });
+    });
+
+    it("keeps its own hint after the real mast-notify.sh runs, since notify gets no stdin", () => {
+      const home = new AgyHookHome();
+      const notify = home.write(home.path(".mast", "bin", "mast-notify.sh"), extractNotifyScript(provisionSource));
+      chmodSync(notify, 0o755);
+      const payload = home.write(join(home.root, "payload.json"), invocationPayload({ hookEventName: "Stop" }));
+      const result = spawnSync(
+        tools.script,
+        ["-qec", `${shellQuote(tools.bash)} ${shellQuote(AGY_HOOK)} idle < ${shellQuote(payload)}`, "/dev/null"],
+        {
+          env: home.env({ SHELL: tools.bash, MAST_TAB: "6" }),
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 10_000,
+        },
+      );
+      if (result.error) throw result.error;
+      expect(result.status).toBe(0);
+      expect(readFileSync(home.path(".mast", "resume", "tab-6"), "utf8")).toMatch(
+        new RegExp(`^agy --conversation ${CONVERSATION}\\n\\d+\\n$`),
+      );
+    });
   });
 });
 

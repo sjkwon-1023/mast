@@ -41,7 +41,7 @@ pub struct TauriHost {
 /// 탭 셸을 띄우는 방식. 둘 다 부팅 때 `settings.json` 에서 한 번 읽는다.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TabLaunch {
-    /// `autoResume` — WSL 래퍼의 자동 재실행 opt-in ([`spawn_spec`]).
+    /// `autoResume` — 자동 재실행 opt-in. WSL 래퍼([`spawn_spec`])와 PowerShell 탭 스크립트가 함께 받는다.
     pub auto_resume: bool,
     /// Windows PowerShell 모드 ([`crate::commands::UiSettings::powershell_mode`]). 참이면
     /// 탭 셸은 WSL 래퍼 대신 PowerShell 로 뜬다 ([`TauriHost::tab_spawn_spec`]).
@@ -206,10 +206,25 @@ fn bash_argv(history_tab: Option<u64>, cwd: Option<&str>, auto_resume: bool) -> 
     ]
 }
 
-/// PowerShell 탭 래퍼 본문. 정본은 `scripts/win/powershell-integration.ps1` 이고, 앞에 붙는 세 값
-/// (탭 id·bin 폴더·작업 폴더)은 [`powershell_spawn_spec`] 가 리터럴로 함께 인코딩한다.
+/// PowerShell 탭 래퍼 본문. 정본은 `scripts/win/powershell-integration.ps1` 이고, 앞에 붙는 네 값
+/// (탭 id·bin 폴더·작업 폴더·자동 재실행 opt-in)은 [`powershell_spawn_spec`] 가 리터럴로 함께 인코딩한다.
 #[cfg(windows)]
 const POWERSHELL_INTEGRATION: &str = include_str!("../../../../scripts/win/powershell-integration.ps1");
+
+/// 명령줄에 실을 스크립트 본문. 줄 전체가 주석인 줄과 빈 줄을 뺀다. 본문이 UTF-16LE base64 로 명령줄에
+/// 들어가 한 글자가 약 2.7자를 차지하므로, 주석까지 실으면 작업 폴더에 남는 길이가 크게 줄어든다
+/// ([`WINDOWS_COMMAND_LINE_LIMIT`]). 스크립트에는 here-string 이나 블록 주석이 없어 줄 단위로 빼도 뜻이 같다.
+#[cfg(windows)]
+fn powershell_integration_body() -> String {
+    POWERSHELL_INTEGRATION
+        .lines()
+        .filter(|line| {
+            let code = line.trim_start();
+            !code.is_empty() && !code.starts_with('#')
+        })
+        .flat_map(|line| [line, "\n"])
+        .collect()
+}
 
 /// Windows 명령줄 한도(NUL 포함 32,767 wide 문자)를 넘지 않는 상한. 넘으면 스폰이 조용히 실패하지 않도록 미리 거부한다.
 #[cfg(windows)]
@@ -223,14 +238,17 @@ fn powershell_spawn_spec(
     req: &ShellSpawnReq,
     bin_dir: &str,
     user_profile: &str,
+    auto_resume: bool,
 ) -> anyhow::Result<SpawnSpec> {
     let tab = req.history_tab.map(|tab| tab.to_string()).unwrap_or_default();
     let cwd = req.cwd.as_deref().filter(|cwd| is_drive_path(cwd)).unwrap_or_default();
     let script = format!(
-        "$MastTab = {}\n$MastBin = {}\n$MastCwd = {}\n{POWERSHELL_INTEGRATION}",
+        "$MastTab = {}\n$MastBin = {}\n$MastCwd = {}\n$MastAutoResume = {}\n{}",
         ps_literal(&tab),
         ps_literal(bin_dir),
         ps_literal(cwd),
+        ps_literal(if auto_resume { "1" } else { "" }),
+        powershell_integration_body(),
     );
     let args = vec![
         "-NoLogo".to_string(),
@@ -432,7 +450,12 @@ impl TauriHost {
         #[cfg(windows)]
         {
             if self.launch.powershell {
-                return powershell_spawn_spec(req, &mast_bin_dir()?, &user_profile()?);
+                return powershell_spawn_spec(
+                    req,
+                    &mast_bin_dir()?,
+                    &user_profile()?,
+                    self.launch.auto_resume,
+                );
             }
         }
         Ok(spawn_spec(req, self.launch.auto_resume))
@@ -550,8 +573,10 @@ fn release_records(records: Arc<RecordStore>, tabs: &[TabId]) {
 fn release_tab_files(tabs: &[TabId], distro: Option<&str>) {
     use std::os::windows::process::CommandExt;
 
-    // PowerShell 탭은 WSL 쪽 셸 파일을 만들지 않으므로 지울 것이 없다 — wsl.exe 를 띄우지 않는다 (ADR-0037 결정 6).
+    // PowerShell 탭은 WSL 쪽 셸 파일을 만들지 않으므로 wsl.exe 를 띄우지 않는다 (ADR-0037 결정 6). 대신 탭 스크립트와
+    // agy 훅이 Windows 쪽에 남긴 파일을 지운다.
     if powershell_mode() {
+        release_powershell_tab_files(tabs);
         return;
     }
     // 콘솔 창 억제 — boot.rs·commands.rs 의 wsl.exe 호출과 같은 플래그다.
@@ -609,6 +634,67 @@ fn release_script(tabs: &[TabId]) -> String {
         ));
     }
     script
+}
+
+/// PowerShell 탭이 `%USERPROFILE%\.mast` 아래에 남기는 파일을 지운다. 로컬 디스크지만 호출이 Dispatcher lock
+/// 아래라([`release_tab_files`]) 스레드로 넘긴다. 실패는 로그로만 쓴다.
+#[cfg(windows)]
+fn release_powershell_tab_files(tabs: &[TabId]) {
+    let state = match user_profile() {
+        Ok(profile) => std::path::PathBuf::from(profile).join(".mast"),
+        Err(err) => {
+            winlog!("could not release {} closed PowerShell tab(s): {err}", tabs.len());
+            return;
+        }
+    };
+    let tabs = tabs.to_vec();
+    let spawned = std::thread::Builder::new()
+        .name("mast-release-tabs".to_string())
+        .spawn(move || {
+            let resume_names: Vec<String> = std::fs::read_dir(state.join("resume"))
+                .map(|entries| {
+                    entries
+                        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+            for path in powershell_tab_files(&state, &tabs, &resume_names) {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => winlog!("could not remove {}: {err}", path.display()),
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        winlog!("could not start the release thread for closed PowerShell tabs: {err}");
+    }
+}
+
+/// PowerShell 탭 하나가 남기는 파일: 탭 스크립트의 프롬프트 세대(`prompt\tab-<id>`), agy 훅의 resume 힌트
+/// (`resume\tab-<id>`), 쓰다 죽은 훅의 임시 파일(`resume\tab-<id>.tmp.<pid>`). `resume_names` 는 resume
+/// 폴더의 파일 이름이다. 접두사가 `tab-<id>.tmp.` 까지라 `tab-1` 이 `tab-12` 의 임시 파일을 잡지 않는다.
+#[cfg(windows)]
+fn powershell_tab_files(
+    state: &std::path::Path,
+    tabs: &[TabId],
+    resume_names: &[String],
+) -> Vec<std::path::PathBuf> {
+    let resume = state.join("resume");
+    let mut paths = Vec::new();
+    for tab in tabs {
+        let id = tab.0;
+        paths.push(state.join("prompt").join(format!("tab-{id}")));
+        paths.push(resume.join(format!("tab-{id}")));
+        let temp_prefix = format!("tab-{id}.tmp.");
+        paths.extend(
+            resume_names
+                .iter()
+                .filter(|name| name.starts_with(&temp_prefix))
+                .map(|name| resume.join(name)),
+        );
+    }
+    paths
 }
 
 /// unix 개발 실행에는 지울 것이 없다 — `spawn_spec` 이 탭별 `HISTFILE` 을 물리지
@@ -777,6 +863,7 @@ mod tests {
             &powershell_req(Some(r"C:\proj"), Some(7)),
             r"C:\Apps\mast\bin",
             r"C:\Users\me",
+            false,
         )
         .unwrap();
         assert_eq!(spec.program, "powershell.exe");
@@ -791,22 +878,53 @@ mod tests {
             &powershell_req(Some(r"C:\proj"), Some(7)),
             r"C:\Apps\mast\bin",
             r"C:\Users\me",
+            false,
         )
         .unwrap();
         let script = decode_powershell_command(&spec.args);
-        let expected_head = "$MastTab = '7'\n$MastBin = 'C:\\Apps\\mast\\bin'\n$MastCwd = 'C:\\proj'\n";
+        let expected_head =
+            "$MastTab = '7'\n$MastBin = 'C:\\Apps\\mast\\bin'\n$MastCwd = 'C:\\proj'\n$MastAutoResume = ''\n";
         assert!(script.starts_with(expected_head), "{script}");
-        assert!(script.ends_with(include_str!("../../../../scripts/win/powershell-integration.ps1")));
+        assert!(script.ends_with(&powershell_integration_body()));
+    }
+
+    /// 명령줄에는 주석과 빈 줄을 뺀 본문만 실리고, 코드 줄은 순서와 들여쓰기까지 그대로다.
+    #[test]
+    fn powershell_script_drops_only_comment_and_blank_lines() {
+        let body = powershell_integration_body();
+        let source_code: Vec<&str> = POWERSHELL_INTEGRATION
+            .lines()
+            .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+            .collect();
+        assert_eq!(body.lines().collect::<Vec<_>>(), source_code);
+        assert!(body.ends_with('\n'));
+        assert!(body.contains("function global:prompt {"));
+        assert!(body.trim_end().ends_with("MastResumeAtStart"));
     }
 
     /// 드라이브 경로가 아닌 작업 폴더(WSL 경로·모드 전환 잔여물)는 넘기지 않고, 탭 id 가 없으면 빈 값이다.
     #[test]
     fn powershell_tab_drops_non_drive_folders_and_missing_tab_ids() {
         for cwd in [Some("/home/me/proj"), Some(r"\\server\share"), Some("C:proj"), None] {
-            let spec =
-                powershell_spawn_spec(&powershell_req(cwd, None), r"C:\bin", r"C:\Users\me").unwrap();
+            let spec = powershell_spawn_spec(&powershell_req(cwd, None), r"C:\bin", r"C:\Users\me", false)
+                .unwrap();
             let script = decode_powershell_command(&spec.args);
             assert!(script.starts_with("$MastTab = ''\n$MastBin = 'C:\\bin'\n$MastCwd = ''\n"), "{cwd:?}");
+        }
+    }
+
+    /// `autoResume` 은 켜졌을 때만 `'1'` 이고 꺼짐은 빈 리터럴이다. 스크립트는 `'1'` 일 때만 자동 실행한다.
+    #[test]
+    fn powershell_tab_passes_auto_resume_as_a_literal() {
+        for (enabled, literal) in [(true, "'1'"), (false, "''")] {
+            let spec =
+                powershell_spawn_spec(&powershell_req(Some(r"C:\proj"), Some(7)), r"C:\bin", r"C:\Users\me", enabled)
+                    .unwrap();
+            let script = decode_powershell_command(&spec.args);
+            assert!(
+                script.contains(&format!("\n$MastAutoResume = {literal}\n")),
+                "autoResume={enabled}: {script}"
+            );
         }
     }
 
@@ -817,6 +935,7 @@ mod tests {
             &powershell_req(Some("C:\\it\u{2019}s $(calc)"), Some(3)),
             r"C:\Users\O'Brien\bin",
             r"C:\Users\O'Brien",
+            false,
         )
         .unwrap();
         let script = decode_powershell_command(&spec.args);
@@ -836,14 +955,36 @@ mod tests {
             &powershell_req(Some(&long_folder), Some(1)),
             r"C:\bin",
             r"C:\Users\me",
+            false,
         )
         .unwrap();
         assert!(command_line_len(&spec) < WINDOWS_COMMAND_LINE_LIMIT);
 
         let too_long = format!("C:\\{}", "a".repeat(30_000));
-        let err = powershell_spawn_spec(&powershell_req(Some(&too_long), Some(1)), r"C:\bin", r"C:\Users\me")
-            .unwrap_err();
+        let err =
+            powershell_spawn_spec(&powershell_req(Some(&too_long), Some(1)), r"C:\bin", r"C:\Users\me", false)
+                .unwrap_err();
         assert!(err.to_string().contains("command line"), "{err}");
+    }
+
+    /// 닫힌 PowerShell 탭마다 세대·힌트와 그 탭의 임시 파일만 지운다. 다른 탭의 임시 파일은 남는다.
+    #[test]
+    fn closing_a_powershell_tab_removes_its_generation_hint_and_temporary_files() {
+        let state = std::path::Path::new(r"C:\Users\me\.mast");
+        let names: Vec<String> = ["tab-1", "tab-1.tmp.40", "tab-12", "tab-12.tmp.41", "tab-1.tmp.42"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let paths = powershell_tab_files(state, &[TabId(1)], &names);
+        assert_eq!(
+            paths,
+            [
+                state.join(r"prompt\tab-1"),
+                state.join(r"resume\tab-1"),
+                state.join(r"resume\tab-1.tmp.40"),
+                state.join(r"resume\tab-1.tmp.42"),
+            ]
+        );
     }
 
     /// `is_drive_path` 는 `^[A-Za-z]:\\` 와 같다.

@@ -115,8 +115,12 @@ MVP.
 - **Codex `--no-daemon` wrapper** (ADR-0026 amendment 2026-10-21): verified by one manual
   `codex --no-daemon` turn in the field, but the installed `~/.mast/bin/codex` has not run on a device
   (WINDOWS-BUILD §10 "Codex hooks" step 3). Its subcommand list must follow Codex upgrades.
-- **Antigravity CLI** (ADR-0026 decision 8): no needs-input signal and no resume hint;
-  field verification must name the CLI version.
+- **Antigravity CLI** (ADR-0026 decision 8): no needs-input signal; field verification must name the CLI
+  version. The resume hint (ADR-0026 amendment 2026-11-17) tells a root conversation from a subagent's only
+  by a non-empty `lastUserInput`, observed on agy 1.5.9 and not documented by agy; agy before 1.4.7 writes
+  no hint. In PowerShell mode (ADR-0037 amendment 2026-11-17) the command is printed but not put into the
+  history, and an agy started from the tab's start-up script has not run in a real tab. Checklist:
+  WINDOWS-BUILD §10 "Antigravity CLI resume field verification".
 - **OpenCode** (ADR-0027): Windows TUI, toast and restart checks pending.
 - **`mast send`/`mast ls`**: reading a pane's scrollback needs an opt-in design;
   `mast ls` shows `?` in `COMMAND` for tabs in another distro. Reaching another workspace

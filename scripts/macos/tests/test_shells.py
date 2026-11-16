@@ -204,6 +204,7 @@ AGENT_HINTS = {
     "claude": "claude --resume fresh-id",
     "codex": "codex resume fresh-id",
     "opencode": "opencode --session fresh-id",
+    "agy": "agy --conversation fresh-id",
 }
 AGENT_FIXTURE = (
     '#!/bin/sh\n'
@@ -301,6 +302,22 @@ class AutoResumeCases:
                 self.assertNotIn(b"resume previous agent", self.output)
                 self.finish()
                 self.assertEqual(self.history_text(shell).count(self.HINT), 1)
+
+    def test_auto_resume_runs_an_agy_hint_with_its_fixed_argv(self):
+        self.prepare()
+        self.auto = "1"
+        hint = "agy --conversation c18e460e-c48b-4597-b22c-3d777e0dbf67"
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell):
+                self.reset()
+                self.write_state(hint + "\n1\nold-1\n", "old-1")
+                self.start(shell)
+                log = self.agent_log()
+                self.assertEqual(len(log), 1)
+                self.assertRegex(log[0], r"^agy --conversation c18e460e-c48b-4597-b22c-3d777e0dbf67 gen=\d+-\d+-1$")
+                self.assertIn(("[mast] auto-resume: %s" % hint).encode(), self.output)
+                self.finish()
+                self.assertEqual(self.history_text(shell).count(hint), 1)
 
     def test_a_resumed_session_refreshing_its_hint_is_not_added_to_history_again(self):
         # 실제 writer 는 재개한 세션의 같은 명령을 새 시각으로 다시 쓴다. 다음 프롬프트가 그것을 새 hint 로 보면
@@ -719,7 +736,8 @@ class ShellStartup(AutoResumeCases, PtyShell):
         self.zsh_profile(self.home)
         resume = self.home / ".mast/resume"
         resume.mkdir(parents=True)
-        for hint in ("claude --resume claude-id", "codex resume codex-id", "opencode --session open_id"):
+        for hint in ("claude --resume claude-id", "codex resume codex-id", "opencode --session open_id",
+                     "agy --conversation c18e460e-c48b-4597-b22c-3d777e0dbf67"):
             with self.subTest(hint=hint):
                 (resume / "tab-42").write_text(hint + "\n1\n")
                 self.start("/bin/zsh")
@@ -939,6 +957,18 @@ class WslShellStartup(AutoResumeCases, PtyShell):
         self.assertIn(b"GEN:[unset]", self.output)
         self.assertEqual(self.cwd_reports()[0], str(self.cwd))
         self.assertIn("codex resume stale-id", (self.home / ".mast/history/tab-42").read_text())
+
+    def test_bash_with_a_stale_integration_offers_an_agy_hint(self):
+        (self.shell_dir / "integration.sh").write_text(
+            "export MAST=1\n_mast_cwd() { :; }\n_mast_resume() { :; }\n"
+        )
+        resume = self.home / ".mast/resume"
+        resume.mkdir(parents=True)
+        (resume / "tab-42").write_text("agy --conversation stale-id\n1\n")
+        self.start("/bin/bash")
+        self.finish()
+        self.assertIn(b"resume previous agent: agy --conversation stale-id", self.output)
+        self.assertIn("agy --conversation stale-id", (self.home / ".mast/history/tab-42").read_text())
 
     def test_zsh_login_shell_reports_cwd_and_exports_the_tab_environment(self):
         self.zsh_profile(self.home)

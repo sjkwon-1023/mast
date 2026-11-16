@@ -36,6 +36,7 @@ main() {
   case "${1:-}" in
     running)
       "$HOME/.mast/bin/mast-notify.sh" mast:running < /dev/null
+      write_resume_hint
       ;;
     idle)
       if command -v jq > /dev/null; then
@@ -56,8 +57,33 @@ main() {
         body="done"
       fi
       "$HOME/.mast/bin/mast-notify.sh" mast:idle "$body" < /dev/null
+      write_resume_hint
       ;;
   esac
+}
+
+# 재시작한 탭이 `agy --conversation <id>` 로 이 대화를 다시 열 수 있게 탭별 resume 힌트를 쓴다. 형식과 원자적
+# 교체는 mast-notify.sh 의 Claude 힌트와 같다: 1행 명령, 2행 기록 시각, 3행은 MAST_PROMPT_GEN 이 올바를 때만.
+# 서브에이전트 대화도 같은 훅을 부르고 parentConversationId 를 채우지 않는다(agy 1.5.9 에서 확인). 그 대화의
+# lastUserInput 은 빈 문자열이라 이것이 루트 대화와의 유일한 차이다. 그래서 사용자 입력이 있는 대화만 기록한다.
+# lastUserInput 이 없는 agy(1.4.7 이전)는 힌트를 쓰지 않는다. 실패는 모두 삼킨다.
+write_resume_hint() {
+  command -v jq > /dev/null || return
+  local conversation
+  conversation="$(printf '%s' "$INPUT" | jq -r '
+    select((.lastUserInput | type) == "string" and .lastUserInput != "")
+    | .conversationId
+    | select(type == "string" and test("\\A[A-Za-z0-9_-]+\\z"))')"
+  [[ -n "$conversation" && "$conversation" != *$'\n'* ]] || return
+
+  local file="$HOME/.mast/resume/tab-$MAST_TAB"
+  local lines=("agy --conversation $conversation" "$(date +%s || echo 0)")
+  if [[ "${MAST_PROMPT_GEN:-}" =~ ^[A-Za-z0-9_-]{1,128}$ ]]; then lines+=("$MAST_PROMPT_GEN"); fi
+  mkdir -p "$HOME/.mast/resume" || return
+  if printf '%s\n' "${lines[@]}" > "$file.tmp.$$"; then
+    mv -f "$file.tmp.$$" "$file"
+  fi
+  rm -f "$file.tmp.$$"
 }
 
 main "$@" 3>&-

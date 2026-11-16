@@ -22,8 +22,8 @@ it from your desk or your phone. A native Apple Silicon build is available too.
   type into any tab — an agent or a plain shell.
 - **Pick up where you left off.** Close mast and reopen it: workspaces, splits and tabs come back
   in the directories they were in. Press `Up` in a restored tab to get the command that resumes its
-  Claude Code, Codex or OpenCode session, or turn on `autoResume` to have agents that were still
-  running relaunch by themselves, one tab at a time.
+  Claude Code, Codex, OpenCode or Antigravity CLI session, or turn on `autoResume` to have agents that
+  were still running relaunch by themselves, one tab at a time.
 - **Agents can work together.** Inside a mast terminal, `mast ls` lists the tabs in the workspace
   and `mast send` types into another one, so one agent can hand work to another. `mast open` and
   `mast diff` show a file or a Git diff in a viewer pane, and `mast layout` reports the panes.
@@ -86,12 +86,15 @@ open Windows PowerShell in your home folder.
 
 **Works:** terminal tabs, splits and workspaces. A tab goes back to its folder after a restart when
 the folder is on a drive letter (`C:\...`). The Antigravity CLI card shows running and idle, and
-`mast update` in a PowerShell tab installs the latest version.
+`mast update` in a PowerShell tab installs the latest version. A restored tab prints the
+`agy --conversation <id>` command that reopens its last Antigravity CLI conversation; add
+`"autoResume": true` to `settings.json` to have conversations that were still open at quit reopen by
+themselves.
 
 **Does not work:** Claude Code, Codex and OpenCode status; Windows notifications (Antigravity CLI has
 no "waiting for you" signal, so it never notifies in this mode); the **Changes** viewer, the folder
 browser and Ctrl+click on file paths; `mast ls`, `send`, `open`, `diff`, `config` and `layout`;
-auto-resume; cmd tabs. The notepad and the built-in browser tab are still available. The phone remote is
+`Up` for the resume command (it is only printed); cmd tabs. The notepad and the built-in browser tab are still available. The phone remote is
 too, but its use with PowerShell tabs has not been checked on a real PC yet.
 
 Moving an existing WSL install to this mode, or back, has not been tested on a device. Use a fresh

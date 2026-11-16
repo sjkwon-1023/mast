@@ -237,8 +237,8 @@ it does not open arbitrary paths supplied by an agent.
 
 Resume is **a hint, never automatic execution**, unless you opt in with `autoResume` (see below).
 Eligible root agent events save
-`claude --resume <id>`, `codex resume <id>` or `opencode --session <id>` for that
-tab. The next shell displays the command and adds it to that tab's history: use
+`claude --resume <id>`, `codex resume <id>`, `opencode --session <id>` or
+`agy --conversation <id>` for that tab. The next shell displays the command and adds it to that tab's history: use
 Up/Enter when you are ready. A shell that is already running adds a newly saved
 hint to its history at the next prompt, silently, so Up right after an agent exits
 offers its resume command. IDs are strictly validated before saving or loading

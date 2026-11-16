@@ -98,6 +98,7 @@ _mast_resume() {
     'claude --resume '*) token=${cmd#'claude --resume '} ;;
     'codex resume '*) token=${cmd#'codex resume '} ;;
     'opencode --session '*) token=${cmd#'opencode --session '} ;;
+    'agy --conversation '*) token=${cmd#'agy --conversation '} ;;
     *) return 0 ;;
   esac
   case "$token" in ''|*[!A-Za-z0-9_-]*) return 0 ;; esac
@@ -176,6 +177,7 @@ _mast_auto_candidate() {
     'claude --resume '*) _mast_auto_kind=claude; token=${cmd#'claude --resume '} ;;
     'codex resume '*) _mast_auto_kind=codex; token=${cmd#'codex resume '} ;;
     'opencode --session '*) _mast_auto_kind=opencode; token=${cmd#'opencode --session '} ;;
+    'agy --conversation '*) _mast_auto_kind=agy; token=${cmd#'agy --conversation '} ;;
     *) return 0 ;;
   esac
   [[ $token =~ $_mast_token_re ]] || { _mast_auto_kind=; return 0; }
@@ -215,6 +217,7 @@ _mast_auto_run() {
       claude) command claude --resume "$_mast_auto_token" ;;
       codex) command codex resume "$_mast_auto_token" ;;
       opencode) command opencode --session "$_mast_auto_token" ;;
+      agy) command agy --conversation "$_mast_auto_token" ;;
     esac
   else
     (( rc == 1 || rc == 130 )) || printf '\033[2m[mast] auto-resume helper failed (exit %s)\033[0m\n' "$rc"

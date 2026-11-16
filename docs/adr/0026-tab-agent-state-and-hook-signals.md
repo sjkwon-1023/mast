@@ -455,7 +455,8 @@ is `rejected` with both ids present. The body is the first line of `last-assista
   stdin and drains the rest, returns without emitting when `MAST_TAB` is not a decimal number (the
   global hooks file also runs outside mast) or when `CLAUDECODE` or `CODEX_THREAD_ID` is set (agy
   started by another agent in the same tab), emits through `mast-notify.sh` with stdin from
-  `/dev/null`, and always exits 0. It writes no resume hint.
+  `/dev/null`, and always exits 0. It writes no resume hint. *[Superseded by the 2026-11-17 amendment: it
+  now writes `agy --conversation <id>` for a root conversation.]*
 - **No needs input.** agy's hook events have no `Notification` or `PermissionRequest` equivalent,
   so a tab waiting for a tool approval shows running. The one candidate signal,
   `tool_confirmation_pending` in the `statusLine` script input, is not used: `statusLine` is a
@@ -708,7 +709,8 @@ travels through the native `mast-notify.sh` wrapper, `scripts/macos/notify.py` a
 terminal device; it does not use Linux `/proc`. `PreInvocation` reports running and `Stop`
 reports idle with the first line of `finalModelOutput` or `done`. The handler preserves agy's
 required `{}` stdout response. It does not report needs-input, create resume hints or replace an
-existing user notification command.
+existing user notification command. *[Resume hints: superseded by the 2026-11-17 amendment, which the shared
+script brings to macOS too.]*
 
 Setup runs only when `~/.gemini/antigravity-cli` exists and the integration is not opted out by
 `~/.mast/no-agy-hooks`. It merges `~/.gemini/config/hooks.json` and records the result in
@@ -893,3 +895,56 @@ current generation and emitted `mast:idle` successfully, and `tab-93` was untouc
 Automated: `apps/mast/tests/codex-wrapper.test.ts` (argument placement, `PATH` walk), `provision-setup.test.ts`
 (installed bytes and mode, the missing-file rerun), `scripts/macos/tests/test_native.py` (macOS asset entry,
 `candidates()`). Field: WINDOWS-BUILD §10 "Codex hooks" step 3 now checks that two tabs each get their own hint.
+
+## Amendment (2026-11-17) — Antigravity CLI writes a resume hint
+
+**Context.** A restarted tab offered no way back into an agy conversation (decision 8). agy has
+`--conversation <id>` ("Resume a previous conversation by ID"), and its hook input carries the id. Payloads
+were captured on WSL on 2026-11-17 with a workspace hook that saved stdin and the environment, first on agy
+1.3.3 and, after agy updated itself, on 1.5.9. Both carry `conversationId` at the top level (a UUID, so it
+passes the existing token check). 1.5.9 adds `lastUserInput` (since 1.4.7), `hookEventName` and `cwd`
+(since 1.5.4), and hooks also see `ANTIGRAVITY_CONVERSATION_ID`.
+
+**Finding: a subagent's conversation runs the same hooks.** In a turn that delegated to a subagent, the
+subagent ran `SessionStart`, `PreInvocation` and `Stop` under its own `conversationId`, interleaved with the
+root's calls, and its `Stop` came before the root's last one. `parentConversationId` and
+`rootConversationId` are defined in agy's hook schema but were absent from every payload, root or subagent.
+The one difference was `lastUserInput`: the root's carries the user's last message, the subagent's is `""`.
+The root also reported that it was waiting for the subagent before the subagent finished, so writing every
+id that reports would let a late subagent replace the root.
+
+**Decision.**
+
+- `mast-agy-hook.sh` writes `agy --conversation <conversationId>` on both events, after its existing gates
+  (`MAST_TAB` decimal, neither `CLAUDECODE` nor `CODEX_THREAD_ID` set), and only when `lastUserInput` is a
+  non-empty string and `conversationId` is a plain token. jq does the check. The file format, tmp+mv
+  replacement and line 3 follow `mast-notify.sh`. `PreInvocation` writes too, so a conversation quit during
+  its first turn is still restorable; the hint is then rewritten on every model call, which costs one jq
+  start per call.
+- Every reader's whitelist gains `agy --conversation <token>`: `launch.sh`'s `hint_re`, `_mast_resume` and
+  `_mast_auto_candidate` in `integration.sh`, and the automatic run, which calls `command agy --conversation
+  "$token"` with a fixed argument list.
+- `SETUP_VERSION` goes to 28, so WSL installs get the new hook and `integration.sh`. macOS installs its
+  assets at every launch and needs no marker change.
+- The Windows PowerShell mode uses the same rule in `mast-agy-hook.exe` ([ADR-0037](0037-powershell-mode.md)
+  amendment 2026-11-17).
+
+**Rejected.** `parentConversationId` or `rootConversationId`: absent in the observed payloads.
+`ANTIGRAVITY_CONVERSATION_ID`: equal to `conversationId` in a subagent's hooks too. agy's `history.jsonl`,
+which records only typed input: a file shared by every agy, which grows, read on every hook call. Writing
+only on `Stop`: a delegated subagent's `Stop` can arrive after the root's.
+
+**Accepted limits.**
+
+- agy before 1.4.7 sends no `lastUserInput` and writes no hint.
+- The `lastUserInput` difference is observed behavior, not documented by agy. If agy starts filling it for
+  subagents, the last conversation to report wins, which can be a subagent.
+- A root turn whose `lastUserInput` is empty, if agy sends one, keeps the previous hint.
+- `agy -p` run directly in a tab writes a hint too. That conversation can be reopened, and since a prompt
+  follows the run, it is offered but never run automatically.
+- A conversation that never reached a model call has no hint, as for Codex.
+
+Automated: `apps/mast/tests/provision-hooks.test.ts` (the writer, including subagent, old-agy, bad-id and
+gate cases, and the real `mast-notify.sh` leaving the agy hint alone) and `scripts/macos/tests/test_shells.py`
+(the manual hint for each form, the agy automatic run, and the bash launcher with an older `integration.sh`).
+Field: WINDOWS-BUILD §10 "Antigravity CLI resume field verification". **Not yet run.**

@@ -3383,6 +3383,39 @@ session.
     early return of the installer, and the `windows-artifacts` job. The last one runs through
     `workflow_dispatch` on the branch before a tag.
 
+### Unreleased — Antigravity CLI resume field verification (ADR-0026 and ADR-0037 amendments 2026-11-17)
+
+Pending field verification. None of the items below is recorded as passed. Record the app build, the mode
+(WSL with bash or zsh, or PowerShell) and the agy version (`agy --version`) with each result. The agy
+payload shape (`conversationId`, `lastUserInput`, a subagent with an empty `lastUserInput` and no
+`parentConversationId`) was read from agy 1.5.9 on WSL on 2026-11-17.
+
+1. **WSL hint.** In a WSL tab, start `agy`, send one prompt, then quit Mast while agy is open. After relaunch
+   with `autoResume` off, the tab prints `[mast] resume previous agent: agy --conversation <id>`, and `↑` puts
+   that command on the line. `<id>` must be the conversation `/resume` shows as current.
+2. **WSL auto-resume.** Repeat item 1 with `autoResume` on. The tab prints `[mast] auto-resume: agy
+   --conversation <id>` and reopens the same conversation once. Then exit agy normally, quit and relaunch:
+   it must not run again (ADR-0026 auto-resume item 4 applies).
+3. **Subagent.** Ask agy to delegate a task to a subagent and wait until the subagent finishes. Quit and
+   relaunch: the hint must name the root conversation, not the subagent's.
+4. **Conversation switch.** Inside one agy session, switch with `/resume` or `/new` and send a prompt. The hint
+   must name the conversation that received the prompt.
+5. **PowerShell hint.** On a PowerShell-mode install, repeat item 1. The hint file is
+   `%USERPROFILE%\.mast\resume\tab-<id>`. The tab prints the same line; `↑` is not expected to reach it.
+6. **PowerShell auto-resume.** Add `"autoResume": true` to `settings.json`, restart, then repeat item 2. agy
+   must start with full colors and keyboard input, and quitting agy must return to a working PowerShell
+   prompt in the tab's folder. This is the first check of an interactive program started from the tab's
+   start-up script.
+7. **PowerShell, several tabs.** With three tabs that had agy open, the second and later tabs print
+   `[mast] auto-resume queued:` once, and each run starts at least 3 s after the previous one. While one
+   waits, press Ctrl+C: it prints `[mast] auto-resume cancelled` and the manual hint, and the prompt works.
+8. **PowerShell tab close.** Close a tab that ran agy. `%USERPROFILE%\.mast\resume\tab-<id>` and
+   `%USERPROFILE%\.mast\prompt\tab-<id>` must be gone, and no `wsl.exe` may start.
+9. **Not repeated here.** CI covers the WSL hook writer (`apps/mast/tests/provision-hooks.test.ts`), the
+   bash and zsh readers (`scripts/macos/tests/test_shells.py`), the Windows hook
+   (`crates/mast-agy-hook`, including a run of the built exe) and the PowerShell script with a stand-in
+   `agy.cmd` (`scripts/win/tests/test_integration.py`).
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy

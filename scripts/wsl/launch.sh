@@ -106,16 +106,17 @@ if [ -n "$tab" ]; then
   # 하지 않는다. 짝인 통합 자산이 있으면 힌트의 안내·history 기록과 자동 재실행 판정을 첫 프롬프트
   # (integration.sh)가 맡으므로 여기서는 읽지 않는다. 옛 자산이거나 없을 때만 여기서 읽는다.
   # 2행은 기록 시각이며 신선도 판단에는 쓰지 않는다 (의도된 단순화).
-  # 형태는 쓰는 쪽(mast-notify.sh, mast-codex-notify.sh)과 짝인 화이트리스트로 검증한다. 같은 uid 가
-  # 파일을 바꿔치기해도 ↑+Enter 로 임의 명령을 띄우는 표면이 되지 않게 하는 오발 방지이며 권한 경계는
-  # 아니다. 새 에이전트를 붙이려면 여기 패턴에도 형태를 추가해야 한다 — 쓰는 쪽만 고치면 힌트가 조용히 버려진다.
+  # 형태는 쓰는 쪽(mast-notify.sh, mast-codex-notify.sh, OpenCode 플러그인, mast-agy-hook.sh)과 짝인
+  # 화이트리스트로 검증한다. 같은 uid 가 파일을 바꿔치기해도 ↑+Enter 로 임의 명령을 띄우는 표면이 되지
+  # 않게 하는 오발 방지이며 권한 경계는 아니다. 새 에이전트를 붙이려면 여기 패턴에도 형태를 추가해야
+  # 한다 — 쓰는 쪽만 고치면 힌트가 조용히 버려진다.
   # 힌트 파일의 부재·읽기 실패·append 실패 어느 것도 셸 시작을 막지 않는다.
   resume="$HOME/.mast/resume/tab-$tab"
   cmd=
   if [ -s "$resume" ] && [ -z "$integrated" ]; then
     IFS= read -r cmd < "$resume" || true
   fi
-  hint_re='^(claude --resume|codex resume|opencode --session) [A-Za-z0-9_-]+$'
+  hint_re='^(claude --resume|codex resume|opencode --session|agy --conversation) [A-Za-z0-9_-]+$'
   [[ $cmd =~ $hint_re ]] || cmd=
   if [ -n "$cmd" ]; then
     printf '%s\n' "$cmd" >> "$HOME/.mast/history/tab-$tab"
