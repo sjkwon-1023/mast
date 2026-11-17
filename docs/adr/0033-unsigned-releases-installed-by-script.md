@@ -132,3 +132,24 @@ Verification status (2026-10-15):
   installer runs.
 - Not run on a device, so not verified: real Windows PowerShell execution from WSL, a WSL distro
   with `appendWindowsPath=false`, and `mast update` on an Apple Silicon Mac through the installer.
+
+## Amendment (2026-11-17) — the Windows installer reads the architecture from the registry
+
+`mast update` in a PowerShell-mode tab on a Windows 11 25H2 PC (build 26200, .NET Framework 4.8.1, Release
+533509, `curl.exe` present) stopped with `mast: unsupported Windows architecture ` and nothing after the
+word: `[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture` was empty there. On the
+development PC the same call returns `X64`, also in Constrained Language Mode. A type that does not resolve
+fails with "Unable to find type", while a missing property returns nothing, so the type resolved without
+the property. The cause is not known.
+
+`install.ps1` now reads `PROCESSOR_ARCHITECTURE` from
+`HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`, the system environment Windows
+records, and maps `AMD64` to the x64 assets and `ARM64` to the ARM64 ones, for both `mast.exe` and the agy
+hook. Any other value stops the installer with the value in quotes. `Get-ItemProperty` is a cmdlet, so the
+read also works where .NET member access is restricted. `mast update` downloads `install.ps1` from `main`,
+so the fix reaches installed copies without a new release.
+
+Verification: on the development PC, the changed script ran from a file in temporary folders with
+`MAST_WINDOWS_SHELL=powershell` twice — first installing the latest `mast-x64.exe` and hook, then taking the
+already-latest path — and `scripts/win/tests/test_install.py` runs in `windows-gates`. Not run: an ARM64 PC,
+and the field PC itself until the fix is on `main`.
