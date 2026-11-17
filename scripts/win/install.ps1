@@ -10,11 +10,15 @@
     $dest = if ($env:MAST_APP_DIR) { $env:MAST_APP_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\mast' }
     $exe = Join-Path $dest 'mast.exe'
 
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    # 아키텍처는 레지스트리에 기록된 시스템 환경 값(AMD64·ARM64)으로 읽는다. .NET 의
+    # RuntimeInformation.OSArchitecture 는 .NET Framework 4.8.1 인 Windows 11 PC 의 mast 탭에서 빈 값을 돌려준
+    # 현장 사례가 있어(2026-11-17, 원인 미확인) 쓰지 않는다.
+    $environmentKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+    $arch = (Get-ItemProperty -LiteralPath $environmentKey -Name PROCESSOR_ARCHITECTURE).PROCESSOR_ARCHITECTURE
     $asset = switch ($arch) {
-        'X64' { 'mast-x64.exe' }
-        'Arm64' { 'mast-arm64.exe' }
-        default { throw "mast: unsupported Windows architecture $arch" }
+        'AMD64' { 'mast-x64.exe' }
+        'ARM64' { 'mast-arm64.exe' }
+        default { throw "mast: unsupported Windows architecture '$arch'" }
     }
 
     # `return` 이 PowerShell 단계를 건너뛰지 않도록 mast.exe 설치를 함수로 감싼다.
@@ -105,8 +109,8 @@
 
     function Install-PowerShellMode($settingsPath, $settings, $hooksPath, $hooks) {
         $hookAsset = switch ($arch) {
-            'X64' { 'mast-agy-hook-x64.exe' }
-            'Arm64' { 'mast-agy-hook-arm64.exe' }
+            'AMD64' { 'mast-agy-hook-x64.exe' }
+            'ARM64' { 'mast-agy-hook-arm64.exe' }
         }
         $bin = Join-Path $dest 'bin'
         $hookExe = Join-Path $bin 'mast-agy-hook.exe'
