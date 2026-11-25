@@ -291,6 +291,10 @@ size" — field-only, since the layout question needs a real phone and a real TU
 
 ## Amendment (2026-09-17) — a secure pairing path over Tailscale, behind a Secure/Normal choice
 
+Superseded in part by the 2026-11-25 amendment: the dialog's Tailscale mode now reaches the PC by
+its tailnet address over plain HTTP, without `serve`. The HTTPS `serve` path below is still the
+route to home-screen install and web push, and is still not started.
+
 The plain-HTTP limit above is not hypothetical on a shared network, and it hard-blocks the two
 features that were rejected partly because of it — home-screen install and web push ("push in
 particular cannot work over plain HTTP on a LAN"). Building TLS into mast was the costly half
@@ -434,3 +438,48 @@ continues to use its existing port, profile and rule-name checks without change.
 Automated macOS tests cover parsing known `socketfilterfw` responses, unknown output, application
 scope, argument quoting and post-allow re-detection. A real allow/decline prompt and enabled,
 blocked and block-all system states remain device checks; they are not recorded as passed here.
+
+## Amendment (2026-11-25) — Tailscale pairing by the tailnet address, without `serve`
+
+The user chose the cheaper path to reach the PC from another network: the phone and the PC join
+the same tailnet, and the phone opens the existing Local HTTP surface at the PC's tailnet address.
+Tailscale then carries the traffic between networks and encrypts it, so mast needs no TLS, no
+`tailscale` CLI call and no Tailscale-side state.
+
+1. **The dialog's Tailscale mode is a second QR for the same server.** It shows
+   `http://<tailnet IPv4>:<port>/#t=<token>`: the same `remote` key, TCP listener, token file and
+   firewall section as Local HTTP. The Local HTTP QR is unchanged. With `remote` unset the mode
+   points at `settings.json`, as Local HTTP does. The command is `remote_tailscale_pairing`, which
+   shares `remote_pairing`'s state handling and differs only in the address.
+2. **The address comes from the routing table, as `lan_ip()` does.** The glue connects a UDP
+   socket to `100.100.100.100:53` (Tailscale's MagicDNS address; no packet is sent) and reads the
+   local address the route chose. While Tailscale is connected that route goes through its
+   interface, and the address is in 100.64.0.0/10. When Tailscale is stopped or not installed, the
+   default route answers with the LAN address. The range check is
+   `mast_remote::tailscale::tailnet_ipv4`, which runs as a host test. Outside the range the dialog
+   says Tailscale is not connected. It does not tell "not installed" from "stopped", and it shows
+   no QR rather than a wrong one.
+3. **What the phone gets.** WireGuard encrypts the phone's leg, so a LAN or café peer can no longer
+   read the token or the typed text. Inside the tunnel mast still speaks plain HTTP. Tailnet peers
+   connect from their own 100.x addresses with no proxy, so the per-IP limiter works per device. A
+   node keeps its tailnet address, so the pairing survives DHCP changes and network moves. The
+   origin differs from the LAN QR, so the phone keeps a separate token copy for it (same secret).
+4. **The perimeter is the tailnet.** Any device in the user's tailnet can reach the port; the token
+   is the gate, as on the LAN. The listener still binds `0.0.0.0`, so LAN exposure is exactly
+   Local HTTP's. Windows applies the profile of the adapter a packet arrives on, so the existing
+   `domain,private` rule admits tailnet peers only while the Tailscale adapter is Private. A PC
+   whose Wi-Fi is Public is then reachable over Tailscale and not from the LAN.
+
+Accepted limits. No HTTPS origin, so home-screen install and web push stay blocked; that is the
+2026-09-17 `serve` path, still not started. A PC wired directly into a carrier CGNAT network that
+uses 100.64.0.0/10 without Tailscale would have its LAN address read as a tailnet address. That
+QR still works on that LAN. A Tailscale client that stops routing the MagicDNS address through
+its interface would make the mode report "not connected", a loud failure rather than a wrong QR.
+An allow rule scoped to `LocalSubnet` is judged allowed by the firewall check but may not admit
+tailnet peers.
+
+Verification: `cargo test -p mast-remote tailscale` (range edges, LAN addresses, IPv6) and
+`npx vitest run src/features/pairing` (the mode is selectable, uses the TCP firewall commands and
+never the LAN pairing command, shows the not-connected reason without a firewall section, and drops
+a late URL after Back). The device checks are WINDOWS-BUILD §10 "Unreleased — Tailscale pairing
+field verification".

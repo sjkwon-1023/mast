@@ -217,11 +217,27 @@ pub fn remote_status(state: State<'_, RemoteState>) -> RemoteStatus {
 /// 접속하지 못하는 QR 이 나가고, 그 실패는 폰 쪽에서만 보인다.
 #[tauri::command]
 pub fn remote_pairing(state: State<'_, RemoteState>) -> Result<Option<Pairing>, String> {
-    match &*state {
+    pairing_at(&state, lan_ip)
+}
+
+/// Tailscale 페어링 URL — 같은 Local HTTP 서버·토큰에 tailnet 주소만 다르다
+/// (ADR-0016 amendment 2026-11-25). 폰에서는 다른 origin 이라 토큰을 따로 저장한다.
+#[tauri::command]
+pub fn remote_tailscale_pairing(state: State<'_, RemoteState>) -> Result<Option<Pairing>, String> {
+    pairing_at(&state, || tailscale_ip().map(IpAddr::V4))
+}
+
+/// 주소는 서버가 켜져 있을 때만 묻는다 — 꺼진 표면에 "Tailscale 미연결" 사유를 붙이면
+/// 사용자는 settings.json 이 아니라 Tailscale 을 고치러 간다.
+fn pairing_at(
+    state: &RemoteState,
+    address: impl FnOnce() -> Result<IpAddr, String>,
+) -> Result<Option<Pairing>, String> {
+    match state {
         RemoteState::Off => Ok(None),
         RemoteState::Failed { reason } => Err(reason.clone()),
         RemoteState::On { port, token, .. } => Ok(Some(Pairing {
-            url: pairing_url(lan_ip()?, *port, token),
+            url: pairing_url(address()?, *port, token),
         })),
     }
 }
@@ -293,6 +309,24 @@ pub(crate) fn lan_ip() -> Result<IpAddr, String> {
         .local_addr()
         .map(|addr| addr.ip())
         .map_err(|err| format!("cannot read the LAN address: {err}"))
+}
+
+const TAILSCALE_NOT_CONNECTED: &str =
+    "Tailscale is not connected on this PC. Install Tailscale, sign in and connect, then try again.";
+
+/// 이 PC 의 tailnet IPv4 — `lan_ip` 와 같은 기법을 Tailscale 의 DNS 주소로 겨눈다.
+/// 판정은 `mast_remote::tailscale` 에 있다 (이 크레이트는 Linux 에서 테스트되지 않는다).
+fn tailscale_ip() -> Result<std::net::Ipv4Addr, String> {
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .map_err(|err| format!("cannot open a socket to find the Tailscale address: {err}"))?;
+    socket
+        .connect(mast_remote::tailscale::DNS_PROBE)
+        .map_err(|err| format!("{TAILSCALE_NOT_CONNECTED} ({err})"))?;
+    let local = socket
+        .local_addr()
+        .map_err(|err| format!("cannot read the Tailscale address: {err}"))?;
+    mast_remote::tailscale::tailnet_ipv4(local.ip())
+        .ok_or_else(|| TAILSCALE_NOT_CONNECTED.to_owned())
 }
 
 #[cfg(test)]

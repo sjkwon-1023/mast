@@ -54,6 +54,7 @@ function idleStatus(): SecureRemoteStatus {
 function fakeBackend(overrides: Partial<PairingBackend> = {}): PairingBackend {
   return {
     remotePairing: async (): Promise<Pairing | null> => ({ url: LOCAL_URL }),
+    remoteTailscalePairing: async (): Promise<Pairing | null> => null,
     remoteFirewallStatus: async () => status({ state: "allowed" }),
     remoteFirewallAllow: async () => outcome({}),
     secureRemoteStatus: async () => idleStatus(),

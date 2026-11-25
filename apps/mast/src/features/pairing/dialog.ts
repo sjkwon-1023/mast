@@ -5,8 +5,10 @@
 // 페어링을 시작할 때 한 번만 받아 오고 어디에도 캐시하지 않는다 — storage 는
 // 물론 로그에도 남기지 않는다.
 //
-// 첫 화면은 Local HTTP / Secure Remote / Tailscale(추후 제공) 세 갈래다.
+// 첫 화면은 Local HTTP / Secure Remote / Tailscale 세 갈래다.
 // - Local HTTP 는 기존 QR·TCP 방화벽 흐름 그대로다 (`remoteFirewall*`).
+// - Tailscale 은 같은 Local HTTP 서버·토큰·TCP 방화벽을 쓰고 QR 주소만 이 PC 의
+//   tailnet 주소다 (ADR-0016 amendment 2026-11-25).
 // - Secure Remote 는 UI 가 만든 pairingId 로 서버를 시작하고, 미접속 상태로
 //   화면을 떠날 때(닫기·Back) 즉시 취소한다 — `start` 가 아직 응답하지 않았어도
 //   cancel 을 먼저 보내는 것이 Rust 의 취소 tombstone 을 작동시키는 조건이다
@@ -49,6 +51,7 @@ import {
   remoteFirewallAllow,
   remoteFirewallStatus,
   remotePairing,
+  remoteTailscalePairing,
   secureRemoteCancel,
   secureRemoteFirewallAllow,
   secureRemoteFirewallStatus,
@@ -244,6 +247,15 @@ export const SECURE_REMOTE_NOTE =
   "of a certificate issued for this pairing; the browser trusts that fingerprint for this " +
   "connection only, not the whole trust store.";
 
+/** Tailscale 패널의 설명 — 암호화는 Tailscale 구간의 것이고 mast 는 그 안에서 평문
+ *  HTTP 를 쓴다. 경계는 LAN 이 아니라 tailnet 이므로 tailnet 의 모든 기기가 이 주소에
+ *  닿고, 들여보내는 것은 토큰이다. */
+export const TAILSCALE_NOTE =
+  "The QR uses this PC's Tailscale address, so it works from any network while Tailscale is " +
+  "connected on both devices. Install Tailscale on your phone and sign in to the same tailnet. " +
+  "Tailscale encrypts the connection; any device in your tailnet can reach this address, and " +
+  "the pairing token is what lets it in.";
+
 /** `cancel` 이 `connected` 를 돌려줬을 때의 안내 — 인증이 먼저 승인된 연결은
  *  취소로 끊기지 않고 그 연결의 수명에 맡겨진다 (서버는 계속 살아 있다). */
 export const SECURE_CONNECTED_NOTICE =
@@ -287,6 +299,7 @@ export function secureRemoteErrorText(error: unknown): string {
  *  (feature 모듈이 Tauri invoke 를 직접 부르지 않게 한다). */
 export interface PairingBackend {
   remotePairing(): Promise<Pairing | null>;
+  remoteTailscalePairing(): Promise<Pairing | null>;
   remoteFirewallStatus(): Promise<FirewallStatus>;
   remoteFirewallAllow(): Promise<AllowOutcome>;
   secureRemoteStatus(): Promise<SecureRemoteStatus>;
@@ -298,6 +311,7 @@ export interface PairingBackend {
 
 const DEFAULT_BACKEND: PairingBackend = {
   remotePairing,
+  remoteTailscalePairing,
   remoteFirewallStatus,
   remoteFirewallAllow,
   secureRemoteStatus,
@@ -306,6 +320,9 @@ const DEFAULT_BACKEND: PairingBackend = {
   secureRemoteFirewallStatus,
   secureRemoteFirewallAllow,
 };
+
+type HttpPairingMode = "local" | "tailscale";
+type PairingMode = "choose" | HttpPairingMode | "secure";
 
 export interface PairingDialogOptions {
   backend?: PairingBackend;
@@ -346,7 +363,7 @@ export function openPairingDialog(options: PairingDialogOptions = {}): HTMLDialo
   dialog.append(heading, notice, body, close);
 
   const state: {
-    mode: "choose" | "local" | "secure";
+    mode: PairingMode;
     /** 화면이 바뀔 때마다 오르는 세대 — 늦은 비동기 결과의 폐기 판정. */
     generation: number;
     /** 시작했거나 시작 중인 Secure Remote 페어링 (없으면 null). */
@@ -356,7 +373,7 @@ export function openPairingDialog(options: PairingDialogOptions = {}): HTMLDialo
     statusQuery: number;
   } = { mode: "choose", generation: 0, secure: null, statusQuery: 0 };
 
-  function isCurrent(generation: number, mode: "choose" | "local" | "secure"): boolean {
+  function isCurrent(generation: number, mode: PairingMode): boolean {
     return dialog.isConnected && state.generation === generation && state.mode === mode;
   }
 
@@ -537,7 +554,7 @@ export function openPairingDialog(options: PairingDialogOptions = {}): HTMLDialo
       "local",
       "Local HTTP",
       "Connect over HTTP. Use on trusted networks only.",
-      () => showLocal(),
+      () => showHttp("local"),
     );
     screen.append(
       local,
@@ -548,42 +565,57 @@ export function openPairingDialog(options: PairingDialogOptions = {}): HTMLDialo
         () => showSecure(),
       ),
     );
-    const tailscale = modeButton("tailscale", "Tailscale", "Planned. Connect from outside your local network.", () => {});
-    tailscale.disabled = true;
-    screen.append(tailscale);
+    screen.append(
+      modeButton(
+        "tailscale",
+        "Tailscale",
+        "Connect from outside your local network through Tailscale.",
+        () => showHttp("tailscale"),
+      ),
+    );
     local.focus();
     void refreshSecureStatus();
   }
 
-  function showLocal(): void {
+  /** Local HTTP 와 Tailscale 은 같은 서버·토큰·TCP 방화벽이고 QR 의 주소만 다르다. */
+  function showHttp(mode: HttpPairingMode): void {
     if (state.mode !== "choose") return;
     stopSecureWatch();
-    state.mode = "local";
+    state.mode = mode;
     // 선택 화면에서 보던 연결 안내는 여기서 지운다 — 다시 필요하면 시작 거절이나
     // 선택 화면 복귀 시의 상태 조회가 새로 알려 준다 (오래된 안내를 남기지 않는다).
     setNotice(null);
     const generation = ++state.generation;
-    const screen = startScreen("pairing-local");
+    const screen = startScreen(`pairing-${mode}`);
     const canvas = qrCanvas();
     const url = urlText("Checking…");
     const back = backButton(() => showChoice());
-    screen.append(canvas, url, back);
+    screen.append(canvas, url);
+    if (mode === "tailscale") {
+      const note = document.createElement("p");
+      note.className = "pairing-tailscale-note";
+      note.textContent = TAILSCALE_NOTE;
+      screen.append(note);
+    }
+    screen.append(back);
     // 이 화면의 유일한 동기 컨트롤이다 — allow 버튼은 조회 결과에 따라 나중에 뜬다.
     back.focus();
 
-    void resolvePairing(() => backend.remotePairing()).then((result) => {
-      if (!isCurrent(generation, "local")) return;
+    const fetchPairing =
+      mode === "local" ? () => backend.remotePairing() : () => backend.remoteTailscalePairing();
+    void resolvePairing(fetchPairing).then((result) => {
+      if (!isCurrent(generation, mode)) return;
       url.textContent = pairingMessage(result);
       if (result.state !== "on") return;
       installFirewallSection(screen, {
         status: () => backend.remoteFirewallStatus(),
         allow: () => backend.remoteFirewallAllow(),
         ruleName: LOCAL_HTTP_RULE_NAME,
-        isCurrent: () => isCurrent(generation, "local"),
+        isCurrent: () => isCurrent(generation, mode),
       });
       void drawQr(canvas, result.url)
         .then(() => {
-          if (isCurrent(generation, "local")) canvas.hidden = false;
+          if (isCurrent(generation, mode)) canvas.hidden = false;
         })
         .catch((error) => {
           // QR 이 없어도 URL 은 화면에 있다 — 손으로 칠 수 있으므로 다이얼로그를

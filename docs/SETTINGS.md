@@ -292,6 +292,21 @@ file is `remote-token` in the app data directory, normally
 browser's local-storage copy of the pairing token. The accepted limits are recorded in
 [ADR-0016](./adr/0016-remote-surface-over-lan.md).
 
+### Tailscale
+
+*Pair phone* → **Tailscale** shows a second QR for the same Local HTTP listener, carrying this PC's
+Tailscale address (`http://100.x.y.z:<port>/#t=…`) instead of its LAN address. It needs the
+`remote` key above, Tailscale connected on the PC, and the Tailscale app on the phone signed in to
+the same tailnet. It then works from any network. Tailscale encrypts the traffic between the
+devices; inside the tunnel it is the same plain HTTP surface, reachable by every device in your
+tailnet and gated by the same token. The firewall line and button are Local HTTP's TCP rule.
+Windows applies that rule to the Tailscale adapter's own network profile (normally Private), so
+a PC on a Public Wi-Fi is reachable over Tailscale and not from the LAN. Mast does not run the
+`tailscale` CLI or change Tailscale settings. If the dialog says Tailscale is not connected,
+connect it on the PC and open the mode again. The phone stores this pairing separately from the
+LAN one. Decisions are in the 2026-11-25 amendment of
+[ADR-0016](./adr/0016-remote-surface-over-lan.md).
+
 ## Secure Remote
 
 A second phone mode, always available from *Pair phone* → **Secure Remote**. It needs no

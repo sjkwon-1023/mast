@@ -145,9 +145,12 @@ MVP.
 
 #### Phone remote surface
 
-- **Secure pairing over Tailscale** (ADR-0016 amendment 2026-09-17): decided, not started.
-  Open: Tailscale detection, whether mast runs `tailscale serve`, the admin-console HTTPS
-  step, elevation.
+- **Tailscale pairing** (ADR-0016 amendment 2026-11-25): the dialog's Tailscale QR points the
+  Local HTTP surface at the PC's tailnet address. One iPhone run in PowerShell mode passed on
+  2026-11-25; the not-connected message, the in-app Allow button, side-by-side LAN pairing and a
+  tunnel drop are still open (WINDOWS-BUILD §10 "Unreleased — Tailscale pairing field
+  verification"). The HTTPS `tailscale serve` path (amendment 2026-09-17), which home-screen
+  install and web push need, is not started.
 - **Secure Remote** (ADR-0028): no real-device WebTransport connection verified yet; the
   Windows UAC/firewall and phone checks are pending (WINDOWS-BUILD §17).
 - **Image attach from the phone** (user decision 2026-09-08): needs an upload endpoint, an

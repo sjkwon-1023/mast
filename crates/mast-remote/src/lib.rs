@@ -14,15 +14,17 @@
 //! `docs/adr/0028-secure-remote-webtransport.md` (Secure Remote).
 //!
 //! 이 크레이트가 밖으로 내보내는 것은 두 서버의 기동과 토큰 로딩, Secure Remote
-//! 페어링마다 새로 만드는 토큰(`generate_secure_token`), 그리고 Secure Remote 입력
-//! 쓰기를 실행하는 호출자 소유 coordinator(`InputWriter`)뿐이다. HTTP 파싱·라우팅·
-//! rate limit·핸들러는 비공개 모듈 안에 둔다.
+//! 페어링마다 새로 만드는 토큰(`generate_secure_token`), Secure Remote 입력
+//! 쓰기를 실행하는 호출자 소유 coordinator(`InputWriter`), 그리고 Tailscale 페어링
+//! QR 의 주소 판정(`tailscale`)뿐이다. HTTP 파싱·라우팅·rate limit·핸들러는 비공개
+//! 모듈 안에 둔다.
 
 mod handlers;
 mod http;
 mod ratelimit;
 mod routes;
 mod server;
+pub mod tailscale;
 mod token;
 mod wt;
 
