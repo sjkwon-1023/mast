@@ -14,6 +14,15 @@ if [[ -n $MAST_TAB && $MAST_TAB != *[!0-9]* ]]; then
   shopt -s histappend
   history -c
   [[ -r $HISTFILE ]] && history -r "$HISTFILE"
+  # macOS 의 /bin/bash 3.2 에서 `history -a` 는 메모리 목록이 전부 이번 세션 줄이면 아무것도 쓰지 않는다
+  # (bash-3.2.57 bashhist.c maybe_append_history 의 `<` 비교). 빈 탭 history 로 시작한 셸은 프롬프트마다의
+  # 기록이 모두 빠져, 강제 종료되면 첫 세션의 명령과 resume 명령을 잃는다. 파일에서 읽은 줄이 하나 있으면 풀리므로
+  # 빈 목록에 공백 한 줄을 읽어 둔다. 읽은 줄은 이번 세션 줄이 아니라 파일에 쓰이지 않고, history -s 가 지우는
+  # 것은 맨 끝 줄이라 이 줄은 세션 내내 남는다. bash 4.0·4.1 도 쓰지 않지만 이 방법으로 풀리지 않고, macOS 가
+  # 주는 bash 는 3.2 와 (Homebrew 의) 5.x 라 다루지 않는다.
+  if (( BASH_VERSINFO[0] < 4 )) && [[ -z $(history 1) ]]; then
+    history -r /dev/stdin <<< ' '
+  fi
   # 자동 실행이 켜져 있으면 안내는 첫 프롬프트가 맡는다. 판정 결과에 따라 자동 실행이나 수동 안내 중 하나만 한다.
   [[ ${MAST_AUTO_RESUME-} == 1 ]] || _mast_resume
 fi
