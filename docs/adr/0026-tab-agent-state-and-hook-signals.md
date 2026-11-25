@@ -948,3 +948,29 @@ Automated: `apps/mast/tests/provision-hooks.test.ts` (the writer, including suba
 gate cases, and the real `mast-notify.sh` leaving the agy hint alone) and `scripts/macos/tests/test_shells.py`
 (the manual hint for each form, the agy automatic run, and the bash launcher with an older `integration.sh`).
 Field: WINDOWS-BUILD §10 "Antigravity CLI resume field verification". **Not yet run.**
+
+## Amendment (2026-11-25) — macOS bash 3.2 writes a new tab's history at each prompt
+
+The 2026-10-19 "One manual hint" rule assumes the prompt has already written the resume command to the
+tab's history file. On macOS `/bin/bash` (3.2.57) that did not hold for a tab whose history file was
+empty or missing. bash 3.2 runs `history -a` only while the in-memory list holds fewer lines from this
+session than in total (`maybe_append_history` compares with `<`). When every line came from this session,
+nothing was written. A tab killed during its first session therefore lost every command, the resume
+command included. `test_a_session_that_ended_normally_keeps_its_place_in_history` failed on every
+`macos-artifacts` run since that rule landed (v1.1.3, v1.2.0, v1.2.1 and v1.2.2), so no macOS zip was
+attached to those releases.
+
+`scripts/macos/bashrc` now reads one blank line into an empty list on bash 3, from a here-string rather
+than the history file. A line read this way does not count as this session's, so it is never written to
+the file. `history -s` from the prompt hook removes only the last entry, so the blank line stays for the
+whole session and `history -a` writes every prompt. The cost is one blank entry at the oldest end of Up in
+a tab's first session. bash 4.0 and 4.1 also skip the write, but this does not cure them; macOS provides
+3.2 and Homebrew's 5.x, so they are not handled. bash 3.2 still drops the last typed command from the
+in-memory list when the prompt hook adds a resume command; the file keeps it, because the prompt writes
+before adding.
+
+Verification: the macOS `ShellStartup` bash cases of `scripts/macos/tests/test_shells.py`, run under the
+Docker `bash:3.2` and `bash:5.2` images with `/bin/bash` pointed at them, all pass; before the change the
+same four cases failed on 3.2 as on the macOS runner. The macOS runner itself is `macos-artifacts`
+(`workflow_dispatch` or a tag).
+
