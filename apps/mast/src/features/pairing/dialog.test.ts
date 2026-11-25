@@ -29,6 +29,7 @@ import {
   SECURE_STOPPING_TEXT,
   SECURE_WAITING_TEXT,
   secureRemoteErrorText,
+  TAILSCALE_NOTE,
 } from "./dialog";
 import type { PairingBackend } from "./dialog";
 import { deferred } from "../../test-helpers";
@@ -280,6 +281,7 @@ describe("secureRemoteErrorText", () => {
 
 const SECURE_ID = "pairing-uuid-1";
 const LOCAL_URL = "http://192.168.0.5:7331/#t=local-token";
+const TAILSCALE_URL = "http://100.101.2.3:7331/#t=local-token";
 
 function secureUrl(pairingId: string): string {
   return `https://sjkwon-1023.github.io/mast/#v=1&host=192.168.0.5&port=7331&cert=CERT&token=${pairingId}`;
@@ -296,6 +298,7 @@ function waitingStatus(pairingId: string): SecureRemoteStatus {
 function fakeBackend(overrides: Partial<PairingBackend> = {}): PairingBackend {
   return {
     remotePairing: async () => null,
+    remoteTailscalePairing: async () => null,
     remoteFirewallStatus: async () => status({ state: "allowed" }),
     remoteFirewallAllow: async () => outcome({}),
     secureRemoteStatus: async () => idleStatus(),
@@ -353,16 +356,13 @@ afterEach(() => {
 });
 
 describe("pairing dialog — mode choice", () => {
-  it("shows Local HTTP, Secure Remote and a disabled Tailscale marked Planned", () => {
+  it("shows Local HTTP, Secure Remote and Tailscale, all selectable", () => {
     const dialog = open(fakeBackend());
 
     const modes = Array.from(dialog.querySelectorAll<HTMLButtonElement>(".pairing-mode"));
     expect(modes.map((button) => button.dataset.mode)).toEqual(["local", "secure", "tailscale"]);
-    expect(modes[0].disabled).toBe(false);
-    expect(modes[1].disabled).toBe(false);
-    expect(modes[2].disabled).toBe(true);
-    expect(modes[2].textContent).toContain("Planned. Connect from outside your local network.");
-    expect(modes[2].textContent).toContain("Tailscale");
+    expect(modes.map((button) => button.disabled)).toEqual([false, false, false]);
+    expect(modes[2].textContent).toContain("Connect from outside your local network through Tailscale.");
   });
 
   it("limits Local HTTP to trusted networks in its mode description", () => {
@@ -539,6 +539,85 @@ describe("pairing dialog — Local HTTP", () => {
     expect(dialog.querySelectorAll(".pairing-mode")).toHaveLength(3);
     expect(dialog.querySelector(".pairing-firewall")).toBeNull();
     expect(dialog.querySelector(".pairing-allow")).toBeNull();
+  });
+});
+
+describe("pairing dialog — Tailscale", () => {
+  it("on — shows the tailnet URL, the note and the same TCP firewall section as Local HTTP", async () => {
+    const remotePairing = vi.fn(async () => ({ url: LOCAL_URL }));
+    const remoteFirewallStatus = vi.fn(async () => status({ state: "missing" }));
+    const secureRemoteFirewallStatus = vi.fn(async () => status({ state: "allowed" }));
+    const dialog = open(
+      fakeBackend({
+        remotePairing,
+        remoteTailscalePairing: async () => ({ url: TAILSCALE_URL }),
+        remoteFirewallStatus,
+        secureRemoteFirewallStatus,
+      }),
+    );
+
+    modeButton(dialog, "tailscale").click();
+    await flush();
+
+    expect(required<HTMLElement>(dialog, ".pairing-url").textContent).toBe(TAILSCALE_URL);
+    expect(required<HTMLElement>(dialog, ".pairing-tailscale-note").textContent).toBe(TAILSCALE_NOTE);
+    // LAN QR 은 묻지 않는다 — 같은 서버의 다른 주소일 뿐이다.
+    expect(remotePairing).not.toHaveBeenCalled();
+    // Tailscale 은 Local HTTP 의 TCP 리스너로 들어오므로 그 규칙을 본다 (UDP 가 아니다).
+    expect(remoteFirewallStatus).toHaveBeenCalledTimes(1);
+    expect(secureRemoteFirewallStatus).not.toHaveBeenCalled();
+    expect(required<HTMLElement>(dialog, ".pairing-firewall").textContent).toContain(
+      "no rule allowing",
+    );
+    expect(document.activeElement).toBe(backButton(dialog));
+  });
+
+  it("not connected — shows the backend reason without a firewall section", async () => {
+    const remoteFirewallStatus = vi.fn(async () => status({ state: "allowed" }));
+    const dialog = open(
+      fakeBackend({
+        remoteTailscalePairing: async () => {
+          throw "Tailscale is not connected on this PC. Install Tailscale, sign in and connect, then try again.";
+        },
+        remoteFirewallStatus,
+      }),
+    );
+
+    modeButton(dialog, "tailscale").click();
+    await flush();
+
+    expect(required<HTMLElement>(dialog, ".pairing-url").textContent).toBe(
+      "Tailscale is not connected on this PC. Install Tailscale, sign in and connect, then try again.",
+    );
+    expect(remoteFirewallStatus).not.toHaveBeenCalled();
+    expect(dialog.querySelector(".pairing-allow")).toBeNull();
+  });
+
+  it("off — points at settings.json like Local HTTP", async () => {
+    const dialog = open(fakeBackend({ remoteTailscalePairing: async () => null }));
+
+    modeButton(dialog, "tailscale").click();
+    await flush();
+
+    expect(required<HTMLElement>(dialog, ".pairing-url").textContent).toBe(REMOTE_OFF_MESSAGE);
+  });
+
+  it("drops a late tailnet URL after going Back", async () => {
+    const pairing = deferred<Pairing | null>();
+    const dialog = open(fakeBackend({ remoteTailscalePairing: () => pairing.promise }));
+
+    modeButton(dialog, "tailscale").click();
+    await flush();
+    const url = required<HTMLElement>(dialog, ".pairing-url");
+    backButton(dialog).click();
+    await flush();
+
+    pairing.resolve({ url: TAILSCALE_URL });
+    await flush();
+
+    expect(url.textContent).toBe("Checking…");
+    expect(dialog.querySelectorAll(".pairing-mode")).toHaveLength(3);
+    expect(document.activeElement).toBe(modeButton(dialog, "local"));
   });
 });
 

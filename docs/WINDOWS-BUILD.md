@@ -3416,6 +3416,39 @@ payload shape (`conversationId`, `lastUserInput`, a subagent with an empty `last
    (`crates/mast-agy-hook`, including a run of the built exe) and the PowerShell script with a stand-in
    `agy.cmd` (`scripts/win/tests/test_integration.py`).
 
+### Unreleased — Tailscale pairing field verification (ADR-0016 amendment 2026-11-25)
+
+Partly verified (first run below). Record the app build, the Tailscale client versions on the PC and the
+phone, the phone platform and browser, and the network category of the PC's Wi-Fi with each result.
+`remote` must be set in `settings.json` (restart after setting it).
+
+First run, 2026-11-25: Windows 11 25H2 and iPhone iOS 27.0.1, both on Tailscale 1.104.7. The build was
+this branch with a separate identifier (`TAURI_CONFIG` setting `app.mast.desktop.test`), so the
+installed app's data was not touched. It ran in PowerShell mode with `remote` on 7331, and the PC's
+Wi-Fi was Public. Item 2 passed: the route to 100.100.100.100 went through the `Tailscale` adapter,
+and the probe address, `tailscale ip -4` and the QR host were all `100.102.77.126`. Item 3 passed in
+part: the Tailscale adapter was `Private`. The allow rule came from Windows' own first-listen prompt
+(`mast-test.exe`, Private and Public), so the in-app **Allow** button was not exercised. Item 4 passed
+per the user's report: the phone scanned the QR, listed the workspace, showed the PowerShell tab and
+ran typed input. From Windows, `/` answered 200 and a token-less `/api/state` answered 401 on the
+tailnet address. Items 1, 5 and 6 were not run. WSL mode was not run with Tailscale; the server and
+the QR do not depend on the tab shell.
+
+1. **Not connected.** With Tailscale stopped or not installed on the PC, *Pair phone* → **Tailscale**
+   shows `Tailscale is not connected on this PC. …`, no QR and no firewall line.
+2. **Address.** With Tailscale connected, the URL's host equals `tailscale ip -4`, and
+   `Find-NetRoute -RemoteIPAddress 100.100.100.100` names the Tailscale adapter.
+3. **Adapter profile.** `Get-NetConnectionProfile` lists the Tailscale adapter as `Private`. The
+   Tailscale screen's firewall line reports the TCP rule, and **Allow in Windows Firewall** (one
+   UAC prompt) makes it `allowed`.
+4. **Away from home.** On the phone, turn Wi-Fi off, connect Tailscale on mobile data and scan the
+   QR. The page lists workspaces, shows a tab's screen and delivers typed text and Enter.
+5. **LAN QR unchanged.** **Local HTTP** still shows the LAN address. On a Private Wi-Fi both
+   pairings work side by side in the same phone browser; on a Public Wi-Fi only the Tailscale one
+   connects.
+6. **Tunnel down.** Disconnect Tailscale on the phone while the page is open. The page reports a
+   connection failure rather than hanging, and recovers after Tailscale reconnects.
+
 ## 11. ARM64 cross-build notes
 
 The dev machine that produced this repo's crates is x86_64; the eventual target device policy

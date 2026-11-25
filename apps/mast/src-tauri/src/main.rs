@@ -449,6 +449,8 @@ fn main() {
             // 페어링은 다이얼로그를 열 때만.
             remote::remote_status,
             remote::remote_pairing,
+            // 같은 서버의 tailnet 주소 QR (ADR-0016 amendment 2026-11-25).
+            remote::remote_tailscale_pairing,
             // 페어링 대화상자의 방화벽 줄과 그 버튼 (ADR-0016 amendment). 감지는
             // 대화상자를 열 때, 적용은 사용자가 누를 때만 — 둘 다 자동으로 돌지 않는다.
             remote::remote_firewall_status,

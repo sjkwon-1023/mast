@@ -581,8 +581,7 @@ body {
   border-color: var(--accent);
 }
 
-/* 모드 선택 화면 — Local HTTP / Secure Remote / Tailscale. Tailscale 은 disabled
-   로 남겨 "추후 제공"을 숨기지 않는다 (연결된 것처럼 가장하지 않는다). */
+/* 모드 선택 화면 — Local HTTP / Secure Remote / Tailscale. */
 .pairing-modes {
   display: flex;
   flex-direction: column;
@@ -638,7 +637,7 @@ body {
   border-color: var(--accent);
 }
 
-/* 연결된 폰이 남긴 수명 안내와 Secure Remote 설명 — 비밀이 아니라 동작 설명이다. */
+/* 연결된 폰이 남긴 수명 안내와 Secure Remote·Tailscale 설명 — 비밀이 아니라 동작 설명이다. */
 .pairing-notice {
   margin: 0 0 12px;
   padding: 6px 8px;
@@ -649,7 +648,8 @@ body {
   font-size: 12px;
 }
 
-.pairing-secure-note {
+.pairing-secure-note,
+.pairing-tailscale-note {
   margin: 0 0 12px;
   color: var(--fg-muted);
   font-size: 11px;

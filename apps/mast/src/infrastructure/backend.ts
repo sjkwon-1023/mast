@@ -233,7 +233,7 @@ export interface RemoteStatus {
   reason: string | null;
 }
 
-/** 페어링 URL — `http://<lan-ip>:<port>/#t=<token>`. fragment 라 요청에 실리지
+/** 페어링 URL — `http://<lan-ip|tailnet-ip>:<port>/#t=<token>`. fragment 라 요청에 실리지
  *  않는다 (폰 페이지가 받아 localStorage 로 옮기고 주소창에서 지운다). */
 export interface Pairing {
   url: string;
@@ -251,6 +251,12 @@ export function remoteStatus(): Promise<RemoteStatus> {
  *  유일한 경로다). 꺼져 있으면 null, 켜기에 실패했으면 사유로 reject 된다. */
 export function remotePairing(): Promise<Pairing | null> {
   return invoke<Pairing | null>("remote_pairing");
+}
+
+/** 같은 Local HTTP 서버의 Tailscale 주소 URL — `http://<100.x>:<port>/#t=<token>`.
+ *  계약은 `remotePairing` 과 같고, Tailscale 이 연결돼 있지 않으면 사유로 reject 된다. */
+export function remoteTailscalePairing(): Promise<Pairing | null> {
+  return invoke<Pairing | null>("remote_tailscale_pairing");
 }
 
 /** Windows 방화벽에서 이 앱의 상태 (ADR-0016 amendment — 페어링 다이얼로그가
